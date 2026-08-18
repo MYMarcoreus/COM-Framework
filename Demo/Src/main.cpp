@@ -1,12 +1,12 @@
 #include <cstdint>
 #include <cstdlib>
 
-#include "DemoApplication.h"
-#include "Log/Logger.h"
+#include "demo_application.h"
+#include "Log/logger.h"
 
 /// @brief Demo 服务器入口。
 ///
-/// 流程：main → DemoApplication → 组件管理器 → 网络 → 监听 → 接收 → 协议 → 响应。
+/// 流程：main → CDemoApplication → 组件管理器 → 网络 → 监听 → 接收 → 协议 → 响应。
 int main(int argc, char* argv[])
 {
     // 解析端口参数（0 表示从配置文件读取）
@@ -20,16 +20,16 @@ int main(int argc, char* argv[])
         }
     }
 
-    demo::DemoApplication app(port);
+    demo::CDemoApplication app(port);
 
     if (!app.Initialize())
     {
-        common::Logger::Instance().Error("Demo 初始化失败");
+        common::CLogger::Instance().Error("Demo 初始化失败");
         return -1;
     }
     if (!app.Start())
     {
-        common::Logger::Instance().Error("Demo 启动失败（端口可能被占用）");
+        common::CLogger::Instance().Error("Demo 启动失败（端口可能被占用）");
         app.Shutdown();
         return -1;
     }
@@ -37,6 +37,6 @@ int main(int argc, char* argv[])
     int result = app.Run();
 
     app.Shutdown();
-    common::Logger::Instance().Info("Demo 服务器已退出");
+    common::CLogger::Instance().Info("Demo 服务器已退出");
     return result;
 }

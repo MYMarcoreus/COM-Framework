@@ -8,7 +8,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "Protocol/DemoProtocol.h"
+#include "Protocol/demo_protocol.h"
 
 namespace
 {
@@ -62,11 +62,11 @@ int main(int argc, char* argv[])
     std::printf("已连接 %s:%u\n", host, static_cast<unsigned>(port));
 
     // ② 发送 PING，期望 PONG
-    std::string ping = demo::DemoProtocol::BuildPing();
+    std::string ping = demo::CDemoProtocol::BuildPing();
     DoRequest(fd, ping, "PING");
 
     // ③ 发送 ECHO，期望相同负载
-    std::string echo = demo::DemoProtocol::BuildPacket(demo::kCmdEcho, "Hello ServerCore");
+    std::string echo = demo::CDemoProtocol::BuildPacket(demo::kCmdEcho, "Hello ServerCore");
     DoRequest(fd, echo, "ECHO");
 
     ::close(fd);
@@ -127,7 +127,7 @@ void DoRequest(int fd, const std::string& request, const char* label)
     std::uint32_t len = 0;
     std::memcpy(&len, header, sizeof(len));
     len = ntohl(len);
-    if (len < 1 || len > demo::DemoProtocol::kMaxPacketSize)
+    if (len < 1 || len > demo::CDemoProtocol::kMaxPacketSize)
     {
         std::printf("[%s] 非法响应长度: %u\n", label, static_cast<unsigned>(len));
         return;

@@ -1,0 +1,66 @@
+#pragma once
+
+#include <cstdint>
+#include <map>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include "Component/component.h"
+#include "Message/i_message_router.h"
+
+namespace sc {
+
+/// @brief 消息路由器组件。
+///
+/// 按连接维护接收缓冲，使用业务提供的提取器切分完整消息，并按类型分发。
+///
+/// @note 同一连接的数据应串行进入（网络层保证），OnData/OnClose 与
+///       SetExtractor/RegisterHandler 可跨线程安全调用。
+class CMessageRouter : public CComponent, public IMessageRouter
+{
+public:
+    CMessageRouter();
+
+    virtual ~CMessageRouter();
+
+    // 设置消息提取器。
+    void SetExtractor(const MessageExtractor& extractor) override;
+
+    // 注册消息处理器。
+    SubscriptionId RegisterHandler(int type, const MessageHandler& handler) override;
+
+    // 反注册消息处理器。
+    bool UnregisterHandler(SubscriptionId id) override;
+
+    // 数据入口。
+    void OnData(ConnectionId id, const char* data, size_t len) override;
+
+    // 连接关闭清理。
+    void OnClose(ConnectionId id) override;
+
+protected:
+    // 接口查询实现。
+    bool QueryInterfaceImpl(const InterfaceId& iid, void** ppv) override;
+
+private:
+    struct HandlerEntry
+    {
+        int type;
+        MessageHandler handler;
+
+        HandlerEntry() : type(0) {}
+    };
+
+    // 按类型分发一条消息。
+    void Dispatch(ConnectionId id, int type, const char* payload, size_t payloadSize);
+
+    MessageExtractor extractor_;
+    std::map<ConnectionId, std::string> buffers_;
+    std::map<SubscriptionId, HandlerEntry> handlers_;
+    std::map<int, std::vector<SubscriptionId> > byType_;
+    mutable std::mutex mutex_;
+    SubscriptionId nextId_;
+};
+
+} // namespace sc
