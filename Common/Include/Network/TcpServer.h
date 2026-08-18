@@ -71,7 +71,15 @@ public:
     // 指定连接的对端地址；连接不存在时返回空串。
     std::string PeerAddress(ConnectionId nId) const;
 
+    // 设置空闲超时（秒，0 表示禁用）。周期扫描并自动关闭空闲超时连接。
+    void SetIdleTimeout(uint32_t nSeconds);
+
 private:
+    // 启动空闲检测定时器（事件循环线程内调用）。
+    void StartIdleTimer();
+
+    // 扫描并关闭空闲超时的连接（事件循环线程内调用）。
+    void CheckIdleConnections();
     // 事件循环线程入口。
     void ThreadMain();
 
@@ -105,6 +113,8 @@ private:
     std::atomic<uint64_t> m_nTotalClosed;
     mutable std::mutex m_mutexPeer;
     std::map<ConnectionId, std::string> m_mapPeerAddresses;
+    std::atomic<uint32_t> m_nIdleSeconds;
+    std::unique_ptr<asio::steady_timer> m_pIdleTimer;
 };
 
 } // namespace common

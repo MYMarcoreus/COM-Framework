@@ -1,5 +1,7 @@
 #include "Network/TcpConnection.h"
 
+#include <chrono>
+
 namespace common {
 
 namespace
@@ -19,7 +21,9 @@ CTcpConnection::CTcpConnection(asio::io_context& io, ConnectionId nId, asio::ip:
       m_socket(std::move(socket)),
       m_vecReadBuffer(kReadSize),
       m_bWriting(false),
-      m_bClosed(false)
+      m_bClosed(false),
+      m_nIdleSeconds(0),
+      m_lastActive(std::chrono::steady_clock::now())
 {
     asio::error_code ec;
     asio::ip::tcp::endpoint endpointPeer = m_socket.remote_endpoint(ec);
@@ -128,7 +132,10 @@ void CTcpConnection::HandleRead(const asio::error_code& ec, size_t nBytes)
         HandleError(ec);
         return;
     }
-    // ② 追加数据并通知上层
+    // ② 更新活跃时间（收到数据即活跃）
+    m_lastActive = std::chrono::steady_clock::now();
+
+    // ③ 追加数据并通知上层
     m_inputBuffer.Append(&m_vecReadBuffer[0], nBytes);
     if (m_fnDataCallback)
     {
@@ -136,6 +143,25 @@ void CTcpConnection::HandleRead(const asio::error_code& ec, size_t nBytes)
     }
     m_inputBuffer.RetrieveAll();
     DoRead();
+}
+
+/// @brief 设置空闲超时。
+///
+/// @param nSeconds 空闲秒数；0 表示不启用空闲检测。
+void CTcpConnection::SetIdleTimeout(uint32_t nSeconds)
+{
+    m_nIdleSeconds = nSeconds;
+}
+
+/// @brief 距上次活跃已空闲的秒数。
+///
+/// @return 空闲秒数。
+uint64_t CTcpConnection::IdleSeconds() const
+{
+    std::chrono::steady_clock::duration elapsed =
+        std::chrono::steady_clock::now() - m_lastActive;
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
 }
 
 /// @brief 追加待发送数据并启动写。

@@ -1,5 +1,6 @@
 #include "Network/TcpServer.h"
 
+#include <chrono>
 #include <functional>
 #include <vector>
 
@@ -8,7 +9,8 @@ namespace common {
 /// @brief 创建 TCP 服务器。
 CTcpServer::CTcpServer()
     : m_nNextId(1), m_nPort(0), m_bRunning(false),
-      m_nConnectionCount(0), m_nTotalAccepted(0), m_nTotalClosed(0)
+      m_nConnectionCount(0), m_nTotalAccepted(0), m_nTotalClosed(0),
+      m_nIdleSeconds(0)
 {
 }
 
@@ -62,6 +64,13 @@ bool CTcpServer::Start(uint16_t nPort, const AcceptCallback& fnAccept,
     m_nPort = nPort;
     m_bRunning.store(true);
     m_thread = std::thread(&CTcpServer::ThreadMain, this);
+    asio::post(m_io, [this]()
+    {
+        if (m_nIdleSeconds.load() != 0 && m_pIdleTimer == nullptr)
+        {
+            StartIdleTimer();
+        }
+    });
     return true;
 }
 
@@ -219,11 +228,85 @@ void CTcpServer::Close(ConnectionId nId)
     });
 }
 
+/// @brief 设置空闲超时。
+///
+/// @param nSeconds 空闲秒数；0 表示禁用空闲检测。
+void CTcpServer::SetIdleTimeout(uint32_t nSeconds)
+{
+    m_nIdleSeconds.store(nSeconds);
+    if (nSeconds != 0)
+    {
+        asio::post(m_io, [this]()
+        {
+            if (m_pIdleTimer == nullptr)
+            {
+                StartIdleTimer();
+            }
+        });
+    }
+}
+
+/// @brief 启动空闲检测定时器。
+///
+/// 每秒触发一次，扫描并关闭空闲超时的连接；服务器停止时取消。
+void CTcpServer::StartIdleTimer()
+{
+    if (m_nIdleSeconds.load() == 0)
+    {
+        return;
+    }
+    m_pIdleTimer.reset(new asio::steady_timer(m_io));
+    m_pIdleTimer->expires_after(std::chrono::seconds(1));
+    m_pIdleTimer->async_wait(
+        [this](const asio::error_code& ec)
+        {
+            if (ec)
+            {
+                return; // 定时器被取消（服务器关闭中）
+            }
+            CheckIdleConnections();
+            if (m_bRunning.load())
+            {
+                StartIdleTimer(); // 周期继续
+            }
+        });
+}
+
+/// @brief 扫描并关闭空闲超时的连接。
+///
+/// 仅扫描，关闭通过 Close 投递到事件循环线程执行。
+void CTcpServer::CheckIdleConnections()
+{
+    uint32_t nIdle = m_nIdleSeconds.load();
+    if (nIdle == 0)
+    {
+        return;
+    }
+    std::vector<ConnectionId> vecIdle;
+    for (std::map<ConnectionId, CTcpConnection::Ptr>::const_iterator it = m_mapConnections.begin();
+         it != m_mapConnections.end(); ++it)
+    {
+        if (it->second->IdleSeconds() >= nIdle)
+        {
+            vecIdle.push_back(it->first);
+        }
+    }
+    for (size_t i = 0; i < vecIdle.size(); ++i)
+    {
+        Close(vecIdle[i]);
+    }
+}
+
 /// @brief 在 io 线程内执行关闭流程。
 ///
 /// 关闭 acceptor 与所有连接，幂等可重复调用。
 void CTcpServer::ShutdownOnIoThread()
 {
+    if (m_pIdleTimer != nullptr)
+    {
+        static_cast<void>(m_pIdleTimer->cancel());
+        m_pIdleTimer.reset();
+    }
     if (m_pAcceptor != nullptr && m_pAcceptor->is_open())
     {
         asio::error_code ignore;

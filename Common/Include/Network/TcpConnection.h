@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -57,6 +58,12 @@ public:
     // 是否已关闭。
     bool IsClosed() const;
 
+    // 设置空闲超时（秒，0 表示不启用空闲检测）。
+    void SetIdleTimeout(uint32_t nSeconds);
+
+    // 距上次活跃（收到数据）已空闲的秒数。
+    uint64_t IdleSeconds() const;
+
 private:
     // 发起一次异步读。
     void DoRead();
@@ -90,6 +97,8 @@ private:
     CloseCallback m_fnCloseCallback;
     std::atomic<bool> m_bWriting;
     std::atomic<bool> m_bClosed;
+    uint32_t m_nIdleSeconds;
+    std::chrono::steady_clock::time_point m_lastActive;
 };
 
 } // namespace common
