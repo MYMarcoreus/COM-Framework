@@ -7,7 +7,8 @@ namespace sc {
 /// @brief 创建异步执行器组件。
 ///
 /// @param nThreadCount 工作线程数量。
-CAsyncExecutorComponent::CAsyncExecutorComponent(size_t nThreadCount) : m_nThreadCount(nThreadCount)
+CAsyncExecutorComponent::CAsyncExecutorComponent(size_t nThreadCount)
+    : CModule("async-executor"), m_nThreadCount(nThreadCount)
 {
 }
 
@@ -62,7 +63,7 @@ bool CAsyncExecutorComponent::QueryInterfaceImpl(const InterfaceId& iid, void** 
         *ppv = static_cast<IAsyncExecutor*>(this);
         return true;
     }
-    return CComponent::QueryInterfaceImpl(iid, ppv);
+    return CModule::QueryInterfaceImpl(iid, ppv);
 }
 
 } // namespace sc

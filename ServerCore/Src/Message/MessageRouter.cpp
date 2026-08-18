@@ -5,7 +5,7 @@
 namespace sc {
 
 /// @brief 创建消息路由器。
-CMessageRouter::CMessageRouter() : m_nNextId(1)
+CMessageRouter::CMessageRouter() : CModule("message-router"), m_nNextId(1)
 {
 }
 
@@ -193,7 +193,7 @@ bool CMessageRouter::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
         *ppv = static_cast<IMessageRouter*>(this);
         return true;
     }
-    return CComponent::QueryInterfaceImpl(iid, ppv);
+    return CModule::QueryInterfaceImpl(iid, ppv);
 }
 
 } // namespace sc

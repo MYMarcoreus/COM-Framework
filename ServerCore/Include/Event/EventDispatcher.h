@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "Component/Component.h"
+#include "Module/Module.h"
 #include "Event/IEventDispatcher.h"
 
 namespace sc {
@@ -15,8 +15,8 @@ namespace sc {
 ///
 /// 线程安全：订阅 / 取消订阅 / 发布均可跨线程调用。
 /// 发布时在锁外调用处理器，避免处理器内再次发布导致死锁。
-/// 可作为组件注册到 CComponentManager（IID_EventDispatcher）。
-class CEventDispatcher : public CComponent, public IEventDispatcher
+/// 可作为模块注册到 CModuleManager（IID_EventDispatcher）。
+class CEventDispatcher : public CModule, public IEventDispatcher
 {
 public:
     CEventDispatcher();

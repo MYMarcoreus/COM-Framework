@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include "Component/Component.h"
+#include "Module/Module.h"
 #include "Config/Config.h"
 
 namespace sc {
@@ -38,7 +38,7 @@ public:
 /// @brief 配置组件。
 ///
 /// 内部持有独立 common::CConfig 实例。
-class CConfigComponent : public CComponent, public IConfig
+class CConfigComponent : public CModule, public IConfig
 {
 public:
     CConfigComponent();

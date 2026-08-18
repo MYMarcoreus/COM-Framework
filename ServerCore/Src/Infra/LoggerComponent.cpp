@@ -7,7 +7,7 @@
 namespace sc {
 
 /// @brief 创建日志组件。
-CLoggerComponent::CLoggerComponent()
+CLoggerComponent::CLoggerComponent() : CModule("logger")
 {
 }
 
@@ -62,7 +62,7 @@ bool CLoggerComponent::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
         *ppv = static_cast<ILogger*>(this);
         return true;
     }
-    return CComponent::QueryInterfaceImpl(iid, ppv);
+    return CModule::QueryInterfaceImpl(iid, ppv);
 }
 
 } // namespace sc

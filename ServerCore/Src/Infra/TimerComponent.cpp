@@ -5,7 +5,7 @@
 namespace sc {
 
 /// @brief 创建定时器组件。
-CTimerComponent::CTimerComponent()
+CTimerComponent::CTimerComponent() : CModule("timer")
 {
 }
 
@@ -54,7 +54,7 @@ bool CTimerComponent::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
         *ppv = static_cast<ITimer*>(this);
         return true;
     }
-    return CComponent::QueryInterfaceImpl(iid, ppv);
+    return CModule::QueryInterfaceImpl(iid, ppv);
 }
 
 } // namespace sc

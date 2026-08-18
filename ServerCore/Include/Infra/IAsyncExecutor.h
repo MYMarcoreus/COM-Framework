@@ -5,7 +5,7 @@
 #include <memory>
 
 #include "Async/AsyncExecutor.h"
-#include "Component/Component.h"
+#include "Module/Module.h"
 
 namespace sc {
 
@@ -38,7 +38,7 @@ public:
 /// @brief 异步执行器组件。
 ///
 /// 内部持有 common::CAsyncExecutor 实例。
-class CAsyncExecutorComponent : public CComponent, public IAsyncExecutor
+class CAsyncExecutorComponent : public CModule, public IAsyncExecutor
 {
 public:
     explicit CAsyncExecutorComponent(size_t nThreadCount = 1);

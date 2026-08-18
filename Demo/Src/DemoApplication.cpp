@@ -53,8 +53,8 @@ bool CDemoApplication::RegisterComponents()
     }
 
     // ② 注册网络组件
-    sc::IUnknown* network = new sc::CNetworkComponent();
-    if (!m_componentManager.RegisterComponent(sc::IID_INetwork(), network))
+    sc::IModule* network = new sc::CNetworkComponent();
+    if (!m_moduleManager.RegisterModule(sc::IID_INetwork(), network))
     {
         network->Release();
         return false;
@@ -62,8 +62,8 @@ bool CDemoApplication::RegisterComponents()
     network->Release(); // 管理器已持有引用
 
     // ② 注册事件分发器组件
-    sc::IUnknown* events = new sc::CEventDispatcher();
-    if (!m_componentManager.RegisterComponent(sc::IID_EventDispatcher(), events))
+    sc::IModule* events = new sc::CEventDispatcher();
+    if (!m_moduleManager.RegisterModule(sc::IID_EventDispatcher(), events))
     {
         events->Release();
         return false;
@@ -72,7 +72,7 @@ bool CDemoApplication::RegisterComponents()
 
     // ③ 注册协议处理服务
     CDemoService* service = new CDemoService();
-    if (!m_componentManager.RegisterComponent(sc::IID_INetworkHandler(), service))
+    if (!m_moduleManager.RegisterModule(sc::IID_INetworkHandler(), service))
     {
         service->Release();
         return false;
@@ -110,7 +110,7 @@ bool CDemoApplication::RegisterModules()
     timer->Release(); // 管理器已持有引用
 
     // ③ 网络模块：关联组件并启动 TCP 服务器
-    sc::IModule* network = new CDemoNetworkModule(m_componentManager, m_pService, m_nPort);
+    sc::IModule* network = new CDemoNetworkModule(m_moduleManager, m_pService, m_nPort);
     if (!m_moduleManager.RegisterModule(network))
     {
         network->Release();
@@ -127,7 +127,7 @@ bool CDemoApplication::RegisterModules()
 /// @return true。
 bool CDemoApplication::OnInitialize()
 {
-    sc::IUnknown* eventObject = m_componentManager.GetComponent(sc::IID_EventDispatcher());
+    sc::IUnknown* eventObject = m_moduleManager.GetModuleByIid(sc::IID_EventDispatcher());
     if (eventObject == nullptr)
     {
         return false;

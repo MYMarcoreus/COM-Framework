@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "Component/Component.h"
+#include "Module/Module.h"
 #include "Timer/TimerManager.h"
 
 namespace sc {
@@ -43,7 +43,7 @@ public:
 /// @brief 定时器组件。
 ///
 /// 内部持有 common::CTimerManager 实例。
-class CTimerComponent : public CComponent, public ITimer
+class CTimerComponent : public CModule, public ITimer
 {
 public:
     CTimerComponent();

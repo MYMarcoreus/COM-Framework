@@ -12,9 +12,9 @@ namespace servera {
 /// @param componentManager 组件管理器，用于获取网络与回显服务组件。
 /// @param service          回显服务（借用指针，由组件管理器持有）。
 /// @param port             监听端口。
-CServerNetworkModule::CServerNetworkModule(sc::CComponentManager& componentManager,
+CServerNetworkModule::CServerNetworkModule(sc::CModuleManager& moduleManager,
                                          CEchoService* service, std::uint16_t port)
-    : sc::CModule("network"), m_componentManager(componentManager),
+    : sc::CModule("network"), m_moduleManager(moduleManager),
       m_pService(service), m_nPort(port)
 {
 }
@@ -30,7 +30,7 @@ CServerNetworkModule::~CServerNetworkModule()
 bool CServerNetworkModule::Initialize()
 {
     // ① 获取网络接口
-    sc::IUnknown* networkObject = m_componentManager.GetComponent(sc::IID_INetwork());
+    sc::IUnknown* networkObject = m_moduleManager.GetModuleByIid(sc::IID_INetwork());
     if (networkObject == nullptr)
     {
         return false;
@@ -43,7 +43,7 @@ bool CServerNetworkModule::Initialize()
     m_pNetwork.Reset(static_cast<sc::INetwork*>(raw));
 
     // ② 获取回显服务接口
-    sc::IUnknown* serviceObject = m_componentManager.GetComponent(sc::IID_INetworkHandler());
+    sc::IUnknown* serviceObject = m_moduleManager.GetModuleByIid(sc::IID_INetworkHandler());
     if (serviceObject == nullptr)
     {
         return false;
@@ -55,7 +55,7 @@ bool CServerNetworkModule::Initialize()
     m_pHandler.Reset(static_cast<sc::INetworkHandler*>(raw));
 
     // ③ 获取事件分发器
-    sc::IUnknown* eventObject = m_componentManager.GetComponent(sc::IID_EventDispatcher());
+    sc::IUnknown* eventObject = m_moduleManager.GetModuleByIid(sc::IID_EventDispatcher());
     if (eventObject != nullptr)
     {
         if (eventObject->QueryInterface(sc::IID_EventDispatcher(), &raw))

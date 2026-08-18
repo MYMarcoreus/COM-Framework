@@ -5,7 +5,7 @@
 namespace demo {
 
 /// @brief 创建 Demo 协议处理服务。
-CDemoService::CDemoService()
+CDemoService::CDemoService() : sc::CModule("service")
 {
 }
 
@@ -107,7 +107,7 @@ bool CDemoService::QueryInterfaceImpl(const sc::InterfaceId& iid, void** ppv)
         *ppv = static_cast<sc::INetworkHandler*>(this);
         return true;
     }
-    return sc::CComponent::QueryInterfaceImpl(iid, ppv);
+    return sc::CModule::QueryInterfaceImpl(iid, ppv);
 }
 
 /// @brief 记录日志。

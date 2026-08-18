@@ -5,7 +5,7 @@
 namespace sc {
 
 /// @brief 创建事件分发器。
-CEventDispatcher::CEventDispatcher() : m_nNextId(1)
+CEventDispatcher::CEventDispatcher() : CModule("event"), m_nNextId(1)
 {
 }
 
@@ -134,7 +134,7 @@ bool CEventDispatcher::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
         *ppv = static_cast<IEventDispatcher*>(this);
         return true;
     }
-    return CComponent::QueryInterfaceImpl(iid, ppv);
+    return CModule::QueryInterfaceImpl(iid, ppv);
 }
 
 } // namespace sc

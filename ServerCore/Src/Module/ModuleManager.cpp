@@ -1,5 +1,7 @@
 #include "Module/ModuleManager.h"
 
+#include <chrono>
+
 namespace sc {
 
 /// @brief 创建模块管理器。
@@ -26,7 +28,7 @@ bool CModuleManager::RegisterModule(IModule* pModule)
     {
         return false;
     }
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     const char* strName = pModule->GetName();
     if (strName == nullptr || strName[0] == '\0')
     {
@@ -42,6 +44,33 @@ bool CModuleManager::RegisterModule(IModule* pModule)
     return true;
 }
 
+/// @brief 按接口标识注册模块。
+///
+/// 用于服务定位（如按 INetwork 获取网络模块）；同一接口标识只能注册一次。
+/// 注册成功后管理器持有模块的一个引用。
+///
+/// @param iid 接口标识。
+/// @param module 模块接口指针。
+///
+/// @return true 注册成功；false 参数非法或接口标识重复。
+bool CModuleManager::RegisterModule(const InterfaceId& iid, IModule* pModule)
+{
+    if (iid == nullptr || pModule == nullptr)
+    {
+        return false;
+    }
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    std::string strKey(iid);
+    if (m_mapIndexByIid.find(strKey) != m_mapIndexByIid.end())
+    {
+        return false; // 接口标识重复
+    }
+    pModule->AddRef();
+    m_mapIndexByIid[strKey] = m_vecModules.size();
+    m_vecModules.push_back(Entry(pModule, strKey));
+    return true;
+}
+
 /// @brief 根据名称获取模块。
 ///
 /// @param strName 模块名称。
@@ -49,9 +78,29 @@ bool CModuleManager::RegisterModule(IModule* pModule)
 /// @return 借用指针（不增加引用计数）；未找到返回 nullptr。
 IModule* CModuleManager::GetModule(const char* strName) const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     std::map<std::string, size_t>::const_iterator it = m_mapIndexByName.find(strName);
     if (it == m_mapIndexByName.end())
+    {
+        return nullptr;
+    }
+    return m_vecModules[it->second].module;
+}
+
+/// @brief 根据接口标识获取模块。
+///
+/// @param iid 接口标识。
+///
+/// @return 借用指针（不增加引用计数）；未找到返回 nullptr。
+IModule* CModuleManager::GetModuleByIid(const InterfaceId& iid) const
+{
+    if (iid == nullptr)
+    {
+        return nullptr;
+    }
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    std::map<std::string, size_t>::const_iterator it = m_mapIndexByIid.find(std::string(iid));
+    if (it == m_mapIndexByIid.end())
     {
         return nullptr;
     }
@@ -65,7 +114,7 @@ IModule* CModuleManager::GetModule(const char* strName) const
 /// @return 模块状态；未找到返回 kCreated。
 ModuleState CModuleManager::GetModuleState(const char* strName) const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     std::map<std::string, size_t>::const_iterator it = m_mapIndexByName.find(strName);
     if (it == m_mapIndexByName.end())
     {
@@ -85,7 +134,7 @@ bool CModuleManager::UnregisterModule(const char* strName)
 {
     IModule* pModule = nullptr;
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
         std::map<std::string, size_t>::iterator it = m_mapIndexByName.find(strName);
         if (it == m_mapIndexByName.end())
         {
@@ -94,11 +143,70 @@ bool CModuleManager::UnregisterModule(const char* strName)
         size_t nIndex = it->second;
         pModule = m_vecModules[nIndex].module;
         m_vecModules.erase(m_vecModules.begin() + static_cast<std::ptrdiff_t>(nIndex));
-        // 向量删除后重建名称索引
+        // 向量删除后重建名称与接口索引
         m_mapIndexByName.clear();
+        m_mapIndexByIid.clear();
         for (size_t i = 0; i < m_vecModules.size(); ++i)
         {
-            m_mapIndexByName[m_vecModules[i].module->GetName()] = i;
+            if (!m_vecModules[i].strIid.empty())
+            {
+                m_mapIndexByIid[m_vecModules[i].strIid] = i;
+            }
+            else
+            {
+                const char* strName = m_vecModules[i].module->GetName();
+                if (strName != nullptr && strName[0] != '\0')
+                {
+                    m_mapIndexByName[strName] = i;
+                }
+            }
+        }
+    }
+    pModule->Release();
+    return true;
+}
+
+/// @brief 反注册接口标识对应的模块。
+///
+/// 移除模块并释放引用（锁外释放，避免模块析构时重入）。
+///
+/// @param iid 接口标识。
+///
+/// @return true 移除成功；false 未找到。
+bool CModuleManager::UnregisterModuleByIid(const InterfaceId& iid)
+{
+    if (iid == nullptr)
+    {
+        return false;
+    }
+    IModule* pModule = nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
+        std::map<std::string, size_t>::iterator it = m_mapIndexByIid.find(std::string(iid));
+        if (it == m_mapIndexByIid.end())
+        {
+            return false;
+        }
+        size_t nIndex = it->second;
+        pModule = m_vecModules[nIndex].module;
+        m_vecModules.erase(m_vecModules.begin() + static_cast<std::ptrdiff_t>(nIndex));
+        // 向量删除后重建名称与接口索引
+        m_mapIndexByName.clear();
+        m_mapIndexByIid.clear();
+        for (size_t i = 0; i < m_vecModules.size(); ++i)
+        {
+            if (!m_vecModules[i].strIid.empty())
+            {
+                m_mapIndexByIid[m_vecModules[i].strIid] = i;
+            }
+            else
+            {
+                const char* strName = m_vecModules[i].module->GetName();
+                if (strName != nullptr && strName[0] != '\0')
+                {
+                    m_mapIndexByName[strName] = i;
+                }
+            }
         }
     }
     pModule->Release();
@@ -110,7 +218,7 @@ void CModuleManager::Clear()
 {
     std::vector<IModule*> vecToRelease;
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard<std::recursive_mutex> lock(m_mutex);
         vecToRelease.reserve(m_vecModules.size());
         for (size_t i = 0; i < m_vecModules.size(); ++i)
         {
@@ -118,6 +226,7 @@ void CModuleManager::Clear()
         }
         m_vecModules.clear();
         m_mapIndexByName.clear();
+        m_mapIndexByIid.clear();
     }
     for (size_t i = 0; i < vecToRelease.size(); ++i)
     {
@@ -128,7 +237,7 @@ void CModuleManager::Clear()
 /// @brief 已注册模块数量。
 size_t CModuleManager::Size() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     return m_vecModules.size();
 }
 
@@ -139,7 +248,7 @@ size_t CModuleManager::Size() const
 /// @return true 全部初始化成功；false 存在失败并已回滚。
 bool CModuleManager::InitializeAll()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     for (size_t i = 0; i < m_vecModules.size(); ++i)
     {
         Entry& e = m_vecModules[i];
@@ -164,7 +273,7 @@ bool CModuleManager::InitializeAll()
 /// @return true 全部启动成功；false 存在失败并已回滚。
 bool CModuleManager::StartAll()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     for (size_t i = 0; i < m_vecModules.size(); ++i)
     {
         Entry& e = m_vecModules[i];
@@ -185,7 +294,7 @@ bool CModuleManager::StartAll()
 /// @brief 统一停止所有模块（逆序）。
 void CModuleManager::StopAll()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     for (size_t i = m_vecModules.size(); i > 0; --i)
     {
         Entry& e = m_vecModules[i - 1];
@@ -200,7 +309,7 @@ void CModuleManager::StopAll()
 /// @brief 统一关闭所有模块（逆序）。
 void CModuleManager::ShutdownAll()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     for (size_t i = m_vecModules.size(); i > 0; --i)
     {
         Entry& e = m_vecModules[i - 1];
@@ -248,6 +357,86 @@ void CModuleManager::RollbackStarted()
             e.module->Shutdown();
             e.state = ModuleState::kShutdown;
         }
+    }
+}
+
+/// @brief 生成所有模块的状态报告。
+///
+/// @return 多行状态文本，每行对应一个模块。
+std::string CModuleManager::StatusReport() const
+{
+    std::vector<IModule*> vecModules;
+    CollectModules(vecModules);
+    std::string strReport;
+    for (size_t i = 0; i < vecModules.size(); ++i)
+    {
+        if (!strReport.empty())
+        {
+            strReport += "\n";
+        }
+        strReport += vecModules[i]->GetStatus();
+    }
+    return strReport;
+}
+
+/// @brief 带超时地统一停止所有模块。
+///
+/// @param nTimeoutMs 总超时毫秒数。
+///
+/// @return true 表示在超时前完成；false 表示已超时（跳过剩余模块）。
+bool CModuleManager::StopAllWithTimeout(uint32_t nTimeoutMs)
+{
+    std::vector<IModule*> vecModules;
+    CollectModules(vecModules);
+    std::chrono::steady_clock::time_point tpBegin = std::chrono::steady_clock::now();
+    bool bComplete = true;
+    for (size_t i = vecModules.size(); i > 0; --i)
+    {
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - tpBegin).count() >= static_cast<int64_t>(nTimeoutMs))
+        {
+            bComplete = false;
+            break;
+        }
+        vecModules[i - 1]->Stop();
+    }
+    return bComplete;
+}
+
+/// @brief 带超时地统一关闭所有模块。
+///
+/// @param nTimeoutMs 总超时毫秒数。
+///
+/// @return true 表示在超时前完成；false 表示已超时（跳过剩余模块）。
+bool CModuleManager::ShutdownAllWithTimeout(uint32_t nTimeoutMs)
+{
+    std::vector<IModule*> vecModules;
+    CollectModules(vecModules);
+    std::chrono::steady_clock::time_point tpBegin = std::chrono::steady_clock::now();
+    bool bComplete = true;
+    for (size_t i = vecModules.size(); i > 0; --i)
+    {
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - tpBegin).count() >= static_cast<int64_t>(nTimeoutMs))
+        {
+            bComplete = false;
+            break;
+        }
+        vecModules[i - 1]->Shutdown();
+    }
+    return bComplete;
+}
+
+/// @brief 收集所有已注册模块（锁外调用）。
+///
+/// @param vecOut 输出模块列表（按注册顺序）。
+void CModuleManager::CollectModules(std::vector<IModule*>& vecOut) const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    vecOut.reserve(m_vecModules.size());
+    for (size_t i = 0; i < m_vecModules.size(); ++i)
+    {
+        vecOut.push_back(m_vecModules[i].module);
     }
 }
 

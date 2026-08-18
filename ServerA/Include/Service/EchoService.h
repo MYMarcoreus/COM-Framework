@@ -2,7 +2,7 @@
 
 #include <cstddef>
 
-#include "Component/Component.h"
+#include "Module/Module.h"
 #include "Component/ScopedInterfacePtr.h"
 #include "Network/INetwork.h"
 #include "Network/INetworkHandler.h"
@@ -13,7 +13,7 @@ namespace servera {
 ///
 /// 实现 INetworkHandler：记录连接事件，收到数据原样返回。
 /// 属于 ServerA 的业务层，不属于 ServerCore。
-class CEchoService : public sc::CComponent, public sc::INetworkHandler
+class CEchoService : public sc::CModule, public sc::INetworkHandler
 {
 public:
     CEchoService();

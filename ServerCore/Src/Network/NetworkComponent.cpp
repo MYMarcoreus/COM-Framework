@@ -8,7 +8,7 @@
 namespace sc {
 
 /// @brief 创建网络组件。
-CNetworkComponent::CNetworkComponent() : m_nPort(0)
+CNetworkComponent::CNetworkComponent() : CModule("network"), m_nPort(0)
 {
 }
 
@@ -178,7 +178,7 @@ bool CNetworkComponent::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
         *ppv = static_cast<INetwork*>(this);
         return true;
     }
-    return CComponent::QueryInterfaceImpl(iid, ppv);
+    return CModule::QueryInterfaceImpl(iid, ppv);
 }
 
 } // namespace sc

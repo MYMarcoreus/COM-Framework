@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Component/ComponentManager.h"
+#include "Module/ModuleManager.h"
 #include "Module/Module.h"
 
 namespace servera {
@@ -13,7 +13,7 @@ namespace servera {
 class CServerLoggerModule : public sc::CModule
 {
 public:
-    explicit CServerLoggerModule(sc::CComponentManager& componentManager);
+    explicit CServerLoggerModule(sc::CModuleManager& moduleManager);
 
     virtual ~CServerLoggerModule();
 
@@ -21,7 +21,7 @@ public:
     bool Initialize() override;
 
 private:
-    sc::CComponentManager& m_componentManager;
+    sc::CModuleManager& m_moduleManager;
 };
 
 } // namespace servera

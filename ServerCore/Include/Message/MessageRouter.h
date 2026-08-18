@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "Component/Component.h"
+#include "Module/Module.h"
 #include "Message/IMessageRouter.h"
 
 namespace sc {
@@ -17,7 +17,7 @@ namespace sc {
 ///
 /// @note 同一连接的数据应串行进入（网络层保证），OnData/OnClose 与
 ///       SetExtractor/RegisterHandler 可跨线程安全调用。
-class CMessageRouter : public CComponent, public IMessageRouter
+class CMessageRouter : public CModule, public IMessageRouter
 {
 public:
     CMessageRouter();

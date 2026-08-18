@@ -6,8 +6,8 @@
 #include <mutex>
 #include <string>
 
-#include "Component/Component.h"
 #include "Component/ScopedInterfacePtr.h"
+#include "Module/Module.h"
 #include "Network/INetwork.h"
 
 namespace common { class CTcpServer; }
@@ -19,8 +19,8 @@ namespace sc {
 /// @brief 网络组件。
 ///
 /// 实现 INetwork 接口，内部使用 CTcpServer 提供 TCP 服务器能力。
-/// 可作为组件注册到 CComponentManager 中。
-class CNetworkComponent : public CComponent, public INetwork
+/// 可作为模块注册到 CModuleManager 中。
+class CNetworkComponent : public CModule, public INetwork
 {
 public:
     CNetworkComponent();

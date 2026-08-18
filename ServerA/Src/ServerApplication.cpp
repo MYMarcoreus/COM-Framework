@@ -34,8 +34,8 @@ CServerApplication::~CServerApplication()
 bool CServerApplication::RegisterComponents()
 {
     // ① 注册网络组件
-    sc::IUnknown* network = new sc::CNetworkComponent();
-    if (!m_componentManager.RegisterComponent(sc::IID_INetwork(), network))
+    sc::IModule* network = new sc::CNetworkComponent();
+    if (!m_moduleManager.RegisterModule(sc::IID_INetwork(), network))
     {
         network->Release();
         return false;
@@ -43,8 +43,8 @@ bool CServerApplication::RegisterComponents()
     network->Release(); // 管理器已持有引用
 
     // ② 注册事件分发器组件
-    sc::IUnknown* events = new sc::CEventDispatcher();
-    if (!m_componentManager.RegisterComponent(sc::IID_EventDispatcher(), events))
+    sc::IModule* events = new sc::CEventDispatcher();
+    if (!m_moduleManager.RegisterModule(sc::IID_EventDispatcher(), events))
     {
         events->Release();
         return false;
@@ -59,7 +59,7 @@ bool CServerApplication::RegisterComponents()
         configPath = "servera.ini";
     }
     config->LoadFile(configPath);
-    if (!m_componentManager.RegisterComponent(sc::IID_IConfig(), config))
+    if (!m_moduleManager.RegisterModule(sc::IID_IConfig(), config))
     {
         config->Release();
         return false;
@@ -67,8 +67,8 @@ bool CServerApplication::RegisterComponents()
     config->Release(); // 管理器已持有引用
 
     // ④ 注册日志组件
-    sc::IUnknown* logger = new sc::CLoggerComponent();
-    if (!m_componentManager.RegisterComponent(sc::IID_ILogger(), logger))
+    sc::IModule* logger = new sc::CLoggerComponent();
+    if (!m_moduleManager.RegisterModule(sc::IID_ILogger(), logger))
     {
         logger->Release();
         return false;
@@ -77,7 +77,7 @@ bool CServerApplication::RegisterComponents()
 
     // ⑤ 注册回显服务
     CEchoService* service = new CEchoService();
-    if (!m_componentManager.RegisterComponent(sc::IID_INetworkHandler(), service))
+    if (!m_moduleManager.RegisterModule(sc::IID_INetworkHandler(), service))
     {
         service->Release();
         return false;
@@ -93,7 +93,7 @@ bool CServerApplication::RegisterComponents()
 bool CServerApplication::RegisterModules()
 {
     // ① 日志模块（通过组件管理器按接口初始化）
-    sc::IModule* logger = new CServerLoggerModule(m_componentManager);
+    sc::IModule* logger = new CServerLoggerModule(m_moduleManager);
     if (!m_moduleManager.RegisterModule(logger))
     {
         logger->Release();
@@ -102,7 +102,7 @@ bool CServerApplication::RegisterModules()
     logger->Release(); // 管理器已持有引用
 
     // ② 网络模块
-    sc::IModule* network = new CServerNetworkModule(m_componentManager, m_pService, m_nPort);
+    sc::IModule* network = new CServerNetworkModule(m_moduleManager, m_pService, m_nPort);
     if (!m_moduleManager.RegisterModule(network))
     {
         network->Release();
@@ -119,7 +119,7 @@ bool CServerApplication::RegisterModules()
 /// @return true。
 bool CServerApplication::OnInitialize()
 {
-    sc::IUnknown* eventObject = m_componentManager.GetComponent(sc::IID_EventDispatcher());
+    sc::IUnknown* eventObject = m_moduleManager.GetModuleByIid(sc::IID_EventDispatcher());
     if (eventObject == nullptr)
     {
         return false;

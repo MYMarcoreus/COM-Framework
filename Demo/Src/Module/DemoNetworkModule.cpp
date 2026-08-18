@@ -12,9 +12,9 @@ namespace demo {
 /// @param componentManager 组件管理器，用于获取网络与协议处理组件。
 /// @param service          协议处理服务（借用指针，由组件管理器持有）。
 /// @param port             监听端口。
-CDemoNetworkModule::CDemoNetworkModule(sc::CComponentManager& componentManager,
+CDemoNetworkModule::CDemoNetworkModule(sc::CModuleManager& moduleManager,
                                      CDemoService* service, std::uint16_t port)
-    : sc::CModule("network"), m_componentManager(componentManager),
+    : sc::CModule("network"), m_moduleManager(moduleManager),
       m_pService(service), m_nPort(port)
 {
 }
@@ -33,7 +33,7 @@ CDemoNetworkModule::~CDemoNetworkModule()
 bool CDemoNetworkModule::Initialize()
 {
     // ① 获取网络接口
-    sc::IUnknown* networkObject = m_componentManager.GetComponent(sc::IID_INetwork());
+    sc::IUnknown* networkObject = m_moduleManager.GetModuleByIid(sc::IID_INetwork());
     if (networkObject == nullptr)
     {
         return false;
@@ -46,7 +46,7 @@ bool CDemoNetworkModule::Initialize()
     m_pNetwork.Reset(static_cast<sc::INetwork*>(raw));
 
     // ② 获取协议处理接口
-    sc::IUnknown* serviceObject = m_componentManager.GetComponent(sc::IID_INetworkHandler());
+    sc::IUnknown* serviceObject = m_moduleManager.GetModuleByIid(sc::IID_INetworkHandler());
     if (serviceObject == nullptr)
     {
         return false;
@@ -58,7 +58,7 @@ bool CDemoNetworkModule::Initialize()
     m_pHandler.Reset(static_cast<sc::INetworkHandler*>(raw));
 
     // ③ 获取事件分发器（用于发布生命周期事件）
-    sc::IUnknown* eventObject = m_componentManager.GetComponent(sc::IID_EventDispatcher());
+    sc::IUnknown* eventObject = m_moduleManager.GetModuleByIid(sc::IID_EventDispatcher());
     if (eventObject != nullptr)
     {
         if (eventObject->QueryInterface(sc::IID_EventDispatcher(), &raw))

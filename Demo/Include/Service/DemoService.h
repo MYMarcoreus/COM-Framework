@@ -3,7 +3,7 @@
 #include <map>
 #include <string>
 
-#include "Component/Component.h"
+#include "Module/Module.h"
 #include "Component/ScopedInterfacePtr.h"
 #include "Network/INetwork.h"
 #include "Network/INetworkHandler.h"
@@ -15,7 +15,7 @@ namespace demo {
 ///
 /// 实现 INetworkHandler，接收网络原始数据，按 Demo 协议解析并响应。
 /// 协议解析属于 Demo，不属于 ServerCore。
-class CDemoService : public sc::CComponent, public sc::INetworkHandler
+class CDemoService : public sc::CModule, public sc::INetworkHandler
 {
 public:
     CDemoService();

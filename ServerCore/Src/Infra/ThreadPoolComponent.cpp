@@ -7,7 +7,8 @@ namespace sc {
 /// @brief 创建线程池组件。
 ///
 /// @param nThreadCount 工作线程数量。
-CThreadPoolComponent::CThreadPoolComponent(size_t nThreadCount) : m_nThreadCount(nThreadCount)
+CThreadPoolComponent::CThreadPoolComponent(size_t nThreadCount)
+    : CModule("thread-pool"), m_nThreadCount(nThreadCount)
 {
 }
 
@@ -62,7 +63,7 @@ bool CThreadPoolComponent::QueryInterfaceImpl(const InterfaceId& iid, void** ppv
         *ppv = static_cast<IThreadPool*>(this);
         return true;
     }
-    return CComponent::QueryInterfaceImpl(iid, ppv);
+    return CModule::QueryInterfaceImpl(iid, ppv);
 }
 
 } // namespace sc

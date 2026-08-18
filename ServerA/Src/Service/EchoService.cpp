@@ -7,7 +7,7 @@
 namespace servera {
 
 /// @brief 创建回显服务。
-CEchoService::CEchoService()
+CEchoService::CEchoService() : sc::CModule("echo")
 {
 }
 
@@ -56,7 +56,7 @@ bool CEchoService::QueryInterfaceImpl(const sc::InterfaceId& iid, void** ppv)
         *ppv = static_cast<sc::INetworkHandler*>(this);
         return true;
     }
-    return sc::CComponent::QueryInterfaceImpl(iid, ppv);
+    return sc::CModule::QueryInterfaceImpl(iid, ppv);
 }
 
 /// @brief 记录日志。

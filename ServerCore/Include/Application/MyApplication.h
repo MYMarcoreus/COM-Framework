@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <string>
 
-#include "Component/ComponentManager.h"
 #include "Module/ModuleManager.h"
 
 namespace sc {
@@ -13,7 +12,7 @@ namespace sc {
 /// @brief 服务器应用程序基础类。
 ///
 /// 提供统一的初始化、启动、运行、停止和关闭生命周期。
-/// 通过 CComponentManager 组合基础组件，通过 CModuleManager 统一管理模块生命周期，
+/// 通过 CModuleManager 统一管理模块生命周期，
 /// 不硬编码具体实现。
 ///
 /// @note 派生类通过重写虚函数扩展服务器生命周期与组件/模块装配。
@@ -38,9 +37,6 @@ public:
 
     // 关闭应用程序并释放资源。
     virtual void Shutdown();
-
-    // 获取组件管理器。
-    CComponentManager& GetComponentManager();
 
     // 获取模块管理器。
     CModuleManager& GetModuleManager();
@@ -85,7 +81,6 @@ protected:
     // 关闭钩子。
     virtual void OnShutdown();
 
-    CComponentManager m_componentManager;
     CModuleManager m_moduleManager;
 
 private:

@@ -2,7 +2,7 @@
 
 #include <string>
 
-#include "Component/Component.h"
+#include "Module/Module.h"
 
 namespace sc {
 
@@ -43,7 +43,7 @@ public:
 /// @brief 日志组件。
 ///
 /// 内部代理 common::CLogger 全局单例。
-class CLoggerComponent : public CComponent, public ILogger
+class CLoggerComponent : public CModule, public ILogger
 {
 public:
     CLoggerComponent();

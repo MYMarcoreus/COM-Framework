@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "Component/IUnknown.h"
 
 namespace sc {
@@ -47,6 +49,9 @@ public:
 
     // 关闭模块（释放资源）。
     virtual void Shutdown() = 0;
+
+    // 状态报告：返回模块当前状态描述（如 "network:port=9000 conns=2"）。
+    virtual std::string GetStatus() const = 0;
 };
 
 } // namespace sc

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <map>
 #include <mutex>
 #include <string>
@@ -12,7 +13,7 @@ namespace sc {
 
 /// @brief 模块管理器（COM 思想：注册即持有引用，生命周期统一编排）。
 ///
-/// 与 CComponentManager 一致，注册时对模块 AddRef，移除/清空时 Release。
+/// 统一管理器：既可按名字注册业务模块，也可按接口标识注册服务模块（服务定位）。
 /// 生命周期统一管理：
 ///   - 初始化 / 启动：按注册顺序（先注册先启动，依赖在前）
 ///   - 停止 / 关闭：逆序（后启动先停止，栈式释放）
@@ -27,14 +28,23 @@ public:
     // 注册模块：验证名称非空且不重复，成功后持有模块一个引用。
     bool RegisterModule(IModule* pModule);
 
+    // 按接口标识注册模块（服务定位；模块可有可无名称），成功后持有模块一个引用。
+    bool RegisterModule(const InterfaceId& iid, IModule* pModule);
+
     // 根据名称获取模块（借用指针，不增加引用计数）。
     IModule* GetModule(const char* strName) const;
+
+    // 根据接口标识获取模块（借用指针，不增加引用计数）。
+    IModule* GetModuleByIid(const InterfaceId& iid) const;
 
     // 查询模块当前状态。
     ModuleState GetModuleState(const char* strName) const;
 
     // 反注册模块：释放引用并移除。
     bool UnregisterModule(const char* strName);
+
+    // 反注册接口标识对应的模块：释放引用并移除。
+    bool UnregisterModuleByIid(const InterfaceId& iid);
 
     // 移除并释放所有模块。
     void Clear();
@@ -54,13 +64,28 @@ public:
     // 统一关闭所有模块（逆序）。
     void ShutdownAll();
 
+    // 生成所有模块的状态报告（每行一个模块）。
+    std::string StatusReport() const;
+
+    // 带超时地统一停止所有模块；返回 true 表示在超时前完成。
+    bool StopAllWithTimeout(uint32_t nTimeoutMs);
+
+    // 带超时地统一关闭所有模块；返回 true 表示在超时前完成。
+    bool ShutdownAllWithTimeout(uint32_t nTimeoutMs);
+
 private:
+    // 收集所有已注册模块（锁外调用）。
+    void CollectModules(std::vector<IModule*>& vecOut) const;
     struct Entry
     {
         IModule* module;
         ModuleState state;
+        std::string strIid; // 接口标识注册键（空表示按名字注册）
 
-        explicit Entry(IModule* m) : module(m), state(ModuleState::kCreated) {}
+        explicit Entry(IModule* m)
+            : module(m), state(ModuleState::kCreated), strIid() {}
+        Entry(IModule* m, const std::string& iid)
+            : module(m), state(ModuleState::kCreated), strIid(iid) {}
     };
 
     // 逆序关闭所有处于已初始化状态的模块（回滚辅助）。
@@ -71,7 +96,10 @@ private:
 
     std::vector<Entry> m_vecModules;
     std::map<std::string, size_t> m_mapIndexByName;
-    mutable std::mutex m_mutex;
+    std::map<std::string, size_t> m_mapIndexByIid;
+    // 递归互斥量：生命周期编排在持锁状态下调用模块回调，
+    // 回调内再查询管理器（GetModule/GetModuleByIid）时允许重入，避免死锁。
+    mutable std::recursive_mutex m_mutex;
 };
 
 } // namespace sc

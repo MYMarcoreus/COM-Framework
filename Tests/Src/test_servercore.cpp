@@ -1,5 +1,5 @@
 /// @file test_servercore.cpp
-/// ServerCore 单元测试：组件生命周期 / 组件管理器编排 / 事件分发。
+/// ServerCore 单元测试：模块生命周期 / 模块管理器编排 / 事件分发。
 
 #include <atomic>
 #include <cstdio>
@@ -7,17 +7,17 @@
 
 #include "TestFramework.h"
 
-#include "Component/Component.h"
-#include "Component/ComponentManager.h"
 #include "Event/EventDispatcher.h"
+#include "Module/Module.h"
+#include "Module/ModuleManager.h"
 
 namespace {
 
-/// @brief 用于记录生命周期调用序的测试组件。
-class CTestComponent : public sc::CComponent
+/// @brief 用于记录生命周期调用序的测试模块。
+class CTestModule : public sc::CModule
 {
 public:
-    CTestComponent() : m_nInit(0), m_nStart(0), m_nStop(0), m_nShutdown(0) {}
+    CTestModule() : sc::CModule("test"), m_nInit(0), m_nStart(0), m_nStop(0), m_nShutdown(0) {}
 
     bool Initialize() override
     {
@@ -43,7 +43,7 @@ public:
 
     std::string GetStatus() const override
     {
-        return "test-component";
+        return "test-module";
     }
 
     int m_nInit;
@@ -52,50 +52,50 @@ public:
     int m_nShutdown;
 };
 
-/// @brief 测试组件接口标识。
-inline const sc::InterfaceId& IID_TestComponent()
+/// @brief 测试模块接口标识。
+inline const sc::InterfaceId& IID_TestModule()
 {
-    static const sc::InterfaceId iid = "sc::TestComponent";
+    static const sc::InterfaceId iid = "sc::TestModule";
     return iid;
 }
 
 } // namespace
 
 /// @brief 引用计数与接口查询。
-TEST(Component_RefCountAndQuery)
+TEST(Module_RefCountAndQuery)
 {
-    sc::CComponent* pComponent = new sc::CComponent();
-    ASSERT_EQ(pComponent->AddRef(), 2u); // 创建时 1，AddRef 后 2
-    ASSERT_EQ(pComponent->Release(), 1u);
+    sc::CModule* pModule = new sc::CModule("test");
+    ASSERT_EQ(pModule->AddRef(), 2u); // 创建时 1，AddRef 后 2
+    ASSERT_EQ(pModule->Release(), 1u);
 
     void* ppv = nullptr;
-    ASSERT_TRUE(pComponent->QueryInterface(sc::IID_IUnknown(), &ppv));
+    ASSERT_TRUE(pModule->QueryInterface(sc::IID_IUnknown(), &ppv));
     ASSERT_TRUE(ppv != nullptr);
-    ASSERT_EQ(pComponent->Release(), 0u); // 归零销毁
+    ASSERT_EQ(pModule->Release(), 0u); // 归零销毁
 }
 
-/// @brief 组件管理器生命周期编排。
-TEST(ComponentManager_Lifecycle)
+/// @brief 模块管理器生命周期编排。
+TEST(ModuleManager_Lifecycle)
 {
-    sc::CComponentManager manager;
-    CTestComponent* pComponent = new CTestComponent();
-    ASSERT_TRUE(manager.RegisterComponent(IID_TestComponent(), pComponent));
-    pComponent->Release(); // 管理器已持有引用
+    sc::CModuleManager manager;
+    CTestModule* pModule = new CTestModule();
+    ASSERT_TRUE(manager.RegisterModule(IID_TestModule(), pModule));
+    pModule->Release(); // 管理器已持有引用
 
     ASSERT_EQ(manager.Size(), static_cast<size_t>(1));
-    ASSERT_TRUE(manager.GetComponent(IID_TestComponent()) != nullptr);
+    ASSERT_TRUE(manager.GetModuleByIid(IID_TestModule()) != nullptr);
     ASSERT_TRUE(manager.InitializeAll());
     ASSERT_TRUE(manager.StartAll());
-    ASSERT_EQ(pComponent->m_nInit, 1);
-    ASSERT_EQ(pComponent->m_nStart, 1);
+    ASSERT_EQ(pModule->m_nInit, 1);
+    ASSERT_EQ(pModule->m_nStart, 1);
 
     manager.StopAll();
     manager.ShutdownAll();
-    ASSERT_EQ(pComponent->m_nStop, 1);
-    ASSERT_EQ(pComponent->m_nShutdown, 1);
+    ASSERT_EQ(pModule->m_nStop, 1);
+    ASSERT_EQ(pModule->m_nShutdown, 1);
 
     std::string strReport = manager.StatusReport();
-    ASSERT_TRUE(strReport.find("test-component") != std::string::npos);
+    ASSERT_TRUE(strReport.find("test-module") != std::string::npos);
 }
 
 /// @brief 事件订阅与发布。

@@ -4,7 +4,7 @@
 #include <functional>
 #include <memory>
 
-#include "Component/Component.h"
+#include "Module/Module.h"
 #include "Thread/ThreadPool.h"
 
 namespace sc {
@@ -37,7 +37,7 @@ public:
 /// @brief 线程池组件。
 ///
 /// 内部持有 common::CThreadPool 实例。
-class CThreadPoolComponent : public CComponent, public IThreadPool
+class CThreadPoolComponent : public CModule, public IThreadPool
 {
 public:
     explicit CThreadPoolComponent(size_t nThreadCount = 1);

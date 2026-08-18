@@ -46,7 +46,7 @@ bool CMyApplication::Initialize()
     }
     if (!m_moduleManager.InitializeAll())
     {
-        m_componentManager.Clear();
+        m_moduleManager.Clear();
         return false;
     }
     return OnInitialize();
@@ -116,15 +116,9 @@ void CMyApplication::Shutdown()
     OnShutdown();
     m_moduleManager.StopAll();
     m_moduleManager.ShutdownAll();
-    m_componentManager.StopAllWithTimeout(m_nShutdownTimeoutMs);
-    m_componentManager.ShutdownAllWithTimeout(m_nShutdownTimeoutMs);
-    m_componentManager.Clear();
-}
-
-/// @brief 获取组件管理器。
-CComponentManager& CMyApplication::GetComponentManager()
-{
-    return m_componentManager;
+    m_moduleManager.StopAllWithTimeout(m_nShutdownTimeoutMs);
+    m_moduleManager.ShutdownAllWithTimeout(m_nShutdownTimeoutMs);
+    m_moduleManager.Clear();
 }
 
 /// @brief 获取模块管理器。
@@ -170,24 +164,24 @@ uint64_t CMyApplication::UptimeSeconds() const
 /// @return true 全部成功。
 bool CMyApplication::RegisterComponents()
 {
-    if (m_componentManager.GetComponent(IID_IConfig()) == nullptr)
+    if (m_moduleManager.GetModuleByIid(IID_IConfig()) == nullptr)
     {
         CConfigComponent* pConfig = new CConfigComponent();
         if (!m_strConfigPath.empty())
         {
             pConfig->LoadFile(m_strConfigPath);
         }
-        if (!m_componentManager.RegisterComponent(IID_IConfig(), pConfig))
+        if (!m_moduleManager.RegisterModule(IID_IConfig(), pConfig))
         {
             pConfig->Release();
             return false;
         }
         pConfig->Release(); // 管理器已持有引用
     }
-    if (m_componentManager.GetComponent(IID_ILogger()) == nullptr)
+    if (m_moduleManager.GetModuleByIid(IID_ILogger()) == nullptr)
     {
         CLoggerComponent* pLogger = new CLoggerComponent();
-        if (!m_componentManager.RegisterComponent(IID_ILogger(), pLogger))
+        if (!m_moduleManager.RegisterModule(IID_ILogger(), pLogger))
         {
             pLogger->Release();
             return false;

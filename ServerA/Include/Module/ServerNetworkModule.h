@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "Component/ComponentManager.h"
+#include "Module/ModuleManager.h"
 #include "Component/ScopedInterfacePtr.h"
 #include "Event/IEventDispatcher.h"
 #include "Module/Module.h"
@@ -22,7 +22,7 @@ class CEchoService;
 class CServerNetworkModule : public sc::CModule
 {
 public:
-    CServerNetworkModule(sc::CComponentManager& componentManager, CEchoService* service,
+    CServerNetworkModule(sc::CModuleManager& moduleManager, CEchoService* service,
                         std::uint16_t port);
 
     virtual ~CServerNetworkModule();
@@ -40,7 +40,7 @@ public:
     void Shutdown() override;
 
 private:
-    sc::CComponentManager& m_componentManager;
+    sc::CModuleManager& m_moduleManager;
     CEchoService* m_pService; // 借用指针，由组件管理器持有
     std::uint16_t m_nPort;
     sc::ScopedInterfacePtr<sc::INetwork> m_pNetwork;

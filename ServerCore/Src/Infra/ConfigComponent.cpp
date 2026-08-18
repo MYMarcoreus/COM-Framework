@@ -5,7 +5,7 @@
 namespace sc {
 
 /// @brief 创建配置组件。
-CConfigComponent::CConfigComponent()
+CConfigComponent::CConfigComponent() : CModule("config")
 {
 }
 
@@ -54,7 +54,7 @@ bool CConfigComponent::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
         *ppv = static_cast<IConfig*>(this);
         return true;
     }
-    return CComponent::QueryInterfaceImpl(iid, ppv);
+    return CModule::QueryInterfaceImpl(iid, ppv);
 }
 
 } // namespace sc
