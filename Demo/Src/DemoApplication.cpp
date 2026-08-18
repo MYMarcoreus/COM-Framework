@@ -1,12 +1,11 @@
 #include "DemoApplication.h"
 
-#include <string>
-
 #include "Config/Config.h"
-#include "Log/Logger.h"
+#include "Module/DemoLoggerModule.h"
+#include "Module/DemoNetworkModule.h"
+#include "Module/DemoTimerModule.h"
 #include "Network/NetworkComponent.h"
 #include "Service/DemoService.h"
-#include "Timer/TimerManager.h"
 
 namespace demo {
 
@@ -14,7 +13,7 @@ namespace demo {
 ///
 /// @param port 监听端口；0 表示从配置文件读取。
 DemoApplication::DemoApplication(std::uint16_t port)
-    : port_(port), timerId_(common::kInvalidTimerId), service_(nullptr)
+    : port_(port), service_(nullptr)
 {
     // 加载配置文件（可选，best-effort）
     config_.LoadFile("demo.ini");
@@ -63,121 +62,69 @@ bool DemoApplication::RegisterComponents()
     return true;
 }
 
-/// @brief 初始化完成钩子。
+/// @brief 注册模块。
 ///
-/// 通过组件管理器获取网络接口与处理接口，建立关联。
-bool DemoApplication::OnInitialize()
+/// 注册顺序即初始化/启动顺序：日志 → 定时器 → 网络。
+/// 模块注册后由 ModuleManager 持有引用，生命周期由它统一管理。
+///
+/// @return true 全部注册成功；false 注册失败。
+bool DemoApplication::RegisterModules()
 {
-    // ① 配置日志器（读取 Config）
-    common::Logger& logger = common::Logger::Instance();
-    std::string level = config_.GetString("log.level", "info");
-    if (level == "trace")
+    // ① 日志模块：根据配置初始化日志器
+    sc::IModule* logger = new DemoLoggerModule(config_);
+    if (!moduleManager_.RegisterModule(logger))
     {
-        logger.SetLevel(common::LogLevel::kTrace);
+        logger->Release();
+        return false;
     }
-    else if (level == "debug")
-    {
-        logger.SetLevel(common::LogLevel::kDebug);
-    }
-    else if (level == "warn")
-    {
-        logger.SetLevel(common::LogLevel::kWarn);
-    }
-    else if (level == "error")
-    {
-        logger.SetLevel(common::LogLevel::kError);
-    }
-    else
-    {
-        logger.SetLevel(common::LogLevel::kInfo);
-    }
-    std::string logFile = config_.GetString("log.file", "");
-    if (!logFile.empty())
-    {
-        logger.OpenFile(logFile);
-    }
-    logger.Info("Demo 服务器初始化中，监听端口 " + std::to_string(port_));
+    logger->Release(); // 管理器已持有引用
 
-    // ② 获取网络接口
-    sc::IUnknown* networkObject = componentManager_.GetComponent(sc::IID_INetwork());
-    if (networkObject == nullptr)
+    // ② 定时器模块：周期性输出运行状态
+    int intervalMs = config_.GetInt("timer.interval_ms", 5000);
+    sc::IModule* timer = new DemoTimerModule(intervalMs);
+    if (!moduleManager_.RegisterModule(timer))
     {
+        timer->Release();
         return false;
     }
-    void* raw = nullptr;
-    if (!networkObject->QueryInterface(sc::IID_INetwork(), &raw))
-    {
-        return false;
-    }
-    network_.Reset(static_cast<sc::INetwork*>(raw));
+    timer->Release(); // 管理器已持有引用
 
-    // ② 获取协议处理接口
-    sc::IUnknown* serviceObject = componentManager_.GetComponent(sc::IID_INetworkHandler());
-    if (serviceObject == nullptr)
+    // ③ 网络模块：关联组件并启动 TCP 服务器
+    sc::IModule* network = new DemoNetworkModule(componentManager_, service_, port_);
+    if (!moduleManager_.RegisterModule(network))
     {
+        network->Release();
         return false;
     }
-    if (!serviceObject->QueryInterface(sc::IID_INetworkHandler(), &raw))
-    {
-        return false;
-    }
-    handler_.Reset(static_cast<sc::INetworkHandler*>(raw));
-
-    // ③ 告诉服务网络引用，用于发送响应
-    if (service_ != nullptr)
-    {
-        service_->SetNetwork(network_.Get());
-    }
+    network->Release(); // 管理器已持有引用
     return true;
 }
 
-/// @brief 启动钩子。
+/// @brief 初始化完成钩子。
 ///
-/// 启动 TCP 服务器并监听指定端口。
+/// 模块的初始化已由 ModuleManager 在 Initialize 中统一完成，此处无需额外逻辑。
+///
+/// @return true。
+bool DemoApplication::OnInitialize()
+{
+    return true;
+}
+
+/// @brief 启动完成钩子。
+///
+/// 模块的启动已由 ModuleManager 在 Start 中统一完成，此处无需额外逻辑。
+///
+/// @return true。
 bool DemoApplication::OnStart()
 {
-    if (network_ == nullptr || handler_ == nullptr)
-    {
-        return false;
-    }
-    // 启动周期性定时器（演示 Timer 模块）
-    int intervalMs = config_.GetInt("timer.interval_ms", 5000);
-    if (intervalMs < 100)
-    {
-        intervalMs = 100;
-    }
-    if (timer_.Start())
-    {
-        timerId_ = timer_.AddPeriodicTimer(intervalMs,
-            []()
-            {
-                common::Logger::Instance().Info("Demo 服务器运行中");
-            });
-    }
-    if (!network_->StartTcpServer(port_, handler_.Get()))
-    {
-        timer_.Stop();
-        timerId_ = common::kInvalidTimerId;
-        return false;
-    }
-    common::Logger::Instance().Info("Demo 服务器已启动，监听端口 " + std::to_string(port_) + "，按 Ctrl+C 退出");
     return true;
 }
 
 /// @brief 关闭钩子。
 ///
-/// 停止网络服务器并释放组件引用。
+/// 模块的停止与关闭由 MyApplication::Shutdown 中的 ModuleManager 统一完成。
 void DemoApplication::OnShutdown()
 {
-    timer_.Stop();
-    timerId_ = common::kInvalidTimerId;
-    if (network_ != nullptr)
-    {
-        network_->Stop();
-    }
-    network_.Reset();
-    handler_.Reset();
-    service_ = nullptr;
 }
 
 } // namespace demo

@@ -43,6 +43,7 @@ make_test/                       # 工作区根目录（可存放多个项目）
 │   ├── Include/
 │   │   ├── Application/         # MyApplication
 │   │   ├── Component/           # IUnknown / Component / ComponentManager / ScopedInterfacePtr
+│   │   ├── Module/              # IModule / Module / ModuleManager（模块生命周期统一管理）
 │   │   ├── Network/             # INetwork / INetworkHandler / NetworkComponent（组件模型适配）
 │   │   └── Common/              # 类型别名
 │   ├── Src/
@@ -54,8 +55,9 @@ make_test/                       # 工作区根目录（可存放多个项目）
 │   ├── Include/
 │   │   ├── Protocol/            # Demo 极简协议（Length + Command + Payload）
 │   │   ├── Service/             # DemoService（实现 INetworkHandler）
+│   │   ├── Module/              # DemoLoggerModule / DemoTimerModule / DemoNetworkModule
 │   │   └── DemoApplication.h
-│   ├── Src/                     # DemoApplication / main / client_main
+│   ├── Src/                     # DemoApplication / main / client_main / Module/
 │   └── Linux/
 │       └── Makefile             # 生成 build/demo 与 build/demo_client
 │
@@ -79,8 +81,9 @@ make_test/                       # 工作区根目录（可存放多个项目）
 
 `ServerCore` 是其他服务器可直接复用的**基础组件库**，不包含具体业务与协议：
 
-- **Application**：`MyApplication` 提供统一生命周期 `Initialize → Start → Run → Stop → Shutdown`，通过 `ComponentManager` 组合基础组件。
+- **Application**：`MyApplication` 提供统一生命周期 `Initialize → Start → Run → Stop → Shutdown`，通过 `ComponentManager` 组合基础组件，通过 `ModuleManager` 统一管理模块生命周期。
 - **Component**：借鉴 COM 组件模型思想的 C++11/Linux 实现——`IUnknown`（QueryInterface / AddRef / Release）、`Component`（原子引用计数）、`ComponentManager`（注册/获取/移除/清空）、`ScopedInterfacePtr`（RAII 智能引用）。
+- **Module**：与组件模型同思想的**模块生命周期管理**——`IModule`（继承 IUnknown，可查询接口 / 引用计数）、`Module`（基类：引用计数 + 默认生命周期空实现）、`ModuleManager`（注册即持有引用，统一编排：按序初始化/启动、逆序停止/关闭、失败回滚）。
 - **Network**：轻量通信基础设施，基于 **Standalone Asio**（git 子模块）——`TcpServer`（io_context + acceptor + 独立线程事件循环）、`TcpConnection`（异步读写 + 写队列）、`Buffer`、`INetwork`/`INetworkHandler` 接口。
 
 依赖方向：`Demo / Server → ServerCore → Common → 第三方库 / POSIX`。ServerCore 不依赖任何具体业务项目；网络基础设施位于 Common，ServerCore 通过 `NetworkComponent` 适配为组件模型接口（`INetwork` / `INetworkHandler`）。
@@ -98,6 +101,8 @@ main → MyApplication → ComponentManager → Network → TCP Listen → Accep
 - `build/demo_client`：测试客户端（发送 PING/ECHO 并打印响应）
 
 Demo 使用 Common 基础库：Logger 记录日志（控制台 + 可选文件）、Config 读取 `demo.ini`、TimerManager 周期性输出运行状态。
+
+Demo 以**模块化**方式装配：`DemoApplication` 在 `RegisterModules()` 中注册 `DemoLoggerModule`（配置日志器）、`DemoTimerModule`（周期运行状态）、`DemoNetworkModule`（关联组件并启动 TCP 服务器）三个模块，其生命周期由 `ModuleManager` 按注册顺序统一初始化/启动、逆序停止/关闭，验证 ServerCore 的模块管理机制。
 
 ## 使用方式
 

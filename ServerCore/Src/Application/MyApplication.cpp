@@ -28,7 +28,7 @@ MyApplication::~MyApplication()
 
 /// @brief 初始化服务器应用程序。
 ///
-/// 注册基础组件并调用派生类的初始化钩子。
+/// 注册基础组件与模块，统一初始化所有模块，再调用派生类初始化钩子。
 ///
 /// @return true 初始化成功；false 初始化失败。
 bool MyApplication::Initialize()
@@ -37,14 +37,29 @@ bool MyApplication::Initialize()
     {
         return false;
     }
+    if (!RegisterModules())
+    {
+        return false;
+    }
+    if (!moduleManager_.InitializeAll())
+    {
+        componentManager_.Clear();
+        return false;
+    }
     return OnInitialize();
 }
 
 /// @brief 启动服务器应用程序。
 ///
+/// 统一启动所有模块，再调用派生类启动钩子。
+///
 /// @return true 启动成功；false 启动失败。
 bool MyApplication::Start()
 {
+    if (!moduleManager_.StartAll())
+    {
+        return false;
+    }
     return OnStart();
 }
 
@@ -88,9 +103,13 @@ void MyApplication::Stop()
 }
 
 /// @brief 关闭服务器应用程序并释放资源。
+///
+/// 先调用关闭钩子，再统一停止、关闭所有模块，最后释放组件。
 void MyApplication::Shutdown()
 {
     OnShutdown();
+    moduleManager_.StopAll();
+    moduleManager_.ShutdownAll();
     componentManager_.Clear();
 }
 
@@ -100,10 +119,24 @@ ComponentManager& MyApplication::GetComponentManager()
     return componentManager_;
 }
 
+/// @brief 获取模块管理器。
+ModuleManager& MyApplication::GetModuleManager()
+{
+    return moduleManager_;
+}
+
 /// @brief 注册基础组件。
 ///
 /// 基类不注册任何组件，派生类根据需要重写。
 bool MyApplication::RegisterComponents()
+{
+    return true;
+}
+
+/// @brief 注册基础模块。
+///
+/// 基类不注册任何模块，派生类根据需要重写。
+bool MyApplication::RegisterModules()
 {
     return true;
 }

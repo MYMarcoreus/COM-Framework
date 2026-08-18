@@ -3,15 +3,17 @@
 #include <atomic>
 
 #include "Component/ComponentManager.h"
+#include "Module/ModuleManager.h"
 
 namespace sc {
 
 /// @brief 服务器应用程序基础类。
 ///
 /// 提供统一的初始化、启动、运行、停止和关闭生命周期。
-/// 通过 ComponentManager 组合 ServerCore 基础组件，不硬编码具体实现。
+/// 通过 ComponentManager 组合基础组件，通过 ModuleManager 统一管理模块生命周期，
+/// 不硬编码具体实现。
 ///
-/// @note 派生类通过重写虚函数扩展服务器生命周期与组件装配。
+/// @note 派生类通过重写虚函数扩展服务器生命周期与组件/模块装配。
 class MyApplication
 {
 public:
@@ -37,9 +39,15 @@ public:
     // 获取组件管理器。
     ComponentManager& GetComponentManager();
 
+    // 获取模块管理器。
+    ModuleManager& GetModuleManager();
+
 protected:
     // 注册应用程序需要的基础组件。
     virtual bool RegisterComponents();
+
+    // 注册应用程序需要的模块。
+    virtual bool RegisterModules();
 
     // 初始化完成钩子。
     virtual bool OnInitialize();
@@ -57,6 +65,7 @@ protected:
     virtual void OnShutdown();
 
     ComponentManager componentManager_;
+    ModuleManager moduleManager_;
 
 private:
     // 信号处理入口。
