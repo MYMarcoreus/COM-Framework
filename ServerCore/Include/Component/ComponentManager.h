@@ -21,7 +21,7 @@ public:
     ~CComponentManager();
 
     // 注册组件。注册成功后管理器持有组件的一个引用。
-    bool RegisterComponent(const InterfaceId& iid, IUnknown* component);
+    bool RegisterComponent(const InterfaceId& iid, IUnknown* pComponent);
 
     // 根据接口标识获取组件，返回借用指针，不增加引用计数。
     IUnknown* GetComponent(const InterfaceId& iid) const;

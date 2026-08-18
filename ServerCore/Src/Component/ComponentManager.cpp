@@ -24,22 +24,22 @@ CComponentManager::~CComponentManager()
 /// @param component 组件对象。
 ///
 /// @return true 注册成功；false 参数无效或接口已存在。
-bool CComponentManager::RegisterComponent(const InterfaceId& iid, IUnknown* component)
+bool CComponentManager::RegisterComponent(const InterfaceId& iid, IUnknown* pComponent)
 {
-    if (iid == nullptr || component == nullptr)
+    if (iid == nullptr || pComponent == nullptr)
     {
         return false;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
-    std::string key(iid);
-    if (m_mapComponents.find(key) != m_mapComponents.end())
+    std::string strKey(iid);
+    if (m_mapComponents.find(strKey) != m_mapComponents.end())
     {
         return false; // 已存在同标识组件
     }
-    component->AddRef(); // 管理器持有引用
+    pComponent->AddRef(); // 管理器持有引用
     Entry entry;
-    entry.component = component;
-    m_mapComponents[key] = entry;
+    entry.component = pComponent;
+    m_mapComponents[strKey] = entry;
     return true;
 }
 
@@ -74,7 +74,7 @@ bool CComponentManager::RemoveComponent(const InterfaceId& iid)
     {
         return false;
     }
-    IUnknown* component = nullptr;
+    IUnknown* pComponent = nullptr;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         std::map<std::string, Entry>::iterator it = m_mapComponents.find(std::string(iid));
@@ -82,12 +82,12 @@ bool CComponentManager::RemoveComponent(const InterfaceId& iid)
         {
             return false;
         }
-        component = it->second.component;
+        pComponent = it->second.component;
         m_mapComponents.erase(it);
     }
-    if (component != nullptr)
+    if (pComponent != nullptr)
     {
-        component->Release(); // 释放管理器持有的引用
+        pComponent->Release(); // 释放管理器持有的引用
     }
     return true;
 }
@@ -95,18 +95,18 @@ bool CComponentManager::RemoveComponent(const InterfaceId& iid)
 /// @brief 清空所有组件并释放引用。
 void CComponentManager::Clear()
 {
-    std::vector<IUnknown*> toRelease;
+    std::vector<IUnknown*> vecToRelease;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         for (std::map<std::string, Entry>::iterator it = m_mapComponents.begin(); it != m_mapComponents.end(); ++it)
         {
-            toRelease.push_back(it->second.component);
+            vecToRelease.push_back(it->second.component);
         }
         m_mapComponents.clear();
     }
-    for (size_t i = 0; i < toRelease.size(); ++i)
+    for (size_t i = 0; i < vecToRelease.size(); ++i)
     {
-        toRelease[i]->Release();
+        vecToRelease[i]->Release();
     }
 }
 

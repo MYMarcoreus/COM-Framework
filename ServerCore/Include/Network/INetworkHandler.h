@@ -16,13 +16,13 @@ class INetworkHandler : public virtual IUnknown
 {
 public:
     // 新连接建立。
-    virtual void OnAccept(ConnectionId id, const std::string& peer) = 0;
+    virtual void OnAccept(ConnectionId nId, const std::string& strPeer) = 0;
 
     // 收到数据。
-    virtual void OnData(ConnectionId id, const char* data, size_t len) = 0;
+    virtual void OnData(ConnectionId nId, const char* pData, size_t nLen) = 0;
 
     // 连接关闭。
-    virtual void OnClose(ConnectionId id) = 0;
+    virtual void OnClose(ConnectionId nId) = 0;
 };
 
 /// @brief 获取 INetworkHandler 接口标识。

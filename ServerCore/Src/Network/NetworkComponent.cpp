@@ -23,53 +23,53 @@ CNetworkComponent::~CNetworkComponent()
 /// @param handler 网络事件处理器。
 ///
 /// @return 成功返回 true。
-bool CNetworkComponent::StartTcpServer(uint16_t port, INetworkHandler* handler)
+bool CNetworkComponent::StartTcpServer(uint16_t nPort, INetworkHandler* pHandler)
 {
-    if (handler == nullptr)
+    if (pHandler == nullptr)
     {
         return false;
     }
     // 若已有运行中的服务器，先停止
     Stop();
 
-    // 持有 handler 引用，确保网络运行期间 handler 存活
-    m_pHandler.Reset(handler);
+    // 持有 pHandler 引用，确保网络运行期间 handler 存活
+    m_pHandler.Reset(pHandler);
 
     // 将组件接口回调适配为 Common CTcpServer 的 std::function 回调
-    std::unique_ptr<common::CTcpServer> newServer(new common::CTcpServer());
-    common::CTcpServer::AcceptCallback acceptCb =
-        [this](common::ConnectionId id, const std::string& peer)
+    std::unique_ptr<common::CTcpServer> pNewServer(new common::CTcpServer());
+    common::CTcpServer::AcceptCallback fnAccept =
+        [this](common::ConnectionId nId, const std::string& strPeer)
         {
             if (m_pHandler != nullptr)
             {
-                m_pHandler->OnAccept(id, peer);
+                m_pHandler->OnAccept(nId, strPeer);
             }
         };
-    common::CTcpServer::DataCallback dataCb =
-        [this](common::ConnectionId id, const char* data, size_t len)
+    common::CTcpServer::DataCallback fnData =
+        [this](common::ConnectionId nId, const char* pData, size_t nLen)
         {
             if (m_pHandler != nullptr)
             {
-                m_pHandler->OnData(id, data, len);
+                m_pHandler->OnData(nId, pData, nLen);
             }
         };
-    common::CTcpServer::CloseCallback closeCb =
-        [this](common::ConnectionId id)
+    common::CTcpServer::CloseCallback fnClose =
+        [this](common::ConnectionId nId)
         {
             if (m_pHandler != nullptr)
             {
-                m_pHandler->OnClose(id);
+                m_pHandler->OnClose(nId);
             }
         };
-    if (!newServer->Start(port, acceptCb, dataCb, closeCb))
+    if (!pNewServer->Start(nPort, fnAccept, fnData, fnClose))
     {
         m_pHandler.Reset();
         return false;
     }
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_pServer.swap(newServer);
-        m_nPort = port;
+        m_pServer.swap(pNewServer);
+        m_nPort = nPort;
     }
     return true;
 }
@@ -79,38 +79,38 @@ bool CNetworkComponent::StartTcpServer(uint16_t port, INetworkHandler* handler)
 /// 先释放 server 所有权，再在锁外停止，避免等待事件循环线程时死锁。
 void CNetworkComponent::Stop()
 {
-    common::CTcpServer* server = nullptr;
+    common::CTcpServer* pServer = nullptr;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        server = m_pServer.release();
+        pServer = m_pServer.release();
         m_nPort = 0;
     }
-    if (server != nullptr)
+    if (pServer != nullptr)
     {
-        server->Stop(); // 等待事件循环线程退出（不持有本组件锁）
-        delete server;
+        pServer->Stop(); // 等待事件循环线程退出（不持有本组件锁）
+        delete pServer;
     }
     m_pHandler.Reset();
 }
 
 /// @brief 向指定连接发送数据。
-bool CNetworkComponent::Send(ConnectionId id, const char* data, size_t len)
+bool CNetworkComponent::Send(ConnectionId nId, const char* pData, size_t nLen)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_pServer == nullptr)
     {
         return false;
     }
-    return m_pServer->Send(id, data, len);
+    return m_pServer->Send(nId, pData, nLen);
 }
 
 /// @brief 关闭指定连接。
-void CNetworkComponent::Close(ConnectionId id)
+void CNetworkComponent::Close(ConnectionId nId)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (m_pServer != nullptr)
     {
-        m_pServer->Close(id);
+        m_pServer->Close(nId);
     }
 }
 
@@ -143,17 +143,17 @@ uint64_t CNetworkComponent::TotalClosed() const
 }
 
 /// @brief 指定连接是否存在。
-bool CNetworkComponent::HasConnection(ConnectionId id) const
+bool CNetworkComponent::HasConnection(ConnectionId nId) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_pServer != nullptr && m_pServer->HasConnection(id);
+    return m_pServer != nullptr && m_pServer->HasConnection(nId);
 }
 
 /// @brief 指定连接的对端地址。
-std::string CNetworkComponent::PeerAddress(ConnectionId id) const
+std::string CNetworkComponent::PeerAddress(ConnectionId nId) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return (m_pServer != nullptr) ? m_pServer->PeerAddress(id) : "";
+    return (m_pServer != nullptr) ? m_pServer->PeerAddress(nId) : "";
 }
 
 /// @brief 接口查询实现。

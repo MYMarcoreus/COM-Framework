@@ -28,16 +28,16 @@ public:
     virtual ~CNetworkComponent();
 
     // 启动 TCP 服务器。
-    bool StartTcpServer(uint16_t port, INetworkHandler* handler) override;
+    bool StartTcpServer(uint16_t nPort, INetworkHandler* pHandler) override;
 
     // 停止服务器。
     void Stop() override;
 
     // 发送数据。
-    bool Send(ConnectionId id, const char* data, size_t len) override;
+    bool Send(ConnectionId nId, const char* pData, size_t nLen) override;
 
     // 关闭连接。
-    void Close(ConnectionId id) override;
+    void Close(ConnectionId nId) override;
 
     // 监听端口。
     uint16_t ListeningPort() const override;
@@ -52,10 +52,10 @@ public:
     uint64_t TotalClosed() const override;
 
     // 指定连接是否存在。
-    bool HasConnection(ConnectionId id) const override;
+    bool HasConnection(ConnectionId nId) const override;
 
     // 指定连接的对端地址。
-    std::string PeerAddress(ConnectionId id) const override;
+    std::string PeerAddress(ConnectionId nId) const override;
 
 protected:
     // 接口查询实现。

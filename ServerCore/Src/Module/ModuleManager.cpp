@@ -20,37 +20,37 @@ CModuleManager::~CModuleManager()
 /// @param module 模块接口指针。
 ///
 /// @return true 注册成功；false 参数非法或名称重复。
-bool CModuleManager::RegisterModule(IModule* module)
+bool CModuleManager::RegisterModule(IModule* pModule)
 {
-    if (module == nullptr)
+    if (pModule == nullptr)
     {
         return false;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
-    const char* name = module->GetName();
-    if (name == nullptr || name[0] == '\0')
+    const char* strName = pModule->GetName();
+    if (strName == nullptr || strName[0] == '\0')
     {
         return false;
     }
-    if (m_mapIndexByName.find(name) != m_mapIndexByName.end())
+    if (m_mapIndexByName.find(strName) != m_mapIndexByName.end())
     {
         return false; // 名称重复
     }
-    module->AddRef();
-    m_mapIndexByName[name] = m_vecModules.size();
-    m_vecModules.push_back(Entry(module));
+    pModule->AddRef();
+    m_mapIndexByName[strName] = m_vecModules.size();
+    m_vecModules.push_back(Entry(pModule));
     return true;
 }
 
 /// @brief 根据名称获取模块。
 ///
-/// @param name 模块名称。
+/// @param strName 模块名称。
 ///
 /// @return 借用指针（不增加引用计数）；未找到返回 nullptr。
-IModule* CModuleManager::GetModule(const char* name) const
+IModule* CModuleManager::GetModule(const char* strName) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    std::map<std::string, size_t>::const_iterator it = m_mapIndexByName.find(name);
+    std::map<std::string, size_t>::const_iterator it = m_mapIndexByName.find(strName);
     if (it == m_mapIndexByName.end())
     {
         return nullptr;
@@ -60,13 +60,13 @@ IModule* CModuleManager::GetModule(const char* name) const
 
 /// @brief 查询模块当前状态。
 ///
-/// @param name 模块名称。
+/// @param strName 模块名称。
 ///
 /// @return 模块状态；未找到返回 kCreated。
-ModuleState CModuleManager::GetModuleState(const char* name) const
+ModuleState CModuleManager::GetModuleState(const char* strName) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    std::map<std::string, size_t>::const_iterator it = m_mapIndexByName.find(name);
+    std::map<std::string, size_t>::const_iterator it = m_mapIndexByName.find(strName);
     if (it == m_mapIndexByName.end())
     {
         return ModuleState::kCreated;
@@ -78,22 +78,22 @@ ModuleState CModuleManager::GetModuleState(const char* name) const
 ///
 /// 移除模块并释放引用（锁外释放，避免模块析构时重入）。
 ///
-/// @param name 模块名称。
+/// @param strName 模块名称。
 ///
 /// @return true 移除成功；false 未找到。
-bool CModuleManager::UnregisterModule(const char* name)
+bool CModuleManager::UnregisterModule(const char* strName)
 {
-    IModule* module = nullptr;
+    IModule* pModule = nullptr;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        std::map<std::string, size_t>::iterator it = m_mapIndexByName.find(name);
+        std::map<std::string, size_t>::iterator it = m_mapIndexByName.find(strName);
         if (it == m_mapIndexByName.end())
         {
             return false;
         }
-        size_t index = it->second;
-        module = m_vecModules[index].module;
-        m_vecModules.erase(m_vecModules.begin() + static_cast<std::ptrdiff_t>(index));
+        size_t nIndex = it->second;
+        pModule = m_vecModules[nIndex].module;
+        m_vecModules.erase(m_vecModules.begin() + static_cast<std::ptrdiff_t>(nIndex));
         // 向量删除后重建名称索引
         m_mapIndexByName.clear();
         for (size_t i = 0; i < m_vecModules.size(); ++i)
@@ -101,27 +101,27 @@ bool CModuleManager::UnregisterModule(const char* name)
             m_mapIndexByName[m_vecModules[i].module->GetName()] = i;
         }
     }
-    module->Release();
+    pModule->Release();
     return true;
 }
 
 /// @brief 移除并释放所有模块。
 void CModuleManager::Clear()
 {
-    std::vector<IModule*> toRelease;
+    std::vector<IModule*> vecToRelease;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        toRelease.reserve(m_vecModules.size());
+        vecToRelease.reserve(m_vecModules.size());
         for (size_t i = 0; i < m_vecModules.size(); ++i)
         {
-            toRelease.push_back(m_vecModules[i].module);
+            vecToRelease.push_back(m_vecModules[i].module);
         }
         m_vecModules.clear();
         m_mapIndexByName.clear();
     }
-    for (size_t i = 0; i < toRelease.size(); ++i)
+    for (size_t i = 0; i < vecToRelease.size(); ++i)
     {
-        toRelease[i]->Release();
+        vecToRelease[i]->Release();
     }
 }
 

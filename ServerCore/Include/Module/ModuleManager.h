@@ -25,16 +25,16 @@ public:
     ~CModuleManager();
 
     // 注册模块：验证名称非空且不重复，成功后持有模块一个引用。
-    bool RegisterModule(IModule* module);
+    bool RegisterModule(IModule* pModule);
 
     // 根据名称获取模块（借用指针，不增加引用计数）。
-    IModule* GetModule(const char* name) const;
+    IModule* GetModule(const char* strName) const;
 
     // 查询模块当前状态。
-    ModuleState GetModuleState(const char* name) const;
+    ModuleState GetModuleState(const char* strName) const;
 
     // 反注册模块：释放引用并移除。
-    bool UnregisterModule(const char* name);
+    bool UnregisterModule(const char* strName);
 
     // 移除并释放所有模块。
     void Clear();

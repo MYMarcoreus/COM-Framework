@@ -18,16 +18,16 @@ class INetwork : public virtual IUnknown
 {
 public:
     // 启动 TCP 服务器并监听指定端口。
-    virtual bool StartTcpServer(uint16_t port, INetworkHandler* handler) = 0;
+    virtual bool StartTcpServer(uint16_t nPort, INetworkHandler* pHandler) = 0;
 
     // 停止服务器并释放连接。
     virtual void Stop() = 0;
 
     // 向指定连接发送数据。
-    virtual bool Send(ConnectionId id, const char* data, size_t len) = 0;
+    virtual bool Send(ConnectionId nId, const char* pData, size_t nLen) = 0;
 
     // 关闭指定连接。
-    virtual void Close(ConnectionId id) = 0;
+    virtual void Close(ConnectionId nId) = 0;
 
     // 当前监听端口，未启动时返回 0。
     virtual uint16_t ListeningPort() const = 0;
@@ -42,10 +42,10 @@ public:
     virtual uint64_t TotalClosed() const = 0;
 
     // 指定连接是否存在。
-    virtual bool HasConnection(ConnectionId id) const = 0;
+    virtual bool HasConnection(ConnectionId nId) const = 0;
 
     // 指定连接的对端地址；连接不存在时返回空串。
-    virtual std::string PeerAddress(ConnectionId id) const = 0;
+    virtual std::string PeerAddress(ConnectionId nId) const = 0;
 };
 
 /// @brief 获取 INetwork 接口标识。
