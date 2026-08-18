@@ -5,6 +5,9 @@
 #include <cstring>
 #include <thread>
 
+#include "Infra/IConfig.h"
+#include "Infra/ILogger.h"
+
 namespace sc {
 
 namespace
@@ -17,7 +20,7 @@ CMyApplication* g_instance = nullptr;
 } // namespace
 
 /// @brief 创建服务器应用程序。
-CMyApplication::CMyApplication() : m_bRunning(false)
+CMyApplication::CMyApplication() : m_bRunning(false), m_nShutdownTimeoutMs(0)
 {
 }
 
@@ -105,12 +108,16 @@ void CMyApplication::Stop()
 
 /// @brief 关闭服务器应用程序并释放资源。
 ///
-/// 先调用关闭钩子，再统一停止、关闭所有模块，最后释放组件。
+/// 多阶段优雅关闭：先调用关闭钩子，再停止、关闭所有模块，
+/// 然后带超时地停止、关闭组件，最后释放组件。
+/// 若设置了关闭超时（SetShutdownTimeout），超时后跳过剩余阶段。
 void CMyApplication::Shutdown()
 {
     OnShutdown();
     m_moduleManager.StopAll();
     m_moduleManager.ShutdownAll();
+    m_componentManager.StopAllWithTimeout(m_nShutdownTimeoutMs);
+    m_componentManager.ShutdownAllWithTimeout(m_nShutdownTimeoutMs);
     m_componentManager.Clear();
 }
 
@@ -155,12 +162,53 @@ uint64_t CMyApplication::UptimeSeconds() const
         std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
 }
 
-/// @brief 注册基础组件。
+/// @brief 注册基础组件（默认装配）。
 ///
-/// 基类不注册任何组件，派生类根据需要重写。
+/// 默认注册配置组件与日志组件；若同接口标识组件已存在（派生类先注册）则跳过。
+/// 派生类重写时可先调用本实现再注册业务组件。
+///
+/// @return true 全部成功。
 bool CMyApplication::RegisterComponents()
 {
+    if (m_componentManager.GetComponent(IID_IConfig()) == nullptr)
+    {
+        CConfigComponent* pConfig = new CConfigComponent();
+        if (!m_strConfigPath.empty())
+        {
+            pConfig->LoadFile(m_strConfigPath);
+        }
+        if (!m_componentManager.RegisterComponent(IID_IConfig(), pConfig))
+        {
+            pConfig->Release();
+            return false;
+        }
+        pConfig->Release(); // 管理器已持有引用
+    }
+    if (m_componentManager.GetComponent(IID_ILogger()) == nullptr)
+    {
+        CLoggerComponent* pLogger = new CLoggerComponent();
+        if (!m_componentManager.RegisterComponent(IID_ILogger(), pLogger))
+        {
+            pLogger->Release();
+            return false;
+        }
+        pLogger->Release(); // 管理器已持有引用
+    }
     return true;
+}
+
+/// @brief 设置优雅关闭总超时。
+///
+/// @param nTimeoutMs 超时毫秒数；0 表示不限制。
+void CMyApplication::SetShutdownTimeout(uint32_t nTimeoutMs)
+{
+    m_nShutdownTimeoutMs = nTimeoutMs;
+}
+
+/// @brief 当前优雅关闭超时（毫秒）。
+uint32_t CMyApplication::ShutdownTimeout() const
+{
+    return m_nShutdownTimeoutMs;
 }
 
 /// @brief 注册基础模块。

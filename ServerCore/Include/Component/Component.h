@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <string>
 
 #include "Component/IUnknown.h"
 
@@ -39,6 +40,9 @@ public:
 
     // 生命周期：关闭（默认空实现，子类按需重写）。
     virtual void Shutdown();
+
+    // 状态报告：返回组件当前状态描述（默认返回组件类型名，子类按需重写）。
+    virtual std::string GetStatus() const;
 
 protected:
     // 子类重写以返回自身实现的接口。

@@ -57,6 +57,12 @@ public:
     // 已运行秒数（Run 启动后计时，供状态查询）。
     uint64_t UptimeSeconds() const;
 
+    // 设置优雅关闭总超时（毫秒，默认 0 表示不限制）。
+    void SetShutdownTimeout(uint32_t nTimeoutMs);
+
+    // 当前优雅关闭超时（毫秒）。
+    uint32_t ShutdownTimeout() const;
+
 protected:
     // 注册应用程序需要的基础组件。
     virtual bool RegisterComponents();
@@ -89,6 +95,7 @@ private:
     std::string m_strConfigPath;
     std::chrono::steady_clock::time_point m_startTime;
     std::atomic<bool> m_bRunning;
+    uint32_t m_nShutdownTimeoutMs;
 };
 
 } // namespace sc

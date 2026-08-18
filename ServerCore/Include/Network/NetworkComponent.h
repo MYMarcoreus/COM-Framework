@@ -57,6 +57,9 @@ public:
     // 指定连接的对端地址。
     std::string PeerAddress(ConnectionId nId) const override;
 
+    // 状态报告：监听端口与连接统计。
+    std::string GetStatus() const override;
+
 protected:
     // 接口查询实现。
     bool QueryInterfaceImpl(const InterfaceId& iid, void** ppv) override;

@@ -1,5 +1,6 @@
 #include "Network/NetworkComponent.h"
 
+#include <cstdio>
 #include <string>
 
 #include "Network/TcpServer.h"
@@ -154,6 +155,19 @@ std::string CNetworkComponent::PeerAddress(ConnectionId nId) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     return (m_pServer != nullptr) ? m_pServer->PeerAddress(nId) : "";
+}
+
+/// @brief 网络组件状态报告。
+///
+/// @return 形如 "network:port=9000 conns=2 accepted=5 closed=3"。
+std::string CNetworkComponent::GetStatus() const
+{
+    char szBuffer[128];
+    std::snprintf(szBuffer, sizeof(szBuffer), "network:port=%u conns=%zu accepted=%llu closed=%llu",
+                  static_cast<unsigned int>(ListeningPort()), ConnectionCount(),
+                  static_cast<unsigned long long>(TotalAccepted()),
+                  static_cast<unsigned long long>(TotalClosed()));
+    return std::string(szBuffer);
 }
 
 /// @brief 接口查询实现。

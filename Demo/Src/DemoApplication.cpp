@@ -46,7 +46,13 @@ CDemoApplication::~CDemoApplication()
 /// 注册网络组件（INetwork）、事件分发器（IEventDispatcher）与协议处理服务（INetworkHandler）。
 bool CDemoApplication::RegisterComponents()
 {
-    // ① 注册网络组件
+    // ① 先装配基类默认组件（配置组件 IConfig + 日志组件 ILogger）
+    if (!CMyApplication::RegisterComponents())
+    {
+        return false;
+    }
+
+    // ② 注册网络组件
     sc::IUnknown* network = new sc::CNetworkComponent();
     if (!m_componentManager.RegisterComponent(sc::IID_INetwork(), network))
     {

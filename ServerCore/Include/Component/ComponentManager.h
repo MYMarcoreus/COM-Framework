@@ -50,6 +50,15 @@ public:
     // 统一关闭所有组件。
     void ShutdownAll();
 
+    // 生成所有组件的状态报告（每行一个组件）。
+    std::string StatusReport() const;
+
+    // 带超时地统一停止所有组件；返回 true 表示在超时前完成。
+    bool StopAllWithTimeout(uint32_t nTimeoutMs);
+
+    // 带超时地统一关闭所有组件；返回 true 表示在超时前完成。
+    bool ShutdownAllWithTimeout(uint32_t nTimeoutMs);
+
 private:
     struct Entry
     {

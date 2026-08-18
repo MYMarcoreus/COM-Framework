@@ -1,5 +1,6 @@
 #include "Component/ComponentManager.h"
 
+#include <chrono>
 #include <vector>
 
 namespace sc {
@@ -171,6 +172,73 @@ void CComponentManager::ShutdownAll()
     {
         vecComponents[i - 1]->Shutdown();
     }
+}
+
+/// @brief 生成所有组件的状态报告。
+///
+/// @return 多行状态文本，每行对应一个组件。
+std::string CComponentManager::StatusReport() const
+{
+    std::vector<CComponent*> vecComponents;
+    CollectComponents(vecComponents);
+    std::string strReport;
+    for (size_t i = 0; i < vecComponents.size(); ++i)
+    {
+        if (!strReport.empty())
+        {
+            strReport += "\n";
+        }
+        strReport += vecComponents[i]->GetStatus();
+    }
+    return strReport;
+}
+
+/// @brief 带超时地统一停止所有组件。
+///
+/// @param nTimeoutMs 总超时毫秒数。
+///
+/// @return true 表示在超时前完成；false 表示已超时（跳过剩余组件）。
+bool CComponentManager::StopAllWithTimeout(uint32_t nTimeoutMs)
+{
+    std::vector<CComponent*> vecComponents;
+    CollectComponents(vecComponents);
+    std::chrono::steady_clock::time_point tpBegin = std::chrono::steady_clock::now();
+    bool bComplete = true;
+    for (size_t i = vecComponents.size(); i > 0; --i)
+    {
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - tpBegin).count() >= static_cast<int64_t>(nTimeoutMs))
+        {
+            bComplete = false;
+            break;
+        }
+        vecComponents[i - 1]->Stop();
+    }
+    return bComplete;
+}
+
+/// @brief 带超时地统一关闭所有组件。
+///
+/// @param nTimeoutMs 总超时毫秒数。
+///
+/// @return true 表示在超时前完成；false 表示已超时（跳过剩余组件）。
+bool CComponentManager::ShutdownAllWithTimeout(uint32_t nTimeoutMs)
+{
+    std::vector<CComponent*> vecComponents;
+    CollectComponents(vecComponents);
+    std::chrono::steady_clock::time_point tpBegin = std::chrono::steady_clock::now();
+    bool bComplete = true;
+    for (size_t i = vecComponents.size(); i > 0; --i)
+    {
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - tpBegin).count() >= static_cast<int64_t>(nTimeoutMs))
+        {
+            bComplete = false;
+            break;
+        }
+        vecComponents[i - 1]->Shutdown();
+    }
+    return bComplete;
 }
 
 /// @brief 收集所有 CComponent 派生组件。

@@ -104,4 +104,12 @@ void CComponent::Shutdown()
 {
 }
 
+/// @brief 返回组件状态描述。
+///
+/// @note 默认返回通用描述，子类按需重写以提供更有意义的状态。
+std::string CComponent::GetStatus() const
+{
+    return "component";
+}
+
 } // namespace sc
