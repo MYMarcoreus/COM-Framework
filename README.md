@@ -41,10 +41,13 @@ make_test/                       # 工作区根目录（可存放多个项目）
 │
 ├── ServerCore/                  # 服务器基础框架（静态库 libServerCore.a）
 │   ├── Include/
-│   │   ├── Application/         # MyApplication
+│   │   ├── Application/         # MyApplication（生命周期 + 配置注入 + 运行状态）
 │   │   ├── Component/           # IUnknown / Component / ComponentManager / ScopedInterfacePtr
 │   │   ├── Module/              # IModule / Module / ModuleManager（模块生命周期统一管理）
 │   │   ├── Event/               # IEventDispatcher / EventDispatcher（模块间解耦通信）
+│   │   ├── Message/             # IMessageRouter / MessageRouter（基础消息分发）
+│   │   ├── Infra/               # ILogger / IConfig / ITimer / IThreadPool / IAsyncExecutor（组件化适配层）
+│   │   ├── Process/             # Process 工具 / PidFile（守护进程 + pid 文件）
 │   │   ├── Network/             # INetwork / INetworkHandler / NetworkComponent（组件模型适配）
 │   │   └── Common/              # 类型别名
 │   ├── Src/
@@ -91,11 +94,14 @@ make_test/                       # 工作区根目录（可存放多个项目）
 
 `ServerCore` 是其他服务器可直接复用的**基础组件库**，不包含具体业务与协议：
 
-- **Application**：`MyApplication` 提供统一生命周期 `Initialize → Start → Run → Stop → Shutdown`，通过 `ComponentManager` 组合基础组件，通过 `ModuleManager` 统一管理模块生命周期。
+- **Application**：`MyApplication` 提供统一生命周期 `Initialize → Start → Run → Stop → Shutdown`，通过 `ComponentManager` 组合基础组件，通过 `ModuleManager` 统一管理模块生命周期；支持配置路径注入（`SetConfigPath`）、运行状态查询（`IsRunning` / `UptimeSeconds`）。
 - **Component**：借鉴 COM 组件模型思想的 C++11/Linux 实现——`IUnknown`（QueryInterface / AddRef / Release）、`Component`（原子引用计数）、`ComponentManager`（注册/获取/移除/清空）、`ScopedInterfacePtr`（RAII 智能引用）。
 - **Module**：与组件模型同思想的**模块生命周期管理**——`IModule`（继承 IUnknown，可查询接口 / 引用计数）、`Module`（基类：引用计数 + 默认生命周期空实现）、`ModuleManager`（注册即持有引用，统一编排：按序初始化/启动、逆序停止/关闭、失败回滚）。
 - **Event**：**事件分发**机制——`IEventDispatcher`（继承 IUnknown，`Subscribe` 返回订阅标识 / `Unsubscribe` / `Publish` / `SubscriberCount`）、`EventDispatcher`（线程安全，发布在锁外调用处理器防重入死锁），用于模块之间的解耦通信。
-- **Network**：轻量通信基础设施，基于 **Standalone Asio**（git 子模块）——`TcpServer`（io_context + acceptor + 独立线程事件循环）、`TcpConnection`（异步读写 + 写队列）、`Buffer`、`INetwork`/`INetworkHandler` 接口。
+- **Message**：**基础消息分发**机制——`IMessageRouter`（协议无关：按连接维护缓冲，通过业务提供的 `MessageExtractor` 切分完整消息，按类型路由到 `MessageHandler`），支持粘包切分、跨包重组、非法数据丢弃。
+- **Infra**：**组件化适配层**——把 Common 基础设施适配为组件接口：`ILogger` / `IConfig` / `ITimer` / `IThreadPool` / `IAsyncExecutor`，模块通过 `ComponentManager` 按接口访问（符合规范 §10.2）。
+- **Process**：**进程级基础设施**——`Process`（`Daemonize` 守护进程化 / pid 文件读写 / 存活检查）、`PidFile`（RAII，析构自动删除）。
+- **Network**：轻量通信基础设施，基于 **Standalone Asio**（git 子模块）——`TcpServer`（io_context + acceptor + 独立线程事件循环）、`TcpConnection`（异步读写 + 写队列）、`Buffer`、`INetwork`/`INetworkHandler` 接口；`INetwork` 提供连接管理与统计（`ConnectionCount` / `TotalAccepted` / `PeerAddress` 等）。
 
 依赖方向：`Demo / Server → ServerCore → Common → 第三方库 / POSIX`。ServerCore 不依赖任何具体业务项目；网络基础设施位于 Common，ServerCore 通过 `NetworkComponent` 适配为组件模型接口（`INetwork` / `INetworkHandler`）。
 
