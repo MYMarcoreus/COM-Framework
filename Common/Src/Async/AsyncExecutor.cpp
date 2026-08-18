@@ -15,7 +15,7 @@ AsyncExecutor::~AsyncExecutor()
     Stop();
 }
 
-/// @brief 启动工作线程（惰性创建 progschj 线程池）。
+/// @brief 启动工作线程。
 bool AsyncExecutor::Start()
 {
     if (pool_)
@@ -26,8 +26,8 @@ bool AsyncExecutor::Start()
     {
         return false;
     }
-    pool_.reset(new ::ThreadPool(threadCount_));
-    return true;
+    pool_.reset(new ThreadPool(threadCount_));
+    return pool_->Start();
 }
 
 /// @brief 提交无返回值任务。
@@ -37,20 +37,23 @@ bool AsyncExecutor::Post(const std::function<void()>& task)
     {
         return false;
     }
-    pool_->enqueue(task);
-    return true;
+    return pool_->Submit(task);
 }
 
 /// @brief 停止并等待任务完成。
 void AsyncExecutor::Stop()
 {
-    pool_.reset(); // progschj 析构会 join 所有工作线程
+    if (pool_)
+    {
+        pool_->Stop();
+        pool_.reset();
+    }
 }
 
 /// @brief 是否正在运行。
 bool AsyncExecutor::IsRunning() const
 {
-    return pool_ != nullptr;
+    return pool_ != nullptr && pool_->IsRunning();
 }
 
 } // namespace common

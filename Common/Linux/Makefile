@@ -18,11 +18,10 @@ PROJECT    := $(notdir $(ROOT))
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -pthread
-# 本项目 Include + 第三方子模块（asio / inih / ThreadPool）
+# 本项目 Include + 第三方子模块（asio / inih）
 CPPFLAGS ?= -I$(ROOT)/Include \
             -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE \
-            -I$(WS_ROOT)/Common/ThirdParty/inih \
-            -I$(WS_ROOT)/Common/ThirdParty/ThreadPool
+            -I$(WS_ROOT)/Common/ThirdParty/inih
 LDFLAGS  ?=
 LDLIBS   ?=
 

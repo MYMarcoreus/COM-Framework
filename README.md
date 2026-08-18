@@ -31,13 +31,13 @@ make_test/                       # 工作区根目录（可存放多个项目）
 │   │   ├── Log/                 # Logger（自实现：线程安全，控制台 + 文件）
 │   │   ├── Timer/               # TimerManager（基于 asio::steady_timer）
 │   │   ├── Config/              # 配置解析（基于 inih）
-│   │   └── Async/               # AsyncExecutor（基于 progschj::ThreadPool）
+│   │   ├── Thread/              # ThreadPool（自实现：多线程任务队列）
+│   │   └── Async/               # AsyncExecutor（Task 链式调用：Then / Get）
 │   ├── Src/
 │   ├── Linux/Makefile           # 生成 build/libCommon.a
 │   └── ThirdParty/              # git 子模块
 │       ├── asio/                # Standalone Asio（asio-1-38-2）：网络 + 定时器
-│       ├── inih/                # inih（r62）：INI 解析
-│       └── ThreadPool/          # progschj/ThreadPool（9a42ec1）：线程池
+│       └── inih/                # inih（r62）：INI 解析
 │
 ├── ServerCore/                  # 服务器基础框架（静态库 libServerCore.a）
 │   ├── Include/
@@ -70,7 +70,8 @@ make_test/                       # 工作区根目录（可存放多个项目）
 - **Log**：`Logger`（自实现，C++11 标准库即可满足）——线程安全、等级过滤、控制台 + 文件。
 - **Timer**：`TimerManager` 基于 **asio::steady_timer**（独立 io 线程，一次性 / 周期性）。
 - **Config**：基于 **inih** 的 INI 解析（`key=value`、注释、`[section]` 分组）。
-- **Async**：`AsyncExecutor` 基于 **progschj/ThreadPool**（`enqueue` 直接返回 `std::future`）。
+- **Thread**：`ThreadPool`（自实现，C++11 `std::thread` + `mutex` + `condition_variable`）——`Start` / `Submit` / `Stop`，固定线程数任务队列。
+- **Async**：`AsyncExecutor` 基于自实现 `ThreadPool`，提供**链式调用**——`Submit` 返回 `Task<T>`，支持 `Then`（类型变换链）、`FromResult`、`Get`、`OnSuccess` / `OnFailure`，异常自动沿链传播；无返回值任务使用 `Post`。
 
 以上模块均可被任意服务器项目复用，且不依赖 ServerCore。
 
@@ -150,7 +151,7 @@ bash build.sh
 
 ### 4. git 子模块（第三方库）
 
-本项目使用 **git 管理**，第三方库以 **submodule** 引入：`Common/ThirdParty/asio`、`Common/ThirdParty/inih`、`Common/ThirdParty/ThreadPool`。
+本项目使用 **git 管理**，第三方库以 **submodule** 引入：`Common/ThirdParty/asio`、`Common/ThirdParty/inih`。
 
 首次克隆后需要初始化子模块：
 
@@ -162,7 +163,7 @@ git submodule update --init --recursive
 
 ```bash
 git -C Common/ThirdParty/asio fetch
-# 或其它子模块：inih / ThreadPool
+# 或其它子模块：inih
 git -C Common/ThirdParty/asio checkout <新标签>
 git add Common/ThirdParty/asio
 git commit -m "升级 asio 到 <新标签>"

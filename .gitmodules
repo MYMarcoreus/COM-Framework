@@ -4,6 +4,3 @@
 [submodule "Common/ThirdParty/inih"]
 	path = Common/ThirdParty/inih
 	url = https://github.com/benhoyt/inih.git
-[submodule "Common/ThirdParty/ThreadPool"]
-	path = Common/ThirdParty/ThreadPool
-	url = https://github.com/progschj/ThreadPool.git
