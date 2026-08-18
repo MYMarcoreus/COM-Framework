@@ -27,7 +27,7 @@ make_test/                       # 工作区根目录（可存放多个项目）
 │
 ├── Common/                      # 公共基础库（静态库 libCommon.a）
 │   ├── Include/
-│   │   ├── Network/             # TcpServer / TcpConnection / Buffer（基于 asio）
+│   │   ├── Network/             # TcpServer / TcpClient / TcpConnection / UdpSocket / Buffer（基于 asio）
 │   │   ├── Log/                 # Logger（自实现：线程安全，控制台 + 文件）
 │   │   ├── Timer/               # TimerManager（基于 asio::steady_timer）
 │   │   ├── Config/              # 配置解析（基于 inih）
@@ -44,6 +44,7 @@ make_test/                       # 工作区根目录（可存放多个项目）
 │   │   ├── Application/         # MyApplication
 │   │   ├── Component/           # IUnknown / Component / ComponentManager / ScopedInterfacePtr
 │   │   ├── Module/              # IModule / Module / ModuleManager（模块生命周期统一管理）
+│   │   ├── Event/               # IEventDispatcher / EventDispatcher（模块间解耦通信）
 │   │   ├── Network/             # INetwork / INetworkHandler / NetworkComponent（组件模型适配）
 │   │   └── Common/              # 类型别名
 │   ├── Src/
@@ -61,6 +62,15 @@ make_test/                       # 工作区根目录（可存放多个项目）
 │   └── Linux/
 │       └── Makefile             # 生成 build/demo 与 build/demo_client
 │
+├── ServerA/                     # 第一个业务服务器骨架（复用 ServerCore）
+│   ├── Include/
+│   │   ├── Service/             # EchoService（实现 INetworkHandler）
+│   │   ├── Module/              # ServerLoggerModule / ServerNetworkModule
+│   │   └── ServerApplication.h
+│   ├── Src/                     # ServerApplication / main / Service/ / Module/
+│   └── Linux/
+│       └── Makefile             # 生成 build/servera
+│
 └── build/                       # 构建产物（.o / .a / 可执行文件）
 ```
 
@@ -68,7 +78,7 @@ make_test/                       # 工作区根目录（可存放多个项目）
 
 `Common` 是**服务器无关的公共基础设施**（`libCommon.a`），优先复用轻量级第三方库（git 子模块），不足处自实现：
 
-- **Network**：基于 **Standalone Asio** 的 `TcpServer` / `TcpConnection` / `Buffer`，通过 `std::function` 回调上报事件。
+- **Network**：基于 **Standalone Asio** 的 `TcpServer`（服务端，含连接管理与统计：`ConnectionCount`/`TotalAccepted`/`PeerAddress` 等）、`TcpClient`（主动连接，支持主机名解析与对端关闭通知）、`TcpConnection`（异步读写）、`UdpSocket`（UDP 数据报收发）、`Buffer`，通过 `std::function` 回调上报事件。
 - **Log**：`Logger`（自实现，C++11 标准库即可满足）——线程安全、等级过滤、控制台 + 文件。
 - **Timer**：`TimerManager` 基于 **asio::steady_timer**（独立 io 线程，一次性 / 周期性）。
 - **Config**：基于 **inih** 的 INI 解析（`key=value`、注释、`[section]` 分组）。
@@ -84,6 +94,7 @@ make_test/                       # 工作区根目录（可存放多个项目）
 - **Application**：`MyApplication` 提供统一生命周期 `Initialize → Start → Run → Stop → Shutdown`，通过 `ComponentManager` 组合基础组件，通过 `ModuleManager` 统一管理模块生命周期。
 - **Component**：借鉴 COM 组件模型思想的 C++11/Linux 实现——`IUnknown`（QueryInterface / AddRef / Release）、`Component`（原子引用计数）、`ComponentManager`（注册/获取/移除/清空）、`ScopedInterfacePtr`（RAII 智能引用）。
 - **Module**：与组件模型同思想的**模块生命周期管理**——`IModule`（继承 IUnknown，可查询接口 / 引用计数）、`Module`（基类：引用计数 + 默认生命周期空实现）、`ModuleManager`（注册即持有引用，统一编排：按序初始化/启动、逆序停止/关闭、失败回滚）。
+- **Event**：**事件分发**机制——`IEventDispatcher`（继承 IUnknown，`Subscribe` 返回订阅标识 / `Unsubscribe` / `Publish` / `SubscriberCount`）、`EventDispatcher`（线程安全，发布在锁外调用处理器防重入死锁），用于模块之间的解耦通信。
 - **Network**：轻量通信基础设施，基于 **Standalone Asio**（git 子模块）——`TcpServer`（io_context + acceptor + 独立线程事件循环）、`TcpConnection`（异步读写 + 写队列）、`Buffer`、`INetwork`/`INetworkHandler` 接口。
 
 依赖方向：`Demo / Server → ServerCore → Common → 第三方库 / POSIX`。ServerCore 不依赖任何具体业务项目；网络基础设施位于 Common，ServerCore 通过 `NetworkComponent` 适配为组件模型接口（`INetwork` / `INetworkHandler`）。
@@ -104,6 +115,17 @@ Demo 使用 Common 基础库：Logger 记录日志（控制台 + 可选文件）
 
 Demo 以**模块化**方式装配：`DemoApplication` 在 `RegisterModules()` 中注册 `DemoLoggerModule`（配置日志器）、`DemoTimerModule`（周期运行状态）、`DemoNetworkModule`（关联组件并启动 TCP 服务器）三个模块，其生命周期由 `ModuleManager` 按注册顺序统一初始化/启动、逆序停止/关闭，验证 ServerCore 的模块管理机制。
 
+Demo 还验证**事件解耦通信**：`DemoNetworkModule` 启动/停止时发布 `network.started` / `network.stopped` 事件，`DemoApplication` 订阅并记录日志，发布者与订阅者互不依赖。
+
+## ServerA
+
+`ServerA` 是**第一个业务服务器骨架**，演示 ServerCore 在多个服务器项目间的复用（多服务器组织）。
+
+- `build/servera`：服务器（默认端口 9100，可用命令行参数覆盖）
+- 复用 ServerCore：`MyApplication` 生命周期 + `ComponentManager` 组件装配 + `ModuleManager` 模块生命周期 + `EventDispatcher` 事件通信 + `NetworkComponent` 网络
+- 业务层：`EchoService`（实现 `INetworkHandler`，收到数据原样返回，验证网络收发链路）
+- 不含具体业务（规范：第一阶段不做业务认证 / 权限 / 数据库等），作为后续内网安全服务控制台后端的起点
+
 ## 使用方式
 
 ### 1. 在 Dev Container 中打开
@@ -114,7 +136,7 @@ Demo 以**模块化**方式装配：`DemoApplication` 在 `RegisterModules()` �
 
 ```bash
 bash build.sh   # 生成所有项目的 compile_commands.json（供 clangd）
-bash .builds.sh # 构建 Common → ServerCore → Demo
+bash .builds.sh # 构建 Common → ServerCore → Demo → ServerA
 ```
 
 > 容器内 clangd 直接使用容器路径（`/workspace/...`）的 `compile_commands.json`，无需路径改写。
@@ -122,7 +144,7 @@ bash .builds.sh # 构建 Common → ServerCore → Demo
 ### 2. 构建与运行
 
 ```bash
-# 工作区统一构建（按依赖顺序：Common → ServerCore → Demo）
+# 工作区统一构建（按依赖顺序：Common → ServerCore → Demo → ServerA）
 bash .builds.sh
 
 # 生成 compile_commands.json（供 clangd）

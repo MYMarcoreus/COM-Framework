@@ -5,8 +5,8 @@ set -euo pipefail
 # 使用方式：bash .builds.sh
 WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 依赖顺序：Common → ServerCore → Demo
-PROJECTS=(Common ServerCore Demo)
+# 依赖顺序：Common → ServerCore → Demo → ServerA
+PROJECTS=(Common ServerCore Demo ServerA)
 
 for project in "${PROJECTS[@]}"; do
     PROJECT_ROOT="$WORKSPACE_ROOT/$project"

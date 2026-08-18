@@ -4,7 +4,7 @@ set -euo pipefail
 # 工作区编译数据库生成脚本：为所有项目生成 compile_commands.json（供 clangd）
 # 使用方式：bash build.sh
 # 编译逻辑集中在各项目 Makefile 的 compiledb 目标中，本脚本只负责按顺序调用。
-PROJECTS=(Common ServerCore Demo)
+PROJECTS=(Common ServerCore Demo ServerA)
 
 WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
