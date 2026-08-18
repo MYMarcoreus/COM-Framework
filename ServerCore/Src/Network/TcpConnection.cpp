@@ -1,7 +1,5 @@
 #include "Network/TcpConnection.h"
 
-#include <cstdint>
-
 namespace sc {
 
 namespace
@@ -35,7 +33,7 @@ TcpConnection::TcpConnection(asio::io_context& io, ConnectionId id, asio::ip::tc
 TcpConnection::~TcpConnection()
 {
     asio::error_code ignore;
-    socket_.close(ignore);
+    static_cast<void>(socket_.close(ignore));
 }
 
 /// @brief 返回连接标识。
@@ -193,7 +191,7 @@ void TcpConnection::CloseOnIoThread()
     }
     closed_.store(true);
     asio::error_code ignore;
-    socket_.close(ignore);
+    static_cast<void>(socket_.close(ignore));
 }
 
 /// @brief 处理错误或对端关闭。
@@ -206,7 +204,7 @@ void TcpConnection::HandleError(const asio::error_code& ec)
     }
     closed_.store(true);
     asio::error_code ignore;
-    socket_.close(ignore);
+    static_cast<void>(socket_.close(ignore));
     if (closeCallback_)
     {
         closeCallback_(shared_from_this());

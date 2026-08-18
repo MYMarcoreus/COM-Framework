@@ -35,18 +35,18 @@ bool TcpServer::Start(uint16_t port, INetworkHandler* handler)
     asio::error_code ec;
     acceptor_.reset(new asio::ip::tcp::acceptor(io_));
     asio::ip::tcp::endpoint endpoint(asio::ip::tcp::v4(), port);
-    acceptor_->open(endpoint.protocol(), ec);
+    static_cast<void>(acceptor_->open(endpoint.protocol(), ec));
     if (!ec)
     {
-        acceptor_->set_option(asio::ip::tcp::acceptor::reuse_address(true), ec);
+        static_cast<void>(acceptor_->set_option(asio::ip::tcp::acceptor::reuse_address(true), ec));
     }
     if (!ec)
     {
-        acceptor_->bind(endpoint, ec);
+        static_cast<void>(acceptor_->bind(endpoint, ec));
     }
     if (!ec)
     {
-        acceptor_->listen(asio::socket_base::max_listen_connections, ec);
+        static_cast<void>(acceptor_->listen(asio::socket_base::max_listen_connections, ec));
     }
     if (ec)
     {
@@ -197,7 +197,7 @@ void TcpServer::ShutdownOnIoThread()
     if (acceptor_ != nullptr && acceptor_->is_open())
     {
         asio::error_code ignore;
-        acceptor_->close(ignore);
+        static_cast<void>(acceptor_->close(ignore));
     }
     std::vector<TcpConnection::Ptr> all;
     for (std::map<ConnectionId, TcpConnection::Ptr>::iterator it = connections_.begin();
