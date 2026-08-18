@@ -54,7 +54,7 @@
         {
             "label": "clean (all projects)",
             "type": "shell",
-            "command": "bash -c 'for p in ServerCore Demo; do make -C \"$PWD/$p/Linux\" clean; done'",
+            "command": "bash -c 'for p in Common ServerCore Demo; do make -C \"$PWD/$p/Linux\" clean; done'",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",

@@ -2,31 +2,43 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
+#include <string>
 #include <thread>
 
 #include "asio.hpp"
 
-#include "Common/Types.h"
-#include "Network/INetworkHandler.h"
+#include "Network/NetworkTypes.h"
 #include "Network/TcpConnection.h"
 
-namespace sc {
+namespace common {
 
 /// @brief TCP 服务器（基于 asio）。
 ///
 /// 基于 asio::io_context + tcp::acceptor 提供 TCP 服务器能力。
 /// 事件循环在独立线程中运行；连接生命周期由 shared_ptr 管理。
+/// 通过回调向上层报告 accept / data / close 事件，不依赖具体业务接口。
 class TcpServer
 {
 public:
+    // 新连接回调。
+    using AcceptCallback = std::function<void(ConnectionId id, const std::string& peer)>;
+
+    // 数据回调。
+    using DataCallback = std::function<void(ConnectionId id, const char* data, size_t len)>;
+
+    // 连接关闭回调。
+    using CloseCallback = std::function<void(ConnectionId id)>;
+
     TcpServer();
 
     ~TcpServer();
 
     // 启动服务器并监听端口。
-    bool Start(uint16_t port, INetworkHandler* handler);
+    bool Start(uint16_t port, const AcceptCallback& acceptCb,
+               const DataCallback& dataCb, const CloseCallback& closeCb);
 
     // 停止服务器，等待事件循环线程退出。
     void Stop();
@@ -64,7 +76,9 @@ private:
 
     asio::io_context io_;
     std::unique_ptr<asio::ip::tcp::acceptor> acceptor_;
-    INetworkHandler* handler_;
+    AcceptCallback acceptCb_;
+    DataCallback dataCb_;
+    CloseCallback closeCb_;
     std::map<ConnectionId, TcpConnection::Ptr> connections_;
     std::thread thread_;
     ConnectionId nextId_;
@@ -72,4 +86,4 @@ private:
     std::atomic<bool> running_;
 };
 
-} // namespace sc
+} // namespace common

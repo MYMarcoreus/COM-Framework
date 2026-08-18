@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace sc {
+namespace common {
 
 /// @brief 网络数据缓冲区。
 ///
@@ -56,4 +56,4 @@ private:
     size_t writeIndex_;
 };
 
-} // namespace sc
+} // namespace common

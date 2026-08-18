@@ -1,6 +1,6 @@
 #include "Network/TcpConnection.h"
 
-namespace sc {
+namespace common {
 
 namespace
 {
@@ -211,4 +211,4 @@ void TcpConnection::HandleError(const asio::error_code& ec)
     }
 }
 
-} // namespace sc
+} // namespace common

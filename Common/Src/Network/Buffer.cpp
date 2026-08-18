@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-namespace sc {
+namespace common {
 
 /// @brief 创建网络缓冲区。
 ///
@@ -122,4 +122,4 @@ void Buffer::EnsureWritable(size_t len)
     readIndex_ = 0;
 }
 
-} // namespace sc
+} // namespace common

@@ -35,8 +35,33 @@ bool NetworkComponent::StartTcpServer(uint16_t port, INetworkHandler* handler)
     // 持有 handler 引用，确保网络运行期间 handler 存活
     handler_.Reset(handler);
 
-    std::unique_ptr<TcpServer> newServer(new TcpServer());
-    if (!newServer->Start(port, handler))
+    // 将组件接口回调适配为 Common TcpServer 的 std::function 回调
+    std::unique_ptr<common::TcpServer> newServer(new common::TcpServer());
+    common::TcpServer::AcceptCallback acceptCb =
+        [this](common::ConnectionId id, const std::string& peer)
+        {
+            if (handler_ != nullptr)
+            {
+                handler_->OnAccept(id, peer);
+            }
+        };
+    common::TcpServer::DataCallback dataCb =
+        [this](common::ConnectionId id, const char* data, size_t len)
+        {
+            if (handler_ != nullptr)
+            {
+                handler_->OnData(id, data, len);
+            }
+        };
+    common::TcpServer::CloseCallback closeCb =
+        [this](common::ConnectionId id)
+        {
+            if (handler_ != nullptr)
+            {
+                handler_->OnClose(id);
+            }
+        };
+    if (!newServer->Start(port, acceptCb, dataCb, closeCb))
     {
         handler_.Reset();
         return false;
@@ -54,7 +79,7 @@ bool NetworkComponent::StartTcpServer(uint16_t port, INetworkHandler* handler)
 /// 先释放 server 所有权，再在锁外停止，避免等待事件循环线程时死锁。
 void NetworkComponent::Stop()
 {
-    TcpServer* server = nullptr;
+    common::TcpServer* server = nullptr;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         server = server_.release();

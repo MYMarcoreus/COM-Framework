@@ -21,16 +21,17 @@ PROJECT    := $(notdir $(ROOT))
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -pthread
-# 本项目 Include + ServerCore Include + asio 子模块
-CPPFLAGS ?= -I$(ROOT)/Include -I$(WS_ROOT)/ServerCore/Include -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE
+# 本项目 Include + ServerCore Include + Common Include + asio 子模块
+CPPFLAGS ?= -I$(ROOT)/Include -I$(WS_ROOT)/ServerCore/Include -I$(WS_ROOT)/Common/Include -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE
 LDFLAGS  ?=
-LDLIBS   ?= $(WS_ROOT)/build/libServerCore.a
+LDLIBS   ?= $(WS_ROOT)/build/libServerCore.a $(WS_ROOT)/build/libCommon.a
 
 SRC_DIR   := $(ROOT)/Src
 BUILD_DIR := $(WS_ROOT)/build
 TARGET    := $(BUILD_DIR)/demo
 CLIENT    := $(BUILD_DIR)/demo_client
 LIB       := $(WS_ROOT)/build/libServerCore.a
+COMMON_LIB := $(WS_ROOT)/build/libCommon.a
 
 # 服务器源码（排除客户端入口）
 SERVER_SRCS := $(filter-out $(SRC_DIR)/client_main.cpp,$(shell find $(SRC_DIR) -name '*.cpp' | sort))
@@ -46,8 +47,8 @@ DEPS := $(SERVER_OBJS:.o=.d) $(CLIENT_OBJS:.o=.d)
 # 默认目标
 all: $(TARGET) $(CLIENT)
 
-# 服务器链接 libServerCore.a
-$(TARGET): $(SERVER_OBJS) $(LIB)
+# 服务器链接 libServerCore.a 与 libCommon.a
+$(TARGET): $(SERVER_OBJS) $(LIB) $(COMMON_LIB)
 	$(CXX) $(LDFLAGS) $(SERVER_OBJS) $(LDLIBS) -o $@
 
 # 客户端（复用 Demo 协议实现，不依赖 ServerCore）
@@ -69,9 +70,12 @@ $(foreach src,$(SERVER_SRCS) $(CLIENT_SRCS),$(eval $(call compile-obj,$(src))))
 # 引入自动生成的头文件依赖
 -include $(DEPS)
 
-# 依赖的 ServerCore 静态库：缺失时自动构建
+# 依赖的 ServerCore / Common 静态库：缺失时自动构建
 $(LIB):
 	$(MAKE) -C $(WS_ROOT)/ServerCore/Linux all
+
+$(COMMON_LIB):
+	$(MAKE) -C $(WS_ROOT)/Common/Linux all
 
 # ------------------------------------------------------------------
 # 生成 compile_commands.json（供 clangd 使用）

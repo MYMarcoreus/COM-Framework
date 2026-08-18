@@ -25,17 +25,30 @@ make_test/                       # 工作区根目录（可存放多个项目）
 │   └── ThirdParty/
 │       └── asio/                # git 子模块：Standalone Asio（asio-1-38-2）
 │
+├── Common/                      # 公共基础库（静态库 libCommon.a）
+│   ├── Include/
+│   │   ├── Network/             # TcpServer / TcpConnection / Buffer（基于 asio）
+│   │   ├── Log/                 # Logger（线程安全，控制台 + 文件）
+│   │   ├── Thread/              # ThreadPool
+│   │   ├── Timer/               # TimerManager（一次性 / 周期性）
+│   │   ├── Config/              # INI 风格配置解析
+│   │   └── Async/               # AsyncExecutor（std::future 结果）
+│   ├── Src/
+│   ├── Linux/Makefile           # 生成 build/libCommon.a
+│   └── ThirdParty/asio/         # git 子模块：Standalone Asio（asio-1-38-2）
+│
 ├── ServerCore/                  # 服务器基础框架（静态库 libServerCore.a）
 │   ├── Include/
 │   │   ├── Application/         # MyApplication
 │   │   ├── Component/           # IUnknown / Component / ComponentManager / ScopedInterfacePtr
-│   │   ├── Network/             # TcpServer / TcpConnection / Buffer / INetwork（基于 asio）
-│   │   └── Common/              # 公共类型
+│   │   ├── Network/             # INetwork / INetworkHandler / NetworkComponent（组件模型适配）
+│   │   └── Common/              # 类型别名
 │   ├── Src/
 │   └── Linux/
 │       └── Makefile             # 生成 build/libServerCore.a
 │
 ├── Demo/                        # ServerCore 验证项目
+│   ├── demo.ini                 # 示例配置（Config 模块）
 │   ├── Include/
 │   │   ├── Protocol/            # Demo 极简协议（Length + Command + Payload）
 │   │   ├── Service/             # DemoService（实现 INetworkHandler）
@@ -47,6 +60,19 @@ make_test/                       # 工作区根目录（可存放多个项目）
 └── build/                       # 构建产物（.o / .a / 可执行文件）
 ```
 
+## Common 基础库
+
+`Common` 是**服务器无关的公共基础设施**（`libCommon.a`），包含：
+
+- **Network**：基于 **Standalone Asio**（git 子模块）的 `TcpServer` / `TcpConnection` / `Buffer`，通过 `std::function` 回调上报事件，不依赖具体业务接口。
+- **Log**：线程安全的 `Logger`，等级过滤 + 时间戳，输出到控制台并可同时写入文件。
+- **Thread**：`ThreadPool` 线程池。
+- **Timer**：`TimerManager` 定时器管理器（一次性 / 周期性，独立线程）。
+- **Config**：INI 风格配置解析（`key=value`、注释、`[section]` 分组）。
+- **Async**：`AsyncExecutor` 异步执行器（基于线程池 + `std::future`）。
+
+以上模块均可被任意服务器项目复用，且不依赖 ServerCore。
+
 ## ServerCore
 
 `ServerCore` 是其他服务器可直接复用的**基础组件库**，不包含具体业务与协议：
@@ -55,7 +81,7 @@ make_test/                       # 工作区根目录（可存放多个项目）
 - **Component**：借鉴 COM 组件模型思想的 C++11/Linux 实现——`IUnknown`（QueryInterface / AddRef / Release）、`Component`（原子引用计数）、`ComponentManager`（注册/获取/移除/清空）、`ScopedInterfacePtr`（RAII 智能引用）。
 - **Network**：轻量通信基础设施，基于 **Standalone Asio**（git 子模块）——`TcpServer`（io_context + acceptor + 独立线程事件循环）、`TcpConnection`（异步读写 + 写队列）、`Buffer`、`INetwork`/`INetworkHandler` 接口。
 
-依赖方向：`Demo / Server → ServerCore → POSIX / 标准库`。ServerCore 不依赖任何具体业务项目。
+依赖方向：`Demo / Server → ServerCore → Common → 第三方库 / POSIX`。ServerCore 不依赖任何具体业务项目；网络基础设施位于 Common，ServerCore 通过 `NetworkComponent` 适配为组件模型接口（`INetwork` / `INetworkHandler`）。
 
 ## Demo
 
@@ -66,8 +92,10 @@ main → MyApplication → ComponentManager → Network → TCP Listen → Accep
       → Receive → Demo Protocol → Service → Response
 ```
 
-- `build/demo`：服务器（默认端口 9000，可传参，如 `./build/demo 9100`）
+- `build/demo`：服务器（端口优先级：命令行参数 > `demo.ini` 配置 > 默认 9000）
 - `build/demo_client`：测试客户端（发送 PING/ECHO 并打印响应）
+
+Demo 使用 Common 基础库：Logger 记录日志（控制台 + 可选文件）、Config 读取 `demo.ini`、TimerManager 周期性输出运行状态。
 
 ## 使用方式
 
@@ -79,7 +107,7 @@ main → MyApplication → ComponentManager → Network → TCP Listen → Accep
 
 ```bash
 bash build.sh   # 生成所有项目的 compile_commands.json（供 clangd）
-bash .builds.sh # 构建 ServerCore → Demo
+bash .builds.sh # 构建 Common → ServerCore → Demo
 ```
 
 > 容器内 clangd 直接使用容器路径（`/workspace/...`）的 `compile_commands.json`，无需路径改写。
@@ -87,7 +115,7 @@ bash .builds.sh # 构建 ServerCore → Demo
 ### 2. 构建与运行
 
 ```bash
-# 工作区统一构建（按依赖顺序：ServerCore → Demo）
+# 工作区统一构建（按依赖顺序：Common → ServerCore → Demo）
 bash .builds.sh
 
 # 生成 compile_commands.json（供 clangd）

@@ -4,8 +4,10 @@
 
 #include "Application/MyApplication.h"
 #include "Component/ScopedInterfacePtr.h"
+#include "Config/Config.h"
 #include "Network/INetwork.h"
 #include "Network/INetworkHandler.h"
+#include "Timer/TimerManager.h"
 
 namespace demo {
 
@@ -37,6 +39,9 @@ protected:
 
 private:
     std::uint16_t port_;
+    common::Config config_;
+    common::TimerManager timer_;
+    common::TimerId timerId_;
     sc::ScopedInterfacePtr<sc::INetwork> network_;
     sc::ScopedInterfacePtr<sc::INetworkHandler> handler_;
     DemoService* service_; // 借用指针，由组件管理器持有

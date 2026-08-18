@@ -1,16 +1,16 @@
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
 
 #include "DemoApplication.h"
+#include "Log/Logger.h"
 
 /// @brief Demo 服务器入口。
 ///
 /// 流程：main → DemoApplication → 组件管理器 → 网络 → 监听 → 接收 → 协议 → 响应。
 int main(int argc, char* argv[])
 {
-    // 解析端口参数（默认 9000）
-    std::uint16_t port = 9000;
+    // 解析端口参数（0 表示从配置文件读取）
+    std::uint16_t port = 0;
     if (argc > 1)
     {
         int value = std::atoi(argv[1]);
@@ -24,22 +24,19 @@ int main(int argc, char* argv[])
 
     if (!app.Initialize())
     {
-        std::fprintf(stderr, "Demo 初始化失败\n");
+        common::Logger::Instance().Error("Demo 初始化失败");
         return -1;
     }
     if (!app.Start())
     {
-        std::fprintf(stderr, "Demo 启动失败（端口可能被占用）\n");
+        common::Logger::Instance().Error("Demo 启动失败（端口可能被占用）");
         app.Shutdown();
         return -1;
     }
 
-    std::printf("Demo 服务器已启动，监听端口 %u，按 Ctrl+C 退出\n", static_cast<unsigned>(port));
-    std::fflush(stdout);
-
     int result = app.Run();
 
     app.Shutdown();
-    std::printf("Demo 服务器已退出\n");
+    common::Logger::Instance().Info("Demo 服务器已退出");
     return result;
 }

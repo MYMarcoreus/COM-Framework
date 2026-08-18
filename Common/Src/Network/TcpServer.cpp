@@ -3,11 +3,11 @@
 #include <functional>
 #include <vector>
 
-namespace sc {
+namespace common {
 
 /// @brief 创建 TCP 服务器。
 TcpServer::TcpServer()
-    : handler_(nullptr), nextId_(1), port_(0), running_(false)
+    : nextId_(1), port_(0), running_(false)
 {
 }
 
@@ -20,16 +20,21 @@ TcpServer::~TcpServer()
 /// @brief 启动服务器并监听端口。
 ///
 /// @param port 监听端口。
-/// @param handler 网络事件处理器（借用指针，不持有）。
+/// @param acceptCb 新连接回调。
+/// @param dataCb 数据回调。
+/// @param closeCb 连接关闭回调。
 ///
 /// @return 成功返回 true。
-bool TcpServer::Start(uint16_t port, INetworkHandler* handler)
+bool TcpServer::Start(uint16_t port, const AcceptCallback& acceptCb,
+                      const DataCallback& dataCb, const CloseCallback& closeCb)
 {
     if (running_.load())
     {
         return false;
     }
-    handler_ = handler;
+    acceptCb_ = acceptCb;
+    dataCb_ = dataCb;
+    closeCb_ = closeCb;
 
     // ① 创建并配置 acceptor
     asio::error_code ec;
@@ -118,9 +123,9 @@ void TcpServer::StartAccept()
                 std::bind(&TcpServer::HandleClose, this, std::placeholders::_1));
             connections_[id] = conn;
             conn->StartRead();
-            if (handler_ != nullptr)
+            if (acceptCb_)
             {
-                handler_->OnAccept(id, conn->PeerAddress());
+                acceptCb_(id, conn->PeerAddress());
             }
             StartAccept(); // 继续接受下一个连接
         });
@@ -129,9 +134,9 @@ void TcpServer::StartAccept()
 /// @brief 连接数据回调。
 void TcpServer::HandleData(const TcpConnection::Ptr& conn, const char* data, size_t len)
 {
-    if (handler_ != nullptr)
+    if (dataCb_)
     {
-        handler_->OnData(conn->id(), data, len);
+        dataCb_(conn->id(), data, len);
     }
 }
 
@@ -142,9 +147,9 @@ void TcpServer::HandleClose(const TcpConnection::Ptr& conn)
 {
     ConnectionId id = conn->id();
     connections_.erase(id);
-    if (handler_ != nullptr)
+    if (closeCb_)
     {
-        handler_->OnClose(id);
+        closeCb_(id);
     }
 }
 
@@ -182,9 +187,9 @@ void TcpServer::Close(ConnectionId id)
         TcpConnection::Ptr conn = it->second;
         connections_.erase(it);
         conn->Close();
-        if (handler_ != nullptr)
+        if (closeCb_)
         {
-            handler_->OnClose(id);
+            closeCb_(id);
         }
     });
 }
@@ -209,9 +214,9 @@ void TcpServer::ShutdownOnIoThread()
     for (size_t i = 0; i < all.size(); ++i)
     {
         all[i]->Close();
-        if (handler_ != nullptr)
+        if (closeCb_)
         {
-            handler_->OnClose(all[i]->id());
+            closeCb_(all[i]->id());
         }
     }
 }
@@ -228,4 +233,4 @@ bool TcpServer::IsRunning() const
     return running_.load();
 }
 
-} // namespace sc
+} // namespace common

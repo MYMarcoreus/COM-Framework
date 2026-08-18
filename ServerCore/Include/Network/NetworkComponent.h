@@ -8,10 +8,11 @@
 #include "Component/ScopedInterfacePtr.h"
 #include "Network/INetwork.h"
 
+namespace common { class TcpServer; }
+
 namespace sc {
 
 // 前置声明，减少头文件依赖。
-class TcpServer;
 
 /// @brief 网络组件。
 ///
@@ -44,7 +45,7 @@ protected:
     bool QueryInterfaceImpl(const InterfaceId& iid, void** ppv) override;
 
 private:
-    std::unique_ptr<TcpServer> server_;
+    std::unique_ptr<common::TcpServer> server_;
     ScopedInterfacePtr<INetworkHandler> handler_;
     mutable std::mutex mutex_;
     uint16_t port_;

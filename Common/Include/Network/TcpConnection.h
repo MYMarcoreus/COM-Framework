@@ -9,10 +9,10 @@
 
 #include "asio.hpp"
 
-#include "Common/Types.h"
+#include "Network/NetworkTypes.h"
 #include "Network/Buffer.h"
 
-namespace sc {
+namespace common {
 
 /// @brief TCP 连接（基于 asio）。
 ///
@@ -92,4 +92,4 @@ private:
     std::atomic<bool> closed_;
 };
 
-} // namespace sc
+} // namespace common

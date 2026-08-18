@@ -1,6 +1,6 @@
 #include "Service/DemoService.h"
 
-#include <cstdio>
+#include "Log/Logger.h"
 
 namespace demo {
 
@@ -113,8 +113,7 @@ bool DemoService::QueryInterfaceImpl(const sc::InterfaceId& iid, void** ppv)
 /// @brief 记录日志。
 void DemoService::Log(const std::string& message)
 {
-    std::printf("[DemoService] %s\n", message.c_str());
-    std::fflush(stdout);
+    common::Logger::Instance().Info("[DemoService] " + message);
 }
 
 } // namespace demo
