@@ -28,6 +28,18 @@ public:
     // 查询接口。
     bool QueryInterface(const InterfaceId& iid, void** ppv) override;
 
+    // 生命周期：初始化（默认空实现，子类按需重写）。
+    virtual bool Initialize();
+
+    // 生命周期：启动（默认空实现，子类按需重写）。
+    virtual bool Start();
+
+    // 生命周期：停止（默认空实现，子类按需重写）。
+    virtual void Stop();
+
+    // 生命周期：关闭（默认空实现，子类按需重写）。
+    virtual void Shutdown();
+
 protected:
     // 子类重写以返回自身实现的接口。
     virtual bool QueryInterfaceImpl(const InterfaceId& iid, void** ppv);

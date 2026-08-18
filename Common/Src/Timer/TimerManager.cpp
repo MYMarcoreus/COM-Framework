@@ -66,6 +66,48 @@ bool CTimerManager::Cancel(TimerId nId)
     return true;
 }
 
+/// @brief 注册命名周期定时器。
+///
+/// 通过名称管理定时器，便于后续按名称取消。
+///
+/// @param strName 定时器名称（进程内唯一）。
+/// @param nIntervalMs 周期毫秒数。
+/// @param fnCallback 每次到期回调。
+///
+/// @return 定时器标识；失败返回 kInvalidTimerId。
+TimerId CTimerManager::AddNamedTimer(const std::string& strName, std::int64_t nIntervalMs,
+                                    const TimerCallback& fnCallback)
+{
+    TimerId nId = AddTimerInternal(0, nIntervalMs, fnCallback);
+    if (nId != kInvalidTimerId)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_mapNamedTimers[strName] = nId;
+    }
+    return nId;
+}
+
+/// @brief 按名称取消定时器。
+///
+/// @param strName 定时器名称。
+///
+/// @return true 取消成功；false 名称不存在。
+bool CTimerManager::CancelNamedTimer(const std::string& strName)
+{
+    TimerId nId = kInvalidTimerId;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        std::map<std::string, TimerId>::iterator it = m_mapNamedTimers.find(strName);
+        if (it == m_mapNamedTimers.end())
+        {
+            return false;
+        }
+        nId = it->second;
+        m_mapNamedTimers.erase(it);
+    }
+    return Cancel(nId);
+}
+
 /// @brief 停止定时器线程。
 void CTimerManager::Stop()
 {

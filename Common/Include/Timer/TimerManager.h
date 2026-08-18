@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 
 #include "asio.hpp"
@@ -45,6 +46,13 @@ public:
     // 取消定时器。
     bool Cancel(TimerId nId);
 
+    // 注册命名周期定时器（便于按名称管理/取消）。
+    TimerId AddNamedTimer(const std::string& strName, std::int64_t nIntervalMs,
+                          const TimerCallback& fnCallback);
+
+    // 按名称取消定时器。
+    bool CancelNamedTimer(const std::string& strName);
+
     // 停止定时器线程。
     void Stop();
 
@@ -63,6 +71,7 @@ private:
     asio::io_context m_io;
     std::unique_ptr<asio::executor_work_guard<asio::io_context::executor_type> > m_pWork;
     std::map<TimerId, std::shared_ptr<asio::steady_timer> > m_mapTimers;
+    std::map<std::string, TimerId> m_mapNamedTimers;
     mutable std::mutex m_mutex;
     std::thread m_thread;
     TimerId m_nNextId;

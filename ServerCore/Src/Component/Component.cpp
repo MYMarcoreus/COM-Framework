@@ -78,4 +78,30 @@ bool CComponent::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
     return false;
 }
 
+/// @brief 默认初始化实现，子类按需重写。
+///
+/// @return true。
+bool CComponent::Initialize()
+{
+    return true;
+}
+
+/// @brief 默认启动实现，子类按需重写。
+///
+/// @return true。
+bool CComponent::Start()
+{
+    return true;
+}
+
+/// @brief 默认停止实现，子类按需重写。
+void CComponent::Stop()
+{
+}
+
+/// @brief 默认关闭实现，子类按需重写。
+void CComponent::Shutdown()
+{
+}
+
 } // namespace sc

@@ -117,4 +117,77 @@ size_t CComponentManager::Size() const
     return m_mapComponents.size();
 }
 
+/// @brief 统一初始化所有组件。
+///
+/// 按注册顺序调用 Initialize；任一步失败返回 false。
+bool CComponentManager::InitializeAll()
+{
+    std::vector<CComponent*> vecComponents;
+    CollectComponents(vecComponents);
+    for (size_t i = 0; i < vecComponents.size(); ++i)
+    {
+        if (!vecComponents[i]->Initialize())
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 统一启动所有组件。
+///
+/// 按注册顺序调用 Start；任一步失败返回 false。
+bool CComponentManager::StartAll()
+{
+    std::vector<CComponent*> vecComponents;
+    CollectComponents(vecComponents);
+    for (size_t i = 0; i < vecComponents.size(); ++i)
+    {
+        if (!vecComponents[i]->Start())
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 统一停止所有组件（逆序）。
+void CComponentManager::StopAll()
+{
+    std::vector<CComponent*> vecComponents;
+    CollectComponents(vecComponents);
+    for (size_t i = vecComponents.size(); i > 0; --i)
+    {
+        vecComponents[i - 1]->Stop();
+    }
+}
+
+/// @brief 统一关闭所有组件（逆序）。
+void CComponentManager::ShutdownAll()
+{
+    std::vector<CComponent*> vecComponents;
+    CollectComponents(vecComponents);
+    for (size_t i = vecComponents.size(); i > 0; --i)
+    {
+        vecComponents[i - 1]->Shutdown();
+    }
+}
+
+/// @brief 收集所有 CComponent 派生组件。
+///
+/// @param vecOut 输出组件列表（按注册顺序）。
+void CComponentManager::CollectComponents(std::vector<CComponent*>& vecOut) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (std::map<std::string, Entry>::const_iterator it = m_mapComponents.begin();
+         it != m_mapComponents.end(); ++it)
+    {
+        CComponent* pComponent = dynamic_cast<CComponent*>(it->second.component);
+        if (pComponent != nullptr)
+        {
+            vecOut.push_back(pComponent);
+        }
+    }
+}
+
 } // namespace sc

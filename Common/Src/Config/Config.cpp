@@ -2,6 +2,8 @@
 
 #include <cstdlib>
 
+#include <sys/stat.h>
+
 #include "ini.h"
 
 namespace common {
@@ -36,7 +38,29 @@ bool CConfig::LoadFile(const std::string& strPath)
         return false;
     }
     m_mapValues.insert(mapLoaded.begin(), mapLoaded.end());
+    m_strFilePath = strPath;
+    m_nFileMtime = FileMtime(strPath);
     return true;
+}
+
+/// @brief 检查配置文件是否变更，变更则重新加载。
+///
+/// 比较文件修改时间；变化时清空并重新加载（整体替换）。
+///
+/// @return true 表示发生了重载；false 表示未变更或未加载过文件。
+bool CConfig::ReloadIfChanged()
+{
+    if (m_strFilePath.empty())
+    {
+        return false;
+    }
+    std::time_t nNewMtime = FileMtime(m_strFilePath);
+    if (nNewMtime != m_nFileMtime)
+    {
+        m_mapValues.clear();
+        return LoadFile(m_strFilePath);
+    }
+    return false;
 }
 
 /// @brief 解析文本内容（基于 inih）。
@@ -92,6 +116,21 @@ bool CConfig::Has(const std::string& strKey) const
 void CConfig::Clear()
 {
     m_mapValues.clear();
+    m_strFilePath.clear();
+    m_nFileMtime = 0;
+}
+
+/// @brief 返回文件修改时间。
+///
+/// @return 修改时间；获取失败返回 0。
+std::time_t CConfig::FileMtime(const std::string& strPath)
+{
+    struct stat st;
+    if (::stat(strPath.c_str(), &st) != 0)
+    {
+        return 0;
+    }
+    return st.st_mtime;
 }
 
 } // namespace common
