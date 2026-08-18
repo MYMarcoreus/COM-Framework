@@ -1,17 +1,19 @@
 #pragma once
 
+#include "Component/ComponentManager.h"
 #include "Module/Module.h"
 
 namespace servera {
 
 /// @brief 日志模块。
 ///
-/// 初始化时配置全局日志器（控制台 + 文件）。
+/// 通过组件管理器按接口（IConfig / ILogger）读取日志配置并初始化日志器，
+/// 展示 ServerCore 组件化适配层在真实服务器中的使用。
 /// 模块名 "logger"，应在依赖日志的模块之前注册。
 class ServerLoggerModule : public sc::Module
 {
 public:
-    ServerLoggerModule();
+    explicit ServerLoggerModule(sc::ComponentManager& componentManager);
 
     virtual ~ServerLoggerModule();
 
@@ -19,6 +21,7 @@ public:
     bool Initialize() override;
 
 private:
+    sc::ComponentManager& componentManager_;
 };
 
 } // namespace servera

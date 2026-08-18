@@ -3,6 +3,8 @@
 #include <string>
 
 #include "Event/EventDispatcher.h"
+#include "Infra/IConfig.h"
+#include "Infra/ILogger.h"
 #include "Log/Logger.h"
 #include "Module/ServerLoggerModule.h"
 #include "Module/ServerNetworkModule.h"
@@ -27,7 +29,8 @@ ServerApplication::~ServerApplication()
 
 /// @brief 注册组件。
 ///
-/// 注册网络组件（INetwork）、事件分发器（IEventDispatcher）与回显服务（INetworkHandler）。
+/// 注册网络组件（INetwork）、事件分发器（IEventDispatcher）、配置组件（IConfig）、
+/// 日志组件（ILogger）与回显服务（INetworkHandler）。
 bool ServerApplication::RegisterComponents()
 {
     // ① 注册网络组件
@@ -48,7 +51,26 @@ bool ServerApplication::RegisterComponents()
     }
     events->Release(); // 管理器已持有引用
 
-    // ③ 注册回显服务
+    // ③ 注册配置组件（读取 servera.ini）
+    sc::ConfigComponent* config = new sc::ConfigComponent();
+    config->LoadFile("servera.ini");
+    if (!componentManager_.RegisterComponent(sc::IID_IConfig(), config))
+    {
+        config->Release();
+        return false;
+    }
+    config->Release(); // 管理器已持有引用
+
+    // ④ 注册日志组件
+    sc::IUnknown* logger = new sc::LoggerComponent();
+    if (!componentManager_.RegisterComponent(sc::IID_ILogger(), logger))
+    {
+        logger->Release();
+        return false;
+    }
+    logger->Release(); // 管理器已持有引用
+
+    // ⑤ 注册回显服务
     EchoService* service = new EchoService();
     if (!componentManager_.RegisterComponent(sc::IID_INetworkHandler(), service))
     {
@@ -65,8 +87,8 @@ bool ServerApplication::RegisterComponents()
 /// 注册顺序即初始化/启动顺序：日志 → 网络。
 bool ServerApplication::RegisterModules()
 {
-    // ① 日志模块
-    sc::IModule* logger = new ServerLoggerModule();
+    // ① 日志模块（通过组件管理器按接口初始化）
+    sc::IModule* logger = new ServerLoggerModule(componentManager_);
     if (!moduleManager_.RegisterModule(logger))
     {
         logger->Release();
