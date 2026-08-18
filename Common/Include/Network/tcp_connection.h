@@ -79,17 +79,17 @@ private:
     // 处理错误或对端关闭。
     void HandleError(const asio::error_code& ec);
 
-    asio::io_context& io_;
-    ConnectionId id_;
-    asio::ip::tcp::socket socket_;
-    std::string peerAddress_;
-    CBuffer inputBuffer_;
-    std::string pendingOutput_;
-    std::vector<char> readBuffer_;
-    DataCallback dataCallback_;
-    CloseCallback closeCallback_;
-    std::atomic<bool> writing_;
-    std::atomic<bool> closed_;
+    asio::io_context& m_io;
+    ConnectionId m_id;
+    asio::ip::tcp::socket m_socket;
+    std::string m_strPeerAddress;
+    CBuffer m_inputBuffer;
+    std::string m_strPendingOutput;
+    std::vector<char> m_vecReadBuffer;
+    DataCallback m_fnDataCallback;
+    CloseCallback m_fnCloseCallback;
+    std::atomic<bool> m_bWriting;
+    std::atomic<bool> m_bClosed;
 };
 
 } // namespace common

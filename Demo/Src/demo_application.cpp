@@ -17,21 +17,21 @@ namespace demo {
 ///
 /// @param port 监听端口；0 表示从配置文件读取。
 CDemoApplication::CDemoApplication(std::uint16_t port)
-    : port_(port), service_(nullptr),
-      eventStartId_(sc::kInvalidSubscriptionId), eventStopId_(sc::kInvalidSubscriptionId)
+    : m_nPort(port), m_pService(nullptr),
+      m_tEventStartId(sc::kInvalidSubscriptionId), m_tEventStopId(sc::kInvalidSubscriptionId)
 {
     // 加载配置文件（可选，best-effort）
-    config_.LoadFile("demo.ini");
-    if (port_ == 0)
+    m_config.LoadFile("demo.ini");
+    if (m_nPort == 0)
     {
-        int configPort = config_.GetInt("server.port", 9000);
+        int configPort = m_config.GetInt("server.port", 9000);
         if (configPort > 0 && configPort <= 65535)
         {
-            port_ = static_cast<std::uint16_t>(configPort);
+            m_nPort = static_cast<std::uint16_t>(configPort);
         }
         else
         {
-            port_ = 9000;
+            m_nPort = 9000;
         }
     }
 }
@@ -48,7 +48,7 @@ bool CDemoApplication::RegisterComponents()
 {
     // ① 注册网络组件
     sc::IUnknown* network = new sc::CNetworkComponent();
-    if (!componentManager_.RegisterComponent(sc::IID_INetwork(), network))
+    if (!m_componentManager.RegisterComponent(sc::IID_INetwork(), network))
     {
         network->Release();
         return false;
@@ -57,7 +57,7 @@ bool CDemoApplication::RegisterComponents()
 
     // ② 注册事件分发器组件
     sc::IUnknown* events = new sc::CEventDispatcher();
-    if (!componentManager_.RegisterComponent(sc::IID_EventDispatcher(), events))
+    if (!m_componentManager.RegisterComponent(sc::IID_EventDispatcher(), events))
     {
         events->Release();
         return false;
@@ -66,12 +66,12 @@ bool CDemoApplication::RegisterComponents()
 
     // ③ 注册协议处理服务
     CDemoService* service = new CDemoService();
-    if (!componentManager_.RegisterComponent(sc::IID_INetworkHandler(), service))
+    if (!m_componentManager.RegisterComponent(sc::IID_INetworkHandler(), service))
     {
         service->Release();
         return false;
     }
-    service_ = service;
+    m_pService = service;
     service->Release(); // 管理器已持有引用
     return true;
 }
@@ -85,8 +85,8 @@ bool CDemoApplication::RegisterComponents()
 bool CDemoApplication::RegisterModules()
 {
     // ① 日志模块：根据配置初始化日志器
-    sc::IModule* logger = new CDemoLoggerModule(config_);
-    if (!moduleManager_.RegisterModule(logger))
+    sc::IModule* logger = new CDemoLoggerModule(m_config);
+    if (!m_moduleManager.RegisterModule(logger))
     {
         logger->Release();
         return false;
@@ -94,9 +94,9 @@ bool CDemoApplication::RegisterModules()
     logger->Release(); // 管理器已持有引用
 
     // ② 定时器模块：周期性输出运行状态
-    int intervalMs = config_.GetInt("timer.interval_ms", 5000);
+    int intervalMs = m_config.GetInt("timer.interval_ms", 5000);
     sc::IModule* timer = new CDemoTimerModule(intervalMs);
-    if (!moduleManager_.RegisterModule(timer))
+    if (!m_moduleManager.RegisterModule(timer))
     {
         timer->Release();
         return false;
@@ -104,8 +104,8 @@ bool CDemoApplication::RegisterModules()
     timer->Release(); // 管理器已持有引用
 
     // ③ 网络模块：关联组件并启动 TCP 服务器
-    sc::IModule* network = new CDemoNetworkModule(componentManager_, service_, port_);
-    if (!moduleManager_.RegisterModule(network))
+    sc::IModule* network = new CDemoNetworkModule(m_componentManager, m_pService, m_nPort);
+    if (!m_moduleManager.RegisterModule(network))
     {
         network->Release();
         return false;
@@ -121,7 +121,7 @@ bool CDemoApplication::RegisterModules()
 /// @return true。
 bool CDemoApplication::OnInitialize()
 {
-    sc::IUnknown* eventObject = componentManager_.GetComponent(sc::IID_EventDispatcher());
+    sc::IUnknown* eventObject = m_componentManager.GetComponent(sc::IID_EventDispatcher());
     if (eventObject == nullptr)
     {
         return false;
@@ -131,10 +131,10 @@ bool CDemoApplication::OnInitialize()
     {
         return false;
     }
-    eventDispatcher_.Reset(static_cast<sc::IEventDispatcher*>(raw));
+    m_pEventDispatcher.Reset(static_cast<sc::IEventDispatcher*>(raw));
 
     // 订阅网络启动事件：从事件负载读取监听端口
-    eventStartId_ = eventDispatcher_->Subscribe("network.started",
+    m_tEventStartId = m_pEventDispatcher->Subscribe("network.started",
         [](const sc::Event& event)
         {
             if (event.data != nullptr && event.size == sizeof(std::uint16_t))
@@ -145,7 +145,7 @@ bool CDemoApplication::OnInitialize()
             }
         });
     // 订阅网络停止事件
-    eventStopId_ = eventDispatcher_->Subscribe("network.stopped",
+    m_tEventStopId = m_pEventDispatcher->Subscribe("network.stopped",
         [](const sc::Event&)
         {
             common::CLogger::Instance().Info("[Event] 收到 network.stopped");
@@ -169,17 +169,17 @@ bool CDemoApplication::OnStart()
 /// 中的 CModuleManager 统一完成。
 void CDemoApplication::OnShutdown()
 {
-    if (eventDispatcher_ != nullptr)
+    if (m_pEventDispatcher != nullptr)
     {
-        if (eventStartId_ != sc::kInvalidSubscriptionId)
+        if (m_tEventStartId != sc::kInvalidSubscriptionId)
         {
-            eventDispatcher_->Unsubscribe(eventStartId_);
+            m_pEventDispatcher->Unsubscribe(m_tEventStartId);
         }
-        if (eventStopId_ != sc::kInvalidSubscriptionId)
+        if (m_tEventStopId != sc::kInvalidSubscriptionId)
         {
-            eventDispatcher_->Unsubscribe(eventStopId_);
+            m_pEventDispatcher->Unsubscribe(m_tEventStopId);
         }
-        eventDispatcher_.Reset();
+        m_pEventDispatcher.Reset();
     }
 }
 

@@ -21,7 +21,7 @@ CEchoService::~CEchoService()
 /// @param network 网络组件接口（以引用计数方式持有）。
 void CEchoService::SetNetwork(sc::INetwork* network)
 {
-    network_.Reset(network);
+    m_pNetwork.Reset(network);
 }
 
 /// @brief 新连接建立回调。
@@ -36,9 +36,9 @@ void CEchoService::OnAccept(sc::ConnectionId id, const std::string& peer)
 void CEchoService::OnData(sc::ConnectionId id, const char* data, size_t len)
 {
     Log("收到数据: id=" + std::to_string(id) + " len=" + std::to_string(len));
-    if (network_ != nullptr && data != nullptr && len > 0)
+    if (m_pNetwork != nullptr && data != nullptr && len > 0)
     {
-        network_->Send(id, data, len);
+        m_pNetwork->Send(id, data, len);
     }
 }
 

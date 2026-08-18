@@ -40,12 +40,12 @@ public:
     void Shutdown() override;
 
 private:
-    sc::CComponentManager& componentManager_;
-    CEchoService* service_; // 借用指针，由组件管理器持有
-    std::uint16_t port_;
-    sc::ScopedInterfacePtr<sc::INetwork> network_;
-    sc::ScopedInterfacePtr<sc::INetworkHandler> handler_;
-    sc::ScopedInterfacePtr<sc::IEventDispatcher> eventDispatcher_;
+    sc::CComponentManager& m_componentManager;
+    CEchoService* m_pService; // 借用指针，由组件管理器持有
+    std::uint16_t m_nPort;
+    sc::ScopedInterfacePtr<sc::INetwork> m_pNetwork;
+    sc::ScopedInterfacePtr<sc::INetworkHandler> m_pHandler;
+    sc::ScopedInterfacePtr<sc::IEventDispatcher> m_pEventDispatcher;
 };
 
 } // namespace servera

@@ -10,7 +10,7 @@ namespace demo {
 ///
 /// @param config 应用配置，用于读取日志级别与文件。
 CDemoLoggerModule::CDemoLoggerModule(const common::CConfig& config)
-    : sc::CModule("logger"), config_(config)
+    : sc::CModule("logger"), m_config(config)
 {
 }
 
@@ -28,7 +28,7 @@ CDemoLoggerModule::~CDemoLoggerModule()
 bool CDemoLoggerModule::Initialize()
 {
     common::CLogger& logger = common::CLogger::Instance();
-    std::string level = config_.GetString("log.level", "info");
+    std::string level = m_config.GetString("log.level", "info");
     if (level == "trace")
     {
         logger.SetLevel(common::LogLevel::kTrace);
@@ -49,7 +49,7 @@ bool CDemoLoggerModule::Initialize()
     {
         logger.SetLevel(common::LogLevel::kInfo);
     }
-    std::string logFile = config_.GetString("log.file", "");
+    std::string logFile = m_config.GetString("log.file", "");
     if (!logFile.empty())
     {
         logger.OpenFile(logFile);

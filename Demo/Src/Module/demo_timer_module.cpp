@@ -8,11 +8,11 @@ namespace demo {
 ///
 /// @param intervalMs 周期日志间隔（毫秒），小于 100 时按 100 处理。
 CDemoTimerModule::CDemoTimerModule(std::int64_t intervalMs)
-    : sc::CModule("timer"), intervalMs_(intervalMs), timerId_(common::kInvalidTimerId)
+    : sc::CModule("timer"), m_nIntervalMs(intervalMs), m_tTimerId(common::kInvalidTimerId)
 {
-    if (intervalMs_ < 100)
+    if (m_nIntervalMs < 100)
     {
-        intervalMs_ = 100;
+        m_nIntervalMs = 100;
     }
 }
 
@@ -29,11 +29,11 @@ CDemoTimerModule::~CDemoTimerModule()
 /// @return true 启动成功；false 启动失败。
 bool CDemoTimerModule::Start()
 {
-    if (!timer_.Start())
+    if (!m_timer.Start())
     {
         return false;
     }
-    timerId_ = timer_.AddPeriodicTimer(intervalMs_,
+    m_tTimerId = m_timer.AddPeriodicTimer(m_nIntervalMs,
         []()
         {
             common::CLogger::Instance().Info("Demo 服务器运行中");
@@ -44,8 +44,8 @@ bool CDemoTimerModule::Start()
 /// @brief 停止定时器。
 void CDemoTimerModule::Stop()
 {
-    timer_.Stop();
-    timerId_ = common::kInvalidTimerId;
+    m_timer.Stop();
+    m_tTimerId = common::kInvalidTimerId;
 }
 
 /// @brief 停止定时器并释放资源。

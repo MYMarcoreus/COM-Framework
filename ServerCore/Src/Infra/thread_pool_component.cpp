@@ -7,7 +7,7 @@ namespace sc {
 /// @brief 创建线程池组件。
 ///
 /// @param threadCount 工作线程数量。
-CThreadPoolComponent::CThreadPoolComponent(size_t threadCount) : threadCount_(threadCount)
+CThreadPoolComponent::CThreadPoolComponent(size_t threadCount) : m_nThreadCount(threadCount)
 {
 }
 
@@ -20,16 +20,16 @@ CThreadPoolComponent::~CThreadPoolComponent()
 /// @brief 启动工作线程。
 bool CThreadPoolComponent::Start()
 {
-    if (pool_)
+    if (m_pPool)
     {
         return false;
     }
-    if (threadCount_ == 0)
+    if (m_nThreadCount == 0)
     {
         return false;
     }
-    pool_.reset(new common::CThreadPool(threadCount_));
-    return pool_->Start();
+    m_pPool.reset(new common::CThreadPool(m_nThreadCount));
+    return m_pPool->Start();
 }
 
 /// @brief 提交任务。
@@ -37,20 +37,20 @@ bool CThreadPoolComponent::Start()
 /// @return 已启动时返回 true。
 bool CThreadPoolComponent::Submit(const std::function<void()>& task)
 {
-    if (!pool_)
+    if (!m_pPool)
     {
         return false;
     }
-    return pool_->Submit(task);
+    return m_pPool->Submit(task);
 }
 
 /// @brief 停止并等待任务完成。
 void CThreadPoolComponent::Stop()
 {
-    if (pool_)
+    if (m_pPool)
     {
-        pool_->Stop();
-        pool_.reset();
+        m_pPool->Stop();
+        m_pPool.reset();
     }
 }
 

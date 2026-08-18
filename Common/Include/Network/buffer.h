@@ -51,9 +51,9 @@ private:
     // 确保可写空间不小于 len。
     void EnsureWritable(size_t len);
 
-    std::vector<char> data_;
-    size_t readIndex_;
-    size_t writeIndex_;
+    std::vector<char> m_vecData;
+    size_t m_nReadIndex;
+    size_t m_nWriteIndex;
 };
 
 } // namespace common

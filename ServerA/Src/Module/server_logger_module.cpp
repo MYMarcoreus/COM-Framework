@@ -12,7 +12,7 @@ namespace servera {
 ///
 /// @param componentManager 组件管理器，用于获取配置与日志组件接口。
 CServerLoggerModule::CServerLoggerModule(sc::CComponentManager& componentManager)
-    : sc::CModule("logger"), componentManager_(componentManager)
+    : sc::CModule("logger"), m_componentManager(componentManager)
 {
 }
 
@@ -31,7 +31,7 @@ bool CServerLoggerModule::Initialize()
 {
     // ① 通过 IConfig 读取日志级别配置
     int level = static_cast<int>(common::LogLevel::kInfo);
-    sc::IUnknown* configObject = componentManager_.GetComponent(sc::IID_IConfig());
+    sc::IUnknown* configObject = m_componentManager.GetComponent(sc::IID_IConfig());
     if (configObject != nullptr)
     {
         void* raw = nullptr;
@@ -63,7 +63,7 @@ bool CServerLoggerModule::Initialize()
     }
 
     // ② 通过 ILogger 组件接口设置级别并输出日志
-    sc::IUnknown* loggerObject = componentManager_.GetComponent(sc::IID_ILogger());
+    sc::IUnknown* loggerObject = m_componentManager.GetComponent(sc::IID_ILogger());
     if (loggerObject != nullptr)
     {
         void* raw = nullptr;

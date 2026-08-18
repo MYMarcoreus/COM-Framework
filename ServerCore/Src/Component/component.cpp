@@ -7,7 +7,7 @@ namespace sc {
 /// @brief 创建组件。
 ///
 /// 初始引用计数为 1。
-CComponent::CComponent() : refCount_(1)
+CComponent::CComponent() : m_nRefCount(1)
 {
 }
 
@@ -21,7 +21,7 @@ CComponent::~CComponent()
 /// @return 增加后的引用计数。
 unsigned int CComponent::AddRef()
 {
-    return refCount_.fetch_add(1) + 1;
+    return m_nRefCount.fetch_add(1) + 1;
 }
 
 /// @brief 减少引用计数。
@@ -31,7 +31,7 @@ unsigned int CComponent::AddRef()
 /// @return 减少后的引用计数。
 unsigned int CComponent::Release()
 {
-    unsigned int count = refCount_.fetch_sub(1) - 1;
+    unsigned int count = m_nRefCount.fetch_sub(1) - 1;
     if (count == 0)
     {
         delete this;

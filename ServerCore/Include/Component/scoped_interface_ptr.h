@@ -20,34 +20,34 @@ class ScopedInterfacePtr
                   "ScopedInterfacePtr<T> 要求 T 必须是 IUnknown 派生接口");
 
 public:
-    ScopedInterfacePtr() : ptr_(nullptr) {}
+    ScopedInterfacePtr() : m_ptr(nullptr) {}
 
-    explicit ScopedInterfacePtr(T* ptr) : ptr_(ptr)
+    explicit ScopedInterfacePtr(T* ptr) : m_ptr(ptr)
     {
-        if (ptr_ != nullptr)
+        if (m_ptr != nullptr)
         {
-            ptr_->AddRef();
+            m_ptr->AddRef();
         }
     }
 
-    ScopedInterfacePtr(const ScopedInterfacePtr& other) : ptr_(other.ptr_)
+    ScopedInterfacePtr(const ScopedInterfacePtr& other) : m_ptr(other.m_ptr)
     {
-        if (ptr_ != nullptr)
+        if (m_ptr != nullptr)
         {
-            ptr_->AddRef();
+            m_ptr->AddRef();
         }
     }
 
-    ScopedInterfacePtr(ScopedInterfacePtr&& other) noexcept : ptr_(other.ptr_)
+    ScopedInterfacePtr(ScopedInterfacePtr&& other) noexcept : m_ptr(other.m_ptr)
     {
-        other.ptr_ = nullptr;
+        other.m_ptr = nullptr;
     }
 
     ~ScopedInterfacePtr()
     {
-        if (ptr_ != nullptr)
+        if (m_ptr != nullptr)
         {
-            ptr_->Release();
+            m_ptr->Release();
         }
     }
 
@@ -56,7 +56,7 @@ public:
     {
         if (this != &other)
         {
-            Reset(other.ptr_);
+            Reset(other.m_ptr);
         }
         return *this;
     }
@@ -67,8 +67,8 @@ public:
         if (this != &other)
         {
             Reset();
-            ptr_ = other.ptr_;
-            other.ptr_ = nullptr;
+            m_ptr = other.m_ptr;
+            other.m_ptr = nullptr;
         }
         return *this;
     }
@@ -87,48 +87,48 @@ public:
         {
             ptr->AddRef();
         }
-        if (ptr_ != nullptr)
+        if (m_ptr != nullptr)
         {
-            ptr_->Release();
+            m_ptr->Release();
         }
-        ptr_ = ptr;
+        m_ptr = ptr;
     }
 
     // 返回裸指针（借用，不转移所有权）。
-    T* Get() const { return ptr_; }
+    T* Get() const { return m_ptr; }
 
     // 指针访问运算符。
-    T* operator->() const { return ptr_; }
+    T* operator->() const { return m_ptr; }
 
     // 解引用运算符。
-    T& operator*() const { return *ptr_; }
+    T& operator*() const { return *m_ptr; }
 
     // 判断是否持有有效指针。
-    explicit operator bool() const { return ptr_ != nullptr; }
+    explicit operator bool() const { return m_ptr != nullptr; }
 
     // 判断是否为空。
-    bool operator!() const { return ptr_ == nullptr; }
+    bool operator!() const { return m_ptr == nullptr; }
 
     // 与另一个智能指针比较。
-    bool operator==(const ScopedInterfacePtr& other) const { return ptr_ == other.ptr_; }
+    bool operator==(const ScopedInterfacePtr& other) const { return m_ptr == other.m_ptr; }
 
     // 与另一个智能指针比较。
-    bool operator!=(const ScopedInterfacePtr& other) const { return ptr_ != other.ptr_; }
+    bool operator!=(const ScopedInterfacePtr& other) const { return m_ptr != other.m_ptr; }
 
     // 与裸指针比较。
-    bool operator==(T* ptr) const { return ptr_ == ptr; }
+    bool operator==(T* ptr) const { return m_ptr == ptr; }
 
     // 与裸指针比较。
-    bool operator!=(T* ptr) const { return ptr_ != ptr; }
+    bool operator!=(T* ptr) const { return m_ptr != ptr; }
 
     // 与 nullptr 比较。
-    bool operator==(std::nullptr_t) const { return ptr_ == nullptr; }
+    bool operator==(std::nullptr_t) const { return m_ptr == nullptr; }
 
     // 与 nullptr 比较。
-    bool operator!=(std::nullptr_t) const { return ptr_ != nullptr; }
+    bool operator!=(std::nullptr_t) const { return m_ptr != nullptr; }
 
 private:
-    T* ptr_;
+    T* m_ptr;
 };
 
 } // namespace sc

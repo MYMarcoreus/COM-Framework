@@ -7,8 +7,8 @@ namespace common {
 
 /// @brief 创建 TCP 服务器。
 CTcpServer::CTcpServer()
-    : nextId_(1), port_(0), running_(false),
-      connectionCount_(0), totalAccepted_(0), totalClosed_(0)
+    : m_nNextId(1), m_nPort(0), m_bRunning(false),
+      m_nConnectionCount(0), m_nTotalAccepted(0), m_nTotalClosed(0)
 {
 }
 
@@ -29,39 +29,39 @@ CTcpServer::~CTcpServer()
 bool CTcpServer::Start(uint16_t port, const AcceptCallback& acceptCb,
                       const DataCallback& dataCb, const CloseCallback& closeCb)
 {
-    if (running_.load())
+    if (m_bRunning.load())
     {
         return false;
     }
-    acceptCb_ = acceptCb;
-    dataCb_ = dataCb;
-    closeCb_ = closeCb;
+    m_fnAccept = acceptCb;
+    m_fnData = dataCb;
+    m_fnClose = closeCb;
 
     // ① 创建并配置 acceptor
     asio::error_code ec;
-    acceptor_.reset(new asio::ip::tcp::acceptor(io_));
+    m_pAcceptor.reset(new asio::ip::tcp::acceptor(m_io));
     asio::ip::tcp::endpoint endpoint(asio::ip::tcp::v4(), port);
-    static_cast<void>(acceptor_->open(endpoint.protocol(), ec));
+    static_cast<void>(m_pAcceptor->open(endpoint.protocol(), ec));
     if (!ec)
     {
-        static_cast<void>(acceptor_->set_option(asio::ip::tcp::acceptor::reuse_address(true), ec));
+        static_cast<void>(m_pAcceptor->set_option(asio::ip::tcp::acceptor::reuse_address(true), ec));
     }
     if (!ec)
     {
-        static_cast<void>(acceptor_->bind(endpoint, ec));
+        static_cast<void>(m_pAcceptor->bind(endpoint, ec));
     }
     if (!ec)
     {
-        static_cast<void>(acceptor_->listen(asio::socket_base::max_listen_connections, ec));
+        static_cast<void>(m_pAcceptor->listen(asio::socket_base::max_listen_connections, ec));
     }
     if (ec)
     {
         return false;
     }
 
-    port_ = port;
-    running_.store(true);
-    thread_ = std::thread(&CTcpServer::ThreadMain, this);
+    m_nPort = port;
+    m_bRunning.store(true);
+    m_thread = std::thread(&CTcpServer::ThreadMain, this);
     return true;
 }
 
@@ -70,15 +70,15 @@ bool CTcpServer::Start(uint16_t port, const AcceptCallback& acceptCb,
 /// 投递关闭任务到事件循环线程，等待线程退出。
 void CTcpServer::Stop()
 {
-    if (!running_.load())
+    if (!m_bRunning.load())
     {
         return;
     }
-    running_.store(false);
-    asio::post(io_, [this]() { ShutdownOnIoThread(); });
-    if (thread_.joinable())
+    m_bRunning.store(false);
+    asio::post(m_io, [this]() { ShutdownOnIoThread(); });
+    if (m_thread.joinable())
     {
-        thread_.join();
+        m_thread.join();
     }
 }
 
@@ -86,7 +86,7 @@ void CTcpServer::Stop()
 void CTcpServer::ThreadMain()
 {
     StartAccept();
-    io_.run();
+    m_io.run();
     // 事件循环退出后兜底关闭剩余连接
     ShutdownOnIoThread();
 }
@@ -94,11 +94,11 @@ void CTcpServer::ThreadMain()
 /// @brief 发起一次异步 accept。
 void CTcpServer::StartAccept()
 {
-    if (acceptor_ == nullptr || !acceptor_->is_open())
+    if (m_pAcceptor == nullptr || !m_pAcceptor->is_open())
     {
         return;
     }
-    acceptor_->async_accept(
+    m_pAcceptor->async_accept(
         [this](const asio::error_code& ec, asio::ip::tcp::socket socket)
         {
             // ① 错误处理
@@ -108,31 +108,31 @@ void CTcpServer::StartAccept()
                 {
                     return; // 服务器关闭中
                 }
-                if (acceptor_ != nullptr && acceptor_->is_open())
+                if (m_pAcceptor != nullptr && m_pAcceptor->is_open())
                 {
                     StartAccept(); // 瞬时错误，继续接受
                 }
                 return;
             }
             // ② 创建连接并注册
-            ConnectionId id = nextId_++;
+            ConnectionId id = m_nNextId++;
             CTcpConnection::Ptr conn =
-                std::make_shared<CTcpConnection>(io_, id, std::move(socket));
+                std::make_shared<CTcpConnection>(m_io, id, std::move(socket));
             conn->SetCallbacks(
                 std::bind(&CTcpServer::HandleData, this, std::placeholders::_1,
                           std::placeholders::_2, std::placeholders::_3),
                 std::bind(&CTcpServer::HandleClose, this, std::placeholders::_1));
-            connections_[id] = conn;
+            m_mapConnections[id] = conn;
             conn->StartRead();
             {
-                std::lock_guard<std::mutex> lock(peerMutex_);
-                peerAddresses_[id] = conn->PeerAddress();
+                std::lock_guard<std::mutex> lock(m_mutexPeer);
+                m_mapPeerAddresses[id] = conn->PeerAddress();
             }
-            connectionCount_.fetch_add(1);
-            totalAccepted_.fetch_add(1);
-            if (acceptCb_)
+            m_nConnectionCount.fetch_add(1);
+            m_nTotalAccepted.fetch_add(1);
+            if (m_fnAccept)
             {
-                acceptCb_(id, conn->PeerAddress());
+                m_fnAccept(id, conn->PeerAddress());
             }
             StartAccept(); // 继续接受下一个连接
         });
@@ -141,9 +141,9 @@ void CTcpServer::StartAccept()
 /// @brief 连接数据回调。
 void CTcpServer::HandleData(const CTcpConnection::Ptr& conn, const char* data, size_t len)
 {
-    if (dataCb_)
+    if (m_fnData)
     {
-        dataCb_(conn->id(), data, len);
+        m_fnData(conn->id(), data, len);
     }
 }
 
@@ -153,19 +153,19 @@ void CTcpServer::HandleData(const CTcpConnection::Ptr& conn, const char* data, s
 void CTcpServer::HandleClose(const CTcpConnection::Ptr& conn)
 {
     ConnectionId id = conn->id();
-    connections_.erase(id);
+    m_mapConnections.erase(id);
     {
-        std::lock_guard<std::mutex> lock(peerMutex_);
-        peerAddresses_.erase(id);
+        std::lock_guard<std::mutex> lock(m_mutexPeer);
+        m_mapPeerAddresses.erase(id);
     }
-    if (connectionCount_.load() > 0)
+    if (m_nConnectionCount.load() > 0)
     {
-        connectionCount_.fetch_sub(1);
+        m_nConnectionCount.fetch_sub(1);
     }
-    totalClosed_.fetch_add(1);
-    if (closeCb_)
+    m_nTotalClosed.fetch_add(1);
+    if (m_fnClose)
     {
-        closeCb_(id);
+        m_fnClose(id);
     }
 }
 
@@ -174,15 +174,15 @@ void CTcpServer::HandleClose(const CTcpConnection::Ptr& conn)
 /// 查找与投递均在事件循环线程执行，线程安全。
 bool CTcpServer::Send(ConnectionId id, const char* data, size_t len)
 {
-    if (!running_.load())
+    if (!m_bRunning.load())
     {
         return false;
     }
     std::string payload(data, len);
-    asio::post(io_, [this, id, payload]()
+    asio::post(m_io, [this, id, payload]()
     {
-        std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = connections_.find(id);
-        if (it != connections_.end())
+        std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = m_mapConnections.find(id);
+        if (it != m_mapConnections.end())
         {
             it->second->Send(payload.data(), payload.size());
         }
@@ -193,28 +193,28 @@ bool CTcpServer::Send(ConnectionId id, const char* data, size_t len)
 /// @brief 关闭指定连接。
 void CTcpServer::Close(ConnectionId id)
 {
-    asio::post(io_, [this, id]()
+    asio::post(m_io, [this, id]()
     {
-        std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = connections_.find(id);
-        if (it == connections_.end())
+        std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = m_mapConnections.find(id);
+        if (it == m_mapConnections.end())
         {
             return;
         }
         CTcpConnection::Ptr conn = it->second;
-        connections_.erase(it);
+        m_mapConnections.erase(it);
         {
-            std::lock_guard<std::mutex> lock(peerMutex_);
-            peerAddresses_.erase(id);
+            std::lock_guard<std::mutex> lock(m_mutexPeer);
+            m_mapPeerAddresses.erase(id);
         }
-        if (connectionCount_.load() > 0)
+        if (m_nConnectionCount.load() > 0)
         {
-            connectionCount_.fetch_sub(1);
+            m_nConnectionCount.fetch_sub(1);
         }
-        totalClosed_.fetch_add(1);
+        m_nTotalClosed.fetch_add(1);
         conn->Close();
-        if (closeCb_)
+        if (m_fnClose)
         {
-            closeCb_(id);
+            m_fnClose(id);
         }
     });
 }
@@ -224,30 +224,30 @@ void CTcpServer::Close(ConnectionId id)
 /// 关闭 acceptor 与所有连接，幂等可重复调用。
 void CTcpServer::ShutdownOnIoThread()
 {
-    if (acceptor_ != nullptr && acceptor_->is_open())
+    if (m_pAcceptor != nullptr && m_pAcceptor->is_open())
     {
         asio::error_code ignore;
-        static_cast<void>(acceptor_->close(ignore));
+        static_cast<void>(m_pAcceptor->close(ignore));
     }
     std::vector<CTcpConnection::Ptr> all;
-    for (std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = connections_.begin();
-         it != connections_.end(); ++it)
+    for (std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = m_mapConnections.begin();
+         it != m_mapConnections.end(); ++it)
     {
         all.push_back(it->second);
     }
-    connections_.clear();
+    m_mapConnections.clear();
     {
-        std::lock_guard<std::mutex> lock(peerMutex_);
-        peerAddresses_.clear();
+        std::lock_guard<std::mutex> lock(m_mutexPeer);
+        m_mapPeerAddresses.clear();
     }
-    connectionCount_.store(0);
+    m_nConnectionCount.store(0);
     for (size_t i = 0; i < all.size(); ++i)
     {
         all[i]->Close();
-        totalClosed_.fetch_add(1);
-        if (closeCb_)
+        m_nTotalClosed.fetch_add(1);
+        if (m_fnClose)
         {
-            closeCb_(all[i]->id());
+            m_fnClose(all[i]->id());
         }
     }
 }
@@ -255,38 +255,38 @@ void CTcpServer::ShutdownOnIoThread()
 /// @brief 返回当前监听端口。
 uint16_t CTcpServer::ListeningPort() const
 {
-    return port_;
+    return m_nPort;
 }
 
 /// @brief 是否正在运行。
 bool CTcpServer::IsRunning() const
 {
-    return running_.load();
+    return m_bRunning.load();
 }
 
 /// @brief 当前活跃连接数。
 size_t CTcpServer::ConnectionCount() const
 {
-    return connectionCount_.load();
+    return m_nConnectionCount.load();
 }
 
 /// @brief 累计接受连接数。
 uint64_t CTcpServer::TotalAccepted() const
 {
-    return totalAccepted_.load();
+    return m_nTotalAccepted.load();
 }
 
 /// @brief 累计关闭连接数。
 uint64_t CTcpServer::TotalClosed() const
 {
-    return totalClosed_.load();
+    return m_nTotalClosed.load();
 }
 
 /// @brief 指定连接是否存在。
 bool CTcpServer::HasConnection(ConnectionId id) const
 {
-    std::lock_guard<std::mutex> lock(peerMutex_);
-    return peerAddresses_.find(id) != peerAddresses_.end();
+    std::lock_guard<std::mutex> lock(m_mutexPeer);
+    return m_mapPeerAddresses.find(id) != m_mapPeerAddresses.end();
 }
 
 /// @brief 指定连接的对端地址。
@@ -296,9 +296,9 @@ bool CTcpServer::HasConnection(ConnectionId id) const
 /// @return 对端地址字符串；连接不存在时返回空串。
 std::string CTcpServer::PeerAddress(ConnectionId id) const
 {
-    std::lock_guard<std::mutex> lock(peerMutex_);
-    std::map<ConnectionId, std::string>::const_iterator it = peerAddresses_.find(id);
-    if (it == peerAddresses_.end())
+    std::lock_guard<std::mutex> lock(m_mutexPeer);
+    std::map<ConnectionId, std::string>::const_iterator it = m_mapPeerAddresses.find(id);
+    if (it == m_mapPeerAddresses.end())
     {
         return "";
     }

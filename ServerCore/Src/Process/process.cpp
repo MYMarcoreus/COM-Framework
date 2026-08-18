@@ -126,27 +126,27 @@ bool CProcess::RemovePidFile(const std::string& path)
 
 /// @brief 创建 pid 文件并写入当前进程 pid。
 CPidFile::CPidFile(const std::string& path)
-    : path_(path), pid_(::getpid()), valid_(false)
+    : m_strPath(path), m_pid(::getpid()), m_bValid(false)
 {
-    valid_ = CProcess::WritePidFile(path_, pid_);
+    m_bValid = CProcess::WritePidFile(m_strPath, m_pid);
 }
 
 /// @brief 销毁时删除 pid 文件。
 CPidFile::~CPidFile()
 {
-    CProcess::RemovePidFile(path_);
+    CProcess::RemovePidFile(m_strPath);
 }
 
 /// @brief 是否成功写入。
 bool CPidFile::IsValid() const
 {
-    return valid_;
+    return m_bValid;
 }
 
 /// @brief 当前进程 pid。
 pid_t CPidFile::Pid() const
 {
-    return pid_;
+    return m_pid;
 }
 
 } // namespace sc

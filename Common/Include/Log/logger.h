@@ -59,10 +59,10 @@ private:
     // 返回级别名称。
     static const char* LevelName(LogLevel level);
 
-    mutable std::mutex mutex_;
-    LogLevel level_;
-    std::ofstream file_;
-    bool fileEnabled_;
+    mutable std::mutex m_mutex;
+    LogLevel m_level;
+    std::ofstream m_file;
+    bool m_bFileEnabled;
 };
 
 } // namespace common

@@ -48,9 +48,9 @@ private:
     CPidFile(const CPidFile&) = delete;
     CPidFile& operator=(const CPidFile&) = delete;
 
-    std::string path_;
-    pid_t pid_;
-    bool valid_;
+    std::string m_strPath;
+    pid_t m_pid;
+    bool m_bValid;
 };
 
 } // namespace sc

@@ -60,13 +60,13 @@ private:
     TimerId AddTimerInternal(std::int64_t delayMs, std::int64_t intervalMs,
                              const TimerCallback& callback);
 
-    asio::io_context io_;
-    std::unique_ptr<asio::executor_work_guard<asio::io_context::executor_type> > work_;
-    std::map<TimerId, std::shared_ptr<asio::steady_timer> > timers_;
-    mutable std::mutex mutex_;
-    std::thread thread_;
-    TimerId nextId_;
-    std::atomic<bool> running_;
+    asio::io_context m_io;
+    std::unique_ptr<asio::executor_work_guard<asio::io_context::executor_type> > m_pWork;
+    std::map<TimerId, std::shared_ptr<asio::steady_timer> > m_mapTimers;
+    mutable std::mutex m_mutex;
+    std::thread m_thread;
+    TimerId m_nNextId;
+    std::atomic<bool> m_bRunning;
 };
 
 } // namespace common

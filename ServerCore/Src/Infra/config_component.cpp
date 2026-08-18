@@ -19,7 +19,7 @@ CConfigComponent::~CConfigComponent()
 /// @return 加载成功返回 true。
 bool CConfigComponent::LoadFile(const std::string& path)
 {
-    return config_.LoadFile(path);
+    return m_config.LoadFile(path);
 }
 
 /// @brief 读取字符串。
@@ -27,7 +27,7 @@ bool CConfigComponent::LoadFile(const std::string& path)
 /// @return 对应值；不存在时返回默认值。
 std::string CConfigComponent::GetString(const std::string& key, const std::string& def) const
 {
-    return config_.GetString(key, def);
+    return m_config.GetString(key, def);
 }
 
 /// @brief 读取整数。
@@ -35,7 +35,7 @@ std::string CConfigComponent::GetString(const std::string& key, const std::strin
 /// @return 对应值；不存在或非法时返回默认值。
 int CConfigComponent::GetInt(const std::string& key, int def) const
 {
-    return config_.GetInt(key, def);
+    return m_config.GetInt(key, def);
 }
 
 /// @brief 读取布尔值。
@@ -43,7 +43,7 @@ int CConfigComponent::GetInt(const std::string& key, int def) const
 /// @return 对应值；不存在时返回默认值。
 bool CConfigComponent::GetBool(const std::string& key, bool def) const
 {
-    return config_.GetBool(key, def);
+    return m_config.GetBool(key, def);
 }
 
 /// @brief 接口查询实现。

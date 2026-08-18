@@ -54,8 +54,8 @@ protected:
     bool QueryInterfaceImpl(const InterfaceId& iid, void** ppv) override;
 
 private:
-    std::unique_ptr<common::CAsyncExecutor> executor_;
-    size_t threadCount_;
+    std::unique_ptr<common::CAsyncExecutor> m_pExecutor;
+    size_t m_nThreadCount;
 };
 
 } // namespace sc

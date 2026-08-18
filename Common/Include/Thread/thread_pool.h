@@ -43,13 +43,13 @@ private:
     // 工作线程循环。
     void WorkerLoop();
 
-    std::vector<std::thread> workers_;
-    std::deque<CTask> tasks_;
-    mutable std::mutex mutex_;
-    std::condition_variable condition_;
-    size_t threadCount_;
-    bool running_;
-    bool stopping_;
+    std::vector<std::thread> m_vecWorkers;
+    std::deque<CTask> m_dequeTasks;
+    mutable std::mutex m_mutex;
+    std::condition_variable m_condition;
+    size_t m_nThreadCount;
+    bool m_bRunning;
+    bool m_bStopping;
 };
 
 } // namespace common

@@ -5,7 +5,7 @@
 namespace sc {
 
 /// @brief 创建消息路由器。
-CMessageRouter::CMessageRouter() : nextId_(1)
+CMessageRouter::CMessageRouter() : m_nNextId(1)
 {
 }
 
@@ -19,8 +19,8 @@ CMessageRouter::~CMessageRouter()
 /// @param extractor 业务提供的提取器（协议相关）。
 void CMessageRouter::SetExtractor(const MessageExtractor& extractor)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    extractor_ = extractor;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_fnExtractor = extractor;
 }
 
 /// @brief 注册消息处理器。
@@ -35,13 +35,13 @@ SubscriptionId CMessageRouter::RegisterHandler(int type, const MessageHandler& h
     {
         return kInvalidSubscriptionId;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
-    SubscriptionId id = nextId_++;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    SubscriptionId id = m_nNextId++;
     HandlerEntry entry;
     entry.type = type;
     entry.handler = handler;
-    handlers_[id] = entry;
-    byType_[type].push_back(id);
+    m_mapHandlers[id] = entry;
+    m_mapByType[type].push_back(id);
     return id;
 }
 
@@ -52,14 +52,14 @@ SubscriptionId CMessageRouter::RegisterHandler(int type, const MessageHandler& h
 /// @return true 反注册成功；false 标识无效。
 bool CMessageRouter::UnregisterHandler(SubscriptionId id)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::map<SubscriptionId, HandlerEntry>::iterator it = handlers_.find(id);
-    if (it == handlers_.end())
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::map<SubscriptionId, HandlerEntry>::iterator it = m_mapHandlers.find(id);
+    if (it == m_mapHandlers.end())
     {
         return false;
     }
     int type = it->second.type;
-    std::vector<SubscriptionId>& ids = byType_[type];
+    std::vector<SubscriptionId>& ids = m_mapByType[type];
     for (size_t i = 0; i < ids.size(); ++i)
     {
         if (ids[i] == id)
@@ -70,9 +70,9 @@ bool CMessageRouter::UnregisterHandler(SubscriptionId id)
     }
     if (ids.empty())
     {
-        byType_.erase(type);
+        m_mapByType.erase(type);
     }
-    handlers_.erase(it);
+    m_mapHandlers.erase(it);
     return true;
 }
 
@@ -90,12 +90,12 @@ void CMessageRouter::OnData(ConnectionId id, const char* data, size_t len)
     // ① 取当前缓冲并追加（移除后再处理，避免锁外共享）
     std::string pending;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::map<ConnectionId, std::string>::iterator it = buffers_.find(id);
-        if (it != buffers_.end())
+        std::lock_guard<std::mutex> lock(m_mutex);
+        std::map<ConnectionId, std::string>::iterator it = m_mapBuffers.find(id);
+        if (it != m_mapBuffers.end())
         {
             pending = it->second;
-            buffers_.erase(it);
+            m_mapBuffers.erase(it);
         }
         pending.append(data, len);
     }
@@ -104,7 +104,7 @@ void CMessageRouter::OnData(ConnectionId id, const char* data, size_t len)
     size_t consumed = 0;
     while (consumed < pending.size())
     {
-        if (!extractor_)
+        if (!m_fnExtractor)
         {
             break;
         }
@@ -112,7 +112,7 @@ void CMessageRouter::OnData(ConnectionId id, const char* data, size_t len)
         const char* payload = nullptr;
         size_t payloadSize = 0;
         size_t step = 0;
-        MessageParseResult result = extractor_(
+        MessageParseResult result = m_fnExtractor(
             pending.data() + consumed, pending.size() - consumed,
             &step, &type, &payload, &payloadSize);
         if (result == MessageParseResult::kNeedMore)
@@ -132,14 +132,14 @@ void CMessageRouter::OnData(ConnectionId id, const char* data, size_t len)
     // ③ 剩余数据放回缓冲
     std::string remain = pending.substr(consumed);
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::mutex> lock(m_mutex);
         if (remain.empty())
         {
-            buffers_.erase(id);
+            m_mapBuffers.erase(id);
         }
         else
         {
-            buffers_[id] = remain;
+            m_mapBuffers[id] = remain;
         }
     }
 }
@@ -147,8 +147,8 @@ void CMessageRouter::OnData(ConnectionId id, const char* data, size_t len)
 /// @brief 连接关闭时清理缓冲。
 void CMessageRouter::OnClose(ConnectionId id)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    buffers_.erase(id);
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_mapBuffers.erase(id);
 }
 
 /// @brief 按类型分发一条消息。
@@ -159,9 +159,9 @@ void CMessageRouter::Dispatch(ConnectionId id, int type,
 {
     std::vector<MessageHandler> targets;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::map<int, std::vector<SubscriptionId> >::const_iterator it = byType_.find(type);
-        if (it == byType_.end())
+        std::lock_guard<std::mutex> lock(m_mutex);
+        std::map<int, std::vector<SubscriptionId> >::const_iterator it = m_mapByType.find(type);
+        if (it == m_mapByType.end())
         {
             return;
         }
@@ -169,8 +169,8 @@ void CMessageRouter::Dispatch(ConnectionId id, int type,
         targets.reserve(ids.size());
         for (size_t i = 0; i < ids.size(); ++i)
         {
-            std::map<SubscriptionId, HandlerEntry>::const_iterator sit = handlers_.find(ids[i]);
-            if (sit != handlers_.end())
+            std::map<SubscriptionId, HandlerEntry>::const_iterator sit = m_mapHandlers.find(ids[i]);
+            if (sit != m_mapHandlers.end())
             {
                 targets.push_back(sit->second.handler);
             }

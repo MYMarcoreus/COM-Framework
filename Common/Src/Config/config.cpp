@@ -35,7 +35,7 @@ bool CConfig::LoadFile(const std::string& path)
     {
         return false;
     }
-    values_.insert(loaded.begin(), loaded.end());
+    m_mapValues.insert(loaded.begin(), loaded.end());
     return true;
 }
 
@@ -48,22 +48,22 @@ bool CConfig::Parse(const std::string& content)
     {
         return false;
     }
-    values_.insert(loaded.begin(), loaded.end());
+    m_mapValues.insert(loaded.begin(), loaded.end());
     return true;
 }
 
 /// @brief 读取字符串配置。
 std::string CConfig::GetString(const std::string& key, const std::string& def) const
 {
-    std::map<std::string, std::string>::const_iterator it = values_.find(key);
-    return (it != values_.end()) ? it->second : def;
+    std::map<std::string, std::string>::const_iterator it = m_mapValues.find(key);
+    return (it != m_mapValues.end()) ? it->second : def;
 }
 
 /// @brief 读取整数配置。
 int CConfig::GetInt(const std::string& key, int def) const
 {
-    std::map<std::string, std::string>::const_iterator it = values_.find(key);
-    if (it == values_.end())
+    std::map<std::string, std::string>::const_iterator it = m_mapValues.find(key);
+    if (it == m_mapValues.end())
     {
         return def;
     }
@@ -73,8 +73,8 @@ int CConfig::GetInt(const std::string& key, int def) const
 /// @brief 读取布尔配置。
 bool CConfig::GetBool(const std::string& key, bool def) const
 {
-    std::map<std::string, std::string>::const_iterator it = values_.find(key);
-    if (it == values_.end())
+    std::map<std::string, std::string>::const_iterator it = m_mapValues.find(key);
+    if (it == m_mapValues.end())
     {
         return def;
     }
@@ -85,13 +85,13 @@ bool CConfig::GetBool(const std::string& key, bool def) const
 /// @brief 是否包含指定键。
 bool CConfig::Has(const std::string& key) const
 {
-    return values_.find(key) != values_.end();
+    return m_mapValues.find(key) != m_mapValues.end();
 }
 
 /// @brief 清空配置。
 void CConfig::Clear()
 {
-    values_.clear();
+    m_mapValues.clear();
 }
 
 } // namespace common

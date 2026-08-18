@@ -21,7 +21,7 @@ public:
     bool Initialize() override;
 
 private:
-    sc::CComponentManager& componentManager_;
+    sc::CComponentManager& m_componentManager;
 };
 
 } // namespace servera

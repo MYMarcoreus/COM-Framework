@@ -55,12 +55,12 @@ private:
     // 按类型分发一条消息。
     void Dispatch(ConnectionId id, int type, const char* payload, size_t payloadSize);
 
-    MessageExtractor extractor_;
-    std::map<ConnectionId, std::string> buffers_;
-    std::map<SubscriptionId, HandlerEntry> handlers_;
-    std::map<int, std::vector<SubscriptionId> > byType_;
-    mutable std::mutex mutex_;
-    SubscriptionId nextId_;
+    MessageExtractor m_fnExtractor;
+    std::map<ConnectionId, std::string> m_mapBuffers;
+    std::map<SubscriptionId, HandlerEntry> m_mapHandlers;
+    std::map<int, std::vector<SubscriptionId> > m_mapByType;
+    mutable std::mutex m_mutex;
+    SubscriptionId m_nNextId;
 };
 
 } // namespace sc

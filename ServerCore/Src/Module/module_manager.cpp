@@ -26,19 +26,19 @@ bool CModuleManager::RegisterModule(IModule* module)
     {
         return false;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(m_mutex);
     const char* name = module->GetName();
     if (name == nullptr || name[0] == '\0')
     {
         return false;
     }
-    if (indexByName_.find(name) != indexByName_.end())
+    if (m_mapIndexByName.find(name) != m_mapIndexByName.end())
     {
         return false; // 名称重复
     }
     module->AddRef();
-    indexByName_[name] = modules_.size();
-    modules_.push_back(Entry(module));
+    m_mapIndexByName[name] = m_vecModules.size();
+    m_vecModules.push_back(Entry(module));
     return true;
 }
 
@@ -49,13 +49,13 @@ bool CModuleManager::RegisterModule(IModule* module)
 /// @return 借用指针（不增加引用计数）；未找到返回 nullptr。
 IModule* CModuleManager::GetModule(const char* name) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::map<std::string, size_t>::const_iterator it = indexByName_.find(name);
-    if (it == indexByName_.end())
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::map<std::string, size_t>::const_iterator it = m_mapIndexByName.find(name);
+    if (it == m_mapIndexByName.end())
     {
         return nullptr;
     }
-    return modules_[it->second].module;
+    return m_vecModules[it->second].module;
 }
 
 /// @brief 查询模块当前状态。
@@ -65,13 +65,13 @@ IModule* CModuleManager::GetModule(const char* name) const
 /// @return 模块状态；未找到返回 kCreated。
 ModuleState CModuleManager::GetModuleState(const char* name) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::map<std::string, size_t>::const_iterator it = indexByName_.find(name);
-    if (it == indexByName_.end())
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::map<std::string, size_t>::const_iterator it = m_mapIndexByName.find(name);
+    if (it == m_mapIndexByName.end())
     {
         return ModuleState::kCreated;
     }
-    return modules_[it->second].state;
+    return m_vecModules[it->second].state;
 }
 
 /// @brief 反注册模块。
@@ -85,20 +85,20 @@ bool CModuleManager::UnregisterModule(const char* name)
 {
     IModule* module = nullptr;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::map<std::string, size_t>::iterator it = indexByName_.find(name);
-        if (it == indexByName_.end())
+        std::lock_guard<std::mutex> lock(m_mutex);
+        std::map<std::string, size_t>::iterator it = m_mapIndexByName.find(name);
+        if (it == m_mapIndexByName.end())
         {
             return false;
         }
         size_t index = it->second;
-        module = modules_[index].module;
-        modules_.erase(modules_.begin() + static_cast<std::ptrdiff_t>(index));
+        module = m_vecModules[index].module;
+        m_vecModules.erase(m_vecModules.begin() + static_cast<std::ptrdiff_t>(index));
         // 向量删除后重建名称索引
-        indexByName_.clear();
-        for (size_t i = 0; i < modules_.size(); ++i)
+        m_mapIndexByName.clear();
+        for (size_t i = 0; i < m_vecModules.size(); ++i)
         {
-            indexByName_[modules_[i].module->GetName()] = i;
+            m_mapIndexByName[m_vecModules[i].module->GetName()] = i;
         }
     }
     module->Release();
@@ -110,14 +110,14 @@ void CModuleManager::Clear()
 {
     std::vector<IModule*> toRelease;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        toRelease.reserve(modules_.size());
-        for (size_t i = 0; i < modules_.size(); ++i)
+        std::lock_guard<std::mutex> lock(m_mutex);
+        toRelease.reserve(m_vecModules.size());
+        for (size_t i = 0; i < m_vecModules.size(); ++i)
         {
-            toRelease.push_back(modules_[i].module);
+            toRelease.push_back(m_vecModules[i].module);
         }
-        modules_.clear();
-        indexByName_.clear();
+        m_vecModules.clear();
+        m_mapIndexByName.clear();
     }
     for (size_t i = 0; i < toRelease.size(); ++i)
     {
@@ -128,8 +128,8 @@ void CModuleManager::Clear()
 /// @brief 已注册模块数量。
 size_t CModuleManager::Size() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return modules_.size();
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_vecModules.size();
 }
 
 /// @brief 统一初始化所有模块。
@@ -139,10 +139,10 @@ size_t CModuleManager::Size() const
 /// @return true 全部初始化成功；false 存在失败并已回滚。
 bool CModuleManager::InitializeAll()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (size_t i = 0; i < modules_.size(); ++i)
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (size_t i = 0; i < m_vecModules.size(); ++i)
     {
-        Entry& e = modules_[i];
+        Entry& e = m_vecModules[i];
         if (e.state != ModuleState::kCreated)
         {
             continue; // 幂等：跳过非初始状态
@@ -164,10 +164,10 @@ bool CModuleManager::InitializeAll()
 /// @return true 全部启动成功；false 存在失败并已回滚。
 bool CModuleManager::StartAll()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (size_t i = 0; i < modules_.size(); ++i)
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (size_t i = 0; i < m_vecModules.size(); ++i)
     {
-        Entry& e = modules_[i];
+        Entry& e = m_vecModules[i];
         if (e.state != ModuleState::kInitialized)
         {
             continue; // 只启动已初始化的模块
@@ -185,10 +185,10 @@ bool CModuleManager::StartAll()
 /// @brief 统一停止所有模块（逆序）。
 void CModuleManager::StopAll()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (size_t i = modules_.size(); i > 0; --i)
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (size_t i = m_vecModules.size(); i > 0; --i)
     {
-        Entry& e = modules_[i - 1];
+        Entry& e = m_vecModules[i - 1];
         if (e.state == ModuleState::kStarted)
         {
             e.module->Stop();
@@ -200,10 +200,10 @@ void CModuleManager::StopAll()
 /// @brief 统一关闭所有模块（逆序）。
 void CModuleManager::ShutdownAll()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (size_t i = modules_.size(); i > 0; --i)
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (size_t i = m_vecModules.size(); i > 0; --i)
     {
-        Entry& e = modules_[i - 1];
+        Entry& e = m_vecModules[i - 1];
         if (e.state != ModuleState::kCreated && e.state != ModuleState::kShutdown)
         {
             e.module->Shutdown();
@@ -215,9 +215,9 @@ void CModuleManager::ShutdownAll()
 /// @brief 逆序关闭所有已初始化的模块（回滚辅助）。
 void CModuleManager::RollbackInitialized()
 {
-    for (size_t i = modules_.size(); i > 0; --i)
+    for (size_t i = m_vecModules.size(); i > 0; --i)
     {
-        Entry& e = modules_[i - 1];
+        Entry& e = m_vecModules[i - 1];
         if (e.state == ModuleState::kInitialized)
         {
             e.module->Shutdown();
@@ -230,9 +230,9 @@ void CModuleManager::RollbackInitialized()
 void CModuleManager::RollbackStarted()
 {
     // 先停止已启动的模块
-    for (size_t i = modules_.size(); i > 0; --i)
+    for (size_t i = m_vecModules.size(); i > 0; --i)
     {
-        Entry& e = modules_[i - 1];
+        Entry& e = m_vecModules[i - 1];
         if (e.state == ModuleState::kStarted)
         {
             e.module->Stop();
@@ -240,9 +240,9 @@ void CModuleManager::RollbackStarted()
         }
     }
     // 再关闭已初始化的模块
-    for (size_t i = modules_.size(); i > 0; --i)
+    for (size_t i = m_vecModules.size(); i > 0; --i)
     {
-        Entry& e = modules_[i - 1];
+        Entry& e = m_vecModules[i - 1];
         if (e.state == ModuleState::kInitialized || e.state == ModuleState::kStopped)
         {
             e.module->Shutdown();

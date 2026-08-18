@@ -41,12 +41,12 @@ protected:
     void OnShutdown() override;
 
 private:
-    std::uint16_t port_;
-    common::CConfig config_;
-    CDemoService* service_; // 借用指针，由组件管理器持有
-    sc::ScopedInterfacePtr<sc::IEventDispatcher> eventDispatcher_;
-    sc::SubscriptionId eventStartId_;
-    sc::SubscriptionId eventStopId_;
+    std::uint16_t m_nPort;
+    common::CConfig m_config;
+    CDemoService* m_pService; // 借用指针，由组件管理器持有
+    sc::ScopedInterfacePtr<sc::IEventDispatcher> m_pEventDispatcher;
+    sc::SubscriptionId m_tEventStartId;
+    sc::SubscriptionId m_tEventStopId;
 };
 
 } // namespace demo

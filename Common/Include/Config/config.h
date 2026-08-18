@@ -36,7 +36,7 @@ public:
     void Clear();
 
 private:
-    std::map<std::string, std::string> values_;
+    std::map<std::string, std::string> m_mapValues;
 };
 
 } // namespace common

@@ -20,7 +20,7 @@ public:
     bool Initialize() override;
 
 private:
-    const common::CConfig& config_;
+    const common::CConfig& m_config;
 };
 
 } // namespace demo

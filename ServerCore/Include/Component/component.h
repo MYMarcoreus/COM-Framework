@@ -33,7 +33,7 @@ protected:
     virtual bool QueryInterfaceImpl(const InterfaceId& iid, void** ppv);
 
 private:
-    std::atomic<unsigned int> refCount_;
+    std::atomic<unsigned int> m_nRefCount;
 };
 
 } // namespace sc

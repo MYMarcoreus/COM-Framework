@@ -6,7 +6,7 @@ namespace common {
 ///
 /// @param threadCount 工作线程数量。
 CThreadPool::CThreadPool(size_t threadCount)
-    : threadCount_(threadCount), running_(false), stopping_(false)
+    : m_nThreadCount(threadCount), m_bRunning(false), m_bStopping(false)
 {
 }
 
@@ -19,20 +19,20 @@ CThreadPool::~CThreadPool()
 /// @brief 启动工作线程。
 bool CThreadPool::Start()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (running_)
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_bRunning)
     {
         return false;
     }
-    if (threadCount_ == 0)
+    if (m_nThreadCount == 0)
     {
         return false;
     }
-    running_ = true;
-    stopping_ = false;
-    for (size_t i = 0; i < threadCount_; ++i)
+    m_bRunning = true;
+    m_bStopping = false;
+    for (size_t i = 0; i < m_nThreadCount; ++i)
     {
-        workers_.push_back(std::thread(&CThreadPool::WorkerLoop, this));
+        m_vecWorkers.push_back(std::thread(&CThreadPool::WorkerLoop, this));
     }
     return true;
 }
@@ -47,14 +47,14 @@ bool CThreadPool::Submit(const CTask& task)
         return false;
     }
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!running_ || stopping_)
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_bRunning || m_bStopping)
         {
             return false;
         }
-        tasks_.push_back(task);
+        m_dequeTasks.push_back(task);
     }
-    condition_.notify_one();
+    m_condition.notify_one();
     return true;
 }
 
@@ -64,37 +64,37 @@ bool CThreadPool::Submit(const CTask& task)
 void CThreadPool::Stop()
 {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!running_)
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_bRunning)
         {
             return;
         }
-        stopping_ = true;
+        m_bStopping = true;
     }
-    condition_.notify_all();
-    for (size_t i = 0; i < workers_.size(); ++i)
+    m_condition.notify_all();
+    for (size_t i = 0; i < m_vecWorkers.size(); ++i)
     {
-        if (workers_[i].joinable())
+        if (m_vecWorkers[i].joinable())
         {
-            workers_[i].join();
+            m_vecWorkers[i].join();
         }
     }
-    workers_.clear();
-    running_ = false;
-    stopping_ = false;
+    m_vecWorkers.clear();
+    m_bRunning = false;
+    m_bStopping = false;
 }
 
 /// @brief 返回工作线程数量。
 size_t CThreadPool::ThreadCount() const
 {
-    return threadCount_;
+    return m_nThreadCount;
 }
 
 /// @brief 是否正在运行。
 bool CThreadPool::IsRunning() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return running_;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_bRunning;
 }
 
 /// @brief 工作线程循环。
@@ -104,14 +104,14 @@ void CThreadPool::WorkerLoop()
     {
         CTask task;
         {
-            std::unique_lock<std::mutex> lock(mutex_);
-            condition_.wait(lock, [this]() { return stopping_ || !tasks_.empty(); });
-            if (stopping_ && tasks_.empty())
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_condition.wait(lock, [this]() { return m_bStopping || !m_dequeTasks.empty(); });
+            if (m_bStopping && m_dequeTasks.empty())
             {
                 break;
             }
-            task = tasks_.front();
-            tasks_.pop_front();
+            task = m_dequeTasks.front();
+            m_dequeTasks.pop_front();
         }
         if (task)
         {

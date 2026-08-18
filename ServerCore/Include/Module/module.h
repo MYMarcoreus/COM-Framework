@@ -32,7 +32,7 @@ protected:
     bool QueryInterfaceImpl(const InterfaceId& iid, void** ppv) override;
 
 private:
-    std::string name_;
+    std::string m_strName;
 };
 
 } // namespace sc

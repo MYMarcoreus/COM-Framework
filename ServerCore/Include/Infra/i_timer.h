@@ -63,7 +63,7 @@ protected:
     bool QueryInterfaceImpl(const InterfaceId& iid, void** ppv) override;
 
 private:
-    common::CTimerManager timer_;
+    common::CTimerManager m_timer;
 };
 
 } // namespace sc

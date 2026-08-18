@@ -28,9 +28,9 @@ public:
     void Shutdown() override;
 
 private:
-    std::int64_t intervalMs_;
-    common::CTimerManager timer_;
-    common::TimerId timerId_;
+    std::int64_t m_nIntervalMs;
+    common::CTimerManager m_timer;
+    common::TimerId m_tTimerId;
 };
 
 } // namespace demo

@@ -48,10 +48,10 @@ private:
         Subscription() : type() {}
     };
 
-    std::map<SubscriptionId, Subscription> subscriptions_;
-    std::map<EventType, std::vector<SubscriptionId> > byType_;
-    mutable std::mutex mutex_;
-    SubscriptionId nextId_;
+    std::map<SubscriptionId, Subscription> m_mapSubscriptions;
+    std::map<EventType, std::vector<SubscriptionId> > m_mapByType;
+    mutable std::mutex m_mutex;
+    SubscriptionId m_nNextId;
 };
 
 } // namespace sc

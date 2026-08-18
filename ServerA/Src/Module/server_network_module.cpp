@@ -14,8 +14,8 @@ namespace servera {
 /// @param port             监听端口。
 CServerNetworkModule::CServerNetworkModule(sc::CComponentManager& componentManager,
                                          CEchoService* service, std::uint16_t port)
-    : sc::CModule("network"), componentManager_(componentManager),
-      service_(service), port_(port)
+    : sc::CModule("network"), m_componentManager(componentManager),
+      m_pService(service), m_nPort(port)
 {
 }
 
@@ -30,7 +30,7 @@ CServerNetworkModule::~CServerNetworkModule()
 bool CServerNetworkModule::Initialize()
 {
     // ① 获取网络接口
-    sc::IUnknown* networkObject = componentManager_.GetComponent(sc::IID_INetwork());
+    sc::IUnknown* networkObject = m_componentManager.GetComponent(sc::IID_INetwork());
     if (networkObject == nullptr)
     {
         return false;
@@ -40,10 +40,10 @@ bool CServerNetworkModule::Initialize()
     {
         return false;
     }
-    network_.Reset(static_cast<sc::INetwork*>(raw));
+    m_pNetwork.Reset(static_cast<sc::INetwork*>(raw));
 
     // ② 获取回显服务接口
-    sc::IUnknown* serviceObject = componentManager_.GetComponent(sc::IID_INetworkHandler());
+    sc::IUnknown* serviceObject = m_componentManager.GetComponent(sc::IID_INetworkHandler());
     if (serviceObject == nullptr)
     {
         return false;
@@ -52,24 +52,24 @@ bool CServerNetworkModule::Initialize()
     {
         return false;
     }
-    handler_.Reset(static_cast<sc::INetworkHandler*>(raw));
+    m_pHandler.Reset(static_cast<sc::INetworkHandler*>(raw));
 
     // ③ 获取事件分发器
-    sc::IUnknown* eventObject = componentManager_.GetComponent(sc::IID_EventDispatcher());
+    sc::IUnknown* eventObject = m_componentManager.GetComponent(sc::IID_EventDispatcher());
     if (eventObject != nullptr)
     {
         if (eventObject->QueryInterface(sc::IID_EventDispatcher(), &raw))
         {
-            eventDispatcher_.Reset(static_cast<sc::IEventDispatcher*>(raw));
+            m_pEventDispatcher.Reset(static_cast<sc::IEventDispatcher*>(raw));
         }
     }
 
     // ④ 注入网络引用到回显服务
-    if (service_ != nullptr)
+    if (m_pService != nullptr)
     {
-        service_->SetNetwork(network_.Get());
+        m_pService->SetNetwork(m_pNetwork.Get());
     }
-    common::CLogger::Instance().Info("ServerA 初始化中，监听端口 " + std::to_string(port_));
+    common::CLogger::Instance().Info("ServerA 初始化中，监听端口 " + std::to_string(m_nPort));
     return true;
 }
 
@@ -80,33 +80,33 @@ bool CServerNetworkModule::Initialize()
 /// @return true 启动成功；false 启动失败。
 bool CServerNetworkModule::Start()
 {
-    if (network_ == nullptr || handler_ == nullptr)
+    if (m_pNetwork == nullptr || m_pHandler == nullptr)
     {
         return false;
     }
-    if (!network_->StartTcpServer(port_, handler_.Get()))
+    if (!m_pNetwork->StartTcpServer(m_nPort, m_pHandler.Get()))
     {
         return false;
     }
-    if (eventDispatcher_ != nullptr)
+    if (m_pEventDispatcher != nullptr)
     {
-        eventDispatcher_->Publish("network.started", &port_, sizeof(port_));
+        m_pEventDispatcher->Publish("network.started", &m_nPort, sizeof(m_nPort));
     }
     common::CLogger::Instance().Info(
-        "ServerA 已启动，监听端口 " + std::to_string(port_) + "，按 Ctrl+C 退出");
+        "ServerA 已启动，监听端口 " + std::to_string(m_nPort) + "，按 Ctrl+C 退出");
     return true;
 }
 
 /// @brief 停止服务器。
 void CServerNetworkModule::Stop()
 {
-    if (eventDispatcher_ != nullptr)
+    if (m_pEventDispatcher != nullptr)
     {
-        eventDispatcher_->Publish("network.stopped", nullptr, 0);
+        m_pEventDispatcher->Publish("network.stopped", nullptr, 0);
     }
-    if (network_ != nullptr)
+    if (m_pNetwork != nullptr)
     {
-        network_->Stop();
+        m_pNetwork->Stop();
     }
 }
 
@@ -114,10 +114,10 @@ void CServerNetworkModule::Stop()
 void CServerNetworkModule::Shutdown()
 {
     Stop();
-    network_.Reset();
-    handler_.Reset();
-    eventDispatcher_.Reset();
-    service_ = nullptr;
+    m_pNetwork.Reset();
+    m_pHandler.Reset();
+    m_pEventDispatcher.Reset();
+    m_pService = nullptr;
 }
 
 } // namespace servera

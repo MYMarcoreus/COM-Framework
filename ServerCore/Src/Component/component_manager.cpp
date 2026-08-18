@@ -30,16 +30,16 @@ bool CComponentManager::RegisterComponent(const InterfaceId& iid, IUnknown* comp
     {
         return false;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(m_mutex);
     std::string key(iid);
-    if (components_.find(key) != components_.end())
+    if (m_mapComponents.find(key) != m_mapComponents.end())
     {
         return false; // 已存在同标识组件
     }
     component->AddRef(); // 管理器持有引用
     Entry entry;
     entry.component = component;
-    components_[key] = entry;
+    m_mapComponents[key] = entry;
     return true;
 }
 
@@ -54,9 +54,9 @@ IUnknown* CComponentManager::GetComponent(const InterfaceId& iid) const
     {
         return nullptr;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::map<std::string, Entry>::const_iterator it = components_.find(std::string(iid));
-    if (it == components_.end())
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::map<std::string, Entry>::const_iterator it = m_mapComponents.find(std::string(iid));
+    if (it == m_mapComponents.end())
     {
         return nullptr;
     }
@@ -76,14 +76,14 @@ bool CComponentManager::RemoveComponent(const InterfaceId& iid)
     }
     IUnknown* component = nullptr;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::map<std::string, Entry>::iterator it = components_.find(std::string(iid));
-        if (it == components_.end())
+        std::lock_guard<std::mutex> lock(m_mutex);
+        std::map<std::string, Entry>::iterator it = m_mapComponents.find(std::string(iid));
+        if (it == m_mapComponents.end())
         {
             return false;
         }
         component = it->second.component;
-        components_.erase(it);
+        m_mapComponents.erase(it);
     }
     if (component != nullptr)
     {
@@ -97,12 +97,12 @@ void CComponentManager::Clear()
 {
     std::vector<IUnknown*> toRelease;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (std::map<std::string, Entry>::iterator it = components_.begin(); it != components_.end(); ++it)
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (std::map<std::string, Entry>::iterator it = m_mapComponents.begin(); it != m_mapComponents.end(); ++it)
         {
             toRelease.push_back(it->second.component);
         }
-        components_.clear();
+        m_mapComponents.clear();
     }
     for (size_t i = 0; i < toRelease.size(); ++i)
     {
@@ -113,8 +113,8 @@ void CComponentManager::Clear()
 /// @brief 返回已注册组件数量。
 size_t CComponentManager::Size() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return components_.size();
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_mapComponents.size();
 }
 
 } // namespace sc

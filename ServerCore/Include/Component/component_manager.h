@@ -41,8 +41,8 @@ private:
         IUnknown* component;
     };
 
-    std::map<std::string, Entry> components_;
-    mutable std::mutex mutex_;
+    std::map<std::string, Entry> m_mapComponents;
+    mutable std::mutex m_mutex;
 };
 
 } // namespace sc

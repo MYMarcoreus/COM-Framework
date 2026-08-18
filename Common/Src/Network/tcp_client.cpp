@@ -6,10 +6,10 @@ namespace common {
 
 /// @brief 创建 TCP 客户端。
 CTcpClient::CTcpClient()
-    : socket_(io_), resolver_(io_), port_(0), running_(false),
-      connected_(false), closeNotified_(false)
+    : m_socket(m_io), m_resolver(m_io), m_nPort(0), m_bRunning(false),
+      m_bConnected(false), m_bCloseNotified(false)
 {
-    readBuffer_.resize(8192);
+    m_vecReadBuffer.resize(8192);
 }
 
 /// @brief 销毁 TCP 客户端。
@@ -31,19 +31,19 @@ bool CTcpClient::Connect(const std::string& host, uint16_t port,
                         const ConnectCallback& connectCb, const DataCallback& dataCb,
                         const CloseCallback& closeCb)
 {
-    if (running_.load())
+    if (m_bRunning.load())
     {
         return false; // 已在连接中
     }
-    host_ = host;
-    port_ = port;
-    connectCb_ = connectCb;
-    dataCb_ = dataCb;
-    closeCb_ = closeCb;
-    connected_.store(false);
-    closeNotified_.store(false);
-    running_.store(true);
-    thread_ = std::thread(&CTcpClient::ThreadMain, this);
+    m_strHost = host;
+    m_nPort = port;
+    m_fnConnect = connectCb;
+    m_fnData = dataCb;
+    m_fnClose = closeCb;
+    m_bConnected.store(false);
+    m_bCloseNotified.store(false);
+    m_bRunning.store(true);
+    m_thread = std::thread(&CTcpClient::ThreadMain, this);
     return true;
 }
 
@@ -54,12 +54,12 @@ bool CTcpClient::Connect(const std::string& host, uint16_t port,
 /// @return 已连接时返回 true。
 bool CTcpClient::Send(const char* data, size_t len)
 {
-    if (!connected_.load() || data == nullptr || len == 0)
+    if (!m_bConnected.load() || data == nullptr || len == 0)
     {
         return false;
     }
     std::string payload(data, len);
-    asio::post(io_, [this, payload]() { AppendWrite(payload); });
+    asio::post(m_io, [this, payload]() { AppendWrite(payload); });
     return true;
 }
 
@@ -68,11 +68,11 @@ bool CTcpClient::Send(const char* data, size_t len)
 /// 投递到事件循环线程关闭，线程安全。
 void CTcpClient::Close()
 {
-    if (!running_.load())
+    if (!m_bRunning.load())
     {
         return;
     }
-    asio::post(io_, [this]() { CloseOnIoThread(); });
+    asio::post(m_io, [this]() { CloseOnIoThread(); });
 }
 
 /// @brief 停止客户端。
@@ -81,35 +81,35 @@ void CTcpClient::Close()
 /// 若线程因连接失败/关闭已自然退出，仍执行 join 避免未 join 线程析构。
 void CTcpClient::Stop()
 {
-    if (running_.load())
+    if (m_bRunning.load())
     {
-        running_.store(false);
-        asio::post(io_, [this]() { CloseOnIoThread(); });
+        m_bRunning.store(false);
+        asio::post(m_io, [this]() { CloseOnIoThread(); });
     }
-    if (thread_.joinable())
+    if (m_thread.joinable())
     {
-        thread_.join();
+        m_thread.join();
     }
 }
 
 /// @brief 是否已连接。
 bool CTcpClient::IsConnected() const
 {
-    return connected_.load();
+    return m_bConnected.load();
 }
 
 /// @brief 对端地址字符串。
 std::string CTcpClient::PeerAddress() const
 {
-    return peerAddress_;
+    return m_strPeerAddress;
 }
 
 /// @brief 事件循环线程入口。
 void CTcpClient::ThreadMain()
 {
     StartConnect();
-    io_.run();
-    running_.store(false);
+    m_io.run();
+    m_bRunning.store(false);
 }
 
 /// @brief 发起异步连接。
@@ -117,20 +117,20 @@ void CTcpClient::ThreadMain()
 /// 先解析主机名，再异步连接。
 void CTcpClient::StartConnect()
 {
-    resolver_.async_resolve(host_, std::to_string(port_),
+    m_resolver.async_resolve(m_strHost, std::to_string(m_nPort),
         [this](const asio::error_code& ec, asio::ip::tcp::resolver::results_type results)
         {
             if (ec)
             {
                 // 解析失败：通知连接失败
-                if (connectCb_)
+                if (m_fnConnect)
                 {
-                    connectCb_(false, "");
+                    m_fnConnect(false, "");
                 }
                 NotifyClose();
                 return;
             }
-            asio::async_connect(socket_, results,
+            asio::async_connect(m_socket, results,
                 [this](const asio::error_code& cerr,
                        const asio::ip::tcp::endpoint& endpoint)
                 {
@@ -144,18 +144,18 @@ void CTcpClient::HandleConnect(const asio::error_code& ec, const asio::ip::tcp::
 {
     if (ec)
     {
-        if (connectCb_)
+        if (m_fnConnect)
         {
-            connectCb_(false, "");
+            m_fnConnect(false, "");
         }
         NotifyClose();
         return;
     }
-    peerAddress_ = endpoint.address().to_string() + ":" + std::to_string(endpoint.port());
-    connected_.store(true);
-    if (connectCb_)
+    m_strPeerAddress = endpoint.address().to_string() + ":" + std::to_string(endpoint.port());
+    m_bConnected.store(true);
+    if (m_fnConnect)
     {
-        connectCb_(true, peerAddress_);
+        m_fnConnect(true, m_strPeerAddress);
     }
     DoRead();
 }
@@ -163,7 +163,7 @@ void CTcpClient::HandleConnect(const asio::error_code& ec, const asio::ip::tcp::
 /// @brief 发起一次异步读。
 void CTcpClient::DoRead()
 {
-    socket_.async_read_some(asio::buffer(readBuffer_),
+    m_socket.async_read_some(asio::buffer(m_vecReadBuffer),
         [this](const asio::error_code& ec, size_t bytes)
         {
             HandleRead(ec, bytes);
@@ -181,13 +181,13 @@ void CTcpClient::HandleRead(const asio::error_code& ec, size_t bytes)
         }
         return;
     }
-    inputBuffer_.Append(readBuffer_.data(), bytes);
-    if (dataCb_)
+    m_inputBuffer.Append(m_vecReadBuffer.data(), bytes);
+    if (m_fnData)
     {
-        dataCb_(inputBuffer_.Peek(), inputBuffer_.Readable());
+        m_fnData(m_inputBuffer.Peek(), m_inputBuffer.Readable());
     }
-    inputBuffer_.RetrieveAll();
-    if (!connected_.load())
+    m_inputBuffer.RetrieveAll();
+    if (!m_bConnected.load())
     {
         return;
     }
@@ -197,12 +197,12 @@ void CTcpClient::HandleRead(const asio::error_code& ec, size_t bytes)
 /// @brief 追加待发送数据并启动写。
 void CTcpClient::AppendWrite(const std::string& data)
 {
-    if (!socket_.is_open())
+    if (!m_socket.is_open())
     {
         return;
     }
-    bool writing = !pendingOutput_.empty();
-    pendingOutput_.append(data);
+    bool writing = !m_strPendingOutput.empty();
+    m_strPendingOutput.append(data);
     if (!writing)
     {
         DoWrite();
@@ -212,7 +212,7 @@ void CTcpClient::AppendWrite(const std::string& data)
 /// @brief 发起一次异步写。
 void CTcpClient::DoWrite()
 {
-    socket_.async_write_some(asio::buffer(pendingOutput_),
+    m_socket.async_write_some(asio::buffer(m_strPendingOutput),
         [this](const asio::error_code& ec, size_t bytes)
         {
             HandleWrite(ec, bytes);
@@ -230,8 +230,8 @@ void CTcpClient::HandleWrite(const asio::error_code& ec, size_t bytes)
         }
         return;
     }
-    pendingOutput_.erase(0, bytes);
-    if (!pendingOutput_.empty())
+    m_strPendingOutput.erase(0, bytes);
+    if (!m_strPendingOutput.empty())
     {
         DoWrite();
     }
@@ -240,24 +240,24 @@ void CTcpClient::HandleWrite(const asio::error_code& ec, size_t bytes)
 /// @brief 在 io 线程内关闭连接。
 void CTcpClient::CloseOnIoThread()
 {
-    if (socket_.is_open())
+    if (m_socket.is_open())
     {
         asio::error_code ignored;
-        static_cast<void>(socket_.shutdown(asio::ip::tcp::socket::shutdown_both, ignored));
-        static_cast<void>(socket_.close(ignored));
+        static_cast<void>(m_socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignored));
+        static_cast<void>(m_socket.close(ignored));
     }
-    connected_.store(false);
+    m_bConnected.store(false);
 }
 
 /// @brief 通知上层连接关闭（仅一次）。
 void CTcpClient::NotifyClose()
 {
     bool expected = false;
-    if (closeNotified_.compare_exchange_strong(expected, true))
+    if (m_bCloseNotified.compare_exchange_strong(expected, true))
     {
-        if (closeCb_)
+        if (m_fnClose)
         {
-            closeCb_();
+            m_fnClose();
         }
     }
 }

@@ -79,16 +79,16 @@ protected:
     // 关闭钩子。
     virtual void OnShutdown();
 
-    CComponentManager componentManager_;
-    CModuleManager moduleManager_;
+    CComponentManager m_componentManager;
+    CModuleManager m_moduleManager;
 
 private:
     // 信号处理入口。
     static void HandleSignal(int signo);
 
-    std::string configPath_;
-    std::chrono::steady_clock::time_point startTime_;
-    std::atomic<bool> running_;
+    std::string m_strConfigPath;
+    std::chrono::steady_clock::time_point m_startTime;
+    std::atomic<bool> m_bRunning;
 };
 
 } // namespace sc

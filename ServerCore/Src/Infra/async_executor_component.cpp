@@ -7,7 +7,7 @@ namespace sc {
 /// @brief 创建异步执行器组件。
 ///
 /// @param threadCount 工作线程数量。
-CAsyncExecutorComponent::CAsyncExecutorComponent(size_t threadCount) : threadCount_(threadCount)
+CAsyncExecutorComponent::CAsyncExecutorComponent(size_t threadCount) : m_nThreadCount(threadCount)
 {
 }
 
@@ -20,16 +20,16 @@ CAsyncExecutorComponent::~CAsyncExecutorComponent()
 /// @brief 启动工作线程。
 bool CAsyncExecutorComponent::Start()
 {
-    if (executor_)
+    if (m_pExecutor)
     {
         return false;
     }
-    if (threadCount_ == 0)
+    if (m_nThreadCount == 0)
     {
         return false;
     }
-    executor_.reset(new common::CAsyncExecutor(threadCount_));
-    return executor_->Start();
+    m_pExecutor.reset(new common::CAsyncExecutor(m_nThreadCount));
+    return m_pExecutor->Start();
 }
 
 /// @brief 提交无返回值任务。
@@ -37,20 +37,20 @@ bool CAsyncExecutorComponent::Start()
 /// @return 已启动时返回 true。
 bool CAsyncExecutorComponent::Post(const std::function<void()>& task)
 {
-    if (!executor_)
+    if (!m_pExecutor)
     {
         return false;
     }
-    return executor_->Post(task);
+    return m_pExecutor->Post(task);
 }
 
 /// @brief 停止并等待任务完成。
 void CAsyncExecutorComponent::Stop()
 {
-    if (executor_)
+    if (m_pExecutor)
     {
-        executor_->Stop();
-        executor_.reset();
+        m_pExecutor->Stop();
+        m_pExecutor.reset();
     }
 }
 

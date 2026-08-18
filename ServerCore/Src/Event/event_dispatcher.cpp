@@ -5,7 +5,7 @@
 namespace sc {
 
 /// @brief 创建事件分发器。
-CEventDispatcher::CEventDispatcher() : nextId_(1)
+CEventDispatcher::CEventDispatcher() : m_nNextId(1)
 {
 }
 
@@ -28,13 +28,13 @@ SubscriptionId CEventDispatcher::Subscribe(const EventType& type, const EventHan
     {
         return kInvalidSubscriptionId;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
-    SubscriptionId id = nextId_++;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    SubscriptionId id = m_nNextId++;
     Subscription sub;
     sub.type = type;
     sub.handler = handler;
-    subscriptions_[id] = sub;
-    byType_[type].push_back(id);
+    m_mapSubscriptions[id] = sub;
+    m_mapByType[type].push_back(id);
     return id;
 }
 
@@ -45,14 +45,14 @@ SubscriptionId CEventDispatcher::Subscribe(const EventType& type, const EventHan
 /// @return true 取消成功；false 标识无效。
 bool CEventDispatcher::Unsubscribe(SubscriptionId id)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::map<SubscriptionId, Subscription>::iterator it = subscriptions_.find(id);
-    if (it == subscriptions_.end())
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::map<SubscriptionId, Subscription>::iterator it = m_mapSubscriptions.find(id);
+    if (it == m_mapSubscriptions.end())
     {
         return false;
     }
     const EventType& type = it->second.type;
-    std::vector<SubscriptionId>& ids = byType_[type];
+    std::vector<SubscriptionId>& ids = m_mapByType[type];
     for (size_t i = 0; i < ids.size(); ++i)
     {
         if (ids[i] == id)
@@ -63,9 +63,9 @@ bool CEventDispatcher::Unsubscribe(SubscriptionId id)
     }
     if (ids.empty())
     {
-        byType_.erase(type);
+        m_mapByType.erase(type);
     }
-    subscriptions_.erase(it);
+    m_mapSubscriptions.erase(it);
     return true;
 }
 
@@ -82,9 +82,9 @@ size_t CEventDispatcher::Publish(const EventType& type, const void* data, size_t
 {
     std::vector<EventHandler> targets;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::map<EventType, std::vector<SubscriptionId> >::const_iterator it = byType_.find(type);
-        if (it == byType_.end())
+        std::lock_guard<std::mutex> lock(m_mutex);
+        std::map<EventType, std::vector<SubscriptionId> >::const_iterator it = m_mapByType.find(type);
+        if (it == m_mapByType.end())
         {
             return 0;
         }
@@ -92,8 +92,8 @@ size_t CEventDispatcher::Publish(const EventType& type, const void* data, size_t
         targets.reserve(ids.size());
         for (size_t i = 0; i < ids.size(); ++i)
         {
-            std::map<SubscriptionId, Subscription>::const_iterator sit = subscriptions_.find(ids[i]);
-            if (sit != subscriptions_.end())
+            std::map<SubscriptionId, Subscription>::const_iterator sit = m_mapSubscriptions.find(ids[i]);
+            if (sit != m_mapSubscriptions.end())
             {
                 targets.push_back(sit->second.handler);
             }
@@ -117,9 +117,9 @@ size_t CEventDispatcher::Publish(const EventType& type, const void* data, size_t
 /// @return 订阅者数量；无订阅返回 0。
 size_t CEventDispatcher::SubscriberCount(const EventType& type) const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::map<EventType, std::vector<SubscriptionId> >::const_iterator it = byType_.find(type);
-    if (it == byType_.end())
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::map<EventType, std::vector<SubscriptionId> >::const_iterator it = m_mapByType.find(type);
+    if (it == m_mapByType.end())
     {
         return 0;
     }

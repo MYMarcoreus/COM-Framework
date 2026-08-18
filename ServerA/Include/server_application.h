@@ -42,11 +42,11 @@ protected:
     void OnShutdown() override;
 
 private:
-    std::uint16_t port_;
-    CEchoService* service_; // 借用指针，由组件管理器持有
-    sc::ScopedInterfacePtr<sc::IEventDispatcher> eventDispatcher_;
-    sc::SubscriptionId eventStartId_;
-    sc::SubscriptionId eventStopId_;
+    std::uint16_t m_nPort;
+    CEchoService* m_pService; // 借用指针，由组件管理器持有
+    sc::ScopedInterfacePtr<sc::IEventDispatcher> m_pEventDispatcher;
+    sc::SubscriptionId m_tEventStartId;
+    sc::SubscriptionId m_tEventStopId;
 };
 
 } // namespace servera

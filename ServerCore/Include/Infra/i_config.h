@@ -55,7 +55,7 @@ protected:
     bool QueryInterfaceImpl(const InterfaceId& iid, void** ppv) override;
 
 private:
-    common::CConfig config_;
+    common::CConfig m_config;
 };
 
 } // namespace sc

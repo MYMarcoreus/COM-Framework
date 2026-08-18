@@ -4,7 +4,7 @@ namespace common {
 
 /// @brief 创建定时器管理器。
 CTimerManager::CTimerManager()
-    : nextId_(1), running_(false)
+    : m_nNextId(1), m_bRunning(false)
 {
 }
 
@@ -17,16 +17,16 @@ CTimerManager::~CTimerManager()
 /// @brief 启动定时器线程。
 bool CTimerManager::Start()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (running_.load())
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_bRunning.load())
     {
         return false;
     }
-    io_.restart();
-    work_.reset(new asio::executor_work_guard<asio::io_context::executor_type>(
-        asio::make_work_guard(io_)));
-    running_.store(true);
-    thread_ = std::thread([this]() { io_.run(); });
+    m_io.restart();
+    m_pWork.reset(new asio::executor_work_guard<asio::io_context::executor_type>(
+        asio::make_work_guard(m_io)));
+    m_bRunning.store(true);
+    m_thread = std::thread([this]() { m_io.run(); });
     return true;
 }
 
@@ -55,14 +55,14 @@ TimerId CTimerManager::AddPeriodicTimer(std::int64_t intervalMs, const TimerCall
 /// @brief 取消定时器。
 bool CTimerManager::Cancel(TimerId id)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::map<TimerId, std::shared_ptr<asio::steady_timer> >::iterator it = timers_.find(id);
-    if (it == timers_.end())
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::map<TimerId, std::shared_ptr<asio::steady_timer> >::iterator it = m_mapTimers.find(id);
+    if (it == m_mapTimers.end())
     {
         return false;
     }
     static_cast<void>(it->second->cancel());
-    timers_.erase(it); // 到期处理函数稍后以 operation_aborted 触发（幂等）
+    m_mapTimers.erase(it); // 到期处理函数稍后以 operation_aborted 触发（幂等）
     return true;
 }
 
@@ -70,32 +70,32 @@ bool CTimerManager::Cancel(TimerId id)
 void CTimerManager::Stop()
 {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!running_.load())
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_bRunning.load())
         {
             return;
         }
-        running_.store(false);
-        for (std::map<TimerId, std::shared_ptr<asio::steady_timer> >::iterator it = timers_.begin();
-             it != timers_.end(); ++it)
+        m_bRunning.store(false);
+        for (std::map<TimerId, std::shared_ptr<asio::steady_timer> >::iterator it = m_mapTimers.begin();
+             it != m_mapTimers.end(); ++it)
         {
             static_cast<void>(it->second->cancel());
         }
-        timers_.clear();
-        work_.reset();
+        m_mapTimers.clear();
+        m_pWork.reset();
     }
-    io_.stop();
-    if (thread_.joinable())
+    m_io.stop();
+    if (m_thread.joinable())
     {
-        thread_.join();
+        m_thread.join();
     }
 }
 
 /// @brief 是否正在运行。
 bool CTimerManager::IsRunning() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return running_.load();
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_bRunning.load();
 }
 
 /// @brief 添加定时器。
@@ -106,14 +106,14 @@ bool CTimerManager::IsRunning() const
 TimerId CTimerManager::AddTimerInternal(std::int64_t delayMs, std::int64_t intervalMs,
                                        const TimerCallback& callback)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!running_.load())
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!m_bRunning.load())
     {
         return kInvalidTimerId;
     }
-    TimerId id = nextId_++;
-    std::shared_ptr<asio::steady_timer> timer(new asio::steady_timer(io_));
-    timers_[id] = timer;
+    TimerId id = m_nNextId++;
+    std::shared_ptr<asio::steady_timer> timer(new asio::steady_timer(m_io));
+    m_mapTimers[id] = timer;
     std::int64_t delay = (intervalMs > 0) ? intervalMs : delayMs;
     timer->expires_after(std::chrono::milliseconds(delay));
     Schedule(timer, id, intervalMs, callback);
@@ -130,8 +130,8 @@ void CTimerManager::Schedule(std::shared_ptr<asio::steady_timer> timer, TimerId 
             // ① 取消或错误：清理定时器
             if (ec)
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                timers_.erase(id);
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_mapTimers.erase(id);
                 return;
             }
             // ② 触发回调
@@ -142,10 +142,10 @@ void CTimerManager::Schedule(std::shared_ptr<asio::steady_timer> timer, TimerId 
             // ③ 周期性定时器重新调度（若仍被管理）
             if (intervalMs > 0)
             {
-                std::lock_guard<std::mutex> lock(mutex_);
+                std::lock_guard<std::mutex> lock(m_mutex);
                 std::map<TimerId, std::shared_ptr<asio::steady_timer> >::iterator it =
-                    timers_.find(id);
-                if (it == timers_.end() || it->second != timer)
+                    m_mapTimers.find(id);
+                if (it == m_mapTimers.end() || it->second != timer)
                 {
                     return; // 已被取消
                 }
@@ -154,8 +154,8 @@ void CTimerManager::Schedule(std::shared_ptr<asio::steady_timer> timer, TimerId 
             }
             else
             {
-                std::lock_guard<std::mutex> lock(mutex_);
-                timers_.erase(id);
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_mapTimers.erase(id);
             }
         });
 }

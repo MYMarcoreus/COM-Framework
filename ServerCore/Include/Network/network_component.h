@@ -62,10 +62,10 @@ protected:
     bool QueryInterfaceImpl(const InterfaceId& iid, void** ppv) override;
 
 private:
-    std::unique_ptr<common::CTcpServer> server_;
-    ScopedInterfacePtr<INetworkHandler> handler_;
-    mutable std::mutex mutex_;
-    uint16_t port_;
+    std::unique_ptr<common::CTcpServer> m_pServer;
+    ScopedInterfacePtr<INetworkHandler> m_pHandler;
+    mutable std::mutex m_mutex;
+    uint16_t m_nPort;
 };
 
 } // namespace sc

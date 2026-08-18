@@ -83,22 +83,22 @@ private:
     // 通知上层连接关闭（仅一次）。
     void NotifyClose();
 
-    asio::io_context io_;
-    asio::ip::tcp::socket socket_;
-    asio::ip::tcp::resolver resolver_;
-    ConnectCallback connectCb_;
-    DataCallback dataCb_;
-    CloseCallback closeCb_;
-    std::string host_;
-    uint16_t port_;
-    std::thread thread_;
-    CBuffer inputBuffer_;
-    std::string pendingOutput_;
-    std::vector<char> readBuffer_;
-    std::string peerAddress_;
-    std::atomic<bool> running_;
-    std::atomic<bool> connected_;
-    std::atomic<bool> closeNotified_;
+    asio::io_context m_io;
+    asio::ip::tcp::socket m_socket;
+    asio::ip::tcp::resolver m_resolver;
+    ConnectCallback m_fnConnect;
+    DataCallback m_fnData;
+    CloseCallback m_fnClose;
+    std::string m_strHost;
+    uint16_t m_nPort;
+    std::thread m_thread;
+    CBuffer m_inputBuffer;
+    std::string m_strPendingOutput;
+    std::vector<char> m_vecReadBuffer;
+    std::string m_strPeerAddress;
+    std::atomic<bool> m_bRunning;
+    std::atomic<bool> m_bConnected;
+    std::atomic<bool> m_bCloseNotified;
 };
 
 } // namespace common

@@ -53,8 +53,8 @@ protected:
     bool QueryInterfaceImpl(const InterfaceId& iid, void** ppv) override;
 
 private:
-    std::unique_ptr<common::CThreadPool> pool_;
-    size_t threadCount_;
+    std::unique_ptr<common::CThreadPool> m_pPool;
+    size_t m_nThreadCount;
 };
 
 } // namespace sc

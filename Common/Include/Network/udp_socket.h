@@ -51,15 +51,15 @@ private:
     // 处理接收完成。
     void HandleReceive(const asio::error_code& ec, size_t bytes);
 
-    asio::io_context io_;
-    asio::ip::udp::socket socket_;
-    asio::ip::udp::resolver resolver_;
-    DataCallback dataCb_;
-    std::thread thread_;
-    std::vector<char> recvBuffer_;
-    asio::ip::udp::endpoint remoteEndpoint_;
-    uint16_t port_;
-    std::atomic<bool> running_;
+    asio::io_context m_io;
+    asio::ip::udp::socket m_socket;
+    asio::ip::udp::resolver m_resolver;
+    DataCallback m_fnData;
+    std::thread m_thread;
+    std::vector<char> m_vecRecvBuffer;
+    asio::ip::udp::endpoint m_remoteEndpoint;
+    uint16_t m_nPort;
+    std::atomic<bool> m_bRunning;
 };
 
 } // namespace common

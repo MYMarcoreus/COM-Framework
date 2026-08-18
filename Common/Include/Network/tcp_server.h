@@ -90,21 +90,21 @@ private:
     // 在 io 线程内执行关闭流程。
     void ShutdownOnIoThread();
 
-    asio::io_context io_;
-    std::unique_ptr<asio::ip::tcp::acceptor> acceptor_;
-    AcceptCallback acceptCb_;
-    DataCallback dataCb_;
-    CloseCallback closeCb_;
-    std::map<ConnectionId, CTcpConnection::Ptr> connections_;
-    std::thread thread_;
-    ConnectionId nextId_;
-    uint16_t port_;
-    std::atomic<bool> running_;
-    std::atomic<size_t> connectionCount_;
-    std::atomic<uint64_t> totalAccepted_;
-    std::atomic<uint64_t> totalClosed_;
-    mutable std::mutex peerMutex_;
-    std::map<ConnectionId, std::string> peerAddresses_;
+    asio::io_context m_io;
+    std::unique_ptr<asio::ip::tcp::acceptor> m_pAcceptor;
+    AcceptCallback m_fnAccept;
+    DataCallback m_fnData;
+    CloseCallback m_fnClose;
+    std::map<ConnectionId, CTcpConnection::Ptr> m_mapConnections;
+    std::thread m_thread;
+    ConnectionId m_nNextId;
+    uint16_t m_nPort;
+    std::atomic<bool> m_bRunning;
+    std::atomic<size_t> m_nConnectionCount;
+    std::atomic<uint64_t> m_nTotalAccepted;
+    std::atomic<uint64_t> m_nTotalClosed;
+    mutable std::mutex m_mutexPeer;
+    std::map<ConnectionId, std::string> m_mapPeerAddresses;
 };
 
 } // namespace common

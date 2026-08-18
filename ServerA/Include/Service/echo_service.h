@@ -40,7 +40,7 @@ private:
     // 记录日志。
     void Log(const std::string& message);
 
-    sc::ScopedInterfacePtr<sc::INetwork> network_;
+    sc::ScopedInterfacePtr<sc::INetwork> m_pNetwork;
 };
 
 } // namespace servera

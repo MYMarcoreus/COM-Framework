@@ -17,7 +17,7 @@ CMyApplication* g_instance = nullptr;
 } // namespace
 
 /// @brief 创建服务器应用程序。
-CMyApplication::CMyApplication() : running_(false)
+CMyApplication::CMyApplication() : m_bRunning(false)
 {
 }
 
@@ -41,9 +41,9 @@ bool CMyApplication::Initialize()
     {
         return false;
     }
-    if (!moduleManager_.InitializeAll())
+    if (!m_moduleManager.InitializeAll())
     {
-        componentManager_.Clear();
+        m_componentManager.Clear();
         return false;
     }
     return OnInitialize();
@@ -56,7 +56,7 @@ bool CMyApplication::Initialize()
 /// @return true 启动成功；false 启动失败。
 bool CMyApplication::Start()
 {
-    if (!moduleManager_.StartAll())
+    if (!m_moduleManager.StartAll())
     {
         return false;
     }
@@ -70,8 +70,8 @@ bool CMyApplication::Start()
 /// @return 主循环退出码，0 表示正常退出。
 int CMyApplication::Run()
 {
-    running_.store(true);
-    startTime_ = std::chrono::steady_clock::now();
+    m_bRunning.store(true);
+    m_startTime = std::chrono::steady_clock::now();
     g_stopRequested.store(false);
     g_instance = this;
 
@@ -100,7 +100,7 @@ int CMyApplication::Run()
 /// @note 可从信号处理程序调用，仅做原子写操作。
 void CMyApplication::Stop()
 {
-    running_.store(false);
+    m_bRunning.store(false);
 }
 
 /// @brief 关闭服务器应用程序并释放资源。
@@ -109,39 +109,39 @@ void CMyApplication::Stop()
 void CMyApplication::Shutdown()
 {
     OnShutdown();
-    moduleManager_.StopAll();
-    moduleManager_.ShutdownAll();
-    componentManager_.Clear();
+    m_moduleManager.StopAll();
+    m_moduleManager.ShutdownAll();
+    m_componentManager.Clear();
 }
 
 /// @brief 获取组件管理器。
 CComponentManager& CMyApplication::GetComponentManager()
 {
-    return componentManager_;
+    return m_componentManager;
 }
 
 /// @brief 获取模块管理器。
 CModuleManager& CMyApplication::GetModuleManager()
 {
-    return moduleManager_;
+    return m_moduleManager;
 }
 
 /// @brief 设置配置文件路径。
 void CMyApplication::SetConfigPath(const std::string& path)
 {
-    configPath_ = path;
+    m_strConfigPath = path;
 }
 
 /// @brief 配置文件路径。
 const std::string& CMyApplication::ConfigPath() const
 {
-    return configPath_;
+    return m_strConfigPath;
 }
 
 /// @brief 是否正在运行。
 bool CMyApplication::IsRunning() const
 {
-    return running_.load();
+    return m_bRunning.load();
 }
 
 /// @brief 已运行秒数。
@@ -150,7 +150,7 @@ bool CMyApplication::IsRunning() const
 uint64_t CMyApplication::UptimeSeconds() const
 {
     std::chrono::steady_clock::duration elapsed =
-        std::chrono::steady_clock::now() - startTime_;
+        std::chrono::steady_clock::now() - m_startTime;
     return static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
 }
@@ -188,7 +188,7 @@ bool CMyApplication::OnStart()
 /// 默认实现：等待停止信号，循环检查运行标记。
 int CMyApplication::OnRun()
 {
-    while (running_.load() && !g_stopRequested.load())
+    while (m_bRunning.load() && !g_stopRequested.load())
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
@@ -214,7 +214,7 @@ void CMyApplication::HandleSignal(int signo)
     g_stopRequested.store(true);
     if (g_instance != nullptr)
     {
-        g_instance->running_.store(false);
+        g_instance->m_bRunning.store(false);
     }
 }
 

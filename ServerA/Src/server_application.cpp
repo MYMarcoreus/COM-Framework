@@ -17,8 +17,8 @@ namespace servera {
 ///
 /// @param port 监听端口。
 CServerApplication::CServerApplication(std::uint16_t port)
-    : port_(port), service_(nullptr),
-      eventStartId_(sc::kInvalidSubscriptionId), eventStopId_(sc::kInvalidSubscriptionId)
+    : m_nPort(port), m_pService(nullptr),
+      m_tEventStartId(sc::kInvalidSubscriptionId), m_tEventStopId(sc::kInvalidSubscriptionId)
 {
 }
 
@@ -35,7 +35,7 @@ bool CServerApplication::RegisterComponents()
 {
     // ① 注册网络组件
     sc::IUnknown* network = new sc::CNetworkComponent();
-    if (!componentManager_.RegisterComponent(sc::IID_INetwork(), network))
+    if (!m_componentManager.RegisterComponent(sc::IID_INetwork(), network))
     {
         network->Release();
         return false;
@@ -44,7 +44,7 @@ bool CServerApplication::RegisterComponents()
 
     // ② 注册事件分发器组件
     sc::IUnknown* events = new sc::CEventDispatcher();
-    if (!componentManager_.RegisterComponent(sc::IID_EventDispatcher(), events))
+    if (!m_componentManager.RegisterComponent(sc::IID_EventDispatcher(), events))
     {
         events->Release();
         return false;
@@ -59,7 +59,7 @@ bool CServerApplication::RegisterComponents()
         configPath = "servera.ini";
     }
     config->LoadFile(configPath);
-    if (!componentManager_.RegisterComponent(sc::IID_IConfig(), config))
+    if (!m_componentManager.RegisterComponent(sc::IID_IConfig(), config))
     {
         config->Release();
         return false;
@@ -68,7 +68,7 @@ bool CServerApplication::RegisterComponents()
 
     // ④ 注册日志组件
     sc::IUnknown* logger = new sc::CLoggerComponent();
-    if (!componentManager_.RegisterComponent(sc::IID_ILogger(), logger))
+    if (!m_componentManager.RegisterComponent(sc::IID_ILogger(), logger))
     {
         logger->Release();
         return false;
@@ -77,12 +77,12 @@ bool CServerApplication::RegisterComponents()
 
     // ⑤ 注册回显服务
     CEchoService* service = new CEchoService();
-    if (!componentManager_.RegisterComponent(sc::IID_INetworkHandler(), service))
+    if (!m_componentManager.RegisterComponent(sc::IID_INetworkHandler(), service))
     {
         service->Release();
         return false;
     }
-    service_ = service;
+    m_pService = service;
     service->Release(); // 管理器已持有引用
     return true;
 }
@@ -93,8 +93,8 @@ bool CServerApplication::RegisterComponents()
 bool CServerApplication::RegisterModules()
 {
     // ① 日志模块（通过组件管理器按接口初始化）
-    sc::IModule* logger = new CServerLoggerModule(componentManager_);
-    if (!moduleManager_.RegisterModule(logger))
+    sc::IModule* logger = new CServerLoggerModule(m_componentManager);
+    if (!m_moduleManager.RegisterModule(logger))
     {
         logger->Release();
         return false;
@@ -102,8 +102,8 @@ bool CServerApplication::RegisterModules()
     logger->Release(); // 管理器已持有引用
 
     // ② 网络模块
-    sc::IModule* network = new CServerNetworkModule(componentManager_, service_, port_);
-    if (!moduleManager_.RegisterModule(network))
+    sc::IModule* network = new CServerNetworkModule(m_componentManager, m_pService, m_nPort);
+    if (!m_moduleManager.RegisterModule(network))
     {
         network->Release();
         return false;
@@ -119,7 +119,7 @@ bool CServerApplication::RegisterModules()
 /// @return true。
 bool CServerApplication::OnInitialize()
 {
-    sc::IUnknown* eventObject = componentManager_.GetComponent(sc::IID_EventDispatcher());
+    sc::IUnknown* eventObject = m_componentManager.GetComponent(sc::IID_EventDispatcher());
     if (eventObject == nullptr)
     {
         return false;
@@ -129,9 +129,9 @@ bool CServerApplication::OnInitialize()
     {
         return false;
     }
-    eventDispatcher_.Reset(static_cast<sc::IEventDispatcher*>(raw));
+    m_pEventDispatcher.Reset(static_cast<sc::IEventDispatcher*>(raw));
 
-    eventStartId_ = eventDispatcher_->Subscribe("network.started",
+    m_tEventStartId = m_pEventDispatcher->Subscribe("network.started",
         [](const sc::Event& event)
         {
             if (event.data != nullptr && event.size == sizeof(std::uint16_t))
@@ -141,7 +141,7 @@ bool CServerApplication::OnInitialize()
                     "[Event] ServerA 网络已启动，端口 " + std::to_string(port));
             }
         });
-    eventStopId_ = eventDispatcher_->Subscribe("network.stopped",
+    m_tEventStopId = m_pEventDispatcher->Subscribe("network.stopped",
         [](const sc::Event&)
         {
             common::CLogger::Instance().Info("[Event] ServerA 网络已停止");
@@ -162,17 +162,17 @@ bool CServerApplication::OnStart()
 /// 取消事件订阅并释放引用；模块的停止与关闭由 CMyApplication::Shutdown 统一完成。
 void CServerApplication::OnShutdown()
 {
-    if (eventDispatcher_ != nullptr)
+    if (m_pEventDispatcher != nullptr)
     {
-        if (eventStartId_ != sc::kInvalidSubscriptionId)
+        if (m_tEventStartId != sc::kInvalidSubscriptionId)
         {
-            eventDispatcher_->Unsubscribe(eventStartId_);
+            m_pEventDispatcher->Unsubscribe(m_tEventStartId);
         }
-        if (eventStopId_ != sc::kInvalidSubscriptionId)
+        if (m_tEventStopId != sc::kInvalidSubscriptionId)
         {
-            eventDispatcher_->Unsubscribe(eventStopId_);
+            m_pEventDispatcher->Unsubscribe(m_tEventStopId);
         }
-        eventDispatcher_.Reset();
+        m_pEventDispatcher.Reset();
     }
 }
 

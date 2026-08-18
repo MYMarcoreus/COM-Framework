@@ -7,7 +7,7 @@ namespace sc {
 /// @brief 创建模块。
 ///
 /// @param name 模块名称（进程内唯一，用于管理与日志）。
-CModule::CModule(const char* name) : name_(name != nullptr ? name : "")
+CModule::CModule(const char* name) : m_strName(name != nullptr ? name : "")
 {
 }
 
@@ -19,7 +19,7 @@ CModule::~CModule()
 /// @brief 获取模块名称。
 const char* CModule::GetName() const
 {
-    return name_.c_str();
+    return m_strName.c_str();
 }
 
 /// @brief 默认初始化实现，子类按需重写。

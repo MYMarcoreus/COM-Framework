@@ -8,7 +8,7 @@ namespace common {
 ///
 /// @param initialSize 初始容量。
 CBuffer::CBuffer(size_t initialSize)
-    : data_(initialSize), readIndex_(0), writeIndex_(0)
+    : m_vecData(initialSize), m_nReadIndex(0), m_nWriteIndex(0)
 {
 }
 
@@ -20,7 +20,7 @@ void CBuffer::Append(const char* data, size_t len)
 {
     EnsureWritable(len);
     std::memcpy(BeginWrite(), data, len);
-    writeIndex_ += len;
+    m_nWriteIndex += len;
 }
 
 /// @brief 追加字符串到缓冲区可写区。
@@ -34,25 +34,25 @@ void CBuffer::Append(const std::string& str)
 /// @brief 返回可读字节数。
 size_t CBuffer::Readable() const
 {
-    return writeIndex_ - readIndex_;
+    return m_nWriteIndex - m_nReadIndex;
 }
 
 /// @brief 返回可写字节数。
 size_t CBuffer::Writable() const
 {
-    return data_.size() - writeIndex_;
+    return m_vecData.size() - m_nWriteIndex;
 }
 
 /// @brief 返回可读区起始指针。
 const char* CBuffer::Peek() const
 {
-    return &data_[readIndex_];
+    return &m_vecData[m_nReadIndex];
 }
 
 /// @brief 返回可写区起始指针。
 char* CBuffer::BeginWrite()
 {
-    return &data_[writeIndex_];
+    return &m_vecData[m_nWriteIndex];
 }
 
 /// @brief 消费可读区前 len 字节。
@@ -65,14 +65,14 @@ void CBuffer::Retrieve(size_t len)
         RetrieveAll();
         return;
     }
-    readIndex_ += len;
+    m_nReadIndex += len;
 }
 
 /// @brief 清空缓冲区。
 void CBuffer::RetrieveAll()
 {
-    readIndex_ = 0;
-    writeIndex_ = 0;
+    m_nReadIndex = 0;
+    m_nWriteIndex = 0;
 }
 
 /// @brief 将可读数据转为字符串。
@@ -84,7 +84,7 @@ std::string CBuffer::ToString() const
 /// @brief 返回当前容量。
 size_t CBuffer::Capacity() const
 {
-    return data_.size();
+    return m_vecData.size();
 }
 
 /// @brief 确保可写空间不小于 len。
@@ -102,24 +102,24 @@ void CBuffer::EnsureWritable(size_t len)
         return;
     }
     // ② 整理已消费空间
-    if (readIndex_ + Writable() >= len)
+    if (m_nReadIndex + Writable() >= len)
     {
-        std::memmove(&data_[0], Peek(), Readable());
-        writeIndex_ = Readable();
-        readIndex_ = 0;
+        std::memmove(&m_vecData[0], Peek(), Readable());
+        m_nWriteIndex = Readable();
+        m_nReadIndex = 0;
         return;
     }
     // ③ 扩容
-    size_t newSize = data_.size() * 2;
-    while (newSize - writeIndex_ < len)
+    size_t newSize = m_vecData.size() * 2;
+    while (newSize - m_nWriteIndex < len)
     {
         newSize *= 2;
     }
     std::vector<char> newData(newSize);
     std::memcpy(&newData[0], Peek(), Readable());
-    data_.swap(newData);
-    writeIndex_ = Readable();
-    readIndex_ = 0;
+    m_vecData.swap(newData);
+    m_nWriteIndex = Readable();
+    m_nReadIndex = 0;
 }
 
 } // namespace common

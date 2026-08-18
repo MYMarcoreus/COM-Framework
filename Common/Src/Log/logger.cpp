@@ -14,45 +14,45 @@ CLogger& CLogger::Instance()
 }
 
 /// @brief 创建日志器。
-CLogger::CLogger() : level_(LogLevel::kInfo), fileEnabled_(false)
+CLogger::CLogger() : m_level(LogLevel::kInfo), m_bFileEnabled(false)
 {
 }
 
 /// @brief 销毁日志器。
 CLogger::~CLogger()
 {
-    if (file_.is_open())
+    if (m_file.is_open())
     {
-        file_.close();
+        m_file.close();
     }
 }
 
 /// @brief 设置日志级别。
 void CLogger::SetLevel(LogLevel level)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    level_ = level;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_level = level;
 }
 
 /// @brief 返回当前日志级别。
 LogLevel CLogger::Level() const
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return level_;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_level;
 }
 
 /// @brief 启用文件输出。
 bool CLogger::OpenFile(const std::string& path)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    file_.close();
-    file_.open(path.c_str(), std::ios::out | std::ios::app);
-    if (!file_.is_open())
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_file.close();
+    m_file.open(path.c_str(), std::ios::out | std::ios::app);
+    if (!m_file.is_open())
     {
-        fileEnabled_ = false;
+        m_bFileEnabled = false;
         return false;
     }
-    fileEnabled_ = true;
+    m_bFileEnabled = true;
     return true;
 }
 
@@ -65,8 +65,8 @@ void CLogger::Log(LogLevel level, const std::string& message)
     // ① 级别过滤
     LogLevel current;
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        current = level_;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        current = m_level;
     }
     if (level < current || level == LogLevel::kOff)
     {
@@ -74,13 +74,13 @@ void CLogger::Log(LogLevel level, const std::string& message)
     }
     // ② 格式化并输出
     std::string line = "[" + FormatTime() + "] [" + LevelName(level) + "] " + message + "\n";
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::lock_guard<std::mutex> lock(m_mutex);
     std::fwrite(line.c_str(), 1, line.size(), stdout);
     std::fflush(stdout);
-    if (fileEnabled_ && file_.is_open())
+    if (m_bFileEnabled && m_file.is_open())
     {
-        file_ << line;
-        file_.flush();
+        m_file << line;
+        m_file.flush();
     }
 }
 

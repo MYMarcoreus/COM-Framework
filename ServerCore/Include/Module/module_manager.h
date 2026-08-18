@@ -69,9 +69,9 @@ private:
     // 逆序停止已启动的模块，再逆序关闭已初始化的模块（回滚辅助）。
     void RollbackStarted();
 
-    std::vector<Entry> modules_;
-    std::map<std::string, size_t> indexByName_;
-    mutable std::mutex mutex_;
+    std::vector<Entry> m_vecModules;
+    std::map<std::string, size_t> m_mapIndexByName;
+    mutable std::mutex m_mutex;
 };
 
 } // namespace sc

@@ -19,7 +19,7 @@ CDemoService::~CDemoService()
 /// @param network 网络组件接口（以引用计数方式持有）。
 void CDemoService::SetNetwork(sc::INetwork* network)
 {
-    network_.Reset(network);
+    m_pNetwork.Reset(network);
 }
 
 /// @brief 新连接建立回调。
@@ -33,7 +33,7 @@ void CDemoService::OnAccept(sc::ConnectionId id, const std::string& peer)
 /// 数据追加到该连接的待解析缓冲，尝试解析完整报文。
 void CDemoService::OnData(sc::ConnectionId id, const char* data, size_t len)
 {
-    std::string& pending = pendingBuffers_[id];
+    std::string& pending = m_mapPendingBuffers[id];
     pending.append(data, len);
 
     size_t consumed = 0;
@@ -51,9 +51,9 @@ void CDemoService::OnData(sc::ConnectionId id, const char* data, size_t len)
             // ② 协议非法，丢弃缓冲并关闭连接
             pending.clear();
             Log("协议错误，关闭连接: id=" + std::to_string(id));
-            if (network_ != nullptr)
+            if (m_pNetwork != nullptr)
             {
-                network_->Close(id);
+                m_pNetwork->Close(id);
             }
             return;
         }
@@ -67,7 +67,7 @@ void CDemoService::OnData(sc::ConnectionId id, const char* data, size_t len)
 void CDemoService::OnClose(sc::ConnectionId id)
 {
     Log("连接关闭: id=" + std::to_string(id));
-    pendingBuffers_.erase(id);
+    m_mapPendingBuffers.erase(id);
 }
 
 /// @brief 处理一个完整报文。
@@ -79,9 +79,9 @@ void CDemoService::HandlePacket(sc::ConnectionId id, const Packet& packet)
     {
         std::string response = CDemoProtocol::BuildPong();
         Log("收到 PING，返回 PONG: id=" + std::to_string(id));
-        if (network_ != nullptr)
+        if (m_pNetwork != nullptr)
         {
-            network_->Send(id, response.data(), response.size());
+            m_pNetwork->Send(id, response.data(), response.size());
         }
         return;
     }
@@ -89,9 +89,9 @@ void CDemoService::HandlePacket(sc::ConnectionId id, const Packet& packet)
     {
         std::string response = CDemoProtocol::BuildPacket(kCmdEcho, packet.payload);
         Log("收到 ECHO，负载长度=" + std::to_string(packet.payload.size()) + " id=" + std::to_string(id));
-        if (network_ != nullptr)
+        if (m_pNetwork != nullptr)
         {
-            network_->Send(id, response.data(), response.size());
+            m_pNetwork->Send(id, response.data(), response.size());
         }
         return;
     }
