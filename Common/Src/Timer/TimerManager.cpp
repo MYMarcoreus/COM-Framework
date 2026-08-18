@@ -4,7 +4,7 @@ namespace common {
 
 /// @brief 创建定时器管理器。
 TimerManager::TimerManager()
-    : nextId_(1), running_(false), stopping_(false)
+    : nextId_(1), running_(false)
 {
 }
 
@@ -18,13 +18,15 @@ TimerManager::~TimerManager()
 bool TimerManager::Start()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (running_)
+    if (running_.load())
     {
         return false;
     }
-    running_ = true;
-    stopping_ = false;
-    thread_ = std::thread(&TimerManager::ThreadMain, this);
+    io_.restart();
+    work_.reset(new asio::executor_work_guard<asio::io_context::executor_type>(
+        asio::make_work_guard(io_)));
+    running_.store(true);
+    thread_ = std::thread([this]() { io_.run(); });
     return true;
 }
 
@@ -54,12 +56,13 @@ TimerId TimerManager::AddPeriodicTimer(std::int64_t intervalMs, const TimerCallb
 bool TimerManager::Cancel(TimerId id)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    std::map<TimerId, Entry*>::iterator it = entries_.find(id);
-    if (it == entries_.end())
+    std::map<TimerId, std::shared_ptr<asio::steady_timer> >::iterator it = timers_.find(id);
+    if (it == timers_.end())
     {
         return false;
     }
-    it->second->canceled = true;
+    static_cast<void>(it->second->cancel());
+    timers_.erase(it); // 到期处理函数稍后以 operation_aborted 触发（幂等）
     return true;
 }
 
@@ -68,26 +71,31 @@ void TimerManager::Stop()
 {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (!running_)
+        if (!running_.load())
         {
             return;
         }
-        stopping_ = true;
+        running_.store(false);
+        for (std::map<TimerId, std::shared_ptr<asio::steady_timer> >::iterator it = timers_.begin();
+             it != timers_.end(); ++it)
+        {
+            static_cast<void>(it->second->cancel());
+        }
+        timers_.clear();
+        work_.reset();
     }
-    condition_.notify_all();
+    io_.stop();
     if (thread_.joinable())
     {
         thread_.join();
     }
-    running_ = false;
-    stopping_ = false;
 }
 
 /// @brief 是否正在运行。
 bool TimerManager::IsRunning() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    return running_;
+    return running_.load();
 }
 
 /// @brief 添加定时器。
@@ -99,102 +107,57 @@ TimerId TimerManager::AddTimerInternal(std::int64_t delayMs, std::int64_t interv
                                        const TimerCallback& callback)
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!running_)
+    if (!running_.load())
     {
         return kInvalidTimerId;
     }
     TimerId id = nextId_++;
-    Entry* entry = new Entry;
-    entry->id = id;
-    entry->interval = std::chrono::milliseconds(intervalMs);
-    entry->callback = callback;
-    entry->canceled = false;
+    std::shared_ptr<asio::steady_timer> timer(new asio::steady_timer(io_));
+    timers_[id] = timer;
     std::int64_t delay = (intervalMs > 0) ? intervalMs : delayMs;
-    entry->expiry = std::chrono::steady_clock::now() + std::chrono::milliseconds(delay);
-    queue_.push(entry);
-    entries_[id] = entry;
-    condition_.notify_one();
+    timer->expires_after(std::chrono::milliseconds(delay));
+    Schedule(timer, id, intervalMs, callback);
     return id;
 }
 
-/// @brief 定时器线程入口。
-void TimerManager::ThreadMain()
+/// @brief 调度一次异步等待。
+void TimerManager::Schedule(std::shared_ptr<asio::steady_timer> timer, TimerId id,
+                            std::int64_t intervalMs, const TimerCallback& callback)
 {
-    while (true)
-    {
-        std::vector<Entry*> due;
+    timer->async_wait(
+        [this, timer, id, intervalMs, callback](const asio::error_code& ec)
         {
-            std::unique_lock<std::mutex> lock(mutex_);
-
-            // ① 惰性移除堆顶已取消条目
-            while (!queue_.empty() && queue_.top()->canceled)
+            // ① 取消或错误：清理定时器
+            if (ec)
             {
-                Entry* e = queue_.top();
-                queue_.pop();
-                entries_.erase(e->id);
-                delete e;
+                std::lock_guard<std::mutex> lock(mutex_);
+                timers_.erase(id);
+                return;
             }
-
-            // ② 队列为空：等待或退出
-            if (queue_.empty())
+            // ② 触发回调
+            if (callback)
             {
-                if (stopping_)
+                callback();
+            }
+            // ③ 周期性定时器重新调度（若仍被管理）
+            if (intervalMs > 0)
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                std::map<TimerId, std::shared_ptr<asio::steady_timer> >::iterator it =
+                    timers_.find(id);
+                if (it == timers_.end() || it->second != timer)
                 {
-                    break;
+                    return; // 已被取消
                 }
-                condition_.wait(lock);
-                continue;
-            }
-
-            // ③ 等待到最早到期
-            std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
-            Entry* top = queue_.top();
-            if (top->expiry > now)
-            {
-                condition_.wait_until(lock, top->expiry);
-                continue;
-            }
-
-            // ④ 取出所有到期条目，锁外触发
-            while (!queue_.empty() && queue_.top()->expiry <= now)
-            {
-                due.push_back(queue_.top());
-                queue_.pop();
-            }
-        }
-
-        // 锁外执行回调，避免回调中再次 AddTimer/Cancel 造成死锁
-        for (size_t i = 0; i < due.size(); ++i)
-        {
-            Entry* entry = due[i];
-            if (!entry->canceled && entry->callback)
-            {
-                entry->callback();
-            }
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (!stopping_ && !entry->canceled && entry->interval.count() > 0)
-            {
-                // 周期性定时器重新入队
-                entry->expiry = std::chrono::steady_clock::now() + entry->interval;
-                queue_.push(entry);
+                timer->expires_after(std::chrono::milliseconds(intervalMs));
+                Schedule(timer, id, intervalMs, callback);
             }
             else
             {
-                entries_.erase(entry->id);
-                delete entry;
+                std::lock_guard<std::mutex> lock(mutex_);
+                timers_.erase(id);
             }
-        }
-    }
-
-    // 清理剩余条目
-    std::lock_guard<std::mutex> lock(mutex_);
-    while (!queue_.empty())
-    {
-        Entry* e = queue_.top();
-        queue_.pop();
-        delete e;
-    }
-    entries_.clear();
+        });
 }
 
 } // namespace common

@@ -18,8 +18,11 @@ PROJECT    := $(notdir $(ROOT))
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -pthread
-# 本项目 Include + asio 子模块（Network 依赖）
-CPPFLAGS ?= -I$(ROOT)/Include -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE
+# 本项目 Include + 第三方子模块（asio / inih / ThreadPool）
+CPPFLAGS ?= -I$(ROOT)/Include \
+            -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE \
+            -I$(WS_ROOT)/Common/ThirdParty/inih \
+            -I$(WS_ROOT)/Common/ThirdParty/ThreadPool
 LDFLAGS  ?=
 LDLIBS   ?=
 
@@ -33,11 +36,19 @@ DEPS := $(OBJS:.o=.d)
 
 all: $(TARGET)
 
-$(TARGET): $(OBJS)
+# inih（第三方 C 源码，编译进 libCommon.a）
+INIH_SRC := $(WS_ROOT)/Common/ThirdParty/inih/ini.c
+INIH_OBJ := $(BUILD_DIR)/Common_ini.o
+
+$(TARGET): $(OBJS) $(INIH_OBJ)
 	ar rcs $@ $^
 
+$(INIH_OBJ): $(INIH_SRC)
+	@mkdir -p $(BUILD_DIR)
+	$(CC) -std=c11 -c $< -o $@
+
 .PHONY: objects
-objects: $(OBJS)
+objects: $(OBJS) $(INIH_OBJ)
 
 define compile-obj
 $(BUILD_DIR)/$(PROJECT)_$(subst /,_,$(patsubst $(SRC_DIR)/%.cpp,%,$(1))).o: $(1)
@@ -65,6 +76,6 @@ debug:
 	$(MAKE) all CXXFLAGS="-std=c++11 -Wall -Wextra -O0 -g -pthread"
 
 clean:
-	rm -rf $(OBJS) $(DEPS) $(TARGET) $(ROOT)/compile_commands.json
+	rm -rf $(OBJS) $(DEPS) $(INIH_OBJ) $(TARGET) $(ROOT)/compile_commands.json
 
 .PHONY: all debug run clean

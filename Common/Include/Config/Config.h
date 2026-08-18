@@ -36,9 +36,6 @@ public:
     void Clear();
 
 private:
-    // 去除首尾空白。
-    static std::string Trim(const std::string& text);
-
     std::map<std::string, std::string> values_;
 };
 

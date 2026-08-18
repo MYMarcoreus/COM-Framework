@@ -1,76 +1,54 @@
 #include "Config/Config.h"
 
-#include <cctype>
 #include <cstdlib>
-#include <fstream>
-#include <sstream>
+
+#include "ini.h"
 
 namespace common {
+
+namespace
+{
+/// inih 解析回调：将 (section, name, value) 扁平化为 "section.name" 存入 map。
+int IniHandler(void* user, const char* section, const char* name, const char* value)
+{
+    std::map<std::string, std::string>* values =
+        static_cast<std::map<std::string, std::string>*>(user);
+    std::string key = (section != nullptr && section[0] != '\0')
+                          ? (std::string(section) + "." + std::string(name))
+                          : std::string(name);
+    (*values)[key] = (value != nullptr) ? value : "";
+    return 1;
+}
+} // namespace
 
 /// @brief 创建配置管理器。
 Config::Config()
 {
 }
 
-/// @brief 从文件加载配置。
+/// @brief 从文件加载配置（基于 inih）。
 bool Config::LoadFile(const std::string& path)
 {
-    std::ifstream in(path.c_str());
-    if (!in.is_open())
+    std::map<std::string, std::string> loaded;
+    int result = ini_parse(path.c_str(), IniHandler, &loaded);
+    if (result != 0)
     {
         return false;
     }
-    std::stringstream buffer;
-    buffer << in.rdbuf();
-    return Parse(buffer.str());
+    values_.insert(loaded.begin(), loaded.end());
+    return true;
 }
 
-/// @brief 解析文本内容。
-///
-/// 支持空行、#/; 注释、[section] 分组与 key = value 键值对。
+/// @brief 解析文本内容（基于 inih）。
 bool Config::Parse(const std::string& content)
 {
-    std::string section;
-    std::istringstream stream(content);
-    std::string line;
-    while (std::getline(stream, line))
+    std::map<std::string, std::string> loaded;
+    int result = ini_parse_string(content.c_str(), IniHandler, &loaded);
+    if (result != 0)
     {
-        // ① 去空白，跳过空行与注释
-        std::string s = Trim(line);
-        if (s.empty() || s[0] == '#' || s[0] == ';')
-        {
-            continue;
-        }
-        // ② 解析 [section]
-        if (s[0] == '[' && s[s.size() - 1] == ']')
-        {
-            section = Trim(s.substr(1, s.size() - 2));
-            continue;
-        }
-        // ③ 解析 key = value
-        size_t eq = s.find('=');
-        if (eq == std::string::npos)
-        {
-            continue;
-        }
-        std::string key = Trim(s.substr(0, eq));
-        std::string value = Trim(s.substr(eq + 1));
-        if (key.empty())
-        {
-            continue;
-        }
-        // 去掉行内注释
-        size_t comment = value.find_first_of("#;");
-        if (comment != std::string::npos)
-        {
-            value = Trim(value.substr(0, comment));
-        }
-        if (!section.empty())
-        {
-            key = section + "." + key;
-        }
-        values_[key] = value;
+        return false;
     }
+    values_.insert(loaded.begin(), loaded.end());
     return true;
 }
 
@@ -114,22 +92,6 @@ bool Config::Has(const std::string& key) const
 void Config::Clear()
 {
     values_.clear();
-}
-
-/// @brief 去除首尾空白。
-std::string Config::Trim(const std::string& text)
-{
-    size_t begin = 0;
-    size_t end = text.size();
-    while (begin < end && std::isspace(static_cast<unsigned char>(text[begin])))
-    {
-        ++begin;
-    }
-    while (end > begin && std::isspace(static_cast<unsigned char>(text[end - 1])))
-    {
-        --end;
-    }
-    return text.substr(begin, end - begin);
 }
 
 } // namespace common

@@ -5,13 +5,13 @@
 #include <memory>
 #include <utility>
 
-#include "Thread/ThreadPool.h"
+#include "ThreadPool.h"
 
 namespace common {
 
 /// @brief 异步执行器。
 ///
-/// 基于线程池执行异步任务，通过 std::future 获取任务结果。
+/// 基于 progschj/ThreadPool 执行异步任务，通过 std::future 获取结果。
 class AsyncExecutor
 {
 public:
@@ -20,7 +20,7 @@ public:
 
     ~AsyncExecutor();
 
-    // 启动工作线程。
+    // 启动工作线程（惰性创建线程池）。
     bool Start();
 
     // 提交无返回值任务。
@@ -37,7 +37,8 @@ public:
     bool IsRunning() const;
 
 private:
-    ThreadPool pool_;
+    std::unique_ptr<::ThreadPool> pool_;
+    size_t threadCount_;
 };
 
 /// @brief 提交任务并返回 future。
@@ -50,12 +51,7 @@ template <typename Function>
 std::future<typename std::result_of<Function()>::type>
 AsyncExecutor::Submit(Function&& func)
 {
-    using ResultType = typename std::result_of<Function()>::type;
-    std::shared_ptr<std::packaged_task<ResultType()> > task(
-        new std::packaged_task<ResultType()>(std::forward<Function>(func)));
-    std::future<ResultType> future = task->get_future();
-    pool_.Submit([task]() { (*task)(); });
-    return future;
+    return pool_->enqueue(std::forward<Function>(func));
 }
 
 } // namespace common

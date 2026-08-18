@@ -1,15 +1,15 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <queue>
 #include <thread>
-#include <vector>
+
+#include "asio.hpp"
 
 namespace common {
 
@@ -22,10 +22,10 @@ using TimerId = std::uint64_t;
 /// @brief 定时器回调。
 using TimerCallback = std::function<void()>;
 
-/// @brief 定时器管理器。
+/// @brief 定时器管理器（基于 asio::steady_timer）。
 ///
-/// 在独立线程运行，支持一次性与周期性定时器。
-/// 定时器回调在管理器线程内执行，应尽快返回。
+/// 使用 asio::io_context 在独立线程运行，支持一次性与周期性定时器。
+/// 定时器回调在 io 线程内执行，应尽快返回。
 class TimerManager
 {
 public:
@@ -52,39 +52,21 @@ public:
     bool IsRunning() const;
 
 private:
-    struct Entry
-    {
-        TimerId id;
-        std::chrono::steady_clock::time_point expiry;
-        std::chrono::milliseconds interval; // 0 表示一次性
-        TimerCallback callback;
-        bool canceled;
-    };
-
-    // 最小堆：最早到期的定时器在堆顶。
-    struct EntryCompare
-    {
-        bool operator()(const Entry* a, const Entry* b) const
-        {
-            return a->expiry > b->expiry;
-        }
-    };
+    // 调度一次异步等待（周期定时器到期后重新调度）。
+    void Schedule(std::shared_ptr<asio::steady_timer> timer, TimerId id,
+                  std::int64_t intervalMs, const TimerCallback& callback);
 
     // 添加定时器。
     TimerId AddTimerInternal(std::int64_t delayMs, std::int64_t intervalMs,
                              const TimerCallback& callback);
 
-    // 定时器线程入口。
-    void ThreadMain();
-
+    asio::io_context io_;
+    std::unique_ptr<asio::executor_work_guard<asio::io_context::executor_type> > work_;
+    std::map<TimerId, std::shared_ptr<asio::steady_timer> > timers_;
     mutable std::mutex mutex_;
-    std::condition_variable condition_;
-    std::priority_queue<Entry*, std::vector<Entry*>, EntryCompare> queue_;
-    std::map<TimerId, Entry*> entries_;
     std::thread thread_;
     TimerId nextId_;
-    bool running_;
-    bool stopping_;
+    std::atomic<bool> running_;
 };
 
 } // namespace common
