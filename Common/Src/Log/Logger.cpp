@@ -42,11 +42,11 @@ LogLevel CLogger::Level() const
 }
 
 /// @brief 启用文件输出。
-bool CLogger::OpenFile(const std::string& path)
+bool CLogger::OpenFile(const std::string& strPath)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_file.close();
-    m_file.open(path.c_str(), std::ios::out | std::ios::app);
+    m_file.open(strPath.c_str(), std::ios::out | std::ios::app);
     if (!m_file.is_open())
     {
         m_bFileEnabled = false;
@@ -60,70 +60,70 @@ bool CLogger::OpenFile(const std::string& path)
 ///
 /// ① 过滤低于当前级别的日志。
 /// ② 格式化后输出到控制台与文件（可选）。
-void CLogger::Log(LogLevel level, const std::string& message)
+void CLogger::Log(LogLevel level, const std::string& strMessage)
 {
     // ① 级别过滤
-    LogLevel current;
+    LogLevel levelCurrent;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        current = m_level;
+        levelCurrent = m_level;
     }
-    if (level < current || level == LogLevel::kOff)
+    if (level < levelCurrent || level == LogLevel::kOff)
     {
         return;
     }
     // ② 格式化并输出
-    std::string line = "[" + FormatTime() + "] [" + LevelName(level) + "] " + message + "\n";
+    std::string strLine = "[" + FormatTime() + "] [" + LevelName(level) + "] " + strMessage + "\n";
     std::lock_guard<std::mutex> lock(m_mutex);
-    std::fwrite(line.c_str(), 1, line.size(), stdout);
+    std::fwrite(strLine.c_str(), 1, strLine.size(), stdout);
     std::fflush(stdout);
     if (m_bFileEnabled && m_file.is_open())
     {
-        m_file << line;
+        m_file << strLine;
         m_file.flush();
     }
 }
 
 /// @brief 输出跟踪日志。
-void CLogger::Trace(const std::string& message)
+void CLogger::Trace(const std::string& strMessage)
 {
-    Log(LogLevel::kTrace, message);
+    Log(LogLevel::kTrace, strMessage);
 }
 
 /// @brief 输出调试日志。
-void CLogger::Debug(const std::string& message)
+void CLogger::Debug(const std::string& strMessage)
 {
-    Log(LogLevel::kDebug, message);
+    Log(LogLevel::kDebug, strMessage);
 }
 
 /// @brief 输出信息日志。
-void CLogger::Info(const std::string& message)
+void CLogger::Info(const std::string& strMessage)
 {
-    Log(LogLevel::kInfo, message);
+    Log(LogLevel::kInfo, strMessage);
 }
 
 /// @brief 输出警告日志。
-void CLogger::Warn(const std::string& message)
+void CLogger::Warn(const std::string& strMessage)
 {
-    Log(LogLevel::kWarn, message);
+    Log(LogLevel::kWarn, strMessage);
 }
 
 /// @brief 输出错误日志。
-void CLogger::Error(const std::string& message)
+void CLogger::Error(const std::string& strMessage)
 {
-    Log(LogLevel::kError, message);
+    Log(LogLevel::kError, strMessage);
 }
 
 /// @brief 生成时间戳字符串。
 std::string CLogger::FormatTime()
 {
-    std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
-    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::chrono::system_clock::time_point tmNow = std::chrono::system_clock::now();
+    std::time_t nTime = std::chrono::system_clock::to_time_t(tmNow);
     std::tm tmBuf;
-    localtime_r(&t, &tmBuf);
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tmBuf);
-    return std::string(buf);
+    localtime_r(&nTime, &tmBuf);
+    char szBuf[32];
+    std::strftime(szBuf, sizeof(szBuf), "%Y-%m-%d %H:%M:%S", &tmBuf);
+    return std::string(szBuf);
 }
 
 /// @brief 返回级别名称。

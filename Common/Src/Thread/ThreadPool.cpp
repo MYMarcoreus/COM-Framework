@@ -4,9 +4,9 @@ namespace common {
 
 /// @brief 创建线程池。
 ///
-/// @param threadCount 工作线程数量。
-CThreadPool::CThreadPool(size_t threadCount)
-    : m_nThreadCount(threadCount), m_bRunning(false), m_bStopping(false)
+/// @param nThreadCount 工作线程数量。
+CThreadPool::CThreadPool(size_t nThreadCount)
+    : m_nThreadCount(nThreadCount), m_bRunning(false), m_bStopping(false)
 {
 }
 
@@ -40,9 +40,9 @@ bool CThreadPool::Start()
 /// @brief 提交任务。
 ///
 /// 将任务加入队列并唤醒一个空闲工作线程。
-bool CThreadPool::Submit(const CTask& task)
+bool CThreadPool::Submit(const CTask& fnTask)
 {
-    if (!task)
+    if (!fnTask)
     {
         return false;
     }
@@ -52,7 +52,7 @@ bool CThreadPool::Submit(const CTask& task)
         {
             return false;
         }
-        m_dequeTasks.push_back(task);
+        m_dequeTasks.push_back(fnTask);
     }
     m_condition.notify_one();
     return true;
@@ -102,7 +102,7 @@ void CThreadPool::WorkerLoop()
 {
     while (true)
     {
-        CTask task;
+        CTask fnTask;
         {
             std::unique_lock<std::mutex> lock(m_mutex);
             m_condition.wait(lock, [this]() { return m_bStopping || !m_dequeTasks.empty(); });
@@ -110,12 +110,12 @@ void CThreadPool::WorkerLoop()
             {
                 break;
             }
-            task = m_dequeTasks.front();
+            fnTask = m_dequeTasks.front();
             m_dequeTasks.pop_front();
         }
-        if (task)
+        if (fnTask)
         {
-            task();
+            fnTask();
         }
     }
 }

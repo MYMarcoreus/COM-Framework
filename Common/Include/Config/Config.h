@@ -15,22 +15,22 @@ public:
     CConfig();
 
     // 从文件加载（追加合并，后加载覆盖先加载）。
-    bool LoadFile(const std::string& path);
+    bool LoadFile(const std::string& strPath);
 
     // 解析文本内容。
-    bool Parse(const std::string& content);
+    bool Parse(const std::string& strContent);
 
     // 读取字符串。
-    std::string GetString(const std::string& key, const std::string& def = "") const;
+    std::string GetString(const std::string& strKey, const std::string& strDef = "") const;
 
     // 读取整数。
-    int GetInt(const std::string& key, int def = 0) const;
+    int GetInt(const std::string& strKey, int nDef = 0) const;
 
     // 读取布尔值。
-    bool GetBool(const std::string& key, bool def = false) const;
+    bool GetBool(const std::string& strKey, bool bDef = false) const;
 
     // 是否包含键。
-    bool Has(const std::string& key) const;
+    bool Has(const std::string& strKey) const;
 
     // 清空配置。
     void Clear();

@@ -34,17 +34,17 @@ public:
     LogLevel Level() const;
 
     // 启用文件输出。
-    bool OpenFile(const std::string& path);
+    bool OpenFile(const std::string& strPath);
 
     // 输出一条日志。
-    void Log(LogLevel level, const std::string& message);
+    void Log(LogLevel level, const std::string& strMessage);
 
     // 便捷方法。
-    void Trace(const std::string& message);
-    void Debug(const std::string& message);
-    void Info(const std::string& message);
-    void Warn(const std::string& message);
-    void Error(const std::string& message);
+    void Trace(const std::string& strMessage);
+    void Debug(const std::string& strMessage);
+    void Info(const std::string& strMessage);
+    void Warn(const std::string& strMessage);
+    void Error(const std::string& strMessage);
 
 private:
     CLogger();
