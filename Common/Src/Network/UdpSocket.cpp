@@ -23,20 +23,20 @@ CUdpSocket::~CUdpSocket()
 /// @param dataCb 数据到达回调。
 ///
 /// @return 绑定成功返回 true。
-bool CUdpSocket::Bind(uint16_t port, const DataCallback& dataCb)
+bool CUdpSocket::Bind(uint16_t nPort, const DataCallback& fnData)
 {
     if (m_bRunning.load())
     {
         return false;
     }
-    m_fnData = dataCb;
+    m_fnData = fnData;
     asio::error_code ec;
     static_cast<void>(m_socket.open(asio::ip::udp::v4(), ec));
     if (ec)
     {
         return false;
     }
-    static_cast<void>(m_socket.bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), port), ec));
+    static_cast<void>(m_socket.bind(asio::ip::udp::endpoint(asio::ip::udp::v4(), nPort), ec));
     if (ec)
     {
         return false;
@@ -57,31 +57,31 @@ bool CUdpSocket::Bind(uint16_t port, const DataCallback& dataCb)
 /// 解析目标地址后投递到事件循环线程发送，线程安全。
 ///
 /// @return 已运行且参数合法时返回 true。
-bool CUdpSocket::SendTo(const std::string& host, uint16_t port, const char* data, size_t len)
+bool CUdpSocket::SendTo(const std::string& strHost, uint16_t nPort, const char* pData, size_t nLen)
 {
-    if (!m_bRunning.load() || data == nullptr || len == 0)
+    if (!m_bRunning.load() || pData == nullptr || nLen == 0)
     {
         return false;
     }
-    std::string payload(data, len);
-    m_resolver.async_resolve(host, std::to_string(port),
-        [this, payload](const asio::error_code& ec,
-                        asio::ip::udp::resolver::results_type results)
+    std::string strPayload(pData, nLen);
+    m_resolver.async_resolve(strHost, std::to_string(nPort),
+        [this, strPayload](const asio::error_code& ec,
+                           asio::ip::udp::resolver::results_type results)
         {
             if (ec || results.empty())
             {
                 return;
             }
-            asio::ip::udp::endpoint target = *results.begin();
+            asio::ip::udp::endpoint endpointTarget = *results.begin();
             asio::post(m_io,
-                [this, payload, target]()
+                [this, strPayload, endpointTarget]()
                 {
                     if (!m_socket.is_open())
                     {
                         return;
                     }
                     asio::error_code ignored;
-                    static_cast<void>(m_socket.send_to(asio::buffer(payload), target, 0, ignored));
+                    static_cast<void>(m_socket.send_to(asio::buffer(strPayload), endpointTarget, 0, ignored));
                 });
         });
     return true;
@@ -132,14 +132,14 @@ void CUdpSocket::StartReceive()
         return;
     }
     m_socket.async_receive_from(asio::buffer(m_vecRecvBuffer), m_remoteEndpoint,
-        [this](const asio::error_code& ec, size_t bytes)
+        [this](const asio::error_code& ec, size_t nBytes)
         {
-            HandleReceive(ec, bytes);
+            HandleReceive(ec, nBytes);
         });
 }
 
 /// @brief 处理接收完成。
-void CUdpSocket::HandleReceive(const asio::error_code& ec, size_t bytes)
+void CUdpSocket::HandleReceive(const asio::error_code& ec, size_t nBytes)
 {
     if (ec)
     {
@@ -151,9 +151,9 @@ void CUdpSocket::HandleReceive(const asio::error_code& ec, size_t bytes)
     }
     if (m_fnData)
     {
-        std::string from = m_remoteEndpoint.address().to_string() + ":" +
-                           std::to_string(m_remoteEndpoint.port());
-        m_fnData(m_vecRecvBuffer.data(), bytes, from);
+        std::string strFrom = m_remoteEndpoint.address().to_string() + ":" +
+                              std::to_string(m_remoteEndpoint.port());
+        m_fnData(m_vecRecvBuffer.data(), nBytes, strFrom);
     }
     if (m_bRunning.load() && m_socket.is_open())
     {

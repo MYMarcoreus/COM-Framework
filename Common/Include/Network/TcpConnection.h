@@ -32,7 +32,7 @@ public:
     using CloseCallback = std::function<void(const Ptr& conn)>;
 
     // 创建连接。
-    CTcpConnection(asio::io_context& io, ConnectionId id, asio::ip::tcp::socket socket);
+    CTcpConnection(asio::io_context& io, ConnectionId nId, asio::ip::tcp::socket socket);
 
     ~CTcpConnection();
 
@@ -43,13 +43,13 @@ public:
     const std::string& PeerAddress() const;
 
     // 设置数据与关闭回调。
-    void SetCallbacks(const DataCallback& dataCallback, const CloseCallback& closeCallback);
+    void SetCallbacks(const DataCallback& fnDataCallback, const CloseCallback& fnCloseCallback);
 
     // 开始异步读取。
     void StartRead();
 
     // 发送数据（线程安全）。
-    void Send(const char* data, size_t len);
+    void Send(const char* pData, size_t nLen);
 
     // 关闭连接（线程安全）。
     void Close();
@@ -62,16 +62,16 @@ private:
     void DoRead();
 
     // 处理读完成。
-    void HandleRead(const asio::error_code& ec, size_t bytes);
+    void HandleRead(const asio::error_code& ec, size_t nBytes);
 
     // 追加待发送数据并启动写。
-    void AppendWrite(const std::string& data);
+    void AppendWrite(const std::string& strData);
 
     // 发起一次异步写。
     void DoWrite();
 
     // 处理写完成。
-    void HandleWrite(const asio::error_code& ec, size_t bytes);
+    void HandleWrite(const asio::error_code& ec, size_t nBytes);
 
     // 在 io 线程内关闭连接。
     void CloseOnIoThread();

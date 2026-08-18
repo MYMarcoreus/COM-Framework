@@ -13,19 +13,20 @@ const size_t kReadSize = 4096;
 /// @param io 事件循环（io_context）。
 /// @param id 连接标识。
 /// @param socket 已建立连接的 socket（从 acceptor 移交）。
-CTcpConnection::CTcpConnection(asio::io_context& io, ConnectionId id, asio::ip::tcp::socket socket)
+CTcpConnection::CTcpConnection(asio::io_context& io, ConnectionId nId, asio::ip::tcp::socket socket)
     : m_io(io),
-      m_id(id),
+      m_id(nId),
       m_socket(std::move(socket)),
       m_vecReadBuffer(kReadSize),
       m_bWriting(false),
       m_bClosed(false)
 {
     asio::error_code ec;
-    asio::ip::tcp::endpoint peer = m_socket.remote_endpoint(ec);
+    asio::ip::tcp::endpoint endpointPeer = m_socket.remote_endpoint(ec);
     if (!ec)
     {
-        m_strPeerAddress = peer.address().to_string() + ":" + std::to_string(peer.port());
+        m_strPeerAddress = endpointPeer.address().to_string() + ":" +
+                           std::to_string(endpointPeer.port());
     }
 }
 
@@ -52,10 +53,10 @@ const std::string& CTcpConnection::PeerAddress() const
 ///
 /// @param dataCallback 收到数据时回调。
 /// @param closeCallback 连接异常关闭时回调。
-void CTcpConnection::SetCallbacks(const DataCallback& dataCallback, const CloseCallback& closeCallback)
+void CTcpConnection::SetCallbacks(const DataCallback& fnDataCallback, const CloseCallback& fnCloseCallback)
 {
-    m_fnDataCallback = dataCallback;
-    m_fnCloseCallback = closeCallback;
+    m_fnDataCallback = fnDataCallback;
+    m_fnCloseCallback = fnCloseCallback;
 }
 
 /// @brief 开始异步读取。
@@ -70,15 +71,15 @@ void CTcpConnection::StartRead()
 ///
 /// @param data 数据起始指针。
 /// @param len 数据长度。
-void CTcpConnection::Send(const char* data, size_t len)
+void CTcpConnection::Send(const char* pData, size_t nLen)
 {
     if (m_bClosed.load())
     {
         return;
     }
-    std::string payload(data, len);
+    std::string strPayload(pData, nLen);
     Ptr self = shared_from_this();
-    asio::post(m_io, [self, payload]() { self->AppendWrite(payload); });
+    asio::post(m_io, [self, strPayload]() { self->AppendWrite(strPayload); });
 }
 
 /// @brief 关闭连接。
@@ -109,9 +110,9 @@ void CTcpConnection::DoRead()
     }
     Ptr self = shared_from_this();
     m_socket.async_read_some(asio::buffer(m_vecReadBuffer),
-        [self](const asio::error_code& ec, size_t bytes)
+        [self](const asio::error_code& ec, size_t nBytes)
         {
-            self->HandleRead(ec, bytes);
+            self->HandleRead(ec, nBytes);
         });
 }
 
@@ -119,16 +120,16 @@ void CTcpConnection::DoRead()
 ///
 /// ① 出错或对端关闭时进入关闭流程。
 /// ② 将数据写入输入缓冲并通知上层。
-void CTcpConnection::HandleRead(const asio::error_code& ec, size_t bytes)
+void CTcpConnection::HandleRead(const asio::error_code& ec, size_t nBytes)
 {
     // ① 出错或对端关闭
-    if (ec || bytes == 0)
+    if (ec || nBytes == 0)
     {
         HandleError(ec);
         return;
     }
     // ② 追加数据并通知上层
-    m_inputBuffer.Append(&m_vecReadBuffer[0], bytes);
+    m_inputBuffer.Append(&m_vecReadBuffer[0], nBytes);
     if (m_fnDataCallback)
     {
         m_fnDataCallback(shared_from_this(), m_inputBuffer.Peek(), m_inputBuffer.Readable());
@@ -138,13 +139,13 @@ void CTcpConnection::HandleRead(const asio::error_code& ec, size_t bytes)
 }
 
 /// @brief 追加待发送数据并启动写。
-void CTcpConnection::AppendWrite(const std::string& data)
+void CTcpConnection::AppendWrite(const std::string& strData)
 {
     if (m_bClosed.load())
     {
         return;
     }
-    m_strPendingOutput.append(data);
+    m_strPendingOutput.append(strData);
     if (!m_bWriting.load())
     {
         DoWrite();
@@ -157,21 +158,21 @@ void CTcpConnection::DoWrite()
     m_bWriting.store(true);
     Ptr self = shared_from_this();
     m_socket.async_write_some(asio::buffer(m_strPendingOutput),
-        [self](const asio::error_code& ec, size_t bytes)
+        [self](const asio::error_code& ec, size_t nBytes)
         {
-            self->HandleWrite(ec, bytes);
+            self->HandleWrite(ec, nBytes);
         });
 }
 
 /// @brief 处理写完成。
-void CTcpConnection::HandleWrite(const asio::error_code& ec, size_t bytes)
+void CTcpConnection::HandleWrite(const asio::error_code& ec, size_t nBytes)
 {
     if (ec)
     {
         HandleError(ec);
         return;
     }
-    m_strPendingOutput.erase(0, bytes);
+    m_strPendingOutput.erase(0, nBytes);
     if (!m_strPendingOutput.empty())
     {
         DoWrite();

@@ -27,19 +27,19 @@ CTcpClient::~CTcpClient()
 /// @param closeCb 连接关闭回调。
 ///
 /// @return 成功发起连接返回 true。
-bool CTcpClient::Connect(const std::string& host, uint16_t port,
-                        const ConnectCallback& connectCb, const DataCallback& dataCb,
-                        const CloseCallback& closeCb)
+bool CTcpClient::Connect(const std::string& strHost, uint16_t nPort,
+                        const ConnectCallback& fnConnect, const DataCallback& fnData,
+                        const CloseCallback& fnClose)
 {
     if (m_bRunning.load())
     {
         return false; // 已在连接中
     }
-    m_strHost = host;
-    m_nPort = port;
-    m_fnConnect = connectCb;
-    m_fnData = dataCb;
-    m_fnClose = closeCb;
+    m_strHost = strHost;
+    m_nPort = nPort;
+    m_fnConnect = fnConnect;
+    m_fnData = fnData;
+    m_fnClose = fnClose;
     m_bConnected.store(false);
     m_bCloseNotified.store(false);
     m_bRunning.store(true);
@@ -52,14 +52,14 @@ bool CTcpClient::Connect(const std::string& host, uint16_t port,
 /// 投递到事件循环线程写入，线程安全。
 ///
 /// @return 已连接时返回 true。
-bool CTcpClient::Send(const char* data, size_t len)
+bool CTcpClient::Send(const char* pData, size_t nLen)
 {
-    if (!m_bConnected.load() || data == nullptr || len == 0)
+    if (!m_bConnected.load() || pData == nullptr || nLen == 0)
     {
         return false;
     }
-    std::string payload(data, len);
-    asio::post(m_io, [this, payload]() { AppendWrite(payload); });
+    std::string strPayload(pData, nLen);
+    asio::post(m_io, [this, strPayload]() { AppendWrite(strPayload); });
     return true;
 }
 
@@ -171,7 +171,7 @@ void CTcpClient::DoRead()
 }
 
 /// @brief 处理读完成。
-void CTcpClient::HandleRead(const asio::error_code& ec, size_t bytes)
+void CTcpClient::HandleRead(const asio::error_code& ec, size_t nBytes)
 {
     if (ec)
     {
@@ -181,7 +181,7 @@ void CTcpClient::HandleRead(const asio::error_code& ec, size_t bytes)
         }
         return;
     }
-    m_inputBuffer.Append(m_vecReadBuffer.data(), bytes);
+    m_inputBuffer.Append(m_vecReadBuffer.data(), nBytes);
     if (m_fnData)
     {
         m_fnData(m_inputBuffer.Peek(), m_inputBuffer.Readable());
@@ -195,15 +195,15 @@ void CTcpClient::HandleRead(const asio::error_code& ec, size_t bytes)
 }
 
 /// @brief 追加待发送数据并启动写。
-void CTcpClient::AppendWrite(const std::string& data)
+void CTcpClient::AppendWrite(const std::string& strData)
 {
     if (!m_socket.is_open())
     {
         return;
     }
-    bool writing = !m_strPendingOutput.empty();
-    m_strPendingOutput.append(data);
-    if (!writing)
+    bool bWriting = !m_strPendingOutput.empty();
+    m_strPendingOutput.append(strData);
+    if (!bWriting)
     {
         DoWrite();
     }
@@ -213,14 +213,14 @@ void CTcpClient::AppendWrite(const std::string& data)
 void CTcpClient::DoWrite()
 {
     m_socket.async_write_some(asio::buffer(m_strPendingOutput),
-        [this](const asio::error_code& ec, size_t bytes)
+        [this](const asio::error_code& ec, size_t nBytes)
         {
-            HandleWrite(ec, bytes);
+            HandleWrite(ec, nBytes);
         });
 }
 
 /// @brief 处理写完成。
-void CTcpClient::HandleWrite(const asio::error_code& ec, size_t bytes)
+void CTcpClient::HandleWrite(const asio::error_code& ec, size_t nBytes)
 {
     if (ec)
     {
@@ -230,7 +230,7 @@ void CTcpClient::HandleWrite(const asio::error_code& ec, size_t bytes)
         }
         return;
     }
-    m_strPendingOutput.erase(0, bytes);
+    m_strPendingOutput.erase(0, nBytes);
     if (!m_strPendingOutput.empty())
     {
         DoWrite();

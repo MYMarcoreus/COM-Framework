@@ -34,11 +34,11 @@ public:
     ~CTcpClient();
 
     // 异步连接远程服务器。
-    bool Connect(const std::string& host, uint16_t port, const ConnectCallback& connectCb,
-                 const DataCallback& dataCb, const CloseCallback& closeCb);
+    bool Connect(const std::string& strHost, uint16_t nPort, const ConnectCallback& fnConnect,
+                 const DataCallback& fnData, const CloseCallback& fnClose);
 
     // 发送数据（线程安全）。
-    bool Send(const char* data, size_t len);
+    bool Send(const char* pData, size_t nLen);
 
     // 关闭连接（线程安全）。
     void Close();
@@ -66,10 +66,10 @@ private:
     void DoRead();
 
     // 处理读完成。
-    void HandleRead(const asio::error_code& ec, size_t bytes);
+    void HandleRead(const asio::error_code& ec, size_t nBytes);
 
     // 追加待发送数据并启动写。
-    void AppendWrite(const std::string& data);
+    void AppendWrite(const std::string& strData);
 
     // 发起异步写。
     void DoWrite();

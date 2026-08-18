@@ -26,11 +26,11 @@ public:
 
     ~CUdpSocket();
 
-    // 绑定本地端口并开始接收（port=0 表示由系统分配）。
-    bool Bind(uint16_t port, const DataCallback& dataCb);
+    // 绑定本地端口并开始接收（nPort=0 表示由系统分配）。
+    bool Bind(uint16_t nPort, const DataCallback& fnData);
 
     // 向指定地址发送数据报（线程安全）。
-    bool SendTo(const std::string& host, uint16_t port, const char* data, size_t len);
+    bool SendTo(const std::string& strHost, uint16_t nPort, const char* pData, size_t nLen);
 
     // 本地绑定端口（未绑定时返回 0）。
     uint16_t LocalPort() const;
@@ -49,7 +49,7 @@ private:
     void StartReceive();
 
     // 处理接收完成。
-    void HandleReceive(const asio::error_code& ec, size_t bytes);
+    void HandleReceive(const asio::error_code& ec, size_t nBytes);
 
     asio::io_context m_io;
     asio::ip::udp::socket m_socket;

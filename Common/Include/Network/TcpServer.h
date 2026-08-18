@@ -38,17 +38,17 @@ public:
     ~CTcpServer();
 
     // 启动服务器并监听端口。
-    bool Start(uint16_t port, const AcceptCallback& acceptCb,
-               const DataCallback& dataCb, const CloseCallback& closeCb);
+    bool Start(uint16_t nPort, const AcceptCallback& fnAccept,
+               const DataCallback& fnData, const CloseCallback& fnClose);
 
     // 停止服务器，等待事件循环线程退出。
     void Stop();
 
     // 向指定连接发送数据。
-    bool Send(ConnectionId id, const char* data, size_t len);
+    bool Send(ConnectionId nId, const char* pData, size_t nLen);
 
     // 关闭指定连接。
-    void Close(ConnectionId id);
+    void Close(ConnectionId nId);
 
     // 当前监听端口。
     uint16_t ListeningPort() const;
@@ -66,10 +66,10 @@ public:
     uint64_t TotalClosed() const;
 
     // 指定连接是否存在。
-    bool HasConnection(ConnectionId id) const;
+    bool HasConnection(ConnectionId nId) const;
 
     // 指定连接的对端地址；连接不存在时返回空串。
-    std::string PeerAddress(ConnectionId id) const;
+    std::string PeerAddress(ConnectionId nId) const;
 
 private:
     // 事件循环线程入口。
@@ -82,10 +82,10 @@ private:
     void HandleAccept(const asio::error_code& ec, asio::ip::tcp::socket socket);
 
     // 连接数据回调。
-    void HandleData(const CTcpConnection::Ptr& conn, const char* data, size_t len);
+    void HandleData(const CTcpConnection::Ptr& pConn, const char* pData, size_t nLen);
 
     // 连接关闭回调。
-    void HandleClose(const CTcpConnection::Ptr& conn);
+    void HandleClose(const CTcpConnection::Ptr& pConn);
 
     // 在 io 线程内执行关闭流程。
     void ShutdownOnIoThread();
