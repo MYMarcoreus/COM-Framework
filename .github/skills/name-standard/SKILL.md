@@ -29,11 +29,16 @@ description: 本项目命名规范：以 MFC（Microsoft Foundation Classes）�
 
 ## 3. 文件命名
 
-- 全小写 + 下划线（Google，MFC 无统一约定）：
-  - `tcp_server.h` / `tcp_server.cpp` / `my_application.h`
+- **大驼峰法**（PascalCase，每个单词首字母大写）：
+  - `TcpServer.h` / `TcpServer.cpp` / `MyApplication.h` / `EventDispatcher.cpp`
 - 头文件后缀 `.h`，源文件后缀 `.cpp`（本项目不使用 `.cc`）。
-- 一个文件通常对应一个主类型，文件基名与主类型小写化一致：
-  - `CMyApplication` → `my_application.h`
+- 文件基名 = 主类型名（类名去 `C` 前缀，接口保留 `I` 前缀）：
+  - `CTcpServer` → `TcpServer.h`
+  - `CMyApplication` → `MyApplication.h`
+  - `INetwork` → `INetwork.h`
+  - `CEventDispatcher` → `EventDispatcher.h`
+- 结构体 / 别名文件按类型名大驼峰命名（无前缀）：
+  - `EventTypes.h`、`NetworkTypes.h`、`Types.h`
 
 ---
 

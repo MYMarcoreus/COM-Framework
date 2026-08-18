@@ -8,7 +8,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "Protocol/demo_protocol.h"
+#include "Protocol/DemoProtocol.h"
 
 namespace
 {

@@ -37,7 +37,7 @@ COMMON_LIB := $(WS_ROOT)/build/libCommon.a
 SERVER_SRCS := $(filter-out $(SRC_DIR)/client_main.cpp,$(shell find $(SRC_DIR) -name '*.cpp' | sort))
 CLIENT_SRCS := $(SRC_DIR)/client_main.cpp
 # 客户端复用的协议实现源码
-PROTOCOL_SRCS := $(SRC_DIR)/Protocol/demo_protocol.cpp
+PROTOCOL_SRCS := $(SRC_DIR)/Protocol/DemoProtocol.cpp
 
 SERVER_OBJS := $(foreach src,$(SERVER_SRCS),$(BUILD_DIR)/$(PROJECT)_$(subst /,_,$(patsubst $(SRC_DIR)/%.cpp,%,$(src))).o)
 CLIENT_OBJS := $(foreach src,$(CLIENT_SRCS),$(BUILD_DIR)/$(PROJECT)_$(subst /,_,$(patsubst $(SRC_DIR)/%.cpp,%,$(src))).o)
