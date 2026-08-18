@@ -14,13 +14,13 @@ CBuffer::CBuffer(size_t initialSize)
 
 /// @brief 追加数据到缓冲区可写区。
 ///
-/// @param data 数据起始指针。
-/// @param len 数据长度。
-void CBuffer::Append(const char* data, size_t len)
+/// @param pData 数据起始指针。
+/// @param nLen 数据长度。
+void CBuffer::Append(const char* pData, size_t nLen)
 {
-    EnsureWritable(len);
-    std::memcpy(BeginWrite(), data, len);
-    m_nWriteIndex += len;
+    EnsureWritable(nLen);
+    std::memcpy(BeginWrite(), pData, nLen);
+    m_nWriteIndex += nLen;
 }
 
 /// @brief 追加字符串到缓冲区可写区。
@@ -55,17 +55,17 @@ char* CBuffer::BeginWrite()
     return &m_vecData[m_nWriteIndex];
 }
 
-/// @brief 消费可读区前 len 字节。
+/// @brief 消费可读区前 nLen 字节。
 ///
-/// @param len 要消费的字节数。
-void CBuffer::Retrieve(size_t len)
+/// @param nLen 要消费的字节数。
+void CBuffer::Retrieve(size_t nLen)
 {
-    if (len >= Readable())
+    if (nLen >= Readable())
     {
         RetrieveAll();
         return;
     }
-    m_nReadIndex += len;
+    m_nReadIndex += nLen;
 }
 
 /// @brief 清空缓冲区。
@@ -87,22 +87,22 @@ size_t CBuffer::Capacity() const
     return m_vecData.size();
 }
 
-/// @brief 确保可写空间不小于 len。
+/// @brief 确保可写空间不小于 nLen。
 ///
 /// ① 可写空间足够时直接返回。
 /// ② 整理已消费空间后够用时搬移数据。
 /// ③ 否则扩容。
 ///
-/// @param len 需要的可写空间。
-void CBuffer::EnsureWritable(size_t len)
+/// @param nLen 需要的可写空间。
+void CBuffer::EnsureWritable(size_t nLen)
 {
     // ① 可写空间足够
-    if (Writable() >= len)
+    if (Writable() >= nLen)
     {
         return;
     }
     // ② 整理已消费空间
-    if (m_nReadIndex + Writable() >= len)
+    if (m_nReadIndex + Writable() >= nLen)
     {
         std::memmove(&m_vecData[0], Peek(), Readable());
         m_nWriteIndex = Readable();
@@ -110,14 +110,14 @@ void CBuffer::EnsureWritable(size_t len)
         return;
     }
     // ③ 扩容
-    size_t newSize = m_vecData.size() * 2;
-    while (newSize - m_nWriteIndex < len)
+    size_t nNewSize = m_vecData.size() * 2;
+    while (nNewSize - m_nWriteIndex < nLen)
     {
-        newSize *= 2;
+        nNewSize *= 2;
     }
-    std::vector<char> newData(newSize);
-    std::memcpy(&newData[0], Peek(), Readable());
-    m_vecData.swap(newData);
+    std::vector<char> vecNewData(nNewSize);
+    std::memcpy(&vecNewData[0], Peek(), Readable());
+    m_vecData.swap(vecNewData);
     m_nWriteIndex = Readable();
     m_nReadIndex = 0;
 }

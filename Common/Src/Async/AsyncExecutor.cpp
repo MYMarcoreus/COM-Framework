@@ -4,8 +4,8 @@ namespace common {
 
 /// @brief 创建异步执行器。
 ///
-/// @param threadCount 工作线程数量。
-CAsyncExecutor::CAsyncExecutor(size_t threadCount) : m_nThreadCount(threadCount)
+/// @param nThreadCount 工作线程数量。
+CAsyncExecutor::CAsyncExecutor(size_t nThreadCount) : m_nThreadCount(nThreadCount)
 {
 }
 
@@ -31,13 +31,13 @@ bool CAsyncExecutor::Start()
 }
 
 /// @brief 提交无返回值任务。
-bool CAsyncExecutor::Post(const std::function<void()>& task)
+bool CAsyncExecutor::Post(const std::function<void()>& fnTask)
 {
     if (!m_pPool)
     {
         return false;
     }
-    return m_pPool->Submit(task);
+    return m_pPool->Submit(fnTask);
 }
 
 /// @brief 停止并等待任务完成。

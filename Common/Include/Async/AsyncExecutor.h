@@ -35,7 +35,7 @@ public:
     // 成功完成并触发续接。
     void CompleteSuccess(const T& value)
     {
-        std::vector<Continuation> cbs;
+        std::vector<Continuation> vecCbs;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             if (m_bReady)
@@ -44,14 +44,14 @@ public:
             }
             m_bReady = true;
             m_pValue = std::make_shared<T>(value);
-            cbs.swap(m_vecContinuations);
+            vecCbs.swap(m_vecContinuations);
         }
         m_promise.set_value(value);
-        for (size_t i = 0; i < cbs.size(); ++i)
+        for (size_t i = 0; i < vecCbs.size(); ++i)
         {
-            if (cbs[i])
+            if (vecCbs[i])
             {
-                cbs[i](m_pValue.get(), nullptr);
+                vecCbs[i](m_pValue.get(), nullptr);
             }
         }
     }
@@ -59,7 +59,7 @@ public:
     // 异常完成并触发续接。
     void CompleteFailure(const std::exception_ptr& eptr)
     {
-        std::vector<Continuation> cbs;
+        std::vector<Continuation> vecCbs;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             if (m_bReady)
@@ -68,40 +68,40 @@ public:
             }
             m_bReady = true;
             m_exception = eptr;
-            cbs.swap(m_vecContinuations);
+            vecCbs.swap(m_vecContinuations);
         }
         m_promise.set_exception(eptr);
-        for (size_t i = 0; i < cbs.size(); ++i)
+        for (size_t i = 0; i < vecCbs.size(); ++i)
         {
-            if (cbs[i])
+            if (vecCbs[i])
             {
-                cbs[i](nullptr, eptr);
+                vecCbs[i](nullptr, eptr);
             }
         }
     }
 
     // 注册续接；若已就绪则立即触发。
-    void AddContinuation(const Continuation& cb)
+    void AddContinuation(const Continuation& fnCallback)
     {
-        const T* value = nullptr;
+        const T* pValue = nullptr;
         std::exception_ptr eptr;
-        bool fireNow = false;
+        bool bFireNow = false;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             if (m_bReady)
             {
-                fireNow = true;
-                value = m_pValue.get();
+                bFireNow = true;
+                pValue = m_pValue.get();
                 eptr = m_exception;
             }
             else
             {
-                m_vecContinuations.push_back(cb);
+                m_vecContinuations.push_back(fnCallback);
             }
         }
-        if (fireNow && cb)
+        if (bFireNow && fnCallback)
         {
-            cb(value, eptr);
+            fnCallback(pValue, eptr);
         }
     }
 
@@ -143,10 +143,10 @@ public:
     T Get() const { return m_pState->GetFuture().get(); }
 
     // 注册成功回调（fire-and-forget）。
-    void OnSuccess(const std::function<void(const T&)>& cb);
+    void OnSuccess(const std::function<void(const T&)>& fnCallback);
 
     // 注册失败回调（fire-and-forget）。
-    void OnFailure(const std::function<void(const std::exception_ptr&)>& cb);
+    void OnFailure(const std::function<void(const std::exception_ptr&)>& fnCallback);
 
 private:
     friend class CAsyncExecutor;
@@ -165,7 +165,7 @@ class CAsyncExecutor
 {
 public:
     // 创建执行器（指定工作线程数）。
-    explicit CAsyncExecutor(size_t threadCount = 1);
+    explicit CAsyncExecutor(size_t nThreadCount = 1);
 
     ~CAsyncExecutor();
 
@@ -177,7 +177,7 @@ public:
     CTask<typename std::result_of<F()>::type> Submit(F f);
 
     // 提交无返回值任务。
-    bool Post(const std::function<void()>& task);
+    bool Post(const std::function<void()>& fnTask);
 
     // 停止并等待任务完成。
     void Stop();
@@ -197,72 +197,72 @@ template <typename F>
 CTask<typename std::result_of<F(T)>::type> CTask<T>::Then(F f)
 {
     using R = typename std::result_of<F(T)>::type;
-    CTask<R> next;
-    next.m_pExecutor = m_pExecutor;
-    std::shared_ptr<detail::CTaskState<R> > nextState = next.m_pState;
-    CAsyncExecutor* executor = m_pExecutor;
+    CTask<R> taskNext;
+    taskNext.m_pExecutor = m_pExecutor;
+    std::shared_ptr<detail::CTaskState<R> > pNextState = taskNext.m_pState;
+    CAsyncExecutor* pExecutor = m_pExecutor;
 
     m_pState->AddContinuation(
-        [executor, nextState, f](const T* value, const std::exception_ptr& eptr)
+        [pExecutor, pNextState, f](const T* pValue, const std::exception_ptr& eptr)
         {
             // ① 上游失败：异常传播给下游
             if (eptr)
             {
-                nextState->CompleteFailure(eptr);
+                pNextState->CompleteFailure(eptr);
                 return;
             }
             // ② 拷贝值，供异步续接安全使用
-            T copied = *value;
-            std::function<void()> run = [nextState, f, copied]()
+            T valueCopied = *pValue;
+            std::function<void()> fnRun = [pNextState, f, valueCopied]()
             {
                 try
                 {
-                    nextState->CompleteSuccess(f(copied));
+                    pNextState->CompleteSuccess(f(valueCopied));
                 }
                 catch (...)
                 {
-                    nextState->CompleteFailure(std::current_exception());
+                    pNextState->CompleteFailure(std::current_exception());
                 }
             };
-            // ③ 在 executor 上执行；无 executor 时内联执行
-            if (executor != nullptr)
+            // ③ 在 pExecutor 上执行；无执行器时内联执行
+            if (pExecutor != nullptr)
             {
-                if (!executor->Post(run))
+                if (!pExecutor->Post(fnRun))
                 {
-                    nextState->CompleteFailure(std::make_exception_ptr(
+                    pNextState->CompleteFailure(std::make_exception_ptr(
                         std::runtime_error("CAsyncExecutor 已停止")));
                 }
             }
             else
             {
-                run();
+                fnRun();
             }
         });
-    return next;
+    return taskNext;
 }
 
 template <typename T>
-void CTask<T>::OnSuccess(const std::function<void(const T&)>& cb)
+void CTask<T>::OnSuccess(const std::function<void(const T&)>& fnCallback)
 {
     m_pState->AddContinuation(
-        [cb](const T* value, const std::exception_ptr& eptr)
+        [fnCallback](const T* pValue, const std::exception_ptr& eptr)
         {
-            if (!eptr && cb)
+            if (!eptr && fnCallback)
             {
-                cb(*value);
+                fnCallback(*pValue);
             }
         });
 }
 
 template <typename T>
-void CTask<T>::OnFailure(const std::function<void(const std::exception_ptr&)>& cb)
+void CTask<T>::OnFailure(const std::function<void(const std::exception_ptr&)>& fnCallback)
 {
     m_pState->AddContinuation(
-        [cb](const T*, const std::exception_ptr& eptr)
+        [fnCallback](const T*, const std::exception_ptr& eptr)
         {
-            if (eptr && cb)
+            if (eptr && fnCallback)
             {
-                cb(eptr);
+                fnCallback(eptr);
             }
         });
 }
@@ -273,21 +273,21 @@ CTask<typename std::result_of<F()>::type> CAsyncExecutor::Submit(F f)
     using R = typename std::result_of<F()>::type;
     CTask<R> task;
     task.m_pExecutor = this;
-    std::shared_ptr<detail::CTaskState<R> > state = task.m_pState;
-    std::function<void()> run = [state, f]()
+    std::shared_ptr<detail::CTaskState<R> > pState = task.m_pState;
+    std::function<void()> fnRun = [pState, f]()
     {
         try
         {
-            state->CompleteSuccess(f());
+            pState->CompleteSuccess(f());
         }
         catch (...)
         {
-            state->CompleteFailure(std::current_exception());
+            pState->CompleteFailure(std::current_exception());
         }
     };
-    if (!m_pPool || !m_pPool->Submit(run))
+    if (!m_pPool || !m_pPool->Submit(fnRun))
     {
-        state->CompleteFailure(
+        pState->CompleteFailure(
             std::make_exception_ptr(std::runtime_error("CAsyncExecutor 未启动")));
     }
     return task;

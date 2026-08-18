@@ -18,7 +18,7 @@ public:
     explicit CBuffer(size_t initialSize = kInitialSize);
 
     // 追加数据到可写区。
-    void Append(const char* data, size_t len);
+    void Append(const char* pData, size_t nLen);
 
     // 追加字符串到可写区。
     void Append(const std::string& str);
@@ -35,8 +35,8 @@ public:
     // 指向可写区起始位置。
     char* BeginWrite();
 
-    // 消费可读区前 len 字节。
-    void Retrieve(size_t len);
+    // 消费可读区前 nLen 字节。
+    void Retrieve(size_t nLen);
 
     // 清空缓冲区。
     void RetrieveAll();
