@@ -5,6 +5,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -55,6 +56,21 @@ public:
     // 是否正在运行。
     bool IsRunning() const;
 
+    // 当前活跃连接数。
+    size_t ConnectionCount() const;
+
+    // 累计接受连接数。
+    uint64_t TotalAccepted() const;
+
+    // 累计关闭连接数。
+    uint64_t TotalClosed() const;
+
+    // 指定连接是否存在。
+    bool HasConnection(ConnectionId id) const;
+
+    // 指定连接的对端地址；连接不存在时返回空串。
+    std::string PeerAddress(ConnectionId id) const;
+
 private:
     // 事件循环线程入口。
     void ThreadMain();
@@ -84,6 +100,11 @@ private:
     ConnectionId nextId_;
     uint16_t port_;
     std::atomic<bool> running_;
+    std::atomic<size_t> connectionCount_;
+    std::atomic<uint64_t> totalAccepted_;
+    std::atomic<uint64_t> totalClosed_;
+    mutable std::mutex peerMutex_;
+    std::map<ConnectionId, std::string> peerAddresses_;
 };
 
 } // namespace common

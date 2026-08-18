@@ -7,7 +7,8 @@ namespace common {
 
 /// @brief 创建 TCP 服务器。
 TcpServer::TcpServer()
-    : nextId_(1), port_(0), running_(false)
+    : nextId_(1), port_(0), running_(false),
+      connectionCount_(0), totalAccepted_(0), totalClosed_(0)
 {
 }
 
@@ -123,6 +124,12 @@ void TcpServer::StartAccept()
                 std::bind(&TcpServer::HandleClose, this, std::placeholders::_1));
             connections_[id] = conn;
             conn->StartRead();
+            {
+                std::lock_guard<std::mutex> lock(peerMutex_);
+                peerAddresses_[id] = conn->PeerAddress();
+            }
+            connectionCount_.fetch_add(1);
+            totalAccepted_.fetch_add(1);
             if (acceptCb_)
             {
                 acceptCb_(id, conn->PeerAddress());
@@ -147,6 +154,15 @@ void TcpServer::HandleClose(const TcpConnection::Ptr& conn)
 {
     ConnectionId id = conn->id();
     connections_.erase(id);
+    {
+        std::lock_guard<std::mutex> lock(peerMutex_);
+        peerAddresses_.erase(id);
+    }
+    if (connectionCount_.load() > 0)
+    {
+        connectionCount_.fetch_sub(1);
+    }
+    totalClosed_.fetch_add(1);
     if (closeCb_)
     {
         closeCb_(id);
@@ -186,6 +202,15 @@ void TcpServer::Close(ConnectionId id)
         }
         TcpConnection::Ptr conn = it->second;
         connections_.erase(it);
+        {
+            std::lock_guard<std::mutex> lock(peerMutex_);
+            peerAddresses_.erase(id);
+        }
+        if (connectionCount_.load() > 0)
+        {
+            connectionCount_.fetch_sub(1);
+        }
+        totalClosed_.fetch_add(1);
         conn->Close();
         if (closeCb_)
         {
@@ -211,9 +236,15 @@ void TcpServer::ShutdownOnIoThread()
         all.push_back(it->second);
     }
     connections_.clear();
+    {
+        std::lock_guard<std::mutex> lock(peerMutex_);
+        peerAddresses_.clear();
+    }
+    connectionCount_.store(0);
     for (size_t i = 0; i < all.size(); ++i)
     {
         all[i]->Close();
+        totalClosed_.fetch_add(1);
         if (closeCb_)
         {
             closeCb_(all[i]->id());
@@ -231,6 +262,47 @@ uint16_t TcpServer::ListeningPort() const
 bool TcpServer::IsRunning() const
 {
     return running_.load();
+}
+
+/// @brief 当前活跃连接数。
+size_t TcpServer::ConnectionCount() const
+{
+    return connectionCount_.load();
+}
+
+/// @brief 累计接受连接数。
+uint64_t TcpServer::TotalAccepted() const
+{
+    return totalAccepted_.load();
+}
+
+/// @brief 累计关闭连接数。
+uint64_t TcpServer::TotalClosed() const
+{
+    return totalClosed_.load();
+}
+
+/// @brief 指定连接是否存在。
+bool TcpServer::HasConnection(ConnectionId id) const
+{
+    std::lock_guard<std::mutex> lock(peerMutex_);
+    return peerAddresses_.find(id) != peerAddresses_.end();
+}
+
+/// @brief 指定连接的对端地址。
+///
+/// @param id 连接标识。
+///
+/// @return 对端地址字符串；连接不存在时返回空串。
+std::string TcpServer::PeerAddress(ConnectionId id) const
+{
+    std::lock_guard<std::mutex> lock(peerMutex_);
+    std::map<ConnectionId, std::string>::const_iterator it = peerAddresses_.find(id);
+    if (it == peerAddresses_.end())
+    {
+        return "";
+    }
+    return it->second;
 }
 
 } // namespace common
