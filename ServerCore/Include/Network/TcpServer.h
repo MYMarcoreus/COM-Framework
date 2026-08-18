@@ -1,26 +1,23 @@
 #pragma once
 
 #include <atomic>
-#include <cstddef>
 #include <cstdint>
 #include <map>
-#include <mutex>
+#include <memory>
 #include <thread>
 
+#include "asio.hpp"
+
 #include "Common/Types.h"
-#include "Network/Acceptor.h"
-#include "Network/EventLoop.h"
 #include "Network/INetworkHandler.h"
 #include "Network/TcpConnection.h"
 
 namespace sc {
 
-/// @brief TCP 服务器。
+/// @brief TCP 服务器（基于 asio）。
 ///
-/// 协调 Acceptor、TcpConnection 与 EventLoop，管理连接生命周期。
-/// 事件循环在独立线程中运行。
-///
-/// @note 连接对象由本类持有并负责释放。
+/// 基于 asio::io_context + tcp::acceptor 提供 TCP 服务器能力。
+/// 事件循环在独立线程中运行；连接生命周期由 shared_ptr 管理。
 class TcpServer
 {
 public:
@@ -50,24 +47,25 @@ private:
     // 事件循环线程入口。
     void ThreadMain();
 
-    // 处理就绪事件。
-    void HandleEvent(int fd, short revents);
+    // 发起一次异步 accept。
+    void StartAccept();
 
-    // 接受新连接。
-    void HandleAccept();
+    // 处理 accept 完成。
+    void HandleAccept(const asio::error_code& ec, asio::ip::tcp::socket socket);
 
-    // 关闭指定连接。
-    void HandleClose(TcpConnection* conn);
+    // 连接数据回调。
+    void HandleData(const TcpConnection::Ptr& conn, const char* data, size_t len);
 
-    // 关闭所有连接。
-    void CloseAllConnections();
+    // 连接关闭回调。
+    void HandleClose(const TcpConnection::Ptr& conn);
 
-    Acceptor acceptor_;
-    EventLoop loop_;
+    // 在 io 线程内执行关闭流程。
+    void ShutdownOnIoThread();
+
+    asio::io_context io_;
+    std::unique_ptr<asio::ip::tcp::acceptor> acceptor_;
     INetworkHandler* handler_;
-    std::map<ConnectionId, TcpConnection*> connections_;
-    std::map<int, ConnectionId> fdToId_;
-    std::mutex mutex_;
+    std::map<ConnectionId, TcpConnection::Ptr> connections_;
     std::thread thread_;
     ConnectionId nextId_;
     uint16_t port_;

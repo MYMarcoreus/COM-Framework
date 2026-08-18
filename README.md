@@ -21,11 +21,15 @@ make_test/                       # 工作区根目录（可存放多个项目）
 ├── .tools/
 │   └── setup_tools.sh           # 宿主机（无 sudo）安装 compiledb 的脚本
 │
+├── Common/
+│   └── ThirdParty/
+│       └── asio/                # git 子模块：Standalone Asio（asio-1-38-2）
+│
 ├── ServerCore/                  # 服务器基础框架（静态库 libServerCore.a）
 │   ├── Include/
 │   │   ├── Application/         # MyApplication
 │   │   ├── Component/           # IUnknown / Component / ComponentManager / ScopedInterfacePtr
-│   │   ├── Network/             # Socket / Buffer / Acceptor / TcpConnection / EventLoop / TcpServer / INetwork
+│   │   ├── Network/             # TcpServer / TcpConnection / Buffer / INetwork（基于 asio）
 │   │   └── Common/              # 公共类型
 │   ├── Src/
 │   └── Linux/
@@ -49,7 +53,7 @@ make_test/                       # 工作区根目录（可存放多个项目）
 
 - **Application**：`MyApplication` 提供统一生命周期 `Initialize → Start → Run → Stop → Shutdown`，通过 `ComponentManager` 组合基础组件。
 - **Component**：借鉴 COM 组件模型思想的 C++11/Linux 实现——`IUnknown`（QueryInterface / AddRef / Release）、`Component`（原子引用计数）、`ComponentManager`（注册/获取/移除/清空）、`ScopedInterfacePtr`（RAII 智能引用）。
-- **Network**：轻量通信基础设施——`Socket`、`Buffer`、`Acceptor`、`TcpConnection`、`EventLoop`（poll）、`TcpServer`、`INetwork`/`INetworkHandler` 接口。
+- **Network**：轻量通信基础设施，基于 **Standalone Asio**（git 子模块）——`TcpServer`（io_context + acceptor + 独立线程事件循环）、`TcpConnection`（异步读写 + 写队列）、`Buffer`、`INetwork`/`INetworkHandler` 接口。
 
 依赖方向：`Demo / Server → ServerCore → POSIX / 标准库`。ServerCore 不依赖任何具体业务项目。
 
@@ -114,6 +118,25 @@ bash build.sh
 ```
 
 `build.sh` 会自动优先使用系统 `compiledb`，否则回退到 `.tools/venv` 中的版本。
+
+### 4. git 子模块（第三方库）
+
+本项目使用 **git 管理**，第三方库以 **submodule** 引入（当前为 `Common/ThirdParty/asio`）。
+
+首次克隆后需要初始化子模块：
+
+```bash
+git submodule update --init --recursive
+```
+
+上游库更新后拉取新版本（并更新父仓库记录的 commit）：
+
+```bash
+git -C Common/ThirdParty/asio fetch
+git -C Common/ThirdParty/asio checkout <新标签>
+git add Common/ThirdParty/asio
+git commit -m "升级 asio 到 <新标签>"
+```
 
 ## 常用命令
 

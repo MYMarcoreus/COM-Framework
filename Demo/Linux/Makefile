@@ -21,8 +21,8 @@ PROJECT    := $(notdir $(ROOT))
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -pthread
-# 同时包含本项目 Include 与 ServerCore Include
-CPPFLAGS ?= -I$(ROOT)/Include -I$(WS_ROOT)/ServerCore/Include
+# 本项目 Include + ServerCore Include + asio 子模块
+CPPFLAGS ?= -I$(ROOT)/Include -I$(WS_ROOT)/ServerCore/Include -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE
 LDFLAGS  ?=
 LDLIBS   ?= $(WS_ROOT)/build/libServerCore.a
 

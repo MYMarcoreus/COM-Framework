@@ -1,71 +1,95 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
-#include <netinet/in.h>
+#include <functional>
+#include <memory>
 #include <string>
-#include <sys/types.h>
+#include <vector>
+
+#include "asio.hpp"
 
 #include "Common/Types.h"
 #include "Network/Buffer.h"
 
 namespace sc {
 
-/// @brief TCP 连接。
+/// @brief TCP 连接（基于 asio）。
 ///
-/// 封装一个已建立的连接，包含输入/输出缓冲与对端地址。
-/// 所有读写均为非阻塞方式，由事件循环驱动。
-class TcpConnection
+/// 封装一个已建立的连接，基于 asio::ip::tcp::socket 提供异步读写。
+/// 生命周期由 shared_ptr 管理（供异步回调安全持有）。
+/// 所有读写回调都在事件循环线程执行；Send/Close 通过投递保证线程安全。
+class TcpConnection : public std::enable_shared_from_this<TcpConnection>
 {
 public:
+    /// @brief 连接指针。
+    using Ptr = std::shared_ptr<TcpConnection>;
+
+    /// @brief 数据回调。
+    using DataCallback = std::function<void(const Ptr& conn, const char* data, size_t len)>;
+
+    /// @brief 连接关闭回调。
+    using CloseCallback = std::function<void(const Ptr& conn)>;
+
     // 创建连接。
-    TcpConnection(ConnectionId id, int fd, const sockaddr_in& peer);
+    TcpConnection(asio::io_context& io, ConnectionId id, asio::ip::tcp::socket socket);
 
     ~TcpConnection();
 
     // 连接标识。
     ConnectionId id() const;
 
-    // 文件描述符。
-    int fd() const;
-
     // 对端地址字符串。
     const std::string& PeerAddress() const;
 
-    // 从 socket 读取数据到输入缓冲。
-    // 返回 >0 已读取字节数；0 对端关闭；-1 出错。
-    ssize_t Read();
+    // 设置数据与关闭回调。
+    void SetCallbacks(const DataCallback& dataCallback, const CloseCallback& closeCallback);
 
-    // 输入缓冲可读字节数。
-    size_t InputReadable() const;
+    // 开始异步读取。
+    void StartRead();
 
-    // 输入缓冲可读区起始指针。
-    const char* InputPeek() const;
+    // 发送数据（线程安全）。
+    void Send(const char* data, size_t len);
 
-    // 消费输入缓冲前 len 字节。
-    void RetrieveInput(size_t len);
-
-    // 发送数据，未发送完的数据进入输出缓冲。
-    ssize_t Send(const char* data, size_t len);
-
-    // 刷新输出缓冲（非阻塞发送）。
-    ssize_t Flush();
-
-    // 输出缓冲是否有待发送数据。
-    bool HasPendingOutput() const;
-
-    // 关闭连接。
+    // 关闭连接（线程安全）。
     void Close();
 
     // 是否已关闭。
     bool IsClosed() const;
 
 private:
+    // 发起一次异步读。
+    void DoRead();
+
+    // 处理读完成。
+    void HandleRead(const asio::error_code& ec, size_t bytes);
+
+    // 追加待发送数据并启动写。
+    void AppendWrite(const std::string& data);
+
+    // 发起一次异步写。
+    void DoWrite();
+
+    // 处理写完成。
+    void HandleWrite(const asio::error_code& ec, size_t bytes);
+
+    // 在 io 线程内关闭连接。
+    void CloseOnIoThread();
+
+    // 处理错误或对端关闭。
+    void HandleError(const asio::error_code& ec);
+
+    asio::io_context& io_;
     ConnectionId id_;
-    int fd_;
+    asio::ip::tcp::socket socket_;
     std::string peerAddress_;
     Buffer inputBuffer_;
-    Buffer outputBuffer_;
-    bool closed_;
+    std::string pendingOutput_;
+    std::vector<char> readBuffer_;
+    DataCallback dataCallback_;
+    CloseCallback closeCallback_;
+    std::atomic<bool> writing_;
+    std::atomic<bool> closed_;
 };
 
 } // namespace sc

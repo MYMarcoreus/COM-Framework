@@ -20,7 +20,8 @@ PROJECT    := $(notdir $(ROOT))
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -pthread
-CPPFLAGS ?= -I$(ROOT)/Include
+# 本项目 Include + asio 子模块（Common/ThirdParty/asio）
+CPPFLAGS ?= -I$(ROOT)/Include -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE
 LDFLAGS  ?=
 LDLIBS   ?=
 

@@ -1,8 +1,6 @@
 #include "Network/TcpServer.h"
 
-#include <cstring>
 #include <functional>
-#include <poll.h>
 #include <vector>
 
 namespace sc {
@@ -32,10 +30,29 @@ bool TcpServer::Start(uint16_t port, INetworkHandler* handler)
         return false;
     }
     handler_ = handler;
-    if (!acceptor_.BindAndListen(port))
+
+    // ① 创建并配置 acceptor
+    asio::error_code ec;
+    acceptor_.reset(new asio::ip::tcp::acceptor(io_));
+    asio::ip::tcp::endpoint endpoint(asio::ip::tcp::v4(), port);
+    acceptor_->open(endpoint.protocol(), ec);
+    if (!ec)
+    {
+        acceptor_->set_option(asio::ip::tcp::acceptor::reuse_address(true), ec);
+    }
+    if (!ec)
+    {
+        acceptor_->bind(endpoint, ec);
+    }
+    if (!ec)
+    {
+        acceptor_->listen(asio::socket_base::max_listen_connections, ec);
+    }
+    if (ec)
     {
         return false;
     }
+
     port_ = port;
     running_.store(true);
     thread_ = std::thread(&TcpServer::ThreadMain, this);
@@ -44,7 +61,7 @@ bool TcpServer::Start(uint16_t port, INetworkHandler* handler)
 
 /// @brief 停止服务器。
 ///
-/// 停止事件循环并等待线程退出，然后关闭所有连接。
+/// 投递关闭任务到事件循环线程，等待线程退出。
 void TcpServer::Stop()
 {
     if (!running_.load())
@@ -52,7 +69,7 @@ void TcpServer::Stop()
         return;
     }
     running_.store(false);
-    loop_.Stop();
+    asio::post(io_, [this]() { ShutdownOnIoThread(); });
     if (thread_.joinable())
     {
         thread_.join();
@@ -62,208 +79,140 @@ void TcpServer::Stop()
 /// @brief 事件循环线程入口。
 void TcpServer::ThreadMain()
 {
-    loop_.SetEventCallback(std::bind(&TcpServer::HandleEvent, this,
-                                     std::placeholders::_1, std::placeholders::_2));
-    loop_.AddFd(acceptor_.fd(), POLLIN);
-    loop_.Run();
-    CloseAllConnections();
+    StartAccept();
+    io_.run();
+    // 事件循环退出后兜底关闭剩余连接
+    ShutdownOnIoThread();
 }
 
-/// @brief 处理就绪事件。
-void TcpServer::HandleEvent(int fd, short revents)
+/// @brief 发起一次异步 accept。
+void TcpServer::StartAccept()
 {
-    // ① 监听套接字可读：接受新连接
-    if (fd == acceptor_.fd())
-    {
-        HandleAccept();
-        return;
-    }
-
-    // ② 查找对应连接
-    TcpConnection* conn = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::map<int, ConnectionId>::iterator it = fdToId_.find(fd);
-        if (it != fdToId_.end())
-        {
-            std::map<ConnectionId, TcpConnection*>::iterator cit = connections_.find(it->second);
-            if (cit != connections_.end())
-            {
-                conn = cit->second;
-            }
-        }
-    }
-    if (conn == nullptr)
+    if (acceptor_ == nullptr || !acceptor_->is_open())
     {
         return;
     }
-
-    // ③ 异常事件：关闭连接
-    if (revents & (POLLHUP | POLLERR | POLLNVAL))
-    {
-        HandleClose(conn);
-        return;
-    }
-
-    // ④ 可读：读取数据并通知上层
-    if (revents & POLLIN)
-    {
-        ssize_t n = conn->Read();
-        if (n > 0)
+    acceptor_->async_accept(
+        [this](const asio::error_code& ec, asio::ip::tcp::socket socket)
         {
-            if (handler_ != nullptr)
+            // ① 错误处理
+            if (ec)
             {
-                handler_->OnData(conn->id(), conn->InputPeek(), conn->InputReadable());
-            }
-            conn->RetrieveInput(conn->InputReadable());
-        }
-        else if (n == 0)
-        {
-            HandleClose(conn);
-            return;
-        }
-        else
-        {
-            if (errno != EAGAIN && errno != EWOULDBLOCK)
-            {
-                HandleClose(conn);
+                if (ec == asio::error::operation_aborted)
+                {
+                    return; // 服务器关闭中
+                }
+                if (acceptor_ != nullptr && acceptor_->is_open())
+                {
+                    StartAccept(); // 瞬时错误，继续接受
+                }
                 return;
             }
-        }
-    }
-
-    // ⑤ 可写：刷新输出缓冲
-    if (revents & POLLOUT)
-    {
-        if (conn->Flush() < 0)
-        {
-            HandleClose(conn);
-            return;
-        }
-        if (!conn->HasPendingOutput())
-        {
-            loop_.UpdateEvents(conn->fd(), POLLIN);
-        }
-    }
-}
-
-/// @brief 接受新连接。
-void TcpServer::HandleAccept()
-{
-    while (true)
-    {
-        sockaddr_in peer;
-        std::memset(&peer, 0, sizeof(peer));
-        int fd = acceptor_.Accept(&peer);
-        if (fd < 0)
-        {
-            break; // EAGAIN 表示已无待处理连接
-        }
-        Socket newSocket(fd);
-        newSocket.SetNonBlocking();
-        newSocket.SetNoDelay();
-
-        ConnectionId id = nextId_++;
-        TcpConnection* conn = new TcpConnection(id, newSocket.Release(), peer);
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
+            // ② 创建连接并注册
+            ConnectionId id = nextId_++;
+            TcpConnection::Ptr conn =
+                std::make_shared<TcpConnection>(io_, id, std::move(socket));
+            conn->SetCallbacks(
+                std::bind(&TcpServer::HandleData, this, std::placeholders::_1,
+                          std::placeholders::_2, std::placeholders::_3),
+                std::bind(&TcpServer::HandleClose, this, std::placeholders::_1));
             connections_[id] = conn;
-            fdToId_[conn->fd()] = id;
-        }
-        loop_.AddFd(conn->fd(), POLLIN);
-        if (handler_ != nullptr)
-        {
-            handler_->OnAccept(id, conn->PeerAddress());
-        }
+            conn->StartRead();
+            if (handler_ != nullptr)
+            {
+                handler_->OnAccept(id, conn->PeerAddress());
+            }
+            StartAccept(); // 继续接受下一个连接
+        });
+}
+
+/// @brief 连接数据回调。
+void TcpServer::HandleData(const TcpConnection::Ptr& conn, const char* data, size_t len)
+{
+    if (handler_ != nullptr)
+    {
+        handler_->OnData(conn->id(), data, len);
     }
 }
 
-/// @brief 关闭指定连接。
+/// @brief 连接关闭回调。
 ///
-/// 幂等：若连接已不在管理表中，说明已关闭，直接返回，避免重复通知 OnClose。
-void TcpServer::HandleClose(TcpConnection* conn)
+/// 从连接管理表中移除连接，并通知上层。
+void TcpServer::HandleClose(const TcpConnection::Ptr& conn)
 {
-    if (conn == nullptr)
-    {
-        return;
-    }
     ConnectionId id = conn->id();
-    int fd = conn->fd();
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::map<ConnectionId, TcpConnection*>::iterator it = connections_.find(id);
-        if (it == connections_.end() || it->second != conn)
-        {
-            return; // 已关闭，防止重复通知
-        }
-        connections_.erase(it);
-        fdToId_.erase(fd);
-    }
-    loop_.RemoveFd(fd);
+    connections_.erase(id);
     if (handler_ != nullptr)
     {
         handler_->OnClose(id);
     }
-    delete conn;
-}
-
-/// @brief 关闭所有连接。
-void TcpServer::CloseAllConnections()
-{
-    std::vector<TcpConnection*> all;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (std::map<ConnectionId, TcpConnection*>::iterator it = connections_.begin();
-             it != connections_.end(); ++it)
-        {
-            all.push_back(it->second);
-        }
-        connections_.clear();
-        fdToId_.clear();
-    }
-    for (size_t i = 0; i < all.size(); ++i)
-    {
-        if (handler_ != nullptr)
-        {
-            handler_->OnClose(all[i]->id());
-        }
-        delete all[i];
-    }
 }
 
 /// @brief 向指定连接发送数据。
+///
+/// 查找与投递均在事件循环线程执行，线程安全。
 bool TcpServer::Send(ConnectionId id, const char* data, size_t len)
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::map<ConnectionId, TcpConnection*>::iterator it = connections_.find(id);
-    if (it == connections_.end())
+    if (!running_.load())
     {
         return false;
     }
-    TcpConnection* conn = it->second;
-    conn->Send(data, len);
-    if (conn->HasPendingOutput())
+    std::string payload(data, len);
+    asio::post(io_, [this, id, payload]()
     {
-        loop_.UpdateEvents(conn->fd(), POLLIN | POLLOUT);
-    }
+        std::map<ConnectionId, TcpConnection::Ptr>::iterator it = connections_.find(id);
+        if (it != connections_.end())
+        {
+            it->second->Send(payload.data(), payload.size());
+        }
+    });
     return true;
 }
 
 /// @brief 关闭指定连接。
 void TcpServer::Close(ConnectionId id)
 {
-    TcpConnection* conn = nullptr;
+    asio::post(io_, [this, id]()
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::map<ConnectionId, TcpConnection*>::iterator it = connections_.find(id);
-        if (it != connections_.end())
+        std::map<ConnectionId, TcpConnection::Ptr>::iterator it = connections_.find(id);
+        if (it == connections_.end())
         {
-            conn = it->second;
+            return;
         }
-    }
-    if (conn != nullptr)
+        TcpConnection::Ptr conn = it->second;
+        connections_.erase(it);
+        conn->Close();
+        if (handler_ != nullptr)
+        {
+            handler_->OnClose(id);
+        }
+    });
+}
+
+/// @brief 在 io 线程内执行关闭流程。
+///
+/// 关闭 acceptor 与所有连接，幂等可重复调用。
+void TcpServer::ShutdownOnIoThread()
+{
+    if (acceptor_ != nullptr && acceptor_->is_open())
     {
-        HandleClose(conn);
+        asio::error_code ignore;
+        acceptor_->close(ignore);
+    }
+    std::vector<TcpConnection::Ptr> all;
+    for (std::map<ConnectionId, TcpConnection::Ptr>::iterator it = connections_.begin();
+         it != connections_.end(); ++it)
+    {
+        all.push_back(it->second);
+    }
+    connections_.clear();
+    for (size_t i = 0; i < all.size(); ++i)
+    {
+        all[i]->Close();
+        if (handler_ != nullptr)
+        {
+            handler_->OnClose(all[i]->id());
+        }
     }
 }
 
