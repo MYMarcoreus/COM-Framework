@@ -1,0 +1,120 @@
+#include "Component/ComponentManager.h"
+
+#include <vector>
+
+namespace sc {
+
+/// @brief 创建组件管理器。
+ComponentManager::ComponentManager()
+{
+}
+
+/// @brief 销毁组件管理器。
+ComponentManager::~ComponentManager()
+{
+    Clear();
+}
+
+/// @brief 注册组件。
+///
+/// 以接口标识为键，同一接口标识只能注册一次。
+/// 注册成功后管理器持有组件的一个引用（AddRef）。
+///
+/// @param iid 接口标识。
+/// @param component 组件对象。
+///
+/// @return true 注册成功；false 参数无效或接口已存在。
+bool ComponentManager::RegisterComponent(const InterfaceId& iid, IUnknown* component)
+{
+    if (iid == nullptr || component == nullptr)
+    {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string key(iid);
+    if (components_.find(key) != components_.end())
+    {
+        return false; // 已存在同标识组件
+    }
+    component->AddRef(); // 管理器持有引用
+    Entry entry;
+    entry.component = component;
+    components_[key] = entry;
+    return true;
+}
+
+/// @brief 获取组件。
+///
+/// @param iid 接口标识。
+///
+/// @return 借用指针，不增加引用计数；未找到返回 nullptr。
+IUnknown* ComponentManager::GetComponent(const InterfaceId& iid) const
+{
+    if (iid == nullptr)
+    {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::map<std::string, Entry>::const_iterator it = components_.find(std::string(iid));
+    if (it == components_.end())
+    {
+        return nullptr;
+    }
+    return it->second.component;
+}
+
+/// @brief 移除并释放指定组件。
+///
+/// @param iid 接口标识。
+///
+/// @return true 移除成功；false 未找到。
+bool ComponentManager::RemoveComponent(const InterfaceId& iid)
+{
+    if (iid == nullptr)
+    {
+        return false;
+    }
+    IUnknown* component = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        std::map<std::string, Entry>::iterator it = components_.find(std::string(iid));
+        if (it == components_.end())
+        {
+            return false;
+        }
+        component = it->second.component;
+        components_.erase(it);
+    }
+    if (component != nullptr)
+    {
+        component->Release(); // 释放管理器持有的引用
+    }
+    return true;
+}
+
+/// @brief 清空所有组件并释放引用。
+void ComponentManager::Clear()
+{
+    std::vector<IUnknown*> toRelease;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (std::map<std::string, Entry>::iterator it = components_.begin(); it != components_.end(); ++it)
+        {
+            toRelease.push_back(it->second.component);
+        }
+        components_.clear();
+    }
+    for (size_t i = 0; i < toRelease.size(); ++i)
+    {
+        toRelease[i]->Release();
+    }
+}
+
+/// @brief 返回已注册组件数量。
+size_t ComponentManager::Size() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return components_.size();
+}
+
+} // namespace sc
