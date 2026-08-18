@@ -6,7 +6,7 @@ set -euo pipefail
 WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # 依赖顺序：Common → ServerCore → Demo → ServerA
-PROJECTS=(Common ServerCore Demo ServerA)
+PROJECTS=(Common ServerCore Demo ServerA Tests)
 
 for project in "${PROJECTS[@]}"; do
     PROJECT_ROOT="$WORKSPACE_ROOT/$project"
