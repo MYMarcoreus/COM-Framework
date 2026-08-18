@@ -26,8 +26,8 @@ DemoNetworkModule::~DemoNetworkModule()
 
 /// @brief 从组件管理器获取网络接口并建立关联。
 ///
-/// 获取 INetwork 与 INetworkHandler 接口，并将网络引用注入协议服务，
-/// 使服务能够发送响应。
+/// 获取 INetwork、INetworkHandler 与 IEventDispatcher 接口，
+/// 并将网络引用注入协议服务，使服务能够发送响应。
 ///
 /// @return true 关联成功；false 组件缺失。
 bool DemoNetworkModule::Initialize()
@@ -57,7 +57,17 @@ bool DemoNetworkModule::Initialize()
     }
     handler_.Reset(static_cast<sc::INetworkHandler*>(raw));
 
-    // ③ 注入网络引用到协议服务，用于发送响应
+    // ③ 获取事件分发器（用于发布生命周期事件）
+    sc::IUnknown* eventObject = componentManager_.GetComponent(sc::IID_EventDispatcher());
+    if (eventObject != nullptr)
+    {
+        if (eventObject->QueryInterface(sc::IID_EventDispatcher(), &raw))
+        {
+            eventDispatcher_.Reset(static_cast<sc::IEventDispatcher*>(raw));
+        }
+    }
+
+    // ④ 注入网络引用到协议服务，用于发送响应
     if (service_ != nullptr)
     {
         service_->SetNetwork(network_.Get());
@@ -67,6 +77,8 @@ bool DemoNetworkModule::Initialize()
 }
 
 /// @brief 启动 TCP 服务器。
+///
+/// 启动成功后发布 "network.started" 事件（负载为监听端口）。
 ///
 /// @return true 启动成功；false 启动失败（如端口被占用）。
 bool DemoNetworkModule::Start()
@@ -79,14 +91,24 @@ bool DemoNetworkModule::Start()
     {
         return false;
     }
+    if (eventDispatcher_ != nullptr)
+    {
+        eventDispatcher_->Publish("network.started", &port_, sizeof(port_));
+    }
     common::Logger::Instance().Info(
         "Demo 服务器已启动，监听端口 " + std::to_string(port_) + "，按 Ctrl+C 退出");
     return true;
 }
 
 /// @brief 停止服务器。
+///
+/// 停止前发布 "network.stopped" 事件。
 void DemoNetworkModule::Stop()
 {
+    if (eventDispatcher_ != nullptr)
+    {
+        eventDispatcher_->Publish("network.stopped", nullptr, 0);
+    }
     if (network_ != nullptr)
     {
         network_->Stop();
@@ -99,6 +121,7 @@ void DemoNetworkModule::Shutdown()
     Stop();
     network_.Reset();
     handler_.Reset();
+    eventDispatcher_.Reset();
     service_ = nullptr;
 }
 

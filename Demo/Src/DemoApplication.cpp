@@ -1,6 +1,10 @@
 #include "DemoApplication.h"
 
+#include <string>
+
 #include "Config/Config.h"
+#include "Event/EventDispatcher.h"
+#include "Log/Logger.h"
 #include "Module/DemoLoggerModule.h"
 #include "Module/DemoNetworkModule.h"
 #include "Module/DemoTimerModule.h"
@@ -13,7 +17,8 @@ namespace demo {
 ///
 /// @param port 监听端口；0 表示从配置文件读取。
 DemoApplication::DemoApplication(std::uint16_t port)
-    : port_(port), service_(nullptr)
+    : port_(port), service_(nullptr),
+      eventStartId_(sc::kInvalidSubscriptionId), eventStopId_(sc::kInvalidSubscriptionId)
 {
     // 加载配置文件（可选，best-effort）
     config_.LoadFile("demo.ini");
@@ -38,7 +43,7 @@ DemoApplication::~DemoApplication()
 
 /// @brief 注册组件。
 ///
-/// 注册网络组件（INetwork）与协议处理服务（INetworkHandler）。
+/// 注册网络组件（INetwork）、事件分发器（IEventDispatcher）与协议处理服务（INetworkHandler）。
 bool DemoApplication::RegisterComponents()
 {
     // ① 注册网络组件
@@ -50,7 +55,16 @@ bool DemoApplication::RegisterComponents()
     }
     network->Release(); // 管理器已持有引用
 
-    // ② 注册协议处理服务
+    // ② 注册事件分发器组件
+    sc::IUnknown* events = new sc::EventDispatcher();
+    if (!componentManager_.RegisterComponent(sc::IID_EventDispatcher(), events))
+    {
+        events->Release();
+        return false;
+    }
+    events->Release(); // 管理器已持有引用
+
+    // ③ 注册协议处理服务
     DemoService* service = new DemoService();
     if (!componentManager_.RegisterComponent(sc::IID_INetworkHandler(), service))
     {
@@ -102,11 +116,40 @@ bool DemoApplication::RegisterModules()
 
 /// @brief 初始化完成钩子。
 ///
-/// 模块的初始化已由 ModuleManager 在 Initialize 中统一完成，此处无需额外逻辑。
+/// 获取事件分发器，订阅网络模块发布的启动/停止事件（解耦通信验证）。
 ///
 /// @return true。
 bool DemoApplication::OnInitialize()
 {
+    sc::IUnknown* eventObject = componentManager_.GetComponent(sc::IID_EventDispatcher());
+    if (eventObject == nullptr)
+    {
+        return false;
+    }
+    void* raw = nullptr;
+    if (!eventObject->QueryInterface(sc::IID_EventDispatcher(), &raw))
+    {
+        return false;
+    }
+    eventDispatcher_.Reset(static_cast<sc::IEventDispatcher*>(raw));
+
+    // 订阅网络启动事件：从事件负载读取监听端口
+    eventStartId_ = eventDispatcher_->Subscribe("network.started",
+        [](const sc::Event& event)
+        {
+            if (event.data != nullptr && event.size == sizeof(std::uint16_t))
+            {
+                std::uint16_t port = *static_cast<const std::uint16_t*>(event.data);
+                common::Logger::Instance().Info(
+                    "[Event] 收到 network.started，端口 " + std::to_string(port));
+            }
+        });
+    // 订阅网络停止事件
+    eventStopId_ = eventDispatcher_->Subscribe("network.stopped",
+        [](const sc::Event&)
+        {
+            common::Logger::Instance().Info("[Event] 收到 network.stopped");
+        });
     return true;
 }
 
@@ -122,9 +165,22 @@ bool DemoApplication::OnStart()
 
 /// @brief 关闭钩子。
 ///
-/// 模块的停止与关闭由 MyApplication::Shutdown 中的 ModuleManager 统一完成。
+/// 取消事件订阅并释放引用；模块的停止与关闭由 MyApplication::Shutdown
+/// 中的 ModuleManager 统一完成。
 void DemoApplication::OnShutdown()
 {
+    if (eventDispatcher_ != nullptr)
+    {
+        if (eventStartId_ != sc::kInvalidSubscriptionId)
+        {
+            eventDispatcher_->Unsubscribe(eventStartId_);
+        }
+        if (eventStopId_ != sc::kInvalidSubscriptionId)
+        {
+            eventDispatcher_->Unsubscribe(eventStopId_);
+        }
+        eventDispatcher_.Reset();
+    }
 }
 
 } // namespace demo
