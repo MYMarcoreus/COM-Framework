@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 #include "Common/Types.h"
 #include "Component/IUnknown.h"
@@ -30,6 +31,21 @@ public:
 
     // 当前监听端口，未启动时返回 0。
     virtual uint16_t ListeningPort() const = 0;
+
+    // 当前活跃连接数。
+    virtual size_t ConnectionCount() const = 0;
+
+    // 累计接受连接数。
+    virtual uint64_t TotalAccepted() const = 0;
+
+    // 累计关闭连接数。
+    virtual uint64_t TotalClosed() const = 0;
+
+    // 指定连接是否存在。
+    virtual bool HasConnection(ConnectionId id) const = 0;
+
+    // 指定连接的对端地址；连接不存在时返回空串。
+    virtual std::string PeerAddress(ConnectionId id) const = 0;
 };
 
 /// @brief 获取 INetwork 接口标识。

@@ -1,8 +1,10 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 
 #include "Component/Component.h"
 #include "Component/ScopedInterfacePtr.h"
@@ -39,6 +41,21 @@ public:
 
     // 监听端口。
     uint16_t ListeningPort() const override;
+
+    // 当前活跃连接数。
+    size_t ConnectionCount() const override;
+
+    // 累计接受连接数。
+    uint64_t TotalAccepted() const override;
+
+    // 累计关闭连接数。
+    uint64_t TotalClosed() const override;
+
+    // 指定连接是否存在。
+    bool HasConnection(ConnectionId id) const override;
+
+    // 指定连接的对端地址。
+    std::string PeerAddress(ConnectionId id) const override;
 
 protected:
     // 接口查询实现。

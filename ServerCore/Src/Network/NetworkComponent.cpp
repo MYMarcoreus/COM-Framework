@@ -121,6 +121,41 @@ uint16_t NetworkComponent::ListeningPort() const
     return port_;
 }
 
+/// @brief 当前活跃连接数。
+size_t NetworkComponent::ConnectionCount() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return (server_ != nullptr) ? server_->ConnectionCount() : 0;
+}
+
+/// @brief 累计接受连接数。
+uint64_t NetworkComponent::TotalAccepted() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return (server_ != nullptr) ? server_->TotalAccepted() : 0;
+}
+
+/// @brief 累计关闭连接数。
+uint64_t NetworkComponent::TotalClosed() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return (server_ != nullptr) ? server_->TotalClosed() : 0;
+}
+
+/// @brief 指定连接是否存在。
+bool NetworkComponent::HasConnection(ConnectionId id) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return server_ != nullptr && server_->HasConnection(id);
+}
+
+/// @brief 指定连接的对端地址。
+std::string NetworkComponent::PeerAddress(ConnectionId id) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    return (server_ != nullptr) ? server_->PeerAddress(id) : "";
+}
+
 /// @brief 接口查询实现。
 bool NetworkComponent::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
 {
