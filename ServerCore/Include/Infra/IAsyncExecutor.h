@@ -41,7 +41,7 @@ public:
 class CAsyncExecutorComponent : public CComponent, public IAsyncExecutor
 {
 public:
-    explicit CAsyncExecutorComponent(size_t threadCount = 1);
+    explicit CAsyncExecutorComponent(size_t nThreadCount = 1);
 
     virtual ~CAsyncExecutorComponent();
 

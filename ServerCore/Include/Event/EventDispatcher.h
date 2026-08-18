@@ -24,16 +24,16 @@ public:
     virtual ~CEventDispatcher();
 
     // 订阅事件，返回订阅标识。
-    SubscriptionId Subscribe(const EventType& type, const EventHandler& handler) override;
+    SubscriptionId Subscribe(const EventType& strType, const EventHandler& fnHandler) override;
 
     // 根据订阅标识取消订阅。
-    bool Unsubscribe(SubscriptionId id) override;
+    bool Unsubscribe(SubscriptionId nId) override;
 
     // 发布事件，同步调用所有订阅者。
-    size_t Publish(const EventType& type, const void* data, size_t size) override;
+    size_t Publish(const EventType& strType, const void* pData, size_t nSize) override;
 
     // 指定事件的订阅者数量。
-    size_t SubscriberCount(const EventType& type) const override;
+    size_t SubscriberCount(const EventType& strType) const override;
 
 protected:
     // 接口查询实现。

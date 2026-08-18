@@ -19,12 +19,12 @@ namespace sc {
 bool CProcess::Daemonize()
 {
     // ① 第一次 fork
-    pid_t pid = ::fork();
-    if (pid < 0)
+    pid_t nPid = ::fork();
+    if (nPid < 0)
     {
         return false;
     }
-    if (pid > 0)
+    if (nPid > 0)
     {
         ::exit(0); // 父进程退出
     }
@@ -36,12 +36,12 @@ bool CProcess::Daemonize()
     }
 
     // ③ 第二次 fork，防止重新获取控制终端
-    pid = ::fork();
-    if (pid < 0)
+    nPid = ::fork();
+    if (nPid < 0)
     {
         return false;
     }
-    if (pid > 0)
+    if (nPid > 0)
     {
         ::exit(0);
     }
@@ -54,15 +54,15 @@ bool CProcess::Daemonize()
     ::umask(0);
 
     // ⑤ 标准流重定向到 /dev/null
-    int devnull = ::open("/dev/null", O_RDWR);
-    if (devnull >= 0)
+    int nDevnull = ::open("/dev/null", O_RDWR);
+    if (nDevnull >= 0)
     {
-        static_cast<void>(::dup2(devnull, STDIN_FILENO));
-        static_cast<void>(::dup2(devnull, STDOUT_FILENO));
-        static_cast<void>(::dup2(devnull, STDERR_FILENO));
-        if (devnull > 2)
+        static_cast<void>(::dup2(nDevnull, STDIN_FILENO));
+        static_cast<void>(::dup2(nDevnull, STDOUT_FILENO));
+        static_cast<void>(::dup2(nDevnull, STDERR_FILENO));
+        if (nDevnull > 2)
         {
-            static_cast<void>(::close(devnull));
+            static_cast<void>(::close(nDevnull));
         }
     }
     return true;
@@ -71,62 +71,62 @@ bool CProcess::Daemonize()
 /// @brief 将 pid 写入文件。
 ///
 /// @return 写入成功返回 true。
-bool CProcess::WritePidFile(const std::string& path, pid_t pid)
+bool CProcess::WritePidFile(const std::string& strPath, pid_t nPid)
 {
-    int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC,
-                    static_cast<mode_t>(0644));
-    if (fd < 0)
+    int nFd = ::open(strPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC,
+                     static_cast<mode_t>(0644));
+    if (nFd < 0)
     {
         return false;
     }
-    char buffer[32];
-    int len = std::snprintf(buffer, sizeof(buffer), "%ld\n",
-                            static_cast<long>(pid));
-    bool ok = (len > 0) &&
-              (::write(fd, buffer, static_cast<size_t>(len)) == len);
-    static_cast<void>(::close(fd));
-    return ok;
+    char szBuffer[32];
+    int nLen = std::snprintf(szBuffer, sizeof(szBuffer), "%ld\n",
+                             static_cast<long>(nPid));
+    bool bOk = (nLen > 0) &&
+               (::write(nFd, szBuffer, static_cast<size_t>(nLen)) == nLen);
+    static_cast<void>(::close(nFd));
+    return bOk;
 }
 
 /// @brief 从文件读取 pid。
 ///
 /// @return pid；文件不存在或格式非法返回 -1。
-pid_t CProcess::ReadPidFile(const std::string& path)
+pid_t CProcess::ReadPidFile(const std::string& strPath)
 {
-    FILE* file = ::fopen(path.c_str(), "r");
-    if (file == nullptr)
+    FILE* pFile = ::fopen(strPath.c_str(), "r");
+    if (pFile == nullptr)
     {
         return -1;
     }
-    long value = -1;
-    if (std::fscanf(file, "%ld", &value) != 1)
+    long nValue = -1;
+    if (std::fscanf(pFile, "%ld", &nValue) != 1)
     {
-        static_cast<void>(::fclose(file));
+        static_cast<void>(::fclose(pFile));
         return -1;
     }
-    static_cast<void>(::fclose(file));
-    return static_cast<pid_t>(value);
+    static_cast<void>(::fclose(pFile));
+    return static_cast<pid_t>(nValue);
 }
 
 /// @brief 检查进程是否存活。
-bool CProcess::IsAlive(pid_t pid)
+bool CProcess::IsAlive(pid_t nPid)
 {
-    if (pid <= 0)
+    if (nPid <= 0)
     {
         return false;
     }
-    return ::kill(pid, 0) == 0;
+    return ::kill(nPid, 0) == 0;
 }
 
 /// @brief 删除 pid 文件。
-bool CProcess::RemovePidFile(const std::string& path)
+bool CProcess::RemovePidFile(const std::string& strPath)
 {
-    return ::unlink(path.c_str()) == 0;
+    return ::unlink(strPath.c_str()) == 0;
 }
 
 /// @brief 创建 pid 文件并写入当前进程 pid。
-CPidFile::CPidFile(const std::string& path)
-    : m_strPath(path), m_pid(::getpid()), m_bValid(false)
+CPidFile::CPidFile(const std::string& strPath)
+    : m_strPath(strPath), m_pid(::getpid()), m_bValid(false)
 {
     m_bValid = CProcess::WritePidFile(m_strPath, m_pid);
 }

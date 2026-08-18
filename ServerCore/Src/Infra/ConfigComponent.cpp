@@ -17,9 +17,9 @@ CConfigComponent::~CConfigComponent()
 /// @brief 从文件加载配置。
 ///
 /// @return 加载成功返回 true。
-bool CConfigComponent::LoadFile(const std::string& path)
+bool CConfigComponent::LoadFile(const std::string& strPath)
 {
-    return m_config.LoadFile(path);
+    return m_config.LoadFile(strPath);
 }
 
 /// @brief 读取字符串。

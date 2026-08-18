@@ -127,9 +127,9 @@ CModuleManager& CMyApplication::GetModuleManager()
 }
 
 /// @brief 设置配置文件路径。
-void CMyApplication::SetConfigPath(const std::string& path)
+void CMyApplication::SetConfigPath(const std::string& strPath)
 {
-    m_strConfigPath = path;
+    m_strConfigPath = strPath;
 }
 
 /// @brief 配置文件路径。

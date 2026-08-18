@@ -16,16 +16,16 @@ public:
     static bool Daemonize();
 
     // 将 pid 写入文件（含换行）。
-    static bool WritePidFile(const std::string& path, pid_t pid);
+    static bool WritePidFile(const std::string& strPath, pid_t nPid);
 
     // 从文件读取 pid；失败返回 -1。
-    static pid_t ReadPidFile(const std::string& path);
+    static pid_t ReadPidFile(const std::string& strPath);
 
     // 检查进程是否存活。
-    static bool IsAlive(pid_t pid);
+    static bool IsAlive(pid_t nPid);
 
     // 删除 pid 文件。
-    static bool RemovePidFile(const std::string& path);
+    static bool RemovePidFile(const std::string& strPath);
 };
 
 /// @brief pid 文件（RAII）。
@@ -34,7 +34,7 @@ public:
 class CPidFile
 {
 public:
-    explicit CPidFile(const std::string& path);
+    explicit CPidFile(const std::string& strPath);
 
     ~CPidFile();
 

@@ -40,7 +40,7 @@ public:
 class CThreadPoolComponent : public CComponent, public IThreadPool
 {
 public:
-    explicit CThreadPoolComponent(size_t threadCount = 1);
+    explicit CThreadPoolComponent(size_t nThreadCount = 1);
 
     virtual ~CThreadPoolComponent();
 

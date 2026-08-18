@@ -17,52 +17,52 @@ CMessageRouter::~CMessageRouter()
 /// @brief 设置消息提取器。
 ///
 /// @param extractor 业务提供的提取器（协议相关）。
-void CMessageRouter::SetExtractor(const MessageExtractor& extractor)
+void CMessageRouter::SetExtractor(const MessageExtractor& fnExtractor)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_fnExtractor = extractor;
+    m_fnExtractor = fnExtractor;
 }
 
 /// @brief 注册消息处理器。
 ///
-/// @param type    消息类型。
-/// @param handler 处理器。
+/// @param nType    消息类型。
+/// @param fnHandler 处理器。
 ///
 /// @return 订阅标识；失败返回 kInvalidSubscriptionId。
-SubscriptionId CMessageRouter::RegisterHandler(int type, const MessageHandler& handler)
+SubscriptionId CMessageRouter::RegisterHandler(int nType, const MessageHandler& fnHandler)
 {
-    if (!handler)
+    if (!fnHandler)
     {
         return kInvalidSubscriptionId;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
-    SubscriptionId id = m_nNextId++;
+    SubscriptionId nId = m_nNextId++;
     HandlerEntry entry;
-    entry.type = type;
-    entry.handler = handler;
-    m_mapHandlers[id] = entry;
-    m_mapByType[type].push_back(id);
-    return id;
+    entry.type = nType;
+    entry.handler = fnHandler;
+    m_mapHandlers[nId] = entry;
+    m_mapByType[nType].push_back(nId);
+    return nId;
 }
 
 /// @brief 反注册消息处理器。
 ///
-/// @param id 订阅标识。
+/// @param nId 订阅标识。
 ///
 /// @return true 反注册成功；false 标识无效。
-bool CMessageRouter::UnregisterHandler(SubscriptionId id)
+bool CMessageRouter::UnregisterHandler(SubscriptionId nId)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    std::map<SubscriptionId, HandlerEntry>::iterator it = m_mapHandlers.find(id);
+    std::map<SubscriptionId, HandlerEntry>::iterator it = m_mapHandlers.find(nId);
     if (it == m_mapHandlers.end())
     {
         return false;
     }
-    int type = it->second.type;
-    std::vector<SubscriptionId>& ids = m_mapByType[type];
+    int nType = it->second.type;
+    std::vector<SubscriptionId>& ids = m_mapByType[nType];
     for (size_t i = 0; i < ids.size(); ++i)
     {
-        if (ids[i] == id)
+        if (ids[i] == nId)
         {
             ids.erase(ids.begin() + static_cast<std::ptrdiff_t>(i));
             break;
@@ -70,7 +70,7 @@ bool CMessageRouter::UnregisterHandler(SubscriptionId id)
     }
     if (ids.empty())
     {
-        m_mapByType.erase(type);
+        m_mapByType.erase(nType);
     }
     m_mapHandlers.erase(it);
     return true;
@@ -81,106 +81,106 @@ bool CMessageRouter::UnregisterHandler(SubscriptionId id)
 /// 追加到连接缓冲，循环提取完整消息并分发。
 ///
 /// @note 同一连接的数据应串行进入（网络层保证）。
-void CMessageRouter::OnData(ConnectionId id, const char* data, size_t len)
+void CMessageRouter::OnData(ConnectionId nId, const char* pData, size_t nLen)
 {
-    if (data == nullptr || len == 0)
+    if (pData == nullptr || nLen == 0)
     {
         return;
     }
     // ① 取当前缓冲并追加（移除后再处理，避免锁外共享）
-    std::string pending;
+    std::string strPending;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        std::map<ConnectionId, std::string>::iterator it = m_mapBuffers.find(id);
+        std::map<ConnectionId, std::string>::iterator it = m_mapBuffers.find(nId);
         if (it != m_mapBuffers.end())
         {
-            pending = it->second;
+            strPending = it->second;
             m_mapBuffers.erase(it);
         }
-        pending.append(data, len);
+        strPending.append(pData, nLen);
     }
 
     // ② 锁外提取并分发
-    size_t consumed = 0;
-    while (consumed < pending.size())
+    size_t nConsumed = 0;
+    while (nConsumed < strPending.size())
     {
         if (!m_fnExtractor)
         {
             break;
         }
-        int type = 0;
-        const char* payload = nullptr;
-        size_t payloadSize = 0;
-        size_t step = 0;
+        int nType = 0;
+        const char* pPayload = nullptr;
+        size_t nPayloadSize = 0;
+        size_t nStep = 0;
         MessageParseResult result = m_fnExtractor(
-            pending.data() + consumed, pending.size() - consumed,
-            &step, &type, &payload, &payloadSize);
+            strPending.data() + nConsumed, strPending.size() - nConsumed,
+            &nStep, &nType, &pPayload, &nPayloadSize);
         if (result == MessageParseResult::kNeedMore)
         {
             break;
         }
-        if (result == MessageParseResult::kInvalid || step == 0)
+        if (result == MessageParseResult::kInvalid || nStep == 0)
         {
             // 协议非法或提取器异常：丢弃剩余数据
-            consumed = pending.size();
+            nConsumed = strPending.size();
             break;
         }
-        consumed += step;
-        Dispatch(id, type, payload, payloadSize);
+        nConsumed += nStep;
+        Dispatch(nId, nType, pPayload, nPayloadSize);
     }
 
     // ③ 剩余数据放回缓冲
-    std::string remain = pending.substr(consumed);
+    std::string strRemain = strPending.substr(nConsumed);
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        if (remain.empty())
+        if (strRemain.empty())
         {
-            m_mapBuffers.erase(id);
+            m_mapBuffers.erase(nId);
         }
         else
         {
-            m_mapBuffers[id] = remain;
+            m_mapBuffers[nId] = strRemain;
         }
     }
 }
 
 /// @brief 连接关闭时清理缓冲。
-void CMessageRouter::OnClose(ConnectionId id)
+void CMessageRouter::OnClose(ConnectionId nId)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_mapBuffers.erase(id);
+    m_mapBuffers.erase(nId);
 }
 
 /// @brief 按类型分发一条消息。
 ///
 /// 在锁外调用处理器，避免处理器内再次调用本组件时死锁。
-void CMessageRouter::Dispatch(ConnectionId id, int type,
-                             const char* payload, size_t payloadSize)
+void CMessageRouter::Dispatch(ConnectionId nId, int nType,
+                             const char* pPayload, size_t nPayloadSize)
 {
-    std::vector<MessageHandler> targets;
+    std::vector<MessageHandler> vecTargets;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        std::map<int, std::vector<SubscriptionId> >::const_iterator it = m_mapByType.find(type);
+        std::map<int, std::vector<SubscriptionId> >::const_iterator it = m_mapByType.find(nType);
         if (it == m_mapByType.end())
         {
             return;
         }
         const std::vector<SubscriptionId>& ids = it->second;
-        targets.reserve(ids.size());
+        vecTargets.reserve(ids.size());
         for (size_t i = 0; i < ids.size(); ++i)
         {
             std::map<SubscriptionId, HandlerEntry>::const_iterator sit = m_mapHandlers.find(ids[i]);
             if (sit != m_mapHandlers.end())
             {
-                targets.push_back(sit->second.handler);
+                vecTargets.push_back(sit->second.handler);
             }
         }
     }
-    for (size_t i = 0; i < targets.size(); ++i)
+    for (size_t i = 0; i < vecTargets.size(); ++i)
     {
-        if (targets[i])
+        if (vecTargets[i])
         {
-            targets[i](id, type, payload, payloadSize);
+            vecTargets[i](nId, nType, pPayload, nPayloadSize);
         }
     }
 }

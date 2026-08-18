@@ -25,19 +25,19 @@ public:
     virtual ~CMessageRouter();
 
     // 设置消息提取器。
-    void SetExtractor(const MessageExtractor& extractor) override;
+    void SetExtractor(const MessageExtractor& fnExtractor) override;
 
     // 注册消息处理器。
-    SubscriptionId RegisterHandler(int type, const MessageHandler& handler) override;
+    SubscriptionId RegisterHandler(int nType, const MessageHandler& fnHandler) override;
 
     // 反注册消息处理器。
-    bool UnregisterHandler(SubscriptionId id) override;
+    bool UnregisterHandler(SubscriptionId nId) override;
 
     // 数据入口。
-    void OnData(ConnectionId id, const char* data, size_t len) override;
+    void OnData(ConnectionId nId, const char* pData, size_t nLen) override;
 
     // 连接关闭清理。
-    void OnClose(ConnectionId id) override;
+    void OnClose(ConnectionId nId) override;
 
 protected:
     // 接口查询实现。
@@ -53,7 +53,7 @@ private:
     };
 
     // 按类型分发一条消息。
-    void Dispatch(ConnectionId id, int type, const char* payload, size_t payloadSize);
+    void Dispatch(ConnectionId nId, int nType, const char* pPayload, size_t nPayloadSize);
 
     MessageExtractor m_fnExtractor;
     std::map<ConnectionId, std::string> m_mapBuffers;

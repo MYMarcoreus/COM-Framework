@@ -24,16 +24,16 @@ public:
     virtual ~IEventDispatcher() {}
 
     // 订阅事件，返回订阅标识（用于取消订阅）；失败返回 kInvalidSubscriptionId。
-    virtual SubscriptionId Subscribe(const EventType& type, const EventHandler& handler) = 0;
+    virtual SubscriptionId Subscribe(const EventType& strType, const EventHandler& fnHandler) = 0;
 
     // 根据订阅标识取消订阅。
-    virtual bool Unsubscribe(SubscriptionId id) = 0;
+    virtual bool Unsubscribe(SubscriptionId nId) = 0;
 
     // 发布事件，同步调用所有订阅者；返回实际接收的处理器数量。
-    virtual size_t Publish(const EventType& type, const void* data, size_t size) = 0;
+    virtual size_t Publish(const EventType& strType, const void* pData, size_t nSize) = 0;
 
     // 指定事件的订阅者数量。
-    virtual size_t SubscriberCount(const EventType& type) const = 0;
+    virtual size_t SubscriberCount(const EventType& strType) const = 0;
 };
 
 } // namespace sc

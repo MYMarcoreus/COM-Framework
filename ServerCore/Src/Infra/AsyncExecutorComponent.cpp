@@ -6,8 +6,8 @@ namespace sc {
 
 /// @brief 创建异步执行器组件。
 ///
-/// @param threadCount 工作线程数量。
-CAsyncExecutorComponent::CAsyncExecutorComponent(size_t threadCount) : m_nThreadCount(threadCount)
+/// @param nThreadCount 工作线程数量。
+CAsyncExecutorComponent::CAsyncExecutorComponent(size_t nThreadCount) : m_nThreadCount(nThreadCount)
 {
 }
 

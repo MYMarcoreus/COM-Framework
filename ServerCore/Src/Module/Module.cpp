@@ -6,8 +6,8 @@ namespace sc {
 
 /// @brief 创建模块。
 ///
-/// @param name 模块名称（进程内唯一，用于管理与日志）。
-CModule::CModule(const char* name) : m_strName(name != nullptr ? name : "")
+/// @param strName 模块名称（进程内唯一，用于管理与日志）。
+CModule::CModule(const char* strName) : m_strName(strName != nullptr ? strName : "")
 {
 }
 

@@ -23,7 +23,7 @@ public:
     virtual ~IConfig() {}
 
     // 从文件加载配置（追加合并）。
-    virtual bool LoadFile(const std::string& path) = 0;
+    virtual bool LoadFile(const std::string& strPath) = 0;
 
     // 读取字符串。
     virtual std::string GetString(const std::string& key, const std::string& def) const = 0;

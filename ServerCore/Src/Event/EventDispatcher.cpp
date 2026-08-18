@@ -22,31 +22,31 @@ CEventDispatcher::~CEventDispatcher()
 /// @param handler 事件处理器。
 ///
 /// @return 订阅标识；失败返回 kInvalidSubscriptionId。
-SubscriptionId CEventDispatcher::Subscribe(const EventType& type, const EventHandler& handler)
+SubscriptionId CEventDispatcher::Subscribe(const EventType& strType, const EventHandler& fnHandler)
 {
-    if (!handler)
+    if (!fnHandler)
     {
         return kInvalidSubscriptionId;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
-    SubscriptionId id = m_nNextId++;
+    SubscriptionId nId = m_nNextId++;
     Subscription sub;
-    sub.type = type;
-    sub.handler = handler;
-    m_mapSubscriptions[id] = sub;
-    m_mapByType[type].push_back(id);
-    return id;
+    sub.type = strType;
+    sub.handler = fnHandler;
+    m_mapSubscriptions[nId] = sub;
+    m_mapByType[strType].push_back(nId);
+    return nId;
 }
 
 /// @brief 根据订阅标识取消订阅。
 ///
-/// @param id 订阅标识。
+/// @param nId 订阅标识。
 ///
 /// @return true 取消成功；false 标识无效。
-bool CEventDispatcher::Unsubscribe(SubscriptionId id)
+bool CEventDispatcher::Unsubscribe(SubscriptionId nId)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    std::map<SubscriptionId, Subscription>::iterator it = m_mapSubscriptions.find(id);
+    std::map<SubscriptionId, Subscription>::iterator it = m_mapSubscriptions.find(nId);
     if (it == m_mapSubscriptions.end())
     {
         return false;
@@ -55,7 +55,7 @@ bool CEventDispatcher::Unsubscribe(SubscriptionId id)
     std::vector<SubscriptionId>& ids = m_mapByType[type];
     for (size_t i = 0; i < ids.size(); ++i)
     {
-        if (ids[i] == id)
+        if (ids[i] == nId)
         {
             ids.erase(ids.begin() + static_cast<std::ptrdiff_t>(i));
             break;
@@ -78,47 +78,47 @@ bool CEventDispatcher::Unsubscribe(SubscriptionId id)
 /// @param size 负载字节数。
 ///
 /// @return 实际接收事件的处理器数量。
-size_t CEventDispatcher::Publish(const EventType& type, const void* data, size_t size)
+size_t CEventDispatcher::Publish(const EventType& strType, const void* pData, size_t nSize)
 {
-    std::vector<EventHandler> targets;
+    std::vector<EventHandler> vecTargets;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        std::map<EventType, std::vector<SubscriptionId> >::const_iterator it = m_mapByType.find(type);
+        std::map<EventType, std::vector<SubscriptionId> >::const_iterator it = m_mapByType.find(strType);
         if (it == m_mapByType.end())
         {
             return 0;
         }
         const std::vector<SubscriptionId>& ids = it->second;
-        targets.reserve(ids.size());
+        vecTargets.reserve(ids.size());
         for (size_t i = 0; i < ids.size(); ++i)
         {
             std::map<SubscriptionId, Subscription>::const_iterator sit = m_mapSubscriptions.find(ids[i]);
             if (sit != m_mapSubscriptions.end())
             {
-                targets.push_back(sit->second.handler);
+                vecTargets.push_back(sit->second.handler);
             }
         }
     }
-    Event event(type, data, size);
-    for (size_t i = 0; i < targets.size(); ++i)
+    Event event(strType, pData, nSize);
+    for (size_t i = 0; i < vecTargets.size(); ++i)
     {
-        if (targets[i])
+        if (vecTargets[i])
         {
-            targets[i](event);
+            vecTargets[i](event);
         }
     }
-    return targets.size();
+    return vecTargets.size();
 }
 
 /// @brief 指定事件的订阅者数量。
 ///
-/// @param type 事件类型。
+/// @param strType 事件类型。
 ///
 /// @return 订阅者数量；无订阅返回 0。
-size_t CEventDispatcher::SubscriberCount(const EventType& type) const
+size_t CEventDispatcher::SubscriberCount(const EventType& strType) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    std::map<EventType, std::vector<SubscriptionId> >::const_iterator it = m_mapByType.find(type);
+    std::map<EventType, std::vector<SubscriptionId> >::const_iterator it = m_mapByType.find(strType);
     if (it == m_mapByType.end())
     {
         return 0;

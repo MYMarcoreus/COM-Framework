@@ -56,19 +56,19 @@ public:
     virtual ~IMessageRouter() {}
 
     // 设置消息提取器（协议相关，业务提供）。
-    virtual void SetExtractor(const MessageExtractor& extractor) = 0;
+    virtual void SetExtractor(const MessageExtractor& fnExtractor) = 0;
 
     // 注册消息处理器（按类型），返回订阅标识。
-    virtual SubscriptionId RegisterHandler(int type, const MessageHandler& handler) = 0;
+    virtual SubscriptionId RegisterHandler(int nType, const MessageHandler& fnHandler) = 0;
 
     // 反注册消息处理器。
-    virtual bool UnregisterHandler(SubscriptionId id) = 0;
+    virtual bool UnregisterHandler(SubscriptionId nId) = 0;
 
     // 数据入口（供 INetworkHandler::OnData 调用）。
-    virtual void OnData(ConnectionId id, const char* data, size_t len) = 0;
+    virtual void OnData(ConnectionId nId, const char* pData, size_t nLen) = 0;
 
     // 连接关闭时清理缓冲（供 INetworkHandler::OnClose 调用）。
-    virtual void OnClose(ConnectionId id) = 0;
+    virtual void OnClose(ConnectionId nId) = 0;
 };
 
 } // namespace sc

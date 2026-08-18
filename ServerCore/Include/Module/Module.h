@@ -14,7 +14,7 @@ namespace sc {
 class CModule : public CComponent, public IModule
 {
 public:
-    explicit CModule(const char* name);
+    explicit CModule(const char* strName);
 
     virtual ~CModule();
 

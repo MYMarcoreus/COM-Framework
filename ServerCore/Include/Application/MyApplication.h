@@ -46,7 +46,7 @@ public:
     CModuleManager& GetModuleManager();
 
     // 设置配置文件路径（派生类在加载配置时读取）。
-    void SetConfigPath(const std::string& path);
+    void SetConfigPath(const std::string& strPath);
 
     // 配置文件路径。
     const std::string& ConfigPath() const;
