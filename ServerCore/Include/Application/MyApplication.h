@@ -1,6 +1,9 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <string>
 
 #include "Component/ComponentManager.h"
 #include "Module/ModuleManager.h"
@@ -42,6 +45,18 @@ public:
     // 获取模块管理器。
     ModuleManager& GetModuleManager();
 
+    // 设置配置文件路径（派生类在加载配置时读取）。
+    void SetConfigPath(const std::string& path);
+
+    // 配置文件路径。
+    const std::string& ConfigPath() const;
+
+    // 是否正在运行。
+    bool IsRunning() const;
+
+    // 已运行秒数（Run 启动后计时，供状态查询）。
+    uint64_t UptimeSeconds() const;
+
 protected:
     // 注册应用程序需要的基础组件。
     virtual bool RegisterComponents();
@@ -71,6 +86,8 @@ private:
     // 信号处理入口。
     static void HandleSignal(int signo);
 
+    std::string configPath_;
+    std::chrono::steady_clock::time_point startTime_;
     std::atomic<bool> running_;
 };
 

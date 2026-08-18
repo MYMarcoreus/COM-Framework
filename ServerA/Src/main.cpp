@@ -21,6 +21,7 @@ int main(int argc, char* argv[])
     }
 
     servera::ServerApplication app(port);
+    app.SetConfigPath("servera.ini");
 
     if (!app.Initialize())
     {
@@ -37,6 +38,7 @@ int main(int argc, char* argv[])
     int result = app.Run();
 
     app.Shutdown();
-    common::Logger::Instance().Info("ServerA 已退出");
+    common::Logger::Instance().Info(
+        "ServerA 已退出，运行 " + std::to_string(app.UptimeSeconds()) + " 秒");
     return result;
 }

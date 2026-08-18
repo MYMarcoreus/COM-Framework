@@ -51,9 +51,14 @@ bool ServerApplication::RegisterComponents()
     }
     events->Release(); // 管理器已持有引用
 
-    // ③ 注册配置组件（读取 servera.ini）
+    // ③ 注册配置组件（读取配置路径，默认 servera.ini）
     sc::ConfigComponent* config = new sc::ConfigComponent();
-    config->LoadFile("servera.ini");
+    std::string configPath = ConfigPath();
+    if (configPath.empty())
+    {
+        configPath = "servera.ini";
+    }
+    config->LoadFile(configPath);
     if (!componentManager_.RegisterComponent(sc::IID_IConfig(), config))
     {
         config->Release();

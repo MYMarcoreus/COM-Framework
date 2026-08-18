@@ -71,6 +71,7 @@ bool MyApplication::Start()
 int MyApplication::Run()
 {
     running_.store(true);
+    startTime_ = std::chrono::steady_clock::now();
     g_stopRequested.store(false);
     g_instance = this;
 
@@ -123,6 +124,35 @@ ComponentManager& MyApplication::GetComponentManager()
 ModuleManager& MyApplication::GetModuleManager()
 {
     return moduleManager_;
+}
+
+/// @brief 设置配置文件路径。
+void MyApplication::SetConfigPath(const std::string& path)
+{
+    configPath_ = path;
+}
+
+/// @brief 配置文件路径。
+const std::string& MyApplication::ConfigPath() const
+{
+    return configPath_;
+}
+
+/// @brief 是否正在运行。
+bool MyApplication::IsRunning() const
+{
+    return running_.load();
+}
+
+/// @brief 已运行秒数。
+///
+/// Run 启动后开始计时（含已结束的运行），供状态查询与退出时统计。
+uint64_t MyApplication::UptimeSeconds() const
+{
+    std::chrono::steady_clock::duration elapsed =
+        std::chrono::steady_clock::now() - startTime_;
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
 }
 
 /// @brief 注册基础组件。
