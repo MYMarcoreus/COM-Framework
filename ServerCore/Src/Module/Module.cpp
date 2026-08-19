@@ -98,6 +98,18 @@ std::string CModule::GetStatus() const
     return m_strName.empty() ? "module" : m_strName;
 }
 
+/// @brief 返回指向自身的强引用（自持引用）。
+///
+/// 在注册回调 / 投递异步任务时调用，将自持引用一并传入回调：
+/// 回调执行期间模块必然存活（即使正在关闭）；回调对象销毁时引用自动释放。
+/// 模块 Shutdown 时必须取消 / 解除自己注册的所有回调，引用才能归零并析构。
+///
+/// @return 指向 this 的强引用（引用计数 +1）。
+sc::ScopedInterfacePtr<IModule> CModule::Self()
+{
+    return sc::ScopedInterfacePtr<IModule>(this);
+}
+
 /// @brief 默认初始化实现，子类按需重写。
 ///
 /// @return true。

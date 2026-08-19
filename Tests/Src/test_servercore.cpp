@@ -176,3 +176,21 @@ TEST(ModuleManager_Snapshot)
     ASSERT_EQ(vecSnapshot[0].state, sc::ModuleState::kStarted);
     ASSERT_EQ(vecSnapshot[0].strStatus, std::string("test-module"));
 }
+
+/// @brief 自持引用：Self() 返回指向自身的强引用，作用域结束引用释放。
+///
+/// 模拟回调场景：回调持有自持引用期间模块存活；引用对象销毁后引用归零。
+TEST(Module_SelfReference)
+{
+    sc::CModule* pModule = new sc::CModule("self-test");
+    {
+        sc::ScopedInterfacePtr<sc::IModule> spSelf = pModule->Self();
+        ASSERT_TRUE(spSelf.Get() == pModule);
+        // 引用计数 = 创建(1) + Self(1) = 2，作用域内模块必然存活
+    }
+    // spSelf 析构 → 引用计数回到 1，模块仍存活
+    void* ppv = nullptr;
+    ASSERT_TRUE(pModule->QueryInterface(sc::IID_IUnknown(), &ppv));
+    ASSERT_TRUE(ppv != nullptr);
+    ASSERT_EQ(pModule->Release(), 0u); // 归零销毁
+}

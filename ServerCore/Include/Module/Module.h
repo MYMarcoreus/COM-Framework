@@ -3,6 +3,7 @@
 #include <atomic>
 #include <string>
 
+#include "Component/ScopedInterfacePtr.h"
 #include "Module/IModule.h"
 
 namespace sc {
@@ -42,6 +43,11 @@ public:
 
     // 默认状态报告：返回模块名称，子类按需重写。
     std::string GetStatus() const override;
+
+    // 返回指向自身的强引用（自持引用）。
+    // 注册回调 / 投递异步任务时调用，把自持引用一并传入回调，
+    // 保证回调执行期间模块存活；回调对象销毁时引用自动释放。
+    ScopedInterfacePtr<IModule> Self();
 
 protected:
     // 子类重写以返回自身实现的接口。

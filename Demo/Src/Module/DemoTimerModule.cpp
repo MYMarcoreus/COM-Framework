@@ -1,5 +1,6 @@
 #include "Module/DemoTimerModule.h"
 
+#include "Component/ScopedInterfacePtr.h"
 #include "Log/Logger.h"
 
 namespace demo {
@@ -33,19 +34,36 @@ bool CDemoTimerModule::Start()
     {
         return false;
     }
+    // 注册定时器回调时一并传入指向自身的强引用（Self 自持引用）：
+    // 回调执行期间模块必然存活（即使正在关闭），彻底避免野指针；
+    // 回调对象在定时器被取消/停止后销毁，自持引用随之释放。
+    sc::ScopedInterfacePtr<sc::IModule> spSelf = Self();
     m_tTimerId = m_timer.AddPeriodicTimer(m_nIntervalMs,
-        []()
+        [spSelf]()
         {
-            common::CLogger::Instance().Info("Demo 服务器运行中");
+            if (spSelf)
+            {
+                std::string strMessage = "Demo 服务器运行中 (module=";
+                strMessage += spSelf->GetName();
+                strMessage += ")";
+                common::CLogger::Instance().Info(strMessage);
+            }
         });
     return true;
 }
 
 /// @brief 停止定时器。
+///
+/// 先取消定时器（释放回调持有的自持引用，引用计数归零后模块可安全析构），
+/// 再停止定时器线程。
 void CDemoTimerModule::Stop()
 {
+    if (m_tTimerId != common::kInvalidTimerId)
+    {
+        m_timer.Cancel(m_tTimerId);
+        m_tTimerId = common::kInvalidTimerId;
+    }
     m_timer.Stop();
-    m_tTimerId = common::kInvalidTimerId;
 }
 
 /// @brief 停止定时器并释放资源。
