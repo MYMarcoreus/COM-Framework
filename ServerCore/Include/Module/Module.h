@@ -31,6 +31,9 @@ public:
     // 模块名称。
     const char* GetName() const override;
 
+    // 当前生命周期状态（由 CModuleManager 驱动维护，供日志/健康检查查询）。
+    ModuleState GetState() const override;
+
     // 默认空实现，子类按需重写。
     bool Initialize() override;
     bool Start() override;
@@ -45,7 +48,13 @@ protected:
     virtual bool QueryInterfaceImpl(const InterfaceId& iid, void** ppv);
 
 private:
+    // 仅供 CModuleManager 在生命周期编排时调用，外部不可直接修改。
+    void SetState(ModuleState state);
+
+    friend class CModuleManager;
+
     std::atomic<unsigned int> m_nRefCount;
+    std::atomic<ModuleState> m_state;
     std::string m_strName;
 };
 

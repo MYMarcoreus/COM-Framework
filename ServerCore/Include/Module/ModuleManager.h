@@ -11,6 +11,15 @@
 
 namespace sc {
 
+/// @brief 模块快照（供健康检查 / 日志 / 管理接口使用）。
+struct ModuleSnapshot
+{
+    std::string strName;   // 模块名称（可为空）
+    std::string strIid;    // 接口标识注册键（可为空）
+    ModuleState state;     // 当前生命周期状态
+    std::string strStatus; // 状态描述（GetStatus）
+};
+
 /// @brief 模块管理器（COM 思想：注册即持有引用，生命周期统一编排）。
 ///
 /// 统一管理器：既可按名字注册业务模块，也可按接口标识注册服务模块（服务定位）。
@@ -39,6 +48,15 @@ public:
 
     // 查询模块当前状态。
     ModuleState GetModuleState(const char* strName) const;
+
+    // 模块是否存在（按名称）。
+    bool HasModule(const char* strName) const;
+
+    // 模块是否存在（按接口标识）。
+    bool HasModuleByIid(const InterfaceId& iid) const;
+
+    // 生成所有模块的结构化快照（供健康检查 / 日志 / 管理接口）。
+    std::vector<ModuleSnapshot> Snapshot() const;
 
     // 反注册模块：释放引用并移除。
     bool UnregisterModule(const char* strName);
@@ -74,18 +92,18 @@ public:
     bool ShutdownAllWithTimeout(uint32_t nTimeoutMs);
 
 private:
+    // 设置模块生命周期状态（friend 访问 CModule::SetState）。
+    static void SetModuleState(IModule* pModule, ModuleState state);
+
     // 收集所有已注册模块（锁外调用）。
     void CollectModules(std::vector<IModule*>& vecOut) const;
     struct Entry
     {
         IModule* module;
-        ModuleState state;
         std::string strIid; // 接口标识注册键（空表示按名字注册）
 
-        explicit Entry(IModule* m)
-            : module(m), state(ModuleState::kCreated), strIid() {}
-        Entry(IModule* m, const std::string& iid)
-            : module(m), state(ModuleState::kCreated), strIid(iid) {}
+        explicit Entry(IModule* m, const std::string& iid = std::string())
+            : module(m), strIid(iid) {}
     };
 
     // 逆序关闭所有处于已初始化状态的模块（回滚辅助）。

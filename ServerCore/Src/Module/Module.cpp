@@ -10,7 +10,8 @@ namespace sc {
 ///
 /// @param strName 模块名称（进程内唯一，用于管理与日志；可为空）。
 CModule::CModule(const char* strName)
-    : m_nRefCount(1), m_strName(strName != nullptr ? strName : "")
+    : m_nRefCount(1), m_state(ModuleState::kCreated),
+      m_strName(strName != nullptr ? strName : "")
 {
 }
 
@@ -73,6 +74,20 @@ bool CModule::QueryInterface(const InterfaceId& iid, void** ppv)
 const char* CModule::GetName() const
 {
     return m_strName.c_str();
+}
+
+/// @brief 当前生命周期状态。
+///
+/// @note 由 CModuleManager 在生命周期编排时驱动更新。
+ModuleState CModule::GetState() const
+{
+    return m_state.load();
+}
+
+/// @brief 设置生命周期状态（仅供 CModuleManager 调用）。
+void CModule::SetState(ModuleState state)
+{
+    m_state.store(state);
 }
 
 /// @brief 默认状态报告。

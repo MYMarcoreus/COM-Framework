@@ -38,6 +38,9 @@ public:
     // 模块名称（进程内唯一标识，用于管理与日志）。
     virtual const char* GetName() const = 0;
 
+    // 当前生命周期状态（由 CModuleManager 统一驱动维护）。
+    virtual ModuleState GetState() const = 0;
+
     // 初始化模块（创建资源、加载配置）。
     virtual bool Initialize() = 0;
 

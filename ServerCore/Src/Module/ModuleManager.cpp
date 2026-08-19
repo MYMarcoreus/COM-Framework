@@ -2,7 +2,22 @@
 
 #include <chrono>
 
+#include "Module/Module.h"
+
 namespace sc {
+
+/// @brief 设置模块生命周期状态。
+///
+/// @note 状态由管理器驱动；通过 friend 访问 CModule::SetState。
+/// 非 CModule 派生的模块实现无法设置状态（保持默认 kCreated）。
+void CModuleManager::SetModuleState(IModule* pModule, ModuleState state)
+{
+    CModule* pImpl = dynamic_cast<CModule*>(pModule);
+    if (pImpl != nullptr)
+    {
+        pImpl->SetState(state);
+    }
+}
 
 /// @brief 创建模块管理器。
 CModuleManager::CModuleManager()
@@ -120,7 +135,7 @@ ModuleState CModuleManager::GetModuleState(const char* strName) const
     {
         return ModuleState::kCreated;
     }
-    return m_vecModules[it->second].state;
+    return m_vecModules[it->second].module->GetState();
 }
 
 /// @brief 反注册模块。
@@ -252,7 +267,7 @@ bool CModuleManager::InitializeAll()
     for (size_t i = 0; i < m_vecModules.size(); ++i)
     {
         Entry& e = m_vecModules[i];
-        if (e.state != ModuleState::kCreated)
+        if (e.module->GetState() != ModuleState::kCreated)
         {
             continue; // 幂等：跳过非初始状态
         }
@@ -261,7 +276,7 @@ bool CModuleManager::InitializeAll()
             RollbackInitialized();
             return false;
         }
-        e.state = ModuleState::kInitialized;
+        SetModuleState(e.module, ModuleState::kInitialized);
     }
     return true;
 }
@@ -277,7 +292,7 @@ bool CModuleManager::StartAll()
     for (size_t i = 0; i < m_vecModules.size(); ++i)
     {
         Entry& e = m_vecModules[i];
-        if (e.state != ModuleState::kInitialized)
+        if (e.module->GetState() != ModuleState::kInitialized)
         {
             continue; // 只启动已初始化的模块
         }
@@ -286,7 +301,7 @@ bool CModuleManager::StartAll()
             RollbackStarted();
             return false;
         }
-        e.state = ModuleState::kStarted;
+        SetModuleState(e.module, ModuleState::kStarted);
     }
     return true;
 }
@@ -298,10 +313,10 @@ void CModuleManager::StopAll()
     for (size_t i = m_vecModules.size(); i > 0; --i)
     {
         Entry& e = m_vecModules[i - 1];
-        if (e.state == ModuleState::kStarted)
+        if (e.module->GetState() == ModuleState::kStarted)
         {
             e.module->Stop();
-            e.state = ModuleState::kStopped;
+            SetModuleState(e.module, ModuleState::kStopped);
         }
     }
 }
@@ -313,10 +328,11 @@ void CModuleManager::ShutdownAll()
     for (size_t i = m_vecModules.size(); i > 0; --i)
     {
         Entry& e = m_vecModules[i - 1];
-        if (e.state != ModuleState::kCreated && e.state != ModuleState::kShutdown)
+        if (e.module->GetState() != ModuleState::kCreated &&
+            e.module->GetState() != ModuleState::kShutdown)
         {
             e.module->Shutdown();
-            e.state = ModuleState::kShutdown;
+            SetModuleState(e.module, ModuleState::kShutdown);
         }
     }
 }
@@ -327,10 +343,10 @@ void CModuleManager::RollbackInitialized()
     for (size_t i = m_vecModules.size(); i > 0; --i)
     {
         Entry& e = m_vecModules[i - 1];
-        if (e.state == ModuleState::kInitialized)
+        if (e.module->GetState() == ModuleState::kInitialized)
         {
             e.module->Shutdown();
-            e.state = ModuleState::kShutdown;
+            SetModuleState(e.module, ModuleState::kShutdown);
         }
     }
 }
@@ -342,22 +358,56 @@ void CModuleManager::RollbackStarted()
     for (size_t i = m_vecModules.size(); i > 0; --i)
     {
         Entry& e = m_vecModules[i - 1];
-        if (e.state == ModuleState::kStarted)
+        if (e.module->GetState() == ModuleState::kStarted)
         {
             e.module->Stop();
-            e.state = ModuleState::kStopped;
+            SetModuleState(e.module, ModuleState::kStopped);
         }
     }
     // 再关闭已初始化的模块
     for (size_t i = m_vecModules.size(); i > 0; --i)
     {
         Entry& e = m_vecModules[i - 1];
-        if (e.state == ModuleState::kInitialized || e.state == ModuleState::kStopped)
+        ModuleState state = e.module->GetState();
+        if (state == ModuleState::kInitialized || state == ModuleState::kStopped)
         {
             e.module->Shutdown();
-            e.state = ModuleState::kShutdown;
+            SetModuleState(e.module, ModuleState::kShutdown);
         }
     }
+}
+
+/// @brief 模块是否存在（按名称）。
+bool CModuleManager::HasModule(const char* strName) const
+{
+    return GetModule(strName) != nullptr;
+}
+
+/// @brief 模块是否存在（按接口标识）。
+bool CModuleManager::HasModuleByIid(const InterfaceId& iid) const
+{
+    return GetModuleByIid(iid) != nullptr;
+}
+
+/// @brief 生成所有模块的结构化快照。
+///
+/// @return 快照列表（按注册顺序）。
+std::vector<ModuleSnapshot> CModuleManager::Snapshot() const
+{
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    std::vector<ModuleSnapshot> vecSnapshot;
+    vecSnapshot.reserve(m_vecModules.size());
+    for (size_t i = 0; i < m_vecModules.size(); ++i)
+    {
+        ModuleSnapshot item;
+        item.strIid = m_vecModules[i].strIid;
+        const char* strName = m_vecModules[i].module->GetName();
+        item.strName = (strName != nullptr) ? strName : "";
+        item.state = m_vecModules[i].module->GetState();
+        item.strStatus = m_vecModules[i].module->GetStatus();
+        vecSnapshot.push_back(item);
+    }
+    return vecSnapshot;
 }
 
 /// @brief 生成所有模块的状态报告。

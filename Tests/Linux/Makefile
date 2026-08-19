@@ -50,6 +50,10 @@ $(foreach src,$(SRCS),$(eval $(call compile-obj,$(src))))
 
 -include $(DEPS)
 
+.PHONY: compiledb
+compiledb:
+	compiledb -n -o $(ROOT)/compile_commands.json make all
+
 .PHONY: clean
 clean:
 	rm -f $(OBJS) $(DEPS) $(TARGET) compile_commands.json
