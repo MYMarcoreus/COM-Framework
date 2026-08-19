@@ -3,12 +3,14 @@
 
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
 #include "TestFramework.h"
 
 #include "Event/EventDispatcher.h"
+#include "Message/MessageRouter.h"
 #include "Module/Module.h"
 #include "Module/ModuleManager.h"
 
@@ -193,4 +195,77 @@ TEST(Module_SelfReference)
     ASSERT_TRUE(pModule->QueryInterface(sc::IID_IUnknown(), &ppv));
     ASSERT_TRUE(ppv != nullptr);
     ASSERT_EQ(pModule->Release(), 0u); // 归零销毁
+}
+
+/// @brief 消息路由器：结构体返回的提取器 + 粘包/跨包重组。
+///
+/// 协议：Length(4B 小端) + Type(4B) + Payload(Length 字节)。
+TEST(MessageRouter_Dispatch)
+{
+    sc::CMessageRouter* pRouter = new sc::CMessageRouter();
+    pRouter->SetExtractor(
+        [](const char* pData, size_t nLen) -> sc::ExtractedMessage
+        {
+            sc::ExtractedMessage msg;
+            msg.result = sc::MessageParseResult::kNeedMore;
+            msg.step = 0;
+            msg.type = 0;
+            msg.payload = nullptr;
+            msg.payloadSize = 0;
+            if (nLen < 8)
+            {
+                return msg;
+            }
+            uint32_t nLength = 0;
+            uint32_t nType = 0;
+            for (int i = 0; i < 4; ++i)
+            {
+                nLength |= static_cast<uint32_t>(
+                    static_cast<unsigned char>(pData[i])) << (8 * i);
+                nType |= static_cast<uint32_t>(
+                    static_cast<unsigned char>(pData[4 + i])) << (8 * i);
+            }
+            if (nLength > nLen - 8)
+            {
+                return msg; // 数据不足，等待更多
+            }
+            msg.result = sc::MessageParseResult::kOk;
+            msg.step = 8 + nLength;
+            msg.type = static_cast<int>(nType);
+            msg.payload = pData + 8;
+            msg.payloadSize = nLength;
+            return msg;
+        });
+
+    std::vector<std::string> vecReceived;
+    pRouter->RegisterHandler(
+        1, [&vecReceived](sc::ConnectionId, int, const char* pPayload, size_t nLen)
+        {
+            vecReceived.push_back(std::string(pPayload, nLen));
+        });
+
+    // 构造两条消息（type=1, payload="hello"/"world"），每条 13 字节
+    unsigned char buf[26];
+    for (int i = 0; i < 13; ++i)
+    {
+        buf[i] = (i < 4) ? static_cast<unsigned char>((i == 0) ? 5 : 0) : 0;
+    }
+    buf[4] = 1;
+    std::memcpy(buf + 8, "hello", 5);
+    for (int i = 13; i < 26; ++i)
+    {
+        buf[i] = (i < 17) ? static_cast<unsigned char>((i == 13) ? 5 : 0) : 0;
+    }
+    buf[17] = 1;
+    std::memcpy(buf + 21, "world", 5);
+
+    // 第一次发 13 字节（消息1完整），第二次发 13 字节（消息2完整）
+    pRouter->OnData(1, reinterpret_cast<const char*>(buf), 13);
+    pRouter->OnData(1, reinterpret_cast<const char*>(buf + 13), 13);
+    ASSERT_EQ(vecReceived.size(), static_cast<size_t>(2));
+    ASSERT_EQ(vecReceived[0], std::string("hello"));
+    ASSERT_EQ(vecReceived[1], std::string("world"));
+
+    pRouter->OnClose(1);
+    delete pRouter;
 }

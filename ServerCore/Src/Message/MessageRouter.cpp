@@ -108,25 +108,20 @@ void CMessageRouter::OnData(ConnectionId nId, const char* pData, size_t nLen)
         {
             break;
         }
-        int nType = 0;
-        const char* pPayload = nullptr;
-        size_t nPayloadSize = 0;
-        size_t nStep = 0;
-        MessageParseResult result = m_fnExtractor(
-            strPending.data() + nConsumed, strPending.size() - nConsumed,
-            &nStep, &nType, &pPayload, &nPayloadSize);
-        if (result == MessageParseResult::kNeedMore)
+        ExtractedMessage extracted = m_fnExtractor(
+            strPending.data() + nConsumed, strPending.size() - nConsumed);
+        if (extracted.result == MessageParseResult::kNeedMore)
         {
             break;
         }
-        if (result == MessageParseResult::kInvalid || nStep == 0)
+        if (extracted.result == MessageParseResult::kInvalid || extracted.step == 0)
         {
             // 协议非法或提取器异常：丢弃剩余数据
             nConsumed = strPending.size();
             break;
         }
-        nConsumed += nStep;
-        Dispatch(nId, nType, pPayload, nPayloadSize);
+        nConsumed += extracted.step;
+        Dispatch(nId, extracted.type, extracted.payload, extracted.payloadSize);
     }
 
     // ③ 剩余数据放回缓冲

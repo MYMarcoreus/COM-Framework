@@ -25,16 +25,28 @@ enum class MessageParseResult
     kInvalid   // 数据非法
 };
 
+/// @brief 单条消息提取结果。
+///
+/// 通过结构体一次返回全部输出，避免 C 风格 out 指针 / 二重指针参数。
+/// 仅在 result == kOk 时，type / payload / payloadSize / step 有效；
+/// payload 为借用指针，指向输入缓冲内部，本次提取后即失效，不得长期保存。
+struct ExtractedMessage
+{
+    MessageParseResult result; // 解析结果
+    size_t step;               // 消耗字节数（kOk 时有效）
+    int type;                  // 消息类型（kOk 时有效）
+    const char* payload;       // 消息负载（借用指针，不含消息头，kOk 时有效）
+    size_t payloadSize;        // 负载字节数（kOk 时有效）
+};
+
 /// @brief 消息提取器（协议相关，由业务提供）。
 ///
-/// 从数据流起始处提取一条完整消息：
-/// - 成功返回 kOk，通过 step 给出消耗字节数，outType/outPayload/outPayloadSize
+/// 从数据流起始处提取一条完整消息，返回提取结果结构体：
+/// - 成功返回 kOk，step 给出消耗字节数，type / payload / payloadSize
 ///   给出消息类型与负载（负载不含消息头）；
 /// - 数据不足返回 kNeedMore；
 /// - 协议非法返回 kInvalid。
-using MessageExtractor = std::function<MessageParseResult(
-    const char* data, size_t len, size_t* step,
-    int* outType, const char** outPayload, size_t* outPayloadSize)>;
+using MessageExtractor = std::function<ExtractedMessage(const char* data, size_t len)>;
 
 /// @brief 消息处理器。
 ///
