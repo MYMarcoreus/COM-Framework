@@ -86,6 +86,64 @@ bool CModuleManager::RegisterModule(const InterfaceId& iid, IModule* pModule)
     return true;
 }
 
+/// @brief 接管型注册（按名字）。
+///
+/// 直接接管调用方 new 出来的模块的创建者引用（不额外 AddRef）；
+/// 成功时管理器持有该引用（Clear/Unregister 时 Release 归零析构），
+/// 失败（名字为空/重复）时管理器负责 Release 并返回 false，调用方无需释放。
+///
+/// @param module 刚创建、尚未额外 AddRef 的模块接口指针。
+///
+/// @return true 注册成功并接管；false 注册失败（已释放）。
+bool CModuleManager::RegisterModuleOwned(IModule* pModule)
+{
+    if (pModule == nullptr)
+    {
+        return false;
+    }
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    const char* strName = pModule->GetName();
+    if (strName == nullptr || strName[0] == '\0')
+    {
+        pModule->Release();
+        return false;
+    }
+    if (m_mapIndexByName.find(strName) != m_mapIndexByName.end())
+    {
+        pModule->Release(); // 名称重复：释放
+        return false;
+    }
+    m_mapIndexByName[strName] = m_vecModules.size();
+    m_vecModules.push_back(Entry(pModule)); // 接管引用（不 AddRef）
+    return true;
+}
+
+/// @brief 接管型注册（按接口标识）。
+///
+/// 语义与按名字版本一致：接管创建者引用，失败时自行 Release。
+///
+/// @param iid 接口标识。
+/// @param module 刚创建、尚未额外 AddRef 的模块接口指针。
+///
+/// @return true 注册成功并接管；false 注册失败（已释放）。
+bool CModuleManager::RegisterModuleOwned(const InterfaceId& iid, IModule* pModule)
+{
+    if (iid == nullptr || pModule == nullptr)
+    {
+        return false;
+    }
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    std::string strKey(iid);
+    if (m_mapIndexByIid.find(strKey) != m_mapIndexByIid.end())
+    {
+        pModule->Release(); // 接口标识重复：释放
+        return false;
+    }
+    m_mapIndexByIid[strKey] = m_vecModules.size();
+    m_vecModules.push_back(Entry(pModule, strKey)); // 接管引用（不 AddRef）
+    return true;
+}
+
 /// @brief 根据名称获取模块。
 ///
 /// @param strName 模块名称。

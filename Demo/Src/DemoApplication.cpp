@@ -55,61 +55,45 @@ bool CDemoApplication::RegisterModules()
         return false;
     }
 
-    // ② 注册网络模块
-    sc::IModule* network = new sc::CNetworkModule();
-    if (!m_moduleManager.RegisterModule(sc::IID_INetwork(), network))
+    // ② 网络模块
+    if (!m_moduleManager.RegisterModuleOwned(sc::IID_INetwork(), new sc::CNetworkModule()))
     {
-        network->Release();
         return false;
     }
-    network->Release(); // 管理器已持有引用
 
-    // ③ 注册事件分发器模块
-    sc::IModule* events = new sc::CEventDispatcher();
-    if (!m_moduleManager.RegisterModule(sc::IID_EventDispatcher(), events))
+    // ③ 事件分发器模块
+    if (!m_moduleManager.RegisterModuleOwned(sc::IID_EventDispatcher(), new sc::CEventDispatcher()))
     {
-        events->Release();
         return false;
     }
-    events->Release(); // 管理器已持有引用
 
-    // ④ 注册协议处理服务
+    // ④ 协议处理服务（保存指针用于注入业务模块）
     CDemoService* service = new CDemoService();
-    if (!m_moduleManager.RegisterModule(sc::IID_INetworkHandler(), service))
+    if (!m_moduleManager.RegisterModuleOwned(sc::IID_INetworkHandler(), service))
     {
-        service->Release();
         return false;
     }
     m_pService = service;
-    service->Release(); // 管理器已持有引用
 
     // ⑤ 日志模块：根据配置初始化日志器
-    sc::IModule* logger = new CDemoLoggerModule(m_config);
-    if (!m_moduleManager.RegisterModule(logger))
+    if (!m_moduleManager.RegisterModuleOwned(new CDemoLoggerModule(m_config)))
     {
-        logger->Release();
         return false;
     }
-    logger->Release(); // 管理器已持有引用
 
-    // ② 定时器模块：周期性输出运行状态
+    // ⑥ 定时器模块：周期性输出运行状态
     int intervalMs = m_config.GetInt("timer.interval_ms", 5000);
-    sc::IModule* timer = new CDemoTimerModule(intervalMs);
-    if (!m_moduleManager.RegisterModule(timer))
+    if (!m_moduleManager.RegisterModuleOwned(new CDemoTimerModule(intervalMs)))
     {
-        timer->Release();
         return false;
     }
-    timer->Release(); // 管理器已持有引用
 
     // ⑦ 网络业务模块：关联接口模块并启动 TCP 服务器
-    sc::IModule* businessNetwork = new CDemoNetworkModule(m_moduleManager, m_pService, m_nPort);
-    if (!m_moduleManager.RegisterModule(businessNetwork))
+    if (!m_moduleManager.RegisterModuleOwned(
+            new CDemoNetworkModule(m_moduleManager, m_pService, m_nPort)))
     {
-        businessNetwork->Release();
         return false;
     }
-    businessNetwork->Release(); // 管理器已持有引用
     return true;
 }
 

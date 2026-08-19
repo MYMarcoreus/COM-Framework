@@ -40,6 +40,13 @@ public:
     // 按接口标识注册模块（服务定位；模块可有可无名称），成功后持有模块一个引用。
     bool RegisterModule(const InterfaceId& iid, IModule* pModule);
 
+    // 接管型注册（按名字）：接管调用方 new 出来的模块（不额外 AddRef）。
+    // 成功时管理器持有该引用；失败时管理器负责 Release 并返回 false，调用方无需释放。
+    bool RegisterModuleOwned(IModule* pModule);
+
+    // 接管型注册（按接口标识）：语义同上。
+    bool RegisterModuleOwned(const InterfaceId& iid, IModule* pModule);
+
     // 根据名称获取模块（借用指针，不增加引用计数）。
     IModule* GetModule(const char* strName) const;
 

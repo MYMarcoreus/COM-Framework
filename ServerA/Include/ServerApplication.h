@@ -14,7 +14,7 @@ class CEchoService;
 /// @brief ServerA 服务器应用程序（ServerCore 复用骨架）。
 ///
 /// 作为第一个业务服务器项目，复用 ServerCore 的模块 / 事件机制：
-/// - RegisterModules：默认装配 + 接口模块（网络/事件/配置/日志/回显）+ 业务模块（日志/网络）
+/// - RegisterModules：接口模块（网络/事件/配置/日志/回显）+ 业务模块（日志/网络）
 ///
 /// 不含具体业务（规范：第一阶段不做业务认证 / 权限 / 数据库等）。
 class CServerApplication : public sc::CMyApplication
