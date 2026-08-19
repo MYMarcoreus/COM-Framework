@@ -49,7 +49,7 @@ bool CConfigModule::GetBool(const std::string& key, bool def) const
 /// @brief 接口查询实现。
 bool CConfigModule::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
 {
-    if (std::string(iid) == std::string(IID_IConfig()))
+    if (iid == IID_IConfig())
     {
         *ppv = static_cast<IConfig*>(this);
         return true;

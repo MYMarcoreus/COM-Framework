@@ -58,7 +58,7 @@ void CAsyncExecutorModule::Stop()
 /// @brief 接口查询实现。
 bool CAsyncExecutorModule::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
 {
-    if (std::string(iid) == std::string(IID_IAsyncExecutor()))
+    if (iid == IID_IAsyncExecutor())
     {
         *ppv = static_cast<IAsyncExecutor*>(this);
         return true;

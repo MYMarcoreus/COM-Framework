@@ -129,7 +129,7 @@ size_t CEventDispatcher::SubscriberCount(const EventType& strType) const
 /// @brief 接口查询实现。
 bool CEventDispatcher::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
 {
-    if (std::string(iid) == std::string(IID_EventDispatcher()))
+    if (iid == IID_EventDispatcher())
     {
         *ppv = static_cast<IEventDispatcher*>(this);
         return true;

@@ -57,7 +57,7 @@ void CLoggerModule::Error(const std::string& message)
 /// @brief 接口查询实现。
 bool CLoggerModule::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
 {
-    if (std::string(iid) == std::string(IID_ILogger()))
+    if (iid == IID_ILogger())
     {
         *ppv = static_cast<ILogger*>(this);
         return true;

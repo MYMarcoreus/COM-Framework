@@ -173,7 +173,7 @@ std::string CNetworkModule::GetStatus() const
 /// @brief 接口查询实现。
 bool CNetworkModule::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
 {
-    if (std::string(iid) == std::string(IID_INetwork()))
+    if (iid == IID_INetwork())
     {
         *ppv = static_cast<INetwork*>(this);
         return true;

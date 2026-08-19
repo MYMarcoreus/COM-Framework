@@ -62,7 +62,7 @@ bool CModule::QueryInterface(const InterfaceId& iid, void** ppv)
     {
         return false;
     }
-    if (std::string(iid) == std::string(IID_IUnknown()))
+    if (iid == IID_IUnknown())
     {
         *ppv = static_cast<IUnknown*>(this);
         return true;
@@ -143,7 +143,7 @@ void CModule::Shutdown()
 /// @note 接口标识使用字符串内容比较（跨翻译单元地址不可靠，与现有模块实现一致）。
 bool CModule::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
 {
-    if (std::string(iid) == std::string(IID_IModule()))
+    if (iid == IID_IModule())
     {
         *ppv = static_cast<IModule*>(this);
         return true;

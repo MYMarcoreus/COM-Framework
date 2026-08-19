@@ -58,7 +58,7 @@ void CThreadPoolModule::Stop()
 /// @brief 接口查询实现。
 bool CThreadPoolModule::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
 {
-    if (std::string(iid) == std::string(IID_IThreadPool()))
+    if (iid == IID_IThreadPool())
     {
         *ppv = static_cast<IThreadPool*>(this);
         return true;

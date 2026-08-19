@@ -49,7 +49,7 @@ void CTimerModule::Stop()
 /// @brief 接口查询实现。
 bool CTimerModule::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
 {
-    if (std::string(iid) == std::string(IID_ITimer()))
+    if (iid == IID_ITimer())
     {
         *ppv = static_cast<ITimer*>(this);
         return true;

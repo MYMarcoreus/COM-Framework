@@ -102,7 +102,7 @@ void CDemoService::HandlePacket(sc::ConnectionId id, const Packet& packet)
 /// @brief 接口查询实现。
 bool CDemoService::QueryInterfaceImpl(const sc::InterfaceId& iid, void** ppv)
 {
-    if (std::string(iid) == std::string(sc::IID_INetworkHandler()))
+    if (iid == sc::IID_INetworkHandler())
     {
         *ppv = static_cast<sc::INetworkHandler*>(this);
         return true;

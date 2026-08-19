@@ -15,7 +15,7 @@ namespace sc {
 struct ModuleSnapshot
 {
     std::string strName;   // 模块名称（可为空）
-    std::string strIid;    // 接口标识注册键（可为空）
+    std::string strIid;    // 接口标识可读名（按接口注册时非空）
     ModuleState state;     // 当前生命周期状态
     std::string strStatus; // 状态描述（GetStatus）
 };
@@ -101,10 +101,10 @@ private:
     struct Entry
     {
         IModule* module;
-        std::string strIid; // 接口标识注册键（空表示按名字注册）
+        InterfaceId iid; // 接口标识注册键（无效表示按名字注册）
 
-        explicit Entry(IModule* m, const std::string& iid = std::string())
-            : module(m), strIid(iid) {}
+        explicit Entry(IModule* m, const InterfaceId& interfaceId = InterfaceId())
+            : module(m), iid(interfaceId) {}
     };
 
     // 逆序关闭所有处于已初始化状态的模块（回滚辅助）。
@@ -115,7 +115,7 @@ private:
 
     std::vector<Entry> m_vecModules;
     std::map<std::string, size_t> m_mapIndexByName;
-    std::map<std::string, size_t> m_mapIndexByIid;
+    std::map<InterfaceId, size_t> m_mapIndexByIid;
     // 递归互斥量：生命周期编排在持锁状态下调用模块回调，
     // 回调内再查询管理器（GetModule/GetModuleByIid）时允许重入，避免死锁。
     mutable std::recursive_mutex m_mutex;

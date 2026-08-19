@@ -78,14 +78,13 @@ bool CModuleManager::RegisterModule(const InterfaceId& iid, IModule* pModule)
         return false;
     }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    std::string strKey(iid);
-    if (m_mapIndexByIid.find(strKey) != m_mapIndexByIid.end())
+    if (m_mapIndexByIid.find(iid) != m_mapIndexByIid.end())
     {
         pModule->Release(); // 接口标识重复：释放
         return false;
     }
-    m_mapIndexByIid[strKey] = m_vecModules.size();
-    m_vecModules.push_back(Entry(pModule, strKey)); // 接管引用（不 AddRef）
+    m_mapIndexByIid[iid] = m_vecModules.size();
+    m_vecModules.push_back(Entry(pModule, iid)); // 接管引用（不 AddRef）
     return true;
 }
 
@@ -117,7 +116,7 @@ IModule* CModuleManager::GetModuleByIid(const InterfaceId& iid) const
         return nullptr;
     }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    std::map<std::string, size_t>::const_iterator it = m_mapIndexByIid.find(std::string(iid));
+    std::map<InterfaceId, size_t>::const_iterator it = m_mapIndexByIid.find(iid);
     if (it == m_mapIndexByIid.end())
     {
         return nullptr;
@@ -166,9 +165,9 @@ bool CModuleManager::UnregisterModule(const char* strName)
         m_mapIndexByIid.clear();
         for (size_t i = 0; i < m_vecModules.size(); ++i)
         {
-            if (!m_vecModules[i].strIid.empty())
+            if (m_vecModules[i].iid.IsValid())
             {
-                m_mapIndexByIid[m_vecModules[i].strIid] = i;
+                m_mapIndexByIid[m_vecModules[i].iid] = i;
             }
             else
             {
@@ -200,7 +199,7 @@ bool CModuleManager::UnregisterModuleByIid(const InterfaceId& iid)
     IModule* pModule = nullptr;
     {
         std::lock_guard<std::recursive_mutex> lock(m_mutex);
-        std::map<std::string, size_t>::iterator it = m_mapIndexByIid.find(std::string(iid));
+        std::map<InterfaceId, size_t>::iterator it = m_mapIndexByIid.find(iid);
         if (it == m_mapIndexByIid.end())
         {
             return false;
@@ -213,9 +212,9 @@ bool CModuleManager::UnregisterModuleByIid(const InterfaceId& iid)
         m_mapIndexByIid.clear();
         for (size_t i = 0; i < m_vecModules.size(); ++i)
         {
-            if (!m_vecModules[i].strIid.empty())
+            if (m_vecModules[i].iid.IsValid())
             {
-                m_mapIndexByIid[m_vecModules[i].strIid] = i;
+                m_mapIndexByIid[m_vecModules[i].iid] = i;
             }
             else
             {
@@ -403,7 +402,7 @@ std::vector<ModuleSnapshot> CModuleManager::Snapshot() const
     for (size_t i = 0; i < m_vecModules.size(); ++i)
     {
         ModuleSnapshot item;
-        item.strIid = m_vecModules[i].strIid;
+        item.strIid = m_vecModules[i].iid.Name();
         const char* strName = m_vecModules[i].module->GetName();
         item.strName = (strName != nullptr) ? strName : "";
         item.state = m_vecModules[i].module->GetState();

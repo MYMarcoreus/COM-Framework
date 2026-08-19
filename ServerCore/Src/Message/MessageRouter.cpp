@@ -182,7 +182,7 @@ void CMessageRouter::Dispatch(ConnectionId nId, int nType,
 /// @brief 接口查询实现。
 bool CMessageRouter::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
 {
-    if (std::string(iid) == std::string(IID_IMessageRouter()))
+    if (iid == IID_IMessageRouter())
     {
         *ppv = static_cast<IMessageRouter*>(this);
         return true;
