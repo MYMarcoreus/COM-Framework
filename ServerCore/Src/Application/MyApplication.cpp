@@ -183,20 +183,16 @@ bool CMyApplication::RegisterModules()
         }
         if (!m_moduleManager.RegisterModule(IID_IConfig(), pConfig))
         {
-            pConfig->Release();
             return false;
         }
-        pConfig->Release(); // 管理器已持有引用
     }
     if (m_moduleManager.GetModuleByIid(IID_ILogger()) == nullptr)
     {
         CLoggerModule* pLogger = new CLoggerModule();
         if (!m_moduleManager.RegisterModule(IID_ILogger(), pLogger))
         {
-            pLogger->Release();
             return false;
         }
-        pLogger->Release(); // 管理器已持有引用
     }
     return true;
 }

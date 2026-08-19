@@ -82,8 +82,7 @@ TEST(ModuleManager_Lifecycle)
 {
     sc::CModuleManager manager;
     CTestModule* pModule = new CTestModule();
-    ASSERT_TRUE(manager.RegisterModule(IID_TestModule(), pModule));
-    pModule->Release(); // 管理器已持有引用
+    ASSERT_TRUE(manager.RegisterModule(IID_TestModule(), pModule)); // 接管
 
     ASSERT_EQ(manager.Size(), static_cast<size_t>(1));
     ASSERT_TRUE(manager.GetModuleByIid(IID_TestModule()) != nullptr);
@@ -124,8 +123,7 @@ TEST(Module_StateQuery)
 {
     sc::CModuleManager manager;
     CTestModule* pModule = new CTestModule();
-    ASSERT_TRUE(manager.RegisterModule(pModule)); // 按名字 "test" 注册
-    pModule->Release();
+    ASSERT_TRUE(manager.RegisterModule(pModule)); // 按名字 "test" 注册（接管）
 
     sc::IModule* pIface = manager.GetModule("test");
     ASSERT_TRUE(pIface != nullptr);
@@ -147,12 +145,10 @@ TEST(ModuleManager_DualRegister)
 {
     sc::CModuleManager manager;
     CTestModule* pByName = new CTestModule();
-    ASSERT_TRUE(manager.RegisterModule(pByName)); // 按名字 "test"
-    pByName->Release();
+    ASSERT_TRUE(manager.RegisterModule(pByName)); // 按名字 "test"（接管）
 
     CTestModule* pByIid = new CTestModule();
-    ASSERT_TRUE(manager.RegisterModule(IID_TestModule(), pByIid)); // 按接口
-    pByIid->Release();
+    ASSERT_TRUE(manager.RegisterModule(IID_TestModule(), pByIid)); // 按接口（接管）
 
     ASSERT_EQ(manager.Size(), static_cast<size_t>(2));
     ASSERT_TRUE(manager.HasModule("test"));
@@ -166,8 +162,7 @@ TEST(ModuleManager_Snapshot)
 {
     sc::CModuleManager manager;
     CTestModule* pModule = new CTestModule();
-    ASSERT_TRUE(manager.RegisterModule(IID_TestModule(), pModule));
-    pModule->Release();
+    ASSERT_TRUE(manager.RegisterModule(IID_TestModule(), pModule)); // 接管
     ASSERT_TRUE(manager.InitializeAll());
     ASSERT_TRUE(manager.StartAll());
 

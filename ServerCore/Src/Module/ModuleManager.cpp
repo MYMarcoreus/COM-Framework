@@ -30,63 +30,7 @@ CModuleManager::~CModuleManager()
     Clear();
 }
 
-/// @brief 注册模块。
-///
-/// 校验模块非空、名称非空且不重复；成功后持有模块一个引用。
-///
-/// @param module 模块接口指针。
-///
-/// @return true 注册成功；false 参数非法或名称重复。
-bool CModuleManager::RegisterModule(IModule* pModule)
-{
-    if (pModule == nullptr)
-    {
-        return false;
-    }
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    const char* strName = pModule->GetName();
-    if (strName == nullptr || strName[0] == '\0')
-    {
-        return false;
-    }
-    if (m_mapIndexByName.find(strName) != m_mapIndexByName.end())
-    {
-        return false; // 名称重复
-    }
-    pModule->AddRef();
-    m_mapIndexByName[strName] = m_vecModules.size();
-    m_vecModules.push_back(Entry(pModule));
-    return true;
-}
-
-/// @brief 按接口标识注册模块。
-///
-/// 用于服务定位（如按 INetwork 获取网络模块）；同一接口标识只能注册一次。
-/// 注册成功后管理器持有模块的一个引用。
-///
-/// @param iid 接口标识。
-/// @param module 模块接口指针。
-///
-/// @return true 注册成功；false 参数非法或接口标识重复。
-bool CModuleManager::RegisterModule(const InterfaceId& iid, IModule* pModule)
-{
-    if (iid == nullptr || pModule == nullptr)
-    {
-        return false;
-    }
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    std::string strKey(iid);
-    if (m_mapIndexByIid.find(strKey) != m_mapIndexByIid.end())
-    {
-        return false; // 接口标识重复
-    }
-    pModule->AddRef();
-    m_mapIndexByIid[strKey] = m_vecModules.size();
-    m_vecModules.push_back(Entry(pModule, strKey));
-    return true;
-}
-
-/// @brief 接管型注册（按名字）。
+/// @brief 注册模块（接管型，按名字）。
 ///
 /// 直接接管调用方 new 出来的模块的创建者引用（不额外 AddRef）；
 /// 成功时管理器持有该引用（Clear/Unregister 时 Release 归零析构），
@@ -95,7 +39,7 @@ bool CModuleManager::RegisterModule(const InterfaceId& iid, IModule* pModule)
 /// @param module 刚创建、尚未额外 AddRef 的模块接口指针。
 ///
 /// @return true 注册成功并接管；false 注册失败（已释放）。
-bool CModuleManager::RegisterModuleOwned(IModule* pModule)
+bool CModuleManager::RegisterModule(IModule* pModule)
 {
     if (pModule == nullptr)
     {
@@ -118,15 +62,16 @@ bool CModuleManager::RegisterModuleOwned(IModule* pModule)
     return true;
 }
 
-/// @brief 接管型注册（按接口标识）。
+/// @brief 注册模块（接管型，按接口标识）。
 ///
+/// 用于服务定位（如按 INetwork 获取网络模块）；同一接口标识只能注册一次。
 /// 语义与按名字版本一致：接管创建者引用，失败时自行 Release。
 ///
 /// @param iid 接口标识。
 /// @param module 刚创建、尚未额外 AddRef 的模块接口指针。
 ///
 /// @return true 注册成功并接管；false 注册失败（已释放）。
-bool CModuleManager::RegisterModuleOwned(const InterfaceId& iid, IModule* pModule)
+bool CModuleManager::RegisterModule(const InterfaceId& iid, IModule* pModule)
 {
     if (iid == nullptr || pModule == nullptr)
     {

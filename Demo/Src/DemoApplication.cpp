@@ -56,40 +56,40 @@ bool CDemoApplication::RegisterModules()
     }
 
     // ② 网络模块
-    if (!m_moduleManager.RegisterModuleOwned(sc::IID_INetwork(), new sc::CNetworkModule()))
+    if (!m_moduleManager.RegisterModule(sc::IID_INetwork(), new sc::CNetworkModule()))
     {
         return false;
     }
 
     // ③ 事件分发器模块
-    if (!m_moduleManager.RegisterModuleOwned(sc::IID_EventDispatcher(), new sc::CEventDispatcher()))
+    if (!m_moduleManager.RegisterModule(sc::IID_EventDispatcher(), new sc::CEventDispatcher()))
     {
         return false;
     }
 
     // ④ 协议处理服务（保存指针用于注入业务模块）
     CDemoService* service = new CDemoService();
-    if (!m_moduleManager.RegisterModuleOwned(sc::IID_INetworkHandler(), service))
+    if (!m_moduleManager.RegisterModule(sc::IID_INetworkHandler(), service))
     {
         return false;
     }
     m_pService = service;
 
     // ⑤ 日志模块：根据配置初始化日志器
-    if (!m_moduleManager.RegisterModuleOwned(new CDemoLoggerModule(m_config)))
+    if (!m_moduleManager.RegisterModule(new CDemoLoggerModule(m_config)))
     {
         return false;
     }
 
     // ⑥ 定时器模块：周期性输出运行状态
     int intervalMs = m_config.GetInt("timer.interval_ms", 5000);
-    if (!m_moduleManager.RegisterModuleOwned(new CDemoTimerModule(intervalMs)))
+    if (!m_moduleManager.RegisterModule(new CDemoTimerModule(intervalMs)))
     {
         return false;
     }
 
     // ⑦ 网络业务模块：关联接口模块并启动 TCP 服务器
-    if (!m_moduleManager.RegisterModuleOwned(
+    if (!m_moduleManager.RegisterModule(
             new CDemoNetworkModule(m_moduleManager, m_pService, m_nPort)))
     {
         return false;

@@ -33,13 +33,13 @@ CServerApplication::~CServerApplication()
 bool CServerApplication::RegisterModules()
 {
     // ① 网络模块
-    if (!m_moduleManager.RegisterModuleOwned(sc::IID_INetwork(), new sc::CNetworkModule()))
+    if (!m_moduleManager.RegisterModule(sc::IID_INetwork(), new sc::CNetworkModule()))
     {
         return false;
     }
 
     // ② 事件分发器模块
-    if (!m_moduleManager.RegisterModuleOwned(sc::IID_EventDispatcher(), new sc::CEventDispatcher()))
+    if (!m_moduleManager.RegisterModule(sc::IID_EventDispatcher(), new sc::CEventDispatcher()))
     {
         return false;
     }
@@ -52,33 +52,33 @@ bool CServerApplication::RegisterModules()
         configPath = "servera.ini";
     }
     config->LoadFile(configPath);
-    if (!m_moduleManager.RegisterModuleOwned(sc::IID_IConfig(), config))
+    if (!m_moduleManager.RegisterModule(sc::IID_IConfig(), config))
     {
         return false;
     }
 
     // ④ 日志模块
-    if (!m_moduleManager.RegisterModuleOwned(sc::IID_ILogger(), new sc::CLoggerModule()))
+    if (!m_moduleManager.RegisterModule(sc::IID_ILogger(), new sc::CLoggerModule()))
     {
         return false;
     }
 
     // ⑤ 回显服务（保存指针用于注入业务模块）
     CEchoService* service = new CEchoService();
-    if (!m_moduleManager.RegisterModuleOwned(sc::IID_INetworkHandler(), service))
+    if (!m_moduleManager.RegisterModule(sc::IID_INetworkHandler(), service))
     {
         return false;
     }
     m_pService = service;
 
     // ⑥ 业务日志模块（通过模块管理器按接口初始化）
-    if (!m_moduleManager.RegisterModuleOwned(new CServerLoggerModule(m_moduleManager)))
+    if (!m_moduleManager.RegisterModule(new CServerLoggerModule(m_moduleManager)))
     {
         return false;
     }
 
     // ⑦ 业务网络模块
-    if (!m_moduleManager.RegisterModuleOwned(
+    if (!m_moduleManager.RegisterModule(
             new CServerNetworkModule(m_moduleManager, m_pService, m_nPort)))
     {
         return false;
