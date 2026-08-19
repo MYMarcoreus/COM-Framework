@@ -4,9 +4,9 @@
 
 namespace sc {
 
-/// @brief 所有组件接口的基类。
+/// @brief 所有模块接口的基类。
 ///
-/// 借鉴 COM 组件模型思想：接口查询 + 引用计数 + 生命周期管理。
+/// 借鉴 COM 模块模型思想：接口查询 + 引用计数 + 生命周期管理。
 /// 本实现面向 Linux/C++11，不依赖 Windows COM。
 ///
 /// @note 接口查询返回借用的指针，不增加引用计数。
@@ -21,7 +21,7 @@ public:
     // 增加引用计数。
     virtual unsigned int AddRef() = 0;
 
-    // 减少引用计数，归零时销毁组件。
+    // 减少引用计数，归零时销毁模块。
     virtual unsigned int Release() = 0;
 
 protected:

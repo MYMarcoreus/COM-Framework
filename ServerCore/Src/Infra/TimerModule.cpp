@@ -4,50 +4,50 @@
 
 namespace sc {
 
-/// @brief 创建定时器组件。
-CTimerComponent::CTimerComponent() : CModule("timer")
+/// @brief 创建定时器模块。
+CTimerModule::CTimerModule() : CModule("timer")
 {
 }
 
-/// @brief 销毁定时器组件。
-CTimerComponent::~CTimerComponent()
+/// @brief 销毁定时器模块。
+CTimerModule::~CTimerModule()
 {
 }
 
 /// @brief 启动定时器线程。
-bool CTimerComponent::Start()
+bool CTimerModule::Start()
 {
     return m_timer.Start();
 }
 
 /// @brief 添加一次性定时器。
-common::TimerId CTimerComponent::AddTimer(std::int64_t delayMs,
+common::TimerId CTimerModule::AddTimer(std::int64_t delayMs,
                                          const common::TimerCallback& callback)
 {
     return m_timer.AddTimer(delayMs, callback);
 }
 
 /// @brief 添加周期性定时器。
-common::TimerId CTimerComponent::AddPeriodicTimer(std::int64_t intervalMs,
+common::TimerId CTimerModule::AddPeriodicTimer(std::int64_t intervalMs,
                                                  const common::TimerCallback& callback)
 {
     return m_timer.AddPeriodicTimer(intervalMs, callback);
 }
 
 /// @brief 取消定时器。
-bool CTimerComponent::Cancel(common::TimerId id)
+bool CTimerModule::Cancel(common::TimerId id)
 {
     return m_timer.Cancel(id);
 }
 
 /// @brief 停止定时器线程。
-void CTimerComponent::Stop()
+void CTimerModule::Stop()
 {
     m_timer.Stop();
 }
 
 /// @brief 接口查询实现。
-bool CTimerComponent::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
+bool CTimerModule::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
 {
     if (std::string(iid) == std::string(IID_ITimer()))
     {

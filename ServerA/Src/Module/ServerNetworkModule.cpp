@@ -9,8 +9,8 @@ namespace servera {
 
 /// @brief 创建网络模块。
 ///
-/// @param componentManager 组件管理器，用于获取网络与回显服务组件。
-/// @param service          回显服务（借用指针，由组件管理器持有）。
+/// @param componentManager 模块管理器，用于获取网络与回显服务模块。
+/// @param service          回显服务（借用指针，由模块管理器持有）。
 /// @param port             监听端口。
 CServerNetworkModule::CServerNetworkModule(sc::CModuleManager& moduleManager,
                                          CEchoService* service, std::uint16_t port)
@@ -24,9 +24,9 @@ CServerNetworkModule::~CServerNetworkModule()
 {
 }
 
-/// @brief 从组件管理器获取网络接口并建立关联。
+/// @brief 从模块管理器获取网络接口并建立关联。
 ///
-/// @return true 关联成功；false 组件缺失。
+/// @return true 关联成功；false 模块缺失。
 bool CServerNetworkModule::Initialize()
 {
     // ① 获取网络接口

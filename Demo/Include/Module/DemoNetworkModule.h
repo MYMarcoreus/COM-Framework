@@ -16,9 +16,9 @@ class CDemoService;
 
 /// @brief 网络模块。
 ///
-/// 从组件管理器获取网络组件与协议处理服务，建立关联并启动 TCP 服务器。
+/// 从模块管理器获取网络模块与协议处理服务，建立关联并启动 TCP 服务器。
 /// 启动/停止时通过事件分发器发布事件，供其他模块解耦订阅。
-/// 模块名 "network"，依赖组件注册与日志模块。
+/// 模块名 "network"，依赖模块注册与日志模块。
 class CDemoNetworkModule : public sc::CModule
 {
 public:
@@ -27,7 +27,7 @@ public:
 
     virtual ~CDemoNetworkModule();
 
-    // 从组件管理器获取网络接口并建立关联。
+    // 从模块管理器获取网络接口并建立关联。
     bool Initialize() override;
 
     // 启动 TCP 服务器，并发布启动事件。
@@ -41,7 +41,7 @@ public:
 
 private:
     sc::CModuleManager& m_moduleManager;
-    CDemoService* m_pService; // 借用指针，由组件管理器持有
+    CDemoService* m_pService; // 借用指针，由模块管理器持有
     std::uint16_t m_nPort;
     sc::ScopedInterfacePtr<sc::INetwork> m_pNetwork;
     sc::ScopedInterfacePtr<sc::INetworkHandler> m_pHandler;

@@ -29,7 +29,7 @@ inline const InterfaceId& IID_IModule()
 /// @brief 模块接口（COM 风格：继承 IUnknown）。
 ///
 /// 模块是服务器中可独立启停的功能单元，具有明确生命周期。
-/// 与组件模型一致：可查询接口、引用计数、生命周期由 CModuleManager 统一管理。
+/// 与模块模型一致：可查询接口、引用计数、生命周期由 CModuleManager 统一管理。
 class IModule : public virtual IUnknown
 {
 public:

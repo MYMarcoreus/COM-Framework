@@ -6,7 +6,7 @@
 
 /// @brief Demo 服务器入口。
 ///
-/// 流程：main → CDemoApplication → 组件管理器 → 网络 → 监听 → 接收 → 协议 → 响应。
+/// 流程：main → CDemoApplication → 模块管理器 → 网络 → 监听 → 接收 → 协议 → 响应。
 int main(int argc, char* argv[])
 {
     // 解析端口参数（0 表示从配置文件读取）

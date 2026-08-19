@@ -6,7 +6,7 @@
 
 /// @brief ServerA 服务器入口。
 ///
-/// 复用 ServerCore 骨架：main → CServerApplication → 组件/模块 → 网络 → 回显。
+/// 复用 ServerCore 骨架：main → CServerApplication → 模块/模块 → 网络 → 回显。
 int main(int argc, char* argv[])
 {
     // 解析端口参数（默认 9100）

@@ -46,9 +46,9 @@ make_test/                       # 工作区根目录（可存放多个项目）
 │   │   ├── Module/              # IModule / Module / ModuleManager（统一生命周期管理 + 状态查询 + 接口注册）
 │   │   ├── Event/               # IEventDispatcher / EventDispatcher（模块间解耦通信）
 │   │   ├── Message/             # IMessageRouter / MessageRouter（基础消息分发）
-│   │   ├── Infra/               # ILogger / IConfig / ITimer / IThreadPool / IAsyncExecutor（组件化适配层）
+│   │   ├── Infra/               # ILogger / IConfig / ITimer / IThreadPool / IAsyncExecutor（模块化适配层）
 │   │   ├── Process/             # Process 工具 / PidFile（守护进程 + pid 文件）
-│   │   ├── Network/             # INetwork / INetworkHandler / NetworkComponent（组件模型适配）
+│   │   ├── Network/             # INetwork / INetworkHandler / NetworkModule（模块模型适配）
 │   │   └── Common/              # 类型别名
 │   ├── Src/
 │   └── Linux/
@@ -97,25 +97,25 @@ make_test/                       # 工作区根目录（可存放多个项目）
 
 ## ServerCore
 
-`ServerCore` 是其他服务器可直接复用的**基础组件库**，不包含具体业务与协议：
+`ServerCore` 是其他服务器可直接复用的**基础模块库**，不包含具体业务与协议：
 
 - **Application**：`MyApplication` 提供统一生命周期 `Initialize → Start → Run → Stop → Shutdown`，通过 `ModuleManager` 统一管理所有模块（默认装配 IConfig / ILogger）；支持配置路径注入（`SetConfigPath`）、运行状态查询（`IsRunning` / `UptimeSeconds`）、优雅关闭超时（`SetShutdownTimeout`）。
 - **Component**：COM 组件模型思想的 C++11/Linux 基础设施——`IUnknown`（QueryInterface / AddRef / Release）、`InterfaceId`（接口标识）、`ScopedInterfacePtr`（RAII 智能引用）。
 - **Module**：**统一的生命周期管理模型**（组件与模块统一为 Module）——`IModule`（继承 IUnknown：名字 / 生命周期 / 状态查询 `GetState` / 状态报告 `GetStatus`）、`Module`（统一实现骨架：原子引用计数 + 接口查询 + 默认生命周期）、`ModuleManager`（注册即持有引用；既可按名字注册业务模块、也可按接口标识注册服务模块（服务定位）；统一编排：按序初始化/启动、逆序停止/关闭、失败回滚；提供 `StatusReport` / `Snapshot` / `HasModule` / `GetModuleByIid` 等查询）。
 - **Event**：**事件分发**机制——`IEventDispatcher`（继承 IUnknown，`Subscribe` 返回订阅标识 / `Unsubscribe` / `Publish` / `SubscriberCount`）、`EventDispatcher`（线程安全，发布在锁外调用处理器防重入死锁），用于模块之间的解耦通信。
 - **Message**：**基础消息分发**机制——`IMessageRouter`（协议无关：按连接维护缓冲，通过业务提供的 `MessageExtractor` 切分完整消息，按类型路由到 `MessageHandler`），支持粘包切分、跨包重组、非法数据丢弃。
-- **Infra**：**组件化适配层**——把 Common 基础设施适配为模块接口：`ILogger` / `IConfig` / `ITimer` / `IThreadPool` / `IAsyncExecutor`，通过 `ModuleManager` 按接口访问（符合规范 §10.2）。
+- **Infra**：**模块化适配层**——把 Common 基础设施适配为模块接口：`ILogger` / `IConfig` / `ITimer` / `IThreadPool` / `IAsyncExecutor`，通过 `ModuleManager` 按接口访问（符合规范 §10.2）。
 - **Process**：**进程级基础设施**——`Process`（`Daemonize` 守护进程化 / pid 文件读写 / 存活检查）、`PidFile`（RAII，析构自动删除）。
 - **Network**：轻量通信基础设施，基于 **Standalone Asio**（git 子模块）——`TcpServer`（io_context + acceptor + 独立线程事件循环）、`TcpConnection`（异步读写 + 写队列）、`Buffer`、`INetwork`/`INetworkHandler` 接口；`INetwork` 提供连接管理与统计（`ConnectionCount` / `TotalAccepted` / `PeerAddress` 等）。
 
-依赖方向：`Demo / Server → ServerCore → Common → 第三方库 / POSIX`。ServerCore 不依赖任何具体业务项目；网络基础设施位于 Common，ServerCore 通过 `NetworkComponent` 适配为组件模型接口（`INetwork` / `INetworkHandler`）。
+依赖方向：`Demo / Server → ServerCore → Common → 第三方库 / POSIX`。ServerCore 不依赖任何具体业务项目；网络基础设施位于 Common，ServerCore 通过 `NetworkModule` 适配为组件模型接口（`INetwork` / `INetworkHandler`）。
 
 ## Demo
 
 `Demo` 是 ServerCore 的**验证项目**，包含一个极简协议（`Length + Command + Payload`）与协议处理服务，验证完整链路：
 
 ```text
-main → MyApplication → ComponentManager → Network → TCP Listen → Accept
+main → MyApplication → ModuleManager → Network → TCP Listen → Accept
       → Receive → Demo Protocol → Service → Response
 ```
 
@@ -133,7 +133,7 @@ Demo 还验证**事件解耦通信**：`DemoNetworkModule` 启动/停止时发�
 `ServerA` 是**第一个业务服务器骨架**，演示 ServerCore 在多个服务器项目间的复用（多服务器组织）。
 
 - `build/servera`：服务器（默认端口 9100，可用命令行参数覆盖）
-- 复用 ServerCore：`MyApplication` 生命周期 + `ModuleManager` 统一装配（接口注册 / 名字注册）+ `EventDispatcher` 事件通信 + `NetworkComponent` 网络
+- 复用 ServerCore：`MyApplication` 生命周期 + `ModuleManager` 统一装配（接口注册 / 名字注册）+ `EventDispatcher` 事件通信 + `NetworkModule` 网络
 - 业务层：`EchoService`（实现 `INetworkHandler`，收到数据原样返回，验证网络收发链路）
 - 不含具体业务（规范：第一阶段不做业务认证 / 权限 / 数据库等），作为后续内网安全服务控制台后端的起点
 

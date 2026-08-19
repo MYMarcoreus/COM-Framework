@@ -16,7 +16,7 @@ inline const InterfaceId& IID_IAsyncExecutor()
     return iid;
 }
 
-/// @brief 异步执行器接口（组件化适配 common::CAsyncExecutor）。
+/// @brief 异步执行器接口（模块化适配 common::CAsyncExecutor）。
 ///
 /// 暴露无返回值任务的提交（Post）；需要 CTask<T> 链式调用时直接使用
 /// common::CAsyncExecutor（模板接口无法进虚函数表）。
@@ -35,15 +35,15 @@ public:
     virtual void Stop() = 0;
 };
 
-/// @brief 异步执行器组件。
+/// @brief 异步执行器模块。
 ///
 /// 内部持有 common::CAsyncExecutor 实例。
-class CAsyncExecutorComponent : public CModule, public IAsyncExecutor
+class CAsyncExecutorModule : public CModule, public IAsyncExecutor
 {
 public:
-    explicit CAsyncExecutorComponent(size_t nThreadCount = 1);
+    explicit CAsyncExecutorModule(size_t nThreadCount = 1);
 
-    virtual ~CAsyncExecutorComponent();
+    virtual ~CAsyncExecutorModule();
 
     bool Start() override;
     bool Post(const std::function<void()>& task) override;

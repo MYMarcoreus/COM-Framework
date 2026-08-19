@@ -31,7 +31,7 @@ CMyApplication::~CMyApplication()
 
 /// @brief 初始化服务器应用程序。
 ///
-/// 注册基础组件与模块，统一初始化所有模块，再调用派生类初始化钩子。
+/// 注册基础模块与模块，统一初始化所有模块，再调用派生类初始化钩子。
 ///
 /// @return true 初始化成功；false 初始化失败。
 bool CMyApplication::Initialize()
@@ -109,7 +109,7 @@ void CMyApplication::Stop()
 /// @brief 关闭服务器应用程序并释放资源。
 ///
 /// 多阶段优雅关闭：先调用关闭钩子，再停止、关闭所有模块，
-/// 然后带超时地停止、关闭组件，最后释放组件。
+/// 然后带超时地停止、关闭模块，最后释放模块。
 /// 若设置了关闭超时（SetShutdownTimeout），超时后跳过剩余阶段。
 void CMyApplication::Shutdown()
 {
@@ -156,17 +156,17 @@ uint64_t CMyApplication::UptimeSeconds() const
         std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
 }
 
-/// @brief 注册基础组件（默认装配）。
+/// @brief 注册基础模块（默认装配）。
 ///
-/// 默认注册配置组件与日志组件；若同接口标识组件已存在（派生类先注册）则跳过。
-/// 派生类重写时可先调用本实现再注册业务组件。
+/// 默认注册配置模块与日志模块；若同接口标识模块已存在（派生类先注册）则跳过。
+/// 派生类重写时可先调用本实现再注册业务模块。
 ///
 /// @return true 全部成功。
 bool CMyApplication::RegisterComponents()
 {
     if (m_moduleManager.GetModuleByIid(IID_IConfig()) == nullptr)
     {
-        CConfigComponent* pConfig = new CConfigComponent();
+        CConfigModule* pConfig = new CConfigModule();
         if (!m_strConfigPath.empty())
         {
             pConfig->LoadFile(m_strConfigPath);
@@ -180,7 +180,7 @@ bool CMyApplication::RegisterComponents()
     }
     if (m_moduleManager.GetModuleByIid(IID_ILogger()) == nullptr)
     {
-        CLoggerComponent* pLogger = new CLoggerComponent();
+        CLoggerModule* pLogger = new CLoggerModule();
         if (!m_moduleManager.RegisterModule(IID_ILogger(), pLogger))
         {
             pLogger->Release();

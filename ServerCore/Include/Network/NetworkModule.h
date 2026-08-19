@@ -16,16 +16,16 @@ namespace sc {
 
 // 前置声明，减少头文件依赖。
 
-/// @brief 网络组件。
+/// @brief 网络模块。
 ///
 /// 实现 INetwork 接口，内部使用 CTcpServer 提供 TCP 服务器能力。
 /// 可作为模块注册到 CModuleManager 中。
-class CNetworkComponent : public CModule, public INetwork
+class CNetworkModule : public CModule, public INetwork
 {
 public:
-    CNetworkComponent();
+    CNetworkModule();
 
-    virtual ~CNetworkComponent();
+    virtual ~CNetworkModule();
 
     // 启动 TCP 服务器。
     bool StartTcpServer(uint16_t nPort, INetworkHandler* pHandler) override;

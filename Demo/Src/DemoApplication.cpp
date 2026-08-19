@@ -8,7 +8,7 @@
 #include "Module/DemoLoggerModule.h"
 #include "Module/DemoNetworkModule.h"
 #include "Module/DemoTimerModule.h"
-#include "Network/NetworkComponent.h"
+#include "Network/NetworkModule.h"
 #include "Service/DemoService.h"
 
 namespace demo {
@@ -41,19 +41,19 @@ CDemoApplication::~CDemoApplication()
 {
 }
 
-/// @brief 注册组件。
+/// @brief 注册模块。
 ///
-/// 注册网络组件（INetwork）、事件分发器（IEventDispatcher）与协议处理服务（INetworkHandler）。
+/// 注册网络模块（INetwork）、事件分发器（IEventDispatcher）与协议处理服务（INetworkHandler）。
 bool CDemoApplication::RegisterComponents()
 {
-    // ① 先装配基类默认组件（配置组件 IConfig + 日志组件 ILogger）
+    // ① 先装配基类默认模块（配置模块 IConfig + 日志模块 ILogger）
     if (!CMyApplication::RegisterComponents())
     {
         return false;
     }
 
-    // ② 注册网络组件
-    sc::IModule* network = new sc::CNetworkComponent();
+    // ② 注册网络模块
+    sc::IModule* network = new sc::CNetworkModule();
     if (!m_moduleManager.RegisterModule(sc::IID_INetwork(), network))
     {
         network->Release();
@@ -61,7 +61,7 @@ bool CDemoApplication::RegisterComponents()
     }
     network->Release(); // 管理器已持有引用
 
-    // ② 注册事件分发器组件
+    // ② 注册事件分发器模块
     sc::IModule* events = new sc::CEventDispatcher();
     if (!m_moduleManager.RegisterModule(sc::IID_EventDispatcher(), events))
     {
@@ -109,7 +109,7 @@ bool CDemoApplication::RegisterModules()
     }
     timer->Release(); // 管理器已持有引用
 
-    // ③ 网络模块：关联组件并启动 TCP 服务器
+    // ③ 网络模块：关联模块并启动 TCP 服务器
     sc::IModule* network = new CDemoNetworkModule(m_moduleManager, m_pService, m_nPort);
     if (!m_moduleManager.RegisterModule(network))
     {

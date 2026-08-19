@@ -14,9 +14,9 @@ inline const InterfaceId& IID_ITimer()
     return iid;
 }
 
-/// @brief 定时器接口（组件化适配 common::CTimerManager）。
+/// @brief 定时器接口（模块化适配 common::CTimerManager）。
 ///
-/// 使模块通过组件管理器按接口使用定时能力。
+/// 使模块通过模块管理器按接口使用定时能力。
 class ITimer : public virtual IUnknown
 {
 public:
@@ -40,15 +40,15 @@ public:
     virtual void Stop() = 0;
 };
 
-/// @brief 定时器组件。
+/// @brief 定时器模块。
 ///
 /// 内部持有 common::CTimerManager 实例。
-class CTimerComponent : public CModule, public ITimer
+class CTimerModule : public CModule, public ITimer
 {
 public:
-    CTimerComponent();
+    CTimerModule();
 
-    virtual ~CTimerComponent();
+    virtual ~CTimerModule();
 
     bool Start() override;
     common::TimerId AddTimer(std::int64_t delayMs,

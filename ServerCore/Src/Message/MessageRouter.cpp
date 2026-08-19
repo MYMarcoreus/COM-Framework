@@ -153,7 +153,7 @@ void CMessageRouter::OnClose(ConnectionId nId)
 
 /// @brief 按类型分发一条消息。
 ///
-/// 在锁外调用处理器，避免处理器内再次调用本组件时死锁。
+/// 在锁外调用处理器，避免处理器内再次调用本模块时死锁。
 void CMessageRouter::Dispatch(ConnectionId nId, int nType,
                              const char* pPayload, size_t nPayloadSize)
 {

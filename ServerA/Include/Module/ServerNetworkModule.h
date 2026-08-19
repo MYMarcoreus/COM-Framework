@@ -16,7 +16,7 @@ class CEchoService;
 
 /// @brief 网络模块。
 ///
-/// 从组件管理器获取网络组件与回显服务，建立关联并启动 TCP 服务器。
+/// 从模块管理器获取网络模块与回显服务，建立关联并启动 TCP 服务器。
 /// 启动/停止时发布事件，供其他模块解耦订阅。
 /// 模块名 "network"。
 class CServerNetworkModule : public sc::CModule
@@ -27,7 +27,7 @@ public:
 
     virtual ~CServerNetworkModule();
 
-    // 从组件管理器获取网络接口并建立关联。
+    // 从模块管理器获取网络接口并建立关联。
     bool Initialize() override;
 
     // 启动 TCP 服务器，并发布启动事件。
@@ -41,7 +41,7 @@ public:
 
 private:
     sc::CModuleManager& m_moduleManager;
-    CEchoService* m_pService; // 借用指针，由组件管理器持有
+    CEchoService* m_pService; // 借用指针，由模块管理器持有
     std::uint16_t m_nPort;
     sc::ScopedInterfacePtr<sc::INetwork> m_pNetwork;
     sc::ScopedInterfacePtr<sc::INetworkHandler> m_pHandler;

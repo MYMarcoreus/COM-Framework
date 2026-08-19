@@ -13,9 +13,9 @@ inline const InterfaceId& IID_ILogger()
     return iid;
 }
 
-/// @brief 日志接口（组件化适配 common::CLogger）。
+/// @brief 日志接口（模块化适配 common::CLogger）。
 ///
-/// 使模块通过组件管理器按接口获取日志能力，而非直接访问全局单例。
+/// 使模块通过模块管理器按接口获取日志能力，而非直接访问全局单例。
 class ILogger : public virtual IUnknown
 {
 public:
@@ -40,15 +40,15 @@ public:
     virtual void Error(const std::string& message) = 0;
 };
 
-/// @brief 日志组件。
+/// @brief 日志模块。
 ///
 /// 内部代理 common::CLogger 全局单例。
-class CLoggerComponent : public CModule, public ILogger
+class CLoggerModule : public CModule, public ILogger
 {
 public:
-    CLoggerComponent();
+    CLoggerModule();
 
-    virtual ~CLoggerComponent();
+    virtual ~CLoggerModule();
 
     void SetLevel(int level) override;
     void Trace(const std::string& message) override;

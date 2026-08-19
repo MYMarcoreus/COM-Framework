@@ -22,7 +22,7 @@ public:
 
     virtual ~CDemoService();
 
-    // 设置网络组件引用，用于发送响应。
+    // 设置网络模块引用，用于发送响应。
     void SetNetwork(sc::INetwork* network);
 
     // 新连接建立。

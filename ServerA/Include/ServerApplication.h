@@ -13,8 +13,8 @@ class CEchoService;
 
 /// @brief ServerA 服务器应用程序（ServerCore 复用骨架）。
 ///
-/// 作为第一个业务服务器项目，复用 ServerCore 的组件 / 模块 / 事件机制：
-/// - RegisterComponents：注册网络组件、事件分发器、回显服务
+/// 作为第一个业务服务器项目，复用 ServerCore 的模块 / 模块 / 事件机制：
+/// - RegisterComponents：注册网络模块、事件分发器、回显服务
 /// - RegisterModules：注册日志模块与网络模块
 ///
 /// 不含具体业务（规范：第一阶段不做业务认证 / 权限 / 数据库等）。
@@ -26,7 +26,7 @@ public:
     virtual ~CServerApplication();
 
 protected:
-    // 注册组件：网络组件、事件分发器与回显服务。
+    // 注册模块：网络模块、事件分发器与回显服务。
     bool RegisterComponents() override;
 
     // 注册模块：日志 / 网络。
@@ -43,7 +43,7 @@ protected:
 
 private:
     std::uint16_t m_nPort;
-    CEchoService* m_pService; // 借用指针，由组件管理器持有
+    CEchoService* m_pService; // 借用指针，由模块管理器持有
     sc::ScopedInterfacePtr<sc::IEventDispatcher> m_pEventDispatcher;
     sc::SubscriptionId m_tEventStartId;
     sc::SubscriptionId m_tEventStopId;

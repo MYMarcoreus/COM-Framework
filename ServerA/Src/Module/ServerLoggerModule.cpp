@@ -10,7 +10,7 @@ namespace servera {
 
 /// @brief 创建日志模块。
 ///
-/// @param componentManager 组件管理器，用于获取配置与日志组件接口。
+/// @param componentManager 模块管理器，用于获取配置与日志模块接口。
 CServerLoggerModule::CServerLoggerModule(sc::CModuleManager& moduleManager)
     : sc::CModule("logger"), m_moduleManager(moduleManager)
 {
@@ -23,7 +23,7 @@ CServerLoggerModule::~CServerLoggerModule()
 
 /// @brief 初始化日志器。
 ///
-/// 通过组件管理器获取 IConfig 读取 log.level，再通过 ILogger 设置日志级别，
+/// 通过模块管理器获取 IConfig 读取 log.level，再通过 ILogger 设置日志级别，
 /// 演示模块按接口访问基础设施（而非直接使用全局单例）。
 ///
 /// @return true。
@@ -62,7 +62,7 @@ bool CServerLoggerModule::Initialize()
         }
     }
 
-    // ② 通过 ILogger 组件接口设置级别并输出日志
+    // ② 通过 ILogger 模块接口设置级别并输出日志
     sc::IUnknown* loggerObject = m_moduleManager.GetModuleByIid(sc::IID_ILogger());
     if (loggerObject != nullptr)
     {

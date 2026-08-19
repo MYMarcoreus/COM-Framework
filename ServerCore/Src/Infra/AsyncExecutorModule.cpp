@@ -4,22 +4,22 @@
 
 namespace sc {
 
-/// @brief 创建异步执行器组件。
+/// @brief 创建异步执行器模块。
 ///
 /// @param nThreadCount 工作线程数量。
-CAsyncExecutorComponent::CAsyncExecutorComponent(size_t nThreadCount)
+CAsyncExecutorModule::CAsyncExecutorModule(size_t nThreadCount)
     : CModule("async-executor"), m_nThreadCount(nThreadCount)
 {
 }
 
-/// @brief 销毁异步执行器组件。
-CAsyncExecutorComponent::~CAsyncExecutorComponent()
+/// @brief 销毁异步执行器模块。
+CAsyncExecutorModule::~CAsyncExecutorModule()
 {
     Stop();
 }
 
 /// @brief 启动工作线程。
-bool CAsyncExecutorComponent::Start()
+bool CAsyncExecutorModule::Start()
 {
     if (m_pExecutor)
     {
@@ -36,7 +36,7 @@ bool CAsyncExecutorComponent::Start()
 /// @brief 提交无返回值任务。
 ///
 /// @return 已启动时返回 true。
-bool CAsyncExecutorComponent::Post(const std::function<void()>& task)
+bool CAsyncExecutorModule::Post(const std::function<void()>& task)
 {
     if (!m_pExecutor)
     {
@@ -46,7 +46,7 @@ bool CAsyncExecutorComponent::Post(const std::function<void()>& task)
 }
 
 /// @brief 停止并等待任务完成。
-void CAsyncExecutorComponent::Stop()
+void CAsyncExecutorModule::Stop()
 {
     if (m_pExecutor)
     {
@@ -56,7 +56,7 @@ void CAsyncExecutorComponent::Stop()
 }
 
 /// @brief 接口查询实现。
-bool CAsyncExecutorComponent::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
+bool CAsyncExecutorModule::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
 {
     if (std::string(iid) == std::string(IID_IAsyncExecutor()))
     {

@@ -7,10 +7,10 @@
 
 namespace sc {
 
-/// @brief 组件接口智能指针。
+/// @brief 模块接口智能指针。
 ///
 /// 构造时增加引用计数，析构时释放引用计数（RAII）。
-/// 类似 CComPtr，但面向本项目 C++11/Linux 组件模型。
+/// 类似 CComPtr，但面向本项目 C++11/Linux 模块模型。
 ///
 /// @tparam T 接口类型，必须是 IUnknown 派生类型。
 template <typename T>

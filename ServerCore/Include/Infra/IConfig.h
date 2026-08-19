@@ -14,9 +14,9 @@ inline const InterfaceId& IID_IConfig()
     return iid;
 }
 
-/// @brief 配置接口（组件化适配 common::CConfig）。
+/// @brief 配置接口（模块化适配 common::CConfig）。
 ///
-/// 使模块通过组件管理器按接口读取配置，而非直接持有 CConfig 实例。
+/// 使模块通过模块管理器按接口读取配置，而非直接持有 CConfig 实例。
 class IConfig : public virtual IUnknown
 {
 public:
@@ -35,15 +35,15 @@ public:
     virtual bool GetBool(const std::string& key, bool def) const = 0;
 };
 
-/// @brief 配置组件。
+/// @brief 配置模块。
 ///
 /// 内部持有独立 common::CConfig 实例。
-class CConfigComponent : public CModule, public IConfig
+class CConfigModule : public CModule, public IConfig
 {
 public:
-    CConfigComponent();
+    CConfigModule();
 
-    virtual ~CConfigComponent();
+    virtual ~CConfigModule();
 
     bool LoadFile(const std::string& path) override;
     std::string GetString(const std::string& key, const std::string& def) const override;

@@ -9,8 +9,8 @@ namespace demo {
 
 /// @brief 创建网络模块。
 ///
-/// @param componentManager 组件管理器，用于获取网络与协议处理组件。
-/// @param service          协议处理服务（借用指针，由组件管理器持有）。
+/// @param componentManager 模块管理器，用于获取网络与协议处理模块。
+/// @param service          协议处理服务（借用指针，由模块管理器持有）。
 /// @param port             监听端口。
 CDemoNetworkModule::CDemoNetworkModule(sc::CModuleManager& moduleManager,
                                      CDemoService* service, std::uint16_t port)
@@ -24,12 +24,12 @@ CDemoNetworkModule::~CDemoNetworkModule()
 {
 }
 
-/// @brief 从组件管理器获取网络接口并建立关联。
+/// @brief 从模块管理器获取网络接口并建立关联。
 ///
 /// 获取 INetwork、INetworkHandler 与 IEventDispatcher 接口，
 /// 并将网络引用注入协议服务，使服务能够发送响应。
 ///
-/// @return true 关联成功；false 组件缺失。
+/// @return true 关联成功；false 模块缺失。
 bool CDemoNetworkModule::Initialize()
 {
     // ① 获取网络接口

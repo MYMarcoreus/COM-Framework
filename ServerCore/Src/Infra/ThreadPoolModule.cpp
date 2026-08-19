@@ -4,22 +4,22 @@
 
 namespace sc {
 
-/// @brief 创建线程池组件。
+/// @brief 创建线程池模块。
 ///
 /// @param nThreadCount 工作线程数量。
-CThreadPoolComponent::CThreadPoolComponent(size_t nThreadCount)
+CThreadPoolModule::CThreadPoolModule(size_t nThreadCount)
     : CModule("thread-pool"), m_nThreadCount(nThreadCount)
 {
 }
 
-/// @brief 销毁线程池组件。
-CThreadPoolComponent::~CThreadPoolComponent()
+/// @brief 销毁线程池模块。
+CThreadPoolModule::~CThreadPoolModule()
 {
     Stop();
 }
 
 /// @brief 启动工作线程。
-bool CThreadPoolComponent::Start()
+bool CThreadPoolModule::Start()
 {
     if (m_pPool)
     {
@@ -36,7 +36,7 @@ bool CThreadPoolComponent::Start()
 /// @brief 提交任务。
 ///
 /// @return 已启动时返回 true。
-bool CThreadPoolComponent::Submit(const std::function<void()>& task)
+bool CThreadPoolModule::Submit(const std::function<void()>& task)
 {
     if (!m_pPool)
     {
@@ -46,7 +46,7 @@ bool CThreadPoolComponent::Submit(const std::function<void()>& task)
 }
 
 /// @brief 停止并等待任务完成。
-void CThreadPoolComponent::Stop()
+void CThreadPoolModule::Stop()
 {
     if (m_pPool)
     {
@@ -56,7 +56,7 @@ void CThreadPoolComponent::Stop()
 }
 
 /// @brief 接口查询实现。
-bool CThreadPoolComponent::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
+bool CThreadPoolModule::QueryInterfaceImpl(const InterfaceId& iid, void** ppv)
 {
     if (std::string(iid) == std::string(IID_IThreadPool()))
     {

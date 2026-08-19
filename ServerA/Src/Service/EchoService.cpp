@@ -16,9 +16,9 @@ CEchoService::~CEchoService()
 {
 }
 
-/// @brief 设置网络组件引用。
+/// @brief 设置网络模块引用。
 ///
-/// @param network 网络组件接口（以引用计数方式持有）。
+/// @param network 网络模块接口（以引用计数方式持有）。
 void CEchoService::SetNetwork(sc::INetwork* network)
 {
     m_pNetwork.Reset(network);

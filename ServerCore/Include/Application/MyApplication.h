@@ -15,7 +15,7 @@ namespace sc {
 /// 通过 CModuleManager 统一管理模块生命周期，
 /// 不硬编码具体实现。
 ///
-/// @note 派生类通过重写虚函数扩展服务器生命周期与组件/模块装配。
+/// @note 派生类通过重写虚函数扩展服务器生命周期与模块/模块装配。
 class CMyApplication
 {
 public:
@@ -60,7 +60,7 @@ public:
     uint32_t ShutdownTimeout() const;
 
 protected:
-    // 注册应用程序需要的基础组件。
+    // 注册应用程序需要的基础模块。
     virtual bool RegisterComponents();
 
     // 注册应用程序需要的模块。

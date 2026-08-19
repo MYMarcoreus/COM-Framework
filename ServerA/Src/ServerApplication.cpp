@@ -8,7 +8,7 @@
 #include "Log/Logger.h"
 #include "Module/ServerLoggerModule.h"
 #include "Module/ServerNetworkModule.h"
-#include "Network/NetworkComponent.h"
+#include "Network/NetworkModule.h"
 #include "Service/EchoService.h"
 
 namespace servera {
@@ -27,14 +27,14 @@ CServerApplication::~CServerApplication()
 {
 }
 
-/// @brief 注册组件。
+/// @brief 注册模块。
 ///
-/// 注册网络组件（INetwork）、事件分发器（IEventDispatcher）、配置组件（IConfig）、
-/// 日志组件（ILogger）与回显服务（INetworkHandler）。
+/// 注册网络模块（INetwork）、事件分发器（IEventDispatcher）、配置模块（IConfig）、
+/// 日志模块（ILogger）与回显服务（INetworkHandler）。
 bool CServerApplication::RegisterComponents()
 {
-    // ① 注册网络组件
-    sc::IModule* network = new sc::CNetworkComponent();
+    // ① 注册网络模块
+    sc::IModule* network = new sc::CNetworkModule();
     if (!m_moduleManager.RegisterModule(sc::IID_INetwork(), network))
     {
         network->Release();
@@ -42,7 +42,7 @@ bool CServerApplication::RegisterComponents()
     }
     network->Release(); // 管理器已持有引用
 
-    // ② 注册事件分发器组件
+    // ② 注册事件分发器模块
     sc::IModule* events = new sc::CEventDispatcher();
     if (!m_moduleManager.RegisterModule(sc::IID_EventDispatcher(), events))
     {
@@ -51,8 +51,8 @@ bool CServerApplication::RegisterComponents()
     }
     events->Release(); // 管理器已持有引用
 
-    // ③ 注册配置组件（读取配置路径，默认 servera.ini）
-    sc::CConfigComponent* config = new sc::CConfigComponent();
+    // ③ 注册配置模块（读取配置路径，默认 servera.ini）
+    sc::CConfigModule* config = new sc::CConfigModule();
     std::string configPath = ConfigPath();
     if (configPath.empty())
     {
@@ -66,8 +66,8 @@ bool CServerApplication::RegisterComponents()
     }
     config->Release(); // 管理器已持有引用
 
-    // ④ 注册日志组件
-    sc::IModule* logger = new sc::CLoggerComponent();
+    // ④ 注册日志模块
+    sc::IModule* logger = new sc::CLoggerModule();
     if (!m_moduleManager.RegisterModule(sc::IID_ILogger(), logger))
     {
         logger->Release();
@@ -92,7 +92,7 @@ bool CServerApplication::RegisterComponents()
 /// 注册顺序即初始化/启动顺序：日志 → 网络。
 bool CServerApplication::RegisterModules()
 {
-    // ① 日志模块（通过组件管理器按接口初始化）
+    // ① 日志模块（通过模块管理器按接口初始化）
     sc::IModule* logger = new CServerLoggerModule(m_moduleManager);
     if (!m_moduleManager.RegisterModule(logger))
     {

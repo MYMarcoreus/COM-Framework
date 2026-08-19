@@ -16,9 +16,9 @@ inline const InterfaceId& IID_IThreadPool()
     return iid;
 }
 
-/// @brief 线程池接口（组件化适配 common::CThreadPool）。
+/// @brief 线程池接口（模块化适配 common::CThreadPool）。
 ///
-/// 使模块通过组件管理器按接口使用线程池执行任务。
+/// 使模块通过模块管理器按接口使用线程池执行任务。
 class IThreadPool : public virtual IUnknown
 {
 public:
@@ -34,15 +34,15 @@ public:
     virtual void Stop() = 0;
 };
 
-/// @brief 线程池组件。
+/// @brief 线程池模块。
 ///
 /// 内部持有 common::CThreadPool 实例。
-class CThreadPoolComponent : public CModule, public IThreadPool
+class CThreadPoolModule : public CModule, public IThreadPool
 {
 public:
-    explicit CThreadPoolComponent(size_t nThreadCount = 1);
+    explicit CThreadPoolModule(size_t nThreadCount = 1);
 
-    virtual ~CThreadPoolComponent();
+    virtual ~CThreadPoolModule();
 
     bool Start() override;
     bool Submit(const std::function<void()>& task) override;
