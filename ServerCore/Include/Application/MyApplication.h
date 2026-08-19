@@ -60,10 +60,7 @@ public:
     uint32_t ShutdownTimeout() const;
 
 protected:
-    // 注册应用程序需要的基础模块。
-    virtual bool RegisterComponents();
-
-    // 注册应用程序需要的模块。
+    // 注册应用程序需要的模块（默认装配 IConfig/ILogger，派生类重写并先调用本实现）。
     virtual bool RegisterModules();
 
     // 初始化完成钩子。

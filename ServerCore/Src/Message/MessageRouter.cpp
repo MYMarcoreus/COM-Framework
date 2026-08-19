@@ -108,8 +108,7 @@ void CMessageRouter::OnData(ConnectionId nId, const char* pData, size_t nLen)
         {
             break;
         }
-        ExtractedMessage extracted = m_fnExtractor(
-            strPending.data() + nConsumed, strPending.size() - nConsumed);
+        ExtractedMessage extracted = m_fnExtractor(strPending.data() + nConsumed, strPending.size() - nConsumed);
         if (extracted.result == MessageParseResult::kNeedMore)
         {
             break;

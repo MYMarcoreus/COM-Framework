@@ -25,10 +25,7 @@ public:
     virtual ~CDemoApplication();
 
 protected:
-    // 注册模块：网络模块、协议处理服务与事件分发器。
-    bool RegisterComponents() override;
-
-    // 注册模块：日志 / 定时器 / 网络。
+    // 注册模块：默认装配 + 接口模块（网络/事件/服务）+ 业务模块（日志/定时器/网络）。
     bool RegisterModules() override;
 
     // 初始化完成钩子：订阅网络生命周期事件。

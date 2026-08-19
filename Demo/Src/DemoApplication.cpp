@@ -43,11 +43,14 @@ CDemoApplication::~CDemoApplication()
 
 /// @brief 注册模块。
 ///
-/// 注册网络模块（INetwork）、事件分发器（IEventDispatcher）与协议处理服务（INetworkHandler）。
-bool CDemoApplication::RegisterComponents()
+/// 注册顺序即初始化/启动顺序：基类默认装配 → 接口模块（网络/事件/服务）→ 业务模块（日志 → 定时器 → 网络）。
+/// 模块注册后由 CModuleManager 持有引用，生命周期由它统一管理。
+///
+/// @return true 全部注册成功；false 注册失败。
+bool CDemoApplication::RegisterModules()
 {
-    // ① 先装配基类默认模块（配置模块 IConfig + 日志模块 ILogger）
-    if (!CMyApplication::RegisterComponents())
+    // ① 基类默认装配（配置模块 IConfig + 日志模块 ILogger）
+    if (!CMyApplication::RegisterModules())
     {
         return false;
     }
@@ -61,7 +64,7 @@ bool CDemoApplication::RegisterComponents()
     }
     network->Release(); // 管理器已持有引用
 
-    // ② 注册事件分发器模块
+    // ③ 注册事件分发器模块
     sc::IModule* events = new sc::CEventDispatcher();
     if (!m_moduleManager.RegisterModule(sc::IID_EventDispatcher(), events))
     {
@@ -70,7 +73,7 @@ bool CDemoApplication::RegisterComponents()
     }
     events->Release(); // 管理器已持有引用
 
-    // ③ 注册协议处理服务
+    // ④ 注册协议处理服务
     CDemoService* service = new CDemoService();
     if (!m_moduleManager.RegisterModule(sc::IID_INetworkHandler(), service))
     {
@@ -79,18 +82,8 @@ bool CDemoApplication::RegisterComponents()
     }
     m_pService = service;
     service->Release(); // 管理器已持有引用
-    return true;
-}
 
-/// @brief 注册模块。
-///
-/// 注册顺序即初始化/启动顺序：日志 → 定时器 → 网络。
-/// 模块注册后由 CModuleManager 持有引用，生命周期由它统一管理。
-///
-/// @return true 全部注册成功；false 注册失败。
-bool CDemoApplication::RegisterModules()
-{
-    // ① 日志模块：根据配置初始化日志器
+    // ⑤ 日志模块：根据配置初始化日志器
     sc::IModule* logger = new CDemoLoggerModule(m_config);
     if (!m_moduleManager.RegisterModule(logger))
     {
@@ -109,14 +102,14 @@ bool CDemoApplication::RegisterModules()
     }
     timer->Release(); // 管理器已持有引用
 
-    // ③ 网络模块：关联模块并启动 TCP 服务器
-    sc::IModule* network = new CDemoNetworkModule(m_moduleManager, m_pService, m_nPort);
-    if (!m_moduleManager.RegisterModule(network))
+    // ⑦ 网络业务模块：关联接口模块并启动 TCP 服务器
+    sc::IModule* businessNetwork = new CDemoNetworkModule(m_moduleManager, m_pService, m_nPort);
+    if (!m_moduleManager.RegisterModule(businessNetwork))
     {
-        network->Release();
+        businessNetwork->Release();
         return false;
     }
-    network->Release(); // 管理器已持有引用
+    businessNetwork->Release(); // 管理器已持有引用
     return true;
 }
 

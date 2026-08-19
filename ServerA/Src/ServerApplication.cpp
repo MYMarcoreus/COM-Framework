@@ -29,11 +29,16 @@ CServerApplication::~CServerApplication()
 
 /// @brief 注册模块。
 ///
-/// 注册网络模块（INetwork）、事件分发器（IEventDispatcher）、配置模块（IConfig）、
-/// 日志模块（ILogger）与回显服务（INetworkHandler）。
-bool CServerApplication::RegisterComponents()
+/// 注册顺序即初始化/启动顺序：基类默认装配 → 接口模块（网络/事件/配置/日志/回显）→ 业务模块（日志 → 网络）。
+bool CServerApplication::RegisterModules()
 {
-    // ① 注册网络模块
+    // ① 基类默认装配（配置 IConfig + 日志 ILogger；ServerA 已显式注册则跳过）
+    if (!CMyApplication::RegisterModules())
+    {
+        return false;
+    }
+
+    // ② 注册网络模块
     sc::IModule* network = new sc::CNetworkModule();
     if (!m_moduleManager.RegisterModule(sc::IID_INetwork(), network))
     {
@@ -42,7 +47,7 @@ bool CServerApplication::RegisterComponents()
     }
     network->Release(); // 管理器已持有引用
 
-    // ② 注册事件分发器模块
+    // ③ 注册事件分发器模块
     sc::IModule* events = new sc::CEventDispatcher();
     if (!m_moduleManager.RegisterModule(sc::IID_EventDispatcher(), events))
     {
@@ -51,7 +56,7 @@ bool CServerApplication::RegisterComponents()
     }
     events->Release(); // 管理器已持有引用
 
-    // ③ 注册配置模块（读取配置路径，默认 servera.ini）
+    // ④ 注册配置模块（读取配置路径，默认 servera.ini）
     sc::CConfigModule* config = new sc::CConfigModule();
     std::string configPath = ConfigPath();
     if (configPath.empty())
@@ -66,7 +71,7 @@ bool CServerApplication::RegisterComponents()
     }
     config->Release(); // 管理器已持有引用
 
-    // ④ 注册日志模块
+    // ⑤ 注册日志模块
     sc::IModule* logger = new sc::CLoggerModule();
     if (!m_moduleManager.RegisterModule(sc::IID_ILogger(), logger))
     {
@@ -75,7 +80,7 @@ bool CServerApplication::RegisterComponents()
     }
     logger->Release(); // 管理器已持有引用
 
-    // ⑤ 注册回显服务
+    // ⑥ 注册回显服务
     CEchoService* service = new CEchoService();
     if (!m_moduleManager.RegisterModule(sc::IID_INetworkHandler(), service))
     {
@@ -84,31 +89,24 @@ bool CServerApplication::RegisterComponents()
     }
     m_pService = service;
     service->Release(); // 管理器已持有引用
-    return true;
-}
 
-/// @brief 注册模块。
-///
-/// 注册顺序即初始化/启动顺序：日志 → 网络。
-bool CServerApplication::RegisterModules()
-{
-    // ① 日志模块（通过模块管理器按接口初始化）
-    sc::IModule* logger = new CServerLoggerModule(m_moduleManager);
-    if (!m_moduleManager.RegisterModule(logger))
+    // ⑦ 业务日志模块（通过模块管理器按接口初始化）
+    sc::IModule* businessLogger = new CServerLoggerModule(m_moduleManager);
+    if (!m_moduleManager.RegisterModule(businessLogger))
     {
-        logger->Release();
+        businessLogger->Release();
         return false;
     }
-    logger->Release(); // 管理器已持有引用
+    businessLogger->Release(); // 管理器已持有引用
 
-    // ② 网络模块
-    sc::IModule* network = new CServerNetworkModule(m_moduleManager, m_pService, m_nPort);
-    if (!m_moduleManager.RegisterModule(network))
+    // ⑧ 业务网络模块
+    sc::IModule* businessNetwork = new CServerNetworkModule(m_moduleManager, m_pService, m_nPort);
+    if (!m_moduleManager.RegisterModule(businessNetwork))
     {
-        network->Release();
+        businessNetwork->Release();
         return false;
     }
-    network->Release(); // 管理器已持有引用
+    businessNetwork->Release(); // 管理器已持有引用
     return true;
 }
 

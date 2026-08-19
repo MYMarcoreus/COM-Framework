@@ -13,9 +13,8 @@ class CEchoService;
 
 /// @brief ServerA 服务器应用程序（ServerCore 复用骨架）。
 ///
-/// 作为第一个业务服务器项目，复用 ServerCore 的模块 / 模块 / 事件机制：
-/// - RegisterComponents：注册网络模块、事件分发器、回显服务
-/// - RegisterModules：注册日志模块与网络模块
+/// 作为第一个业务服务器项目，复用 ServerCore 的模块 / 事件机制：
+/// - RegisterModules：默认装配 + 接口模块（网络/事件/配置/日志/回显）+ 业务模块（日志/网络）
 ///
 /// 不含具体业务（规范：第一阶段不做业务认证 / 权限 / 数据库等）。
 class CServerApplication : public sc::CMyApplication
@@ -26,10 +25,7 @@ public:
     virtual ~CServerApplication();
 
 protected:
-    // 注册模块：网络模块、事件分发器与回显服务。
-    bool RegisterComponents() override;
-
-    // 注册模块：日志 / 网络。
+    // 注册模块：默认装配 + 接口模块（网络/事件/配置/日志/回显）+ 业务模块（日志/网络）。
     bool RegisterModules() override;
 
     // 初始化完成钩子：订阅网络生命周期事件。

@@ -36,10 +36,6 @@ CMyApplication::~CMyApplication()
 /// @return true 初始化成功；false 初始化失败。
 bool CMyApplication::Initialize()
 {
-    if (!RegisterComponents())
-    {
-        return false;
-    }
     if (!RegisterModules())
     {
         return false;
@@ -156,13 +152,27 @@ uint64_t CMyApplication::UptimeSeconds() const
         std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
 }
 
-/// @brief 注册基础模块（默认装配）。
+/// @brief 设置优雅关闭总超时。
+///
+/// @param nTimeoutMs 超时毫秒数；0 表示不限制。
+void CMyApplication::SetShutdownTimeout(uint32_t nTimeoutMs)
+{
+    m_nShutdownTimeoutMs = nTimeoutMs;
+}
+
+/// @brief 当前优雅关闭超时（毫秒）。
+uint32_t CMyApplication::ShutdownTimeout() const
+{
+    return m_nShutdownTimeoutMs;
+}
+
+/// @brief 注册应用程序需要的模块（默认装配）。
 ///
 /// 默认注册配置模块与日志模块；若同接口标识模块已存在（派生类先注册）则跳过。
 /// 派生类重写时可先调用本实现再注册业务模块。
 ///
 /// @return true 全部成功。
-bool CMyApplication::RegisterComponents()
+bool CMyApplication::RegisterModules()
 {
     if (m_moduleManager.GetModuleByIid(IID_IConfig()) == nullptr)
     {
@@ -188,28 +198,6 @@ bool CMyApplication::RegisterComponents()
         }
         pLogger->Release(); // 管理器已持有引用
     }
-    return true;
-}
-
-/// @brief 设置优雅关闭总超时。
-///
-/// @param nTimeoutMs 超时毫秒数；0 表示不限制。
-void CMyApplication::SetShutdownTimeout(uint32_t nTimeoutMs)
-{
-    m_nShutdownTimeoutMs = nTimeoutMs;
-}
-
-/// @brief 当前优雅关闭超时（毫秒）。
-uint32_t CMyApplication::ShutdownTimeout() const
-{
-    return m_nShutdownTimeoutMs;
-}
-
-/// @brief 注册基础模块。
-///
-/// 基类不注册任何模块，派生类根据需要重写。
-bool CMyApplication::RegisterModules()
-{
     return true;
 }
 
