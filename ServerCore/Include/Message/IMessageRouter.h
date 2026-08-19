@@ -13,7 +13,7 @@ namespace sc {
 /// @brief 获取 IMessageRouter 接口标识。
 inline const InterfaceId& IID_IMessageRouter()
 {
-    static const InterfaceId iid = "sc::IMessageRouter";
+    static const InterfaceId iid("sc::IMessageRouter", "8085dca6-f19e-4bb1-a52f-6c12bc85b5c9");
     return iid;
 }
 

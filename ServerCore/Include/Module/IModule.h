@@ -22,7 +22,7 @@ enum class ModuleState
 /// @brief 获取 IModule 接口标识。
 inline const InterfaceId& IID_IModule()
 {
-    static const InterfaceId iid = "sc::IModule";
+    static const InterfaceId iid("sc::IModule", "fe293bce-4c0e-443b-8ce8-953c4806c6fa");
     return iid;
 }
 

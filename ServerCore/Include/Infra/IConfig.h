@@ -10,7 +10,7 @@ namespace sc {
 /// @brief 获取 IConfig 接口标识。
 inline const InterfaceId& IID_IConfig()
 {
-    static const InterfaceId iid = "sc::IConfig";
+    static const InterfaceId iid("sc::IConfig", "cfaa634b-1064-40d3-94eb-b8518776bd7e");
     return iid;
 }
 

@@ -73,7 +73,7 @@ bool CModuleManager::RegisterModule(IModule* pModule)
 /// @return true 注册成功并接管；false 注册失败（已释放）。
 bool CModuleManager::RegisterModule(const InterfaceId& iid, IModule* pModule)
 {
-    if (iid == nullptr || pModule == nullptr)
+    if (!iid.IsValid() || pModule == nullptr)
     {
         return false;
     }
@@ -111,7 +111,7 @@ IModule* CModuleManager::GetModule(const char* strName) const
 /// @return 借用指针（不增加引用计数）；未找到返回 nullptr。
 IModule* CModuleManager::GetModuleByIid(const InterfaceId& iid) const
 {
-    if (iid == nullptr)
+    if (!iid.IsValid())
     {
         return nullptr;
     }
@@ -192,7 +192,7 @@ bool CModuleManager::UnregisterModule(const char* strName)
 /// @return true 移除成功；false 未找到。
 bool CModuleManager::UnregisterModuleByIid(const InterfaceId& iid)
 {
-    if (iid == nullptr)
+    if (!iid.IsValid())
     {
         return false;
     }

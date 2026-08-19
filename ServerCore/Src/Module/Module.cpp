@@ -58,7 +58,7 @@ bool CModule::QueryInterface(const InterfaceId& iid, void** ppv)
         return false;
     }
     *ppv = nullptr;
-    if (iid == nullptr)
+    if (!iid.IsValid())
     {
         return false;
     }

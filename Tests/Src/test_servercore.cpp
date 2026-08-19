@@ -58,7 +58,7 @@ public:
 /// @brief 测试模块接口标识。
 inline const sc::InterfaceId& IID_TestModule()
 {
-    static const sc::InterfaceId iid = "sc::TestModule";
+    static const sc::InterfaceId iid("sc::TestModule", "ee127b1b-a71c-4cad-8f02-39285975b72f");
     return iid;
 }
 

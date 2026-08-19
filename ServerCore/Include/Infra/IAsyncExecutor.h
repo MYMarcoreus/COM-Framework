@@ -12,7 +12,7 @@ namespace sc {
 /// @brief 获取 IAsyncExecutor 接口标识。
 inline const InterfaceId& IID_IAsyncExecutor()
 {
-    static const InterfaceId iid = "sc::IAsyncExecutor";
+    static const InterfaceId iid("sc::IAsyncExecutor", "c71a0b68-66ef-47b2-8a52-64404059daf0");
     return iid;
 }
 

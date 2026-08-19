@@ -10,7 +10,7 @@ namespace sc {
 /// @brief 获取 ITimer 接口标识。
 inline const InterfaceId& IID_ITimer()
 {
-    static const InterfaceId iid = "sc::ITimer";
+    static const InterfaceId iid("sc::ITimer", "4810a33f-4a1c-490e-b19f-a2d1f3d4229d");
     return iid;
 }
 

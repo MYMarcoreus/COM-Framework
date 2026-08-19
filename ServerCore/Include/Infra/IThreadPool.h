@@ -12,7 +12,7 @@ namespace sc {
 /// @brief 获取 IThreadPool 接口标识。
 inline const InterfaceId& IID_IThreadPool()
 {
-    static const InterfaceId iid = "sc::IThreadPool";
+    static const InterfaceId iid("sc::IThreadPool", "8f578de1-43a1-46fd-a371-2766edbb7f32");
     return iid;
 }
 

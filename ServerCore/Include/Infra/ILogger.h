@@ -9,7 +9,7 @@ namespace sc {
 /// @brief 获取 ILogger 接口标识。
 inline const InterfaceId& IID_ILogger()
 {
-    static const InterfaceId iid = "sc::ILogger";
+    static const InterfaceId iid("sc::ILogger", "7f70d36c-e774-49c0-9f0e-0d59b5c0adf8");
     return iid;
 }
 

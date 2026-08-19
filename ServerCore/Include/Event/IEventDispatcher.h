@@ -10,7 +10,7 @@ namespace sc {
 /// @brief 获取 IEventDispatcher 接口标识。
 inline const InterfaceId& IID_EventDispatcher()
 {
-    static const InterfaceId iid = "sc::IEventDispatcher";
+    static const InterfaceId iid("sc::IEventDispatcher", "3da6cfa3-000a-49cd-9510-0df2984983e0");
     return iid;
 }
 

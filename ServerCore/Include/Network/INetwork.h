@@ -51,7 +51,7 @@ public:
 /// @brief 获取 INetwork 接口标识。
 inline const InterfaceId& IID_INetwork()
 {
-    static const InterfaceId iid = "sc::INetwork";
+    static const InterfaceId iid("sc::INetwork", "74d3ba11-ac29-4ade-8cb7-f7bffa45df3f");
     return iid;
 }
 

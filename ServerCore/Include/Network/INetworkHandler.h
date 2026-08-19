@@ -28,7 +28,7 @@ public:
 /// @brief 获取 INetworkHandler 接口标识。
 inline const InterfaceId& IID_INetworkHandler()
 {
-    static const InterfaceId iid = "sc::INetworkHandler";
+    static const InterfaceId iid("sc::INetworkHandler", "5ee84f83-1e83-4708-9e12-2621199de5c2");
     return iid;
 }
 
