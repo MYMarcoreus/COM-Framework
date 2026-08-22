@@ -9,6 +9,7 @@
 #include "Log/Logger.h"
 #include "Message/MessageRouter.h"
 #include "Module/DemoLoggerModule.h"
+#include "Module/DemoAsyncModule.h"
 #include "Module/DemoLogReporterModule.h"
 #include "Module/DemoTimerModule.h"
 #include "Network/NetworkModule.h"
@@ -118,6 +119,13 @@ bool CDemoApplication::RegisterModules()
 
     // ⑪ 日志上报模块：将运行状态周期上报到 LogServer
     if (!m_moduleManager.RegisterModule(new CDemoLogReporterModule(m_config)))
+    {
+        return false;
+    }
+
+    // ⑫ 异步框架演示模块：周期性演示 CTask 链式 / 多回调 / 异常传播
+    int asyncIntervalMs = m_config.GetInt("async.interval_ms", 5000);
+    if (!m_moduleManager.RegisterModule(new CDemoAsyncModule(asyncIntervalMs)))
     {
         return false;
     }
