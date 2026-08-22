@@ -1,7 +1,7 @@
 ---
 
 name: build-system
-description: 本项目的 Ubuntu 24.04、Docker、Makefile、build.sh、.builds.sh、compiledb、Bear 和 clangd 构建规范。修改构建系统、Makefile、Dev Container、编译数据库或解决编译问题时使用。
+description: 本项目的 Ubuntu 24.04、Docker、Makefile、generate-compiledb.sh、build-all.sh、compiledb、Bear 和 clangd 构建规范。修改构建系统、Makefile、Dev Container、编译数据库或解决编译问题时使用。
 ----------------------------------------------------------------------------------------------------------------------------------------------
 
 # 构建系统规范
@@ -103,7 +103,7 @@ Makefile 必须保证：
 工作区根目录存在：
 
 ```text
-.builds.sh
+build-all.sh
 ```
 
 它负责调用指定项目的 Make 构建。
@@ -111,7 +111,7 @@ Makefile 必须保证：
 整体流程：
 
 ```text
-.builds.sh
+build-all.sh
     ↓
 <Project>/Linux/Makefile
     ↓
@@ -120,19 +120,19 @@ Makefile 必须保证：
 链接
 ```
 
-修改项目名称、路径或构建目标时，必须同步检查 `.builds.sh`。
+修改项目名称、路径或构建目标时，必须同步检查 `build-all.sh`。
 
 ---
 
-## 6. build.sh
+## 6. generate-compiledb.sh
 
 项目可以通过：
 
 ```text
-build.sh
+generate-compiledb.sh
 ```
 
-提供构建入口。
+提供编译数据库（compile_commands.json）生成入口。
 
 VS Code 可以通过：
 
@@ -143,7 +143,7 @@ tasks.json
 调用：
 
 ```text
-build.sh
+generate-compiledb.sh
     ↓
 Makefile
 ```
@@ -159,7 +159,7 @@ Makefile
 ```text
 tasks.json
     ↓
-build.sh
+generate-compiledb.sh
     ↓
 Makefile
 ```

@@ -743,14 +743,11 @@ Doxygen 仍然描述旧行为
 /// 根据接口标识查询当前组件支持的接口。
 ///
 /// @param iid 要查询的接口标识。
-/// @param object 返回查询到的接口对象。
 ///
-/// @return 查询成功返回 true，否则返回 false。
+/// @return 借用的接口指针；未找到返回 nullptr（不使用 out 指针）。
 ///
 /// @note 成功获取接口后，调用方需要按照组件的生命周期规则管理引用。
-bool QueryInterface(
-    const InterfaceId& iid,
-    void** object);
+void* QueryInterface(const InterfaceId& iid);
 ```
 
 ---

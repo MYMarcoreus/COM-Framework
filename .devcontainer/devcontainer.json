@@ -13,5 +13,5 @@
       ]
     }
   },
-  "postCreateCommand": "bash build.sh && bash .builds.sh"
+  "postCreateCommand": "bash generate-compiledb.sh && bash build-all.sh"
 }

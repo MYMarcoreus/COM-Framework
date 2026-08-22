@@ -20,17 +20,17 @@ PROJECT    := $(notdir $(ROOT))
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -pthread
-# 本项目 Include + Common Include + asio 子模块
-CPPFLAGS ?= -I$(ROOT)/Include -I$(WS_ROOT)/Common/Include -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE
+# 本项目各模块目录 + Common 各模块目录 + asio 子模块
+CPPFLAGS ?= -I$(ROOT) -I$(WS_ROOT)/Common -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE
 LDFLAGS  ?=
 LDLIBS   ?=
 
-SRC_DIR   := $(ROOT)/Src
+SRC_DIR   := $(ROOT)
 BUILD_DIR := $(WS_ROOT)/build
 TARGET    := $(BUILD_DIR)/libServerCore.a
 
-# 递归收集 Src 下所有子目录的 .cpp
-SRCS := $(shell find $(SRC_DIR) -name '*.cpp' | sort)
+# 递归收集各模块目录下的 .cpp（排除 Linux 构建目录）
+SRCS := $(shell find $(SRC_DIR) -name '*.cpp' -not -path '*/Linux/*' | sort)
 # 对象名 = <项目>_<路径拍平>.o，避免不同项目同名源文件冲突
 OBJS := $(foreach src,$(SRCS),$(BUILD_DIR)/$(PROJECT)_$(subst /,_,$(patsubst $(SRC_DIR)/%.cpp,%,$(src))).o)
 DEPS := $(OBJS:.o=.d)

@@ -1,6 +1,6 @@
 # ------------------------------------------------------------------
 # ServerA 业务服务器 Makefile（ServerCore 复用骨架）
-#   - 头文件位于 <项目>/Include/，源码位于 <项目>/Src/
+#   - 模块自治：每模块一个目录，头源同目录
 #   - 生成 build/servera
 #   - 依赖 build/libServerCore.a 与 build/libCommon.a
 # 可用目标:
@@ -21,19 +21,19 @@ PROJECT    := $(notdir $(ROOT))
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -pthread
-# 本项目 Include + ServerCore Include + Common Include + asio 子模块
-CPPFLAGS ?= -I$(ROOT)/Include -I$(WS_ROOT)/ServerCore/Include -I$(WS_ROOT)/Common/Include -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE
+# 本项目各模块目录 + ServerCore + Common + asio 子模块
+CPPFLAGS ?= -I$(ROOT) -I$(WS_ROOT)/ServerCore -I$(WS_ROOT)/Common -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE
 LDFLAGS  ?=
 LDLIBS   ?= $(WS_ROOT)/build/libServerCore.a $(WS_ROOT)/build/libCommon.a
 
-SRC_DIR   := $(ROOT)/Src
+SRC_DIR   := $(ROOT)
 BUILD_DIR := $(WS_ROOT)/build
 TARGET    := $(BUILD_DIR)/servera
 LIB       := $(WS_ROOT)/build/libServerCore.a
 COMMON_LIB := $(WS_ROOT)/build/libCommon.a
 
-# 递归收集 Src 下所有子目录的 .cpp
-SRCS := $(shell find $(SRC_DIR) -name '*.cpp' | sort)
+# 递归收集各模块目录下的 .cpp（排除 Linux）
+SRCS := $(shell find $(SRC_DIR) -name '*.cpp' -not -path '*/Linux/*' | sort)
 OBJS := $(foreach src,$(SRCS),$(BUILD_DIR)/$(PROJECT)_$(subst /,_,$(patsubst $(SRC_DIR)/%.cpp,%,$(src))).o)
 DEPS := $(OBJS:.o=.d)
 

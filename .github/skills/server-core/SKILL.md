@@ -218,30 +218,18 @@ Demo 的目的只是证明：
 
 ServerCore 应该按照组件职责组织。
 
-初始阶段可以采用：
+ServerCore 采用**模块自治**组织：每个模块一个目录（头文件与源文件同目录），模块边界清晰、可独立演进；规模增长后各模块目录可直接拆分为独立库。
 
 ```text
 ServerCore/
-├── Include/
-│   ├── Application/
-│   ├── Component/
-│   ├── Network/
-│   ├── Thread/
-│   ├── Event/
-│   ├── Common/
-│   └── ...
-│
-├── Src/
-│   ├── Application/
-│   ├── Component/
-│   ├── Network/
-│   ├── Thread/
-│   ├── Event/
-│   ├── Common/
-│   └── ...
-│
-└── Linux/
-    └── Makefile
+├── Module/       # 模块模型（IModule/CModule/ModuleManager）及基础（IUnknown/InterfaceId/ScopedInterfacePtr）
+├── Application/  # 应用骨架（MyApplication）
+├── Network/      # 网络（ConnectionId/INetwork/NetworkModule/TcpServerModule）
+├── Event/        # 事件（EventTypes/IEventDispatcher/EventDispatcher）
+├── Infra/        # 基础设施适配（IConfig/ILogger/ITimer/IThreadPool/IAsyncExecutor + 各 *Module）
+├── Message/      # 消息路由（IMessageRouter/MessageRouter）
+├── Process/      # 进程（Process）
+└── Linux/        # Makefile（find 递归收集各模块 .cpp）
 ```
 
 实际目录可以根据组件数量调整。
@@ -538,9 +526,8 @@ shared_ptr
 class IUnknown
 {
 public:
-    virtual Result QueryInterface(
-        const InterfaceId& iid,
-        void** object) = 0;
+    virtual void* QueryInterface(
+        const InterfaceId& iid) = 0;
 
     virtual unsigned long AddRef() = 0;
 
@@ -566,31 +553,31 @@ protected:
 例如：
 
 ```text
-ComponentManager
+CModuleManager
         │
-        ├── RegisterComponent()
-        ├── CreateComponent()
-        ├── GetComponent()
-        └── RemoveComponent()
+        ├── RegisterModule()
+        ├── InitializeAll() / StartAll()
+        ├── Resolve<T>() / GetModule()
+        └── UnregisterModule()
 ```
 
 概念关系：
 
 ```text
-Application
+MyApplication
       │
       ▼
-ComponentManager
+CModuleManager
       │
-      ├── Logger
-      ├── Network
-      ├── Timer
-      └── Config
+      ├── LoggerModule
+      ├── NetworkModule
+      ├── TimerModule
+      └── ConfigModule
 ```
 
-组件管理器属于 ServerCore。
+模块管理器属于 ServerCore。
 
-具体业务组件不应修改 ComponentManager 的核心实现。
+具体业务模块不应修改 CModuleManager 的核心实现。
 
 ---
 
@@ -632,11 +619,10 @@ ServerCore
 ├── Application
 │   └── MyApplication
 │
-├── Component
-│   ├── Component
-│   ├── Interface
-│   ├── ComponentManager
-│   └── Reference Management
+├── Module
+│   ├── IModule / CModule / ModuleManager
+│   ├── IUnknown / InterfaceId / ScopedInterfacePtr  # 模块模型基础（原 Component 基础设施）
+│   └── 引用管理（ScopedInterfacePtr）
 │
 ├── Network
 │   ├── Socket
@@ -725,8 +711,11 @@ ServerCore 必须提供一个 Demo 项目。
 
 ```text
 Demo/
-├── Src/
-├── Include/
+├── Application/    # DemoApplication
+├── Module/         # DemoLoggerModule 等
+├── Protocol/       # 通信协议
+├── Service/        # 业务服务
+├── main.cpp        # 服务器入口
 └── Linux/
     └── Makefile
 ```
@@ -754,9 +743,9 @@ MyApplication
 ```text
 MyApplication
  ↓
-ComponentManager
+CModuleManager
  ↓
-基础组件
+基础模块
 ```
 
 ### 19.3 可以启动服务器
@@ -788,19 +777,11 @@ Demo 应提供一个极简通信协议。
 ```text
 Demo/
 ├── Protocol/
-├── Src/
-└── Include/
-```
-
-或者根据项目目录规范：
-
-```text
-Demo/
-├── Include/
-│   └── Protocol/
-├── Src/
-│   └── Protocol/
+├── Service/
+├── Application/
+├── main.cpp
 └── Linux/
+    └── Makefile
 ```
 
 协议只用于验证：
@@ -988,10 +969,9 @@ ServerCore
 ├── Application
 │   └── MyApplication
 │
-├── Component
-│   ├── Interface
-│   ├── Component
-│   └── ComponentManager
+├── Module
+│   ├── IUnknown / InterfaceId / ScopedInterfacePtr  # 模块模型基础
+│   ├── IModule / CModule / ModuleManager
 │
 └── Network
     ├── Socket
@@ -1149,9 +1129,9 @@ COM 思想用于解决：
    ↓
 实现接口
    ↓
-实现具体组件
+实现具体模块
    ↓
-加入 ComponentManager（如果需要）
+注册到 CModuleManager（如果需要）
    ↓
 加入 Makefile
    ↓
@@ -1231,7 +1211,7 @@ Release
    Application          Component             Network
         │                    │                    │
         ▼                    ▼                    ▼
- MyApplication         ComponentManager       TcpServer
+ MyApplication         CModuleManager        TcpServer
                                              TcpConnection
         │                    │                    │
         └────────────────────┼────────────────────┘

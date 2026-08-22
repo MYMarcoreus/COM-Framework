@@ -4,7 +4,7 @@
         {
             "label": "build (all projects)",
             "type": "shell",
-            "command": "bash .builds.sh",
+            "command": "bash build-all.sh",
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -20,7 +20,7 @@
         {
             "label": "generate compile_commands (all projects)",
             "type": "shell",
-            "command": "bash build.sh",
+            "command": "bash generate-compiledb.sh",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",

@@ -3,16 +3,16 @@
 一个基于 **Dev Container（仅 Dockerfile，无 compose）** 的 C++ 多项目工作区：
 
 - 工作区根目录可存放 **多个独立项目**；
-- 每个项目按规范组织：`<Project>/Include/`（头文件）、`<Project>/Src/`（源文件）、`<Project>/Linux/Makefile`；
+- 每个项目按模块自治组织：`<Project>/<Module>/`（每模块一个目录，头源同目录）、`<Project>/Linux/Makefile`；
 - 通过 **bear** 或 **compiledb** 生成 `compile_commands.json`，供 clangd 提供补全与跳转；
 - 统一使用 **C++11**，构建工具为 **Make**（不引入 CMake）。
 
 ## 目录结构
 
 ```text
-make_test/                       # 工作区根目录（可存放多个项目）
-├── .builds.sh                   # 工作区统一构建脚本（按依赖顺序构建所有项目）
-├── build.sh                     # 生成所有项目的 compile_commands.json（供 clangd）
+COM-Framework/                  # 工作区根目录（可存放多个项目）
+├── build-all.sh                 # 工作区统一构建脚本（按依赖顺序构建所有项目）
+├── generate-compiledb.sh        # 生成所有项目的 compile_commands.json（供 clangd）
 ├── .devcontainer/
 │   ├── devcontainer.json        # VS Code 开发容器配置
 │   └── Dockerfile               # 工具链：g++ / make / bear / compiledb / clangd
@@ -21,62 +21,68 @@ make_test/                       # 工作区根目录（可存放多个项目）
 ├── .tools/
 │   └── setup_tools.sh           # 宿主机（无 sudo）安装 compiledb 的脚本
 │
-├── Common/
-│   └── ThirdParty/
-│       └── asio/                # git 子模块：Standalone Asio（asio-1-38-2）
-│
-├── Common/                      # 公共基础库（静态库 libCommon.a）
-│   ├── Include/
-│   │   ├── Network/             # TcpServer / TcpClient / TcpConnection / UdpSocket / Buffer（基于 asio）
-│   │   ├── Log/                 # Logger（自实现：线程安全，控制台 + 文件）
-│   │   ├── Timer/               # TimerManager（基于 asio::steady_timer）
-│   │   ├── Config/              # 配置解析（基于 inih）
-│   │   ├── Thread/              # ThreadPool（自实现：多线程任务队列）
-│   │   └── Async/               # AsyncExecutor（Task 链式调用：Then / Get）
-│   ├── Src/
+├── Common/                      # 公共基础库（静态库 libCommon.a，模块自治：头源同目录）
+│   ├── Network/                 # TcpServer / TcpClient / TcpConnection / UdpSocket / Buffer（基于 asio）
+│   ├── Log/                     # Logger（自实现：线程安全，控制台 + 文件，支持文件滚动）
+│   ├── Timer/                   # TimerManager（基于 asio::steady_timer）
+│   ├── Config/                  # 配置解析（基于 inih）
+│   ├── Thread/                  # ThreadPool（自实现：多线程任务队列）
+│   ├── Async/                   # AsyncExecutor（Task 链式调用：Then / Get）
+│   ├── Serialization/           # 二进制序列化（CBinaryWriter / CBinaryReader，小端 + 边界检查）
 │   ├── Linux/Makefile           # 生成 build/libCommon.a
 │   └── ThirdParty/              # git 子模块
 │       ├── asio/                # Standalone Asio（asio-1-38-2）：网络 + 定时器
 │       └── inih/                # inih（r62）：INI 解析
 │
-├── ServerCore/                  # 服务器基础框架（静态库 libServerCore.a）
-│   ├── Include/
-│   │   ├── Application/         # MyApplication（生命周期 + 配置注入 + 运行状态）
-│   │   ├── Component/           # IUnknown / InterfaceId / ScopedInterfacePtr（接口与引用计数基础设施）
-│   │   ├── Module/              # IModule / Module / ModuleManager（统一生命周期管理 + 状态查询 + 接口注册）
-│   │   ├── Event/               # IEventDispatcher / EventDispatcher（模块间解耦通信）
-│   │   ├── Message/             # IMessageRouter / MessageRouter（基础消息分发）
-│   │   ├── Infra/               # ILogger / IConfig / ITimer / IThreadPool / IAsyncExecutor（模块化适配层）
-│   │   ├── Process/             # Process 工具 / PidFile（守护进程 + pid 文件）
-│   │   ├── Network/             # INetwork / INetworkHandler / NetworkModule（模块模型适配）
-│   │   └── Common/              # 类型别名
-│   ├── Src/
+├── ServerCore/                  # 服务器基础框架（静态库 libServerCore.a，模块自治）
+│   ├── Application/             # MyApplication（生命周期 + 配置注入 + 运行状态 + 默认装配）
+│   ├── Module/                  # 模块模型：IUnknown/InterfaceId/ScopedInterfacePtr + IModule/Module/ModuleManager + InitContext（依赖注入）
+│   ├── Event/                   # IEventDispatcher / EventDispatcher（同步 + 异步事件分发）
+│   ├── Message/                 # IMessageRouter / MessageRouter（消息流水线：半包/粘包/按类型分发）
+│   ├── Infra/                   # ILogger/IConfig/ITimer/IThreadPool/IAsyncExecutor + *Module（模块化适配层）
+│   ├── Observability/           # IMetrics / MetricsModule（统一指标：计数器/仪表 + 状态报告聚合）
+│   ├── Process/                 # Process 工具 / PidFile（守护进程 + pid 文件）
+│   ├── Network/                 # INetwork / INetworkHandler / NetworkModule / TcpServerModule（含连接级上下文）
+│   ├── docs/                    # 架构与开发文档（多 md：模块/注入/消息/网络/事件/指标/序列化/扩展/测试）
 │   └── Linux/
 │       └── Makefile             # 生成 build/libServerCore.a
 │
-├── Demo/                        # ServerCore 验证项目
+├── Demo/                        # ServerCore 验证项目（模块自治）
 │   ├── demo.ini                 # 示例配置（Config 模块）
-│   ├── Include/
-│   │   ├── Protocol/            # Demo 极简协议（Length + Command + Payload）
-│   │   ├── Service/             # DemoService（实现 INetworkHandler）
-│   │   ├── Module/              # DemoLoggerModule / DemoTimerModule / DemoNetworkModule
-│   │   └── DemoApplication.h
-│   ├── Src/                     # DemoApplication / main / client_main / Module/
+│   ├── Application/             # DemoApplication
+│   ├── Protocol/                # Demo 极简协议（Length + Command + Payload）
+│   ├── Service/                 # DemoService（实现 INetworkHandler）
+│   ├── Module/                  # DemoLoggerModule / DemoTimerModule / DemoLogReporterModule
+│   ├── Client/                  # 测试客户端入口（client_main）
+│   ├── main.cpp                 # 服务器入口
 │   └── Linux/
 │       └── Makefile             # 生成 build/demo 与 build/demo_client
 │
-├── ServerA/                     # 第一个业务服务器骨架（复用 ServerCore）
-│   ├── Include/
-│   │   ├── Service/             # EchoService（实现 INetworkHandler）
-│   │   ├── Module/              # ServerLoggerModule / ServerNetworkModule
-│   │   └── ServerApplication.h
-│   ├── Src/                     # ServerApplication / main / Service/ / Module/
+├── ServerA/                     # 第一个业务服务器骨架（复用 ServerCore，模块自治）
+│   ├── Application/             # ServerApplication
+│   ├── Service/                 # EchoService（实现 INetworkHandler）
+│   ├── Module/                  # ServerLoggerModule
+│   ├── main.cpp                 # 服务器入口
 │   └── Linux/
 │       └── Makefile             # 生成 build/servera
 │
-├── Tests/                       # 单元测试（轻量框架，链接 Common + ServerCore）
-│   ├── Include/TestFramework.h  # TEST / ASSERT_TRUE / ASSERT_EQ 宏
-│   ├── Src/                     # test_common / test_servercore / main
+├── LogServer/                   # 集中式日志服务器（复用 ServerCore，模块自治）
+│   ├── logserver.ini            # 示例配置（监听端口 / 日志目录）
+│   ├── Application/             # LogServerApplication（含 CConfigReloadModule 配置热加载广播）
+│   ├── Protocol/                # LogProtocol（Length + Command + 文本负载）
+│   ├── Service/                 # LogService / LogStorage（按来源分文件 + 滚动）
+│   ├── Module/                  # 各业务模块
+│   ├── main.cpp                 # 服务器入口
+│   └── Linux/
+│       └── Makefile             # 生成 build/logserver
+│
+├── Tests/                       # 单元测试（轻量框架，链接 Common + ServerCore + LogServer 被测源码）
+│   ├── TestFramework.h/.cpp     # TEST / ASSERT_TRUE / ASSERT_EQ 宏
+│   ├── test_common.cpp          # 测试用例
+│   ├── test_servercore.cpp
+│   ├── test_logserver.cpp
+│   ├── test_infra.cpp
+│   ├── main.cpp
 │   └── Linux/Makefile           # 生成 build/tests（make run 运行全部用例）
 │
 └── build/                       # 构建产物（.o / .a / 可执行文件）
@@ -146,8 +152,8 @@ Demo 还验证**事件解耦通信**：`DemoNetworkModule` 启动/停止时发�
 容器基于 `ubuntu:24.04`，提供 gcc/g++、make、bear、compiledb、clangd/clang、git、gdb，并以非 root 用户 `ubuntu`（uid=1000，与宿主机一致）运行，避免容器内构建产物在宿主机上出现 root 属主问题。创建完成后 `postCreateCommand` 自动执行：
 
 ```bash
-bash build.sh   # 生成所有项目的 compile_commands.json（供 clangd）
-bash .builds.sh # 构建 Common → ServerCore → Demo → ServerA → Tests
+bash generate-compiledb.sh   # 生成所有项目的 compile_commands.json（供 clangd）
+bash build-all.sh # 构建 Common → ServerCore → LogServer → Demo → ServerA → Tests
 ```
 
 > 容器内 clangd 直接使用容器路径（`/workspace/...`）的 `compile_commands.json`，无需路径改写。
@@ -155,11 +161,11 @@ bash .builds.sh # 构建 Common → ServerCore → Demo → ServerA → Tests
 ### 2. 构建与运行
 
 ```bash
-# 工作区统一构建（按依赖顺序：Common → ServerCore → Demo → ServerA → Tests）
-bash .builds.sh
+# 工作区统一构建（按依赖顺序：Common → ServerCore → LogServer → Demo → ServerA → Tests）
+bash build-all.sh
 
 # 生成 compile_commands.json（供 clangd）
-bash build.sh
+bash generate-compiledb.sh
 
 # 单独构建某个项目
 make -C ServerCore/Linux all
@@ -172,8 +178,8 @@ make -C Demo/Linux all
 
 也可以在 VS Code 中运行任务（`Tasks: Run Build Task`）：
 
-- **build (all projects)** —— `.builds.sh`
-- **generate compile_commands (all projects)** —— `build.sh`
+- **build (all projects)** —— `build-all.sh`
+- **generate compile_commands (all projects)** —— `generate-compiledb.sh`
 - **run demo server** / **run demo client**
 
 ### 3. 宿主机（无 sudo）生成 compile_commands.json
@@ -182,10 +188,10 @@ make -C Demo/Linux all
 
 ```bash
 bash .tools/setup_tools.sh   # 在工作区 .tools/venv 中安装 compiledb
-bash build.sh
+bash generate-compiledb.sh
 ```
 
-`build.sh` 会自动优先使用系统 `compiledb`，否则回退到 `.tools/venv` 中的版本。
+`generate-compiledb.sh` 会自动优先使用系统 `compiledb`，否则回退到 `.tools/venv` 中的版本。
 
 ### 4. git 子模块（第三方库）
 
@@ -211,8 +217,8 @@ git commit -m "升级 asio 到 <新标签>"
 
 | 命令 | 说明 |
 | --- | --- |
-| `bash .builds.sh` | 构建所有项目 |
-| `bash build.sh` | 生成所有项目的 compile_commands.json |
+| `bash build-all.sh` | 构建所有项目 |
+| `bash generate-compiledb.sh` | 生成所有项目的 compile_commands.json |
 | `make -C <项目>/Linux all` | 构建单个项目 |
 | `make -C <项目>/Linux debug` | 调试构建（-O0） |
 | `make -C <项目>/Linux compiledb` | 用 compiledb 生成编译数据库 |

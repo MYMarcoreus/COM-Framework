@@ -18,18 +18,19 @@ PROJECT    := $(notdir $(ROOT))
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -pthread
-# 本项目 Include + 第三方子模块（asio / inih）
-CPPFLAGS ?= -I$(ROOT)/Include \
+# 本项目各模块目录 + 第三方子模块（asio / inih）
+CPPFLAGS ?= -I$(ROOT) \
             -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE \
             -I$(WS_ROOT)/Common/ThirdParty/inih
 LDFLAGS  ?=
 LDLIBS   ?=
 
-SRC_DIR   := $(ROOT)/Src
+SRC_DIR   := $(ROOT)
 BUILD_DIR := $(WS_ROOT)/build
 TARGET    := $(BUILD_DIR)/libCommon.a
 
-SRCS := $(shell find $(SRC_DIR) -name '*.cpp' | sort)
+# 递归收集各模块目录下的 .cpp（排除 Linux / ThirdParty）
+SRCS := $(shell find $(SRC_DIR) -name '*.cpp' -not -path '*/Linux/*' -not -path '*/ThirdParty/*' | sort)
 OBJS := $(foreach src,$(SRCS),$(BUILD_DIR)/$(PROJECT)_$(subst /,_,$(patsubst $(SRC_DIR)/%.cpp,%,$(src))).o)
 DEPS := $(OBJS:.o=.d)
 

@@ -55,8 +55,8 @@ Dockerfile
 1. `devcontainer.json`
 2. `Dockerfile`
 3. Makefile
-4. `build.sh`
-5. `.builds.sh`
+4. `generate-compiledb.sh`
+5. `build-all.sh`
 6. 编译器版本
 7. 依赖库
 
@@ -70,7 +70,7 @@ Dockerfile
 
 ```text
 Workspace/
-├── .builds.sh
+├── build-all.sh
 ├── .devcontainer/
 │   ├── devcontainer.json
 │   └── Dockerfile
@@ -78,20 +78,22 @@ Workspace/
 ├── Common/
 │
 ├── ServerCore/
-│   ├── Src/
-│   ├── Include/
+│   ├── Module/        # 模块模型
+│   ├── Network/
+│   ├── Event/
+│   ├── ...
 │   └── Linux/
 │       └── Makefile
 │
 ├── ServerA/
-│   ├── Src/
-│   ├── Include/
+│   ├── Application/
+│   ├── Module/
+│   ├── Service/
 │   └── Linux/
 │       └── Makefile
 │
 ├── ServerB/
-│   ├── Src/
-│   ├── Include/
+│   ├── ...
 │   └── Linux/
 │       └── Makefile
 │
@@ -102,35 +104,22 @@ Workspace/
 
 ## 4. 标准项目结构
 
-每个普通 C++ 项目原则上使用：
+所有 C++ 项目统一采用**模块自治**组织：每个模块一个目录，头文件（.h）与源文件（.cpp）同目录；可执行项目的入口与配置放在项目根。
 
 ```text
 <ProjectName>/
-├── Src/
-├── Include/
+├── <Module>/    # 领域模块目录（如 Module/Network/Service/Protocol/Application），头源同目录
+├── main.cpp     # 可执行项目入口（库项目无）
+├── <name>.ini   # 配置文件（可选）
 └── Linux/
     └── Makefile
 ```
 
-### Src
-
-存放 `.cpp` 实现文件。
-
-### Include
-
-存放 `.h` 头文件和对外接口。
-
-### Linux
-
-存放 Linux 构建相关文件，主要为：
-
-```text
-Makefile
-```
+- **模块目录**：每个模块一个目录，内含该模块全部 `.h` 与 `.cpp`；命名遵循 name-standard（接口 `I*`、实现 `*Module`/`*Service` 等）。Common 的 `ThirdParty/`（asio/inih）除外。
+- **入口与配置**：`main.cpp` 与 `.ini` 位于项目根；客户端入口可放 `Client/` 子目录。
+- **Linux**：存放 Makefile；Makefile 用 `find` 递归收集各模块目录下的 `.cpp`（排除 `Linux/`，Common 还需排除 `ThirdParty/`）。
 
 不要把业务源码放入 `Linux/`。
-
-不要把 `.cpp` 文件放入 `Include/`。
 
 ---
 
@@ -210,8 +199,8 @@ Linux/POSIX
 
 ```text
 <ProjectName>/
-├── Src/
-├── Include/
+├── <Module>/    # 领域模块目录（头源同目录）
+├── main.cpp     # 可执行入口（库项目无）
 └── Linux/
     └── Makefile
 ```

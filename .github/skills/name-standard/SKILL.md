@@ -47,7 +47,7 @@ description: 本项目命名规范：以 MFC（Microsoft Foundation Classes）�
 ### 4.1 类
 
 - MFC：`C` 前缀 + PascalCase（每个单词首字母大写）：
-  - `CMyApplication`、`CTcpServer`、`CModuleManager`、`CComponentManager`
+  - `CMyApplication`、`CTcpServer`、`CModuleManager`、`CConfigModule`
 - 抽象接口：`I` 前缀（COM / MFC 体系）：
   - `IUnknown`、`INetwork`、`ILogger`、`IModule`、`IEventDispatcher`
 
@@ -122,11 +122,12 @@ private:
 
 - MFC：匈牙利小写前缀 + PascalCase：
   - `int nPort`、`const std::string& strHost`、`bool bEnable`、`INetworkHandler* pHandler`
-- 输出参数：`pOut` / `pp`（指针的指针）：
-  - `void** ppv`（QueryInterface 输出）
+- 输出参数：`pOut` / `pp`（指针的指针），**QueryInterface 除外**（采用返回 `void*`，未找到返回 `nullptr`，不用 out 指针）：
+  - `void** ppv`（QueryInterface 已废弃此形式）
 
 ```cpp
-bool QueryInterface(const InterfaceId& iid, void** ppv);
+// 接口查询：返回借用的接口指针，未找到返回 nullptr（不用二级指针）。
+void* QueryInterface(const InterfaceId& iid);
 ```
 
 ---
