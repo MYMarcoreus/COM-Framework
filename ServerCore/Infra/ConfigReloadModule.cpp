@@ -54,14 +54,15 @@ bool CConfigReloadModule::Start()
     {
         return false;
     }
-    // 回调中一并传入指向自身的强引用（Self 自持引用），保证回调执行期间模块存活。
-    auto spSelf = Self<CConfigReloadModule>();
+    // 周期定时任务用弱引用：模块停止/销毁后跳过重载，且不拖住模块释放。
+    sc::CWeakPtr<CConfigReloadModule> spWeak = WeakSelf<CConfigReloadModule>();
     m_tTimerId = m_timer.AddPeriodicTimer(m_nIntervalMs,
-        [spSelf]()
+        [spWeak]()
         {
-            if (spSelf)
+            sc::ScopedInterfacePtr<CConfigReloadModule> sp = spWeak.Lock();
+            if (sp)
             {
-                spSelf->CheckReload();
+                sp->CheckReload();
             }
         });
     return true;

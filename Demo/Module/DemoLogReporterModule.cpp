@@ -63,15 +63,15 @@ bool CDemoLogReporterModule::Start()
     {
         return false;
     }
-    // 捕获指向自身的强引用（具体类型）：回调中通过 spSelf-> 调用成员，
-    // 无需再捕获裸 this（生命周期由 spSelf 保证，访问入口由具体类型提供）。
-    auto spSelf = Self<CDemoLogReporterModule>();
+    // 周期定时任务用弱引用：模块停止/销毁后不再上报，且不拖住模块释放。
+    sc::CWeakPtr<CDemoLogReporterModule> spWeak = WeakSelf<CDemoLogReporterModule>();
     m_tTimerId = m_pTimer->AddPeriodicTimer(m_nIntervalMs,
-        [spSelf]()
+        [spWeak]()
         {
-            if (spSelf)
+            sc::ScopedInterfacePtr<CDemoLogReporterModule> sp = spWeak.Lock();
+            if (sp)
             {
-                spSelf->ReportStatus();
+                sp->ReportStatus();
             }
         });
     return true;

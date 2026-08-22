@@ -48,16 +48,17 @@ bool CDemoTimerModule::Start()
     {
         return false;
     }
-    // 注册定时器回调时一并传入指向自身的强引用（Self 自持引用）：
-    // 回调执行期间模块必然存活（即使正在关闭），彻底避免野指针。
-    sc::ScopedInterfacePtr<sc::IModule> spSelf = Self();
+    // 周期定时任务用弱引用：模块停止/销毁后回调自动跳过，
+    // 不拖住模块释放；回调内 Lock 升级为强引用后安全访问。
+    sc::CWeakPtr<sc::IModule> spWeak = WeakSelf();
     m_tTimerId = m_pTimer->AddPeriodicTimer(m_nIntervalMs,
-        [spSelf]()
+        [spWeak]()
         {
-            if (spSelf)
+            sc::ScopedInterfacePtr<sc::IModule> sp = spWeak.Lock();
+            if (sp)
             {
                 std::string strMessage = "Demo 服务器运行中 (module=";
-                strMessage += spSelf->GetName();
+                strMessage += sp->GetName();
                 strMessage += ")";
                 common::CLogger::Instance().Info(strMessage);
             }
