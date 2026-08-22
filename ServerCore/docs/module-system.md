@@ -154,6 +154,17 @@ m_pExecutor->Post([spWeak]()
 | 结果通知 / 允许丢弃（模块关了就不要了） | `CWeakPtr` 弱引用 |
 | 任务可能积压，不想长占模块 | `CWeakPtr` 弱引用 |
 
+周期定时任务推荐用守卫模板 `sc::AddGuardedPeriodicTimer`（`Infra/GuardedTimer.h`）：
+统一处理弱引用 `Lock()` 与存活检查，回调参数为已升级的强引用（类型由弱引用决定，
+`IModule` 或具体类型均可，无需转换），模块销毁后回调自动跳过：
+
+```cpp
+m_tTimerId = sc::AddGuardedPeriodicTimer(m_pTimer.Get(), m_nIntervalMs,
+    WeakSelf<CDemoXxx>(), [](const sc::ScopedInterfacePtr<CDemoXxx>& sp) {
+        sp->DoSomething();
+    });
+```
+
 ## 状态查询与报告
 
 - `GetModuleState(name)` / `HasModule(name)` / `Snapshot()`：健康检查 / 日志

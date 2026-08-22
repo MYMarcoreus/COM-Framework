@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include "Infra/GuardedTimer.h"
 #include "Log/Logger.h"
 #include "Module/ResolveContext.h"
 
@@ -54,16 +55,13 @@ bool CConfigReloadModule::Start()
     {
         return false;
     }
-    // 周期定时任务用弱引用：模块停止/销毁后跳过重载，且不拖住模块释放。
-    sc::CWeakPtr<CConfigReloadModule> spWeak = WeakSelf<CConfigReloadModule>();
-    m_tTimerId = m_timer.AddPeriodicTimer(m_nIntervalMs,
-        [spWeak]()
+    // 周期定时任务：用模板守卫函数统一处理弱引用生命周期，
+    // 回调参数为具体类型强引用（无需转换）。
+    m_tTimerId = sc::AddGuardedPeriodicTimer(&m_timer, m_nIntervalMs,
+        WeakSelf<CConfigReloadModule>(),
+        [](const sc::ScopedInterfacePtr<CConfigReloadModule>& sp)
         {
-            sc::ScopedInterfacePtr<CConfigReloadModule> sp = spWeak.Lock();
-            if (sp)
-            {
-                sp->CheckReload();
-            }
+            sp->CheckReload();
         });
     return true;
 }

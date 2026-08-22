@@ -1,5 +1,6 @@
 #include "Module/DemoTimerModule.h"
 
+#include "Infra/GuardedTimer.h"
 #include "Log/Logger.h"
 #include "Module/ResolveContext.h"
 #include "Module/ScopedInterfacePtr.h"
@@ -48,20 +49,16 @@ bool CDemoTimerModule::Start()
     {
         return false;
     }
-    // 周期定时任务用弱引用：模块停止/销毁后回调自动跳过，
-    // 不拖住模块释放；回调内 Lock 升级为强引用后安全访问。
-    sc::CWeakPtr<sc::IModule> spWeak = WeakSelf();
-    m_tTimerId = m_pTimer->AddPeriodicTimer(m_nIntervalMs,
-        [spWeak]()
+    // 周期定时任务：用模板守卫函数统一处理弱引用生命周期，
+    // 回调参数为已升级的强引用（类型随弱引用，无需转换）。
+    m_tTimerId = sc::AddGuardedPeriodicTimer(m_pTimer.Get(), m_nIntervalMs,
+        WeakSelf(),
+        [](const sc::ScopedInterfacePtr<sc::IModule>& sp)
         {
-            sc::ScopedInterfacePtr<sc::IModule> sp = spWeak.Lock();
-            if (sp)
-            {
-                std::string strMessage = "Demo 服务器运行中 (module=";
-                strMessage += sp->GetName();
-                strMessage += ")";
-                common::CLogger::Instance().Info(strMessage);
-            }
+            std::string strMessage = "Demo 服务器运行中 (module=";
+            strMessage += sp->GetName();
+            strMessage += ")";
+            common::CLogger::Instance().Info(strMessage);
         });
     return true;
 }

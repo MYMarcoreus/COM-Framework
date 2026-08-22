@@ -2,6 +2,7 @@
 
 #include <ctime>
 
+#include "Infra/GuardedTimer.h"
 #include "Log/Logger.h"
 #include "Module/ResolveContext.h"
 
@@ -63,16 +64,13 @@ bool CDemoLogReporterModule::Start()
     {
         return false;
     }
-    // 周期定时任务用弱引用：模块停止/销毁后不再上报，且不拖住模块释放。
-    sc::CWeakPtr<CDemoLogReporterModule> spWeak = WeakSelf<CDemoLogReporterModule>();
-    m_tTimerId = m_pTimer->AddPeriodicTimer(m_nIntervalMs,
-        [spWeak]()
+    // 周期定时任务：用模板守卫函数统一处理弱引用生命周期，
+    // 回调参数为具体类型强引用（无需转换）。
+    m_tTimerId = sc::AddGuardedPeriodicTimer(m_pTimer.Get(), m_nIntervalMs,
+        WeakSelf<CDemoLogReporterModule>(),
+        [](const sc::ScopedInterfacePtr<CDemoLogReporterModule>& sp)
         {
-            sc::ScopedInterfacePtr<CDemoLogReporterModule> sp = spWeak.Lock();
-            if (sp)
-            {
-                sp->ReportStatus();
-            }
+            sp->ReportStatus();
         });
     return true;
 }
