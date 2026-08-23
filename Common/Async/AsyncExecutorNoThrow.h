@@ -183,20 +183,6 @@ public:
         return r;
     }
 
-    /// 创建失败结果（错误类型可用「错误码 + 消息」构造时，如 CTaskError）。
-    ///
-    /// @param nCode      错误码（TaskErrorCode 内置值或业务自定义值）。
-    /// @param strMessage 错误描述。
-    template <typename TError2 = TError>
-    static typename std::enable_if<
-        std::is_constructible<TError2, int, const std::string&>::value,
-        CTaskResult>::type Failure(int nCode, const std::string& strMessage)
-    {
-        CTaskResult r;
-        r.m_error = TError2(nCode, strMessage);
-        return r;
-    }
-
     /// 是否成功（持有值）。
     bool Ok() const { return m_pValue != nullptr; }
 
@@ -253,21 +239,6 @@ public:
         CTaskResult r;
         r.m_bOk = false;
         r.m_error = error;
-        return r;
-    }
-
-    /// 创建失败结果（错误类型可用「错误码 + 消息」构造时，如 CTaskError）。
-    ///
-    /// @param nCode      错误码（TaskErrorCode 内置值或业务自定义值）。
-    /// @param strMessage 错误描述。
-    template <typename TError2 = TError>
-    static typename std::enable_if<
-        std::is_constructible<TError2, int, const std::string&>::value,
-        CTaskResult>::type Failure(int nCode, const std::string& strMessage)
-    {
-        CTaskResult r;
-        r.m_bOk = false;
-        r.m_error = TError2(nCode, strMessage);
         return r;
     }
 
@@ -369,7 +340,7 @@ public:
     /// 阻塞等待结果（返回 CTaskResult，不抛异常）。
     ///
     /// 阻塞调用线程直到任务完成；返回最终结果，调用方检查 Ok()/Failed()。
-    CTaskResult<TValue, TError> Wait()
+    auto Wait() -> CTaskResult<TValue, TError>
     {
         std::unique_lock<std::mutex> lock(m_mutex);
         m_cv.wait(lock, [this]() { return m_bReady; });
@@ -479,7 +450,8 @@ public:
     /// 从已就绪结果创建任务（可启动链式调用）。
     ///
     /// @param result 已就绪的结果（成功或失败）。
-    static CTask<TValue, TError> FromResult(const CTaskResult<TValue, TError>& result)
+    static auto FromResult(const CTaskResult<TValue, TError>& result)
+        -> CTask<TValue, TError>
     {
         CTask<TValue, TError> task;
         task.m_pState->Complete(result);
@@ -498,13 +470,14 @@ public:
     /// @param fnTransform 变换函数。
     /// @return 下游任务（携带变换后的结果类型）。
     template <typename TFn>
-    CTask<typename detail::UnwrapTask<
-        typename detail::TInvokeResult<TFn, TValue>::type>::type, TError> Then(TFn fnTransform);
+    auto Then(TFn fnTransform)
+        -> CTask<typename detail::UnwrapTask<
+            typename detail::TInvokeResult<TFn, TValue>::type>::type, TError>;
 
     /// 阻塞获取最终结果（不抛异常）。
     ///
     /// 调用线程阻塞至任务完成；返回 CTaskResult，需检查 Ok()/Failed()。
-    CTaskResult<TValue, TError> Get() const { return m_pState->Wait(); }
+    auto Get() const -> CTaskResult<TValue, TError> { return m_pState->Wait(); }
 
     /// 注册成功回调（fire-and-forget，任务成功时触发）。
     ///
@@ -543,7 +516,8 @@ public:
     /// 从已就绪结果创建任务。
     ///
     /// @param result 已就绪的结果（成功或失败）。
-    static CTask<void, TError> FromResult(const CTaskResult<void, TError>& result)
+    static auto FromResult(const CTaskResult<void, TError>& result)
+        -> CTask<void, TError>
     {
         CTask<void, TError> task;
         task.m_pState->Complete(result);
@@ -553,7 +527,7 @@ public:
     /// 阻塞获取最终结果（不抛异常）。
     ///
     /// 调用线程阻塞至任务完成；返回 CTaskResult，需检查 Ok()/Failed()。
-    CTaskResult<void, TError> Get() const { return m_pState->Wait(); }
+    auto Get() const -> CTaskResult<void, TError> { return m_pState->Wait(); }
 
     /// 注册成功回调（fire-and-forget，任务成功时触发；无值参数）。
     ///
@@ -606,7 +580,8 @@ public:
     /// @return 关联本执行器的任务；执行器未启动时任务立即以
     ///         kExecutorNotStarted 错误完成。
     template <typename TFn>
-    CTask<typename detail::TInvokeResult<TFn>::type, TError> Submit(TFn f);
+    auto Submit(TFn f)
+        -> CTask<typename detail::TInvokeResult<TFn>::type, TError>;
 
     /// 提交无返回值任务（fire-and-forget）。
     ///
@@ -739,8 +714,9 @@ void RunTransform(const std::shared_ptr<CTaskState<TNew, TError> >& pNextState,
 /// @tparam TFn    变换函数类型。
 template <typename TValue, typename TError>
 template <typename TFn>
-CTask<typename detail::UnwrapTask<
-    typename detail::TInvokeResult<TFn, TValue>::type>::type, TError> CTask<TValue, TError>::Then(TFn f)
+auto CTask<TValue, TError>::Then(TFn f)
+    -> CTask<typename detail::UnwrapTask<
+        typename detail::TInvokeResult<TFn, TValue>::type>::type, TError>
 {
     using TResult = typename detail::TInvokeResult<TFn, TValue>::type; // 变换函数原始返回类型。
     using TOut = typename detail::UnwrapTask<TResult>::type;           // 解包后下游结果类型。
@@ -857,7 +833,8 @@ void CTask<void, TError>::OnFailure(const std::function<void(const TError&)>& fn
 /// @tparam TFn    任务函数类型。
 template <typename TError>
 template <typename TFn>
-CTask<typename detail::TInvokeResult<TFn>::type, TError> CAsyncExecutor<TError>::Submit(TFn f)
+auto CAsyncExecutor<TError>::Submit(TFn f)
+    -> CTask<typename detail::TInvokeResult<TFn>::type, TError>
 {
     using TResult = typename detail::TInvokeResult<TFn>::type; // 任务结果类型。
     CTask<TResult, TError> task;

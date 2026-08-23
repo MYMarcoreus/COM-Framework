@@ -117,7 +117,8 @@ TEST(NothrowAsync_ErrorPropagate)
 {
     common::nothrow::CTaskResult<int> r =
         common::nothrow::CTask<int>::FromResult(
-            common::nothrow::CTaskResult<int>::Failure(1001, "业务错误"))
+            common::nothrow::CTaskResult<int>::Failure(
+                common::nothrow::CTaskError(1001, "业务错误")))
             .Then([](int n) { return n + 1; })
             .Get();
     ASSERT_TRUE(r.Failed());
@@ -172,7 +173,8 @@ TEST(NothrowAsync_FlatMapErrorPropagate)
             common::nothrow::CTaskResult<int>::Success(1))
             .Then([](int) {
                 return common::nothrow::CTask<int>::FromResult(
-                    common::nothrow::CTaskResult<int>::Failure(2002, "内部失败"));
+                    common::nothrow::CTaskResult<int>::Failure(
+                        common::nothrow::CTaskError(2002, "内部失败")));
             })
             .Get();
     ASSERT_TRUE(r.Failed());
@@ -267,7 +269,8 @@ TEST(NothrowAsync_OnSuccessOnFailure)
     ASSERT_EQ(nFail.load(), 0);
 
     common::nothrow::CTask<int> f = common::nothrow::CTask<int>::FromResult(
-        common::nothrow::CTaskResult<int>::Failure(3003, "x"));
+        common::nothrow::CTaskResult<int>::Failure(
+            common::nothrow::CTaskError(3003, "x")));
     f.OnSuccess([&nOk](const int&) { nOk.fetch_add(1); });
     f.OnFailure([&nFail](const common::nothrow::CTaskError&) { nFail.fetch_add(1); });
     ASSERT_EQ(nOk.load(), 1);
@@ -302,9 +305,10 @@ TEST(NothrowAsync_CustomErrorType)
     ASSERT_TRUE(vfail.Failed());
     ASSERT_EQ(vfail.Error().nCode, 9002);
 
-    // 默认 TError = CTaskError 时，(错误码, 消息) 便捷工厂仍可用
+    // 默认 TError = CTaskError：通过 CTaskError 对象构造失败结果
     common::nothrow::CTaskResult<int> defaultErr =
-        common::nothrow::CTaskResult<int>::Failure(1001, "业务错误");
+        common::nothrow::CTaskResult<int>::Failure(
+            common::nothrow::CTaskError(1001, "业务错误"));
     ASSERT_TRUE(defaultErr.Failed());
     ASSERT_EQ(defaultErr.Error().nCode, 1001);
 }
