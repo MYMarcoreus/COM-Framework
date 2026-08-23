@@ -19,7 +19,7 @@ CAsyncExecutor::~CAsyncExecutor()
 /// @brief 启动工作线程。
 bool CAsyncExecutor::Start()
 {
-    if (m_pPool)
+    if (m_pHandle)
     {
         return false;
     }
@@ -27,34 +27,48 @@ bool CAsyncExecutor::Start()
     {
         return false;
     }
-    m_pPool.reset(new common::CThreadPool(m_nThreadCount));
-    return m_pPool->Start();
+    m_pHandle.reset(new detail::CExecutorHandle());
+    m_pHandle->m_pPool.reset(new common::CThreadPool(m_nThreadCount));
+    if (!m_pHandle->m_pPool->Start())
+    {
+        m_pHandle.reset();
+        return false;
+    }
+    return true;
 }
 
 /// @brief 提交无返回值任务。
 bool CAsyncExecutor::Post(const std::function<void()>& fnTask)
 {
-    if (!m_pPool)
+    std::shared_ptr<detail::CExecutorHandle> pHandle = m_pHandle;
+    if (!pHandle || pHandle->m_bStopped || !pHandle->m_pPool)
     {
         return false;
     }
-    return m_pPool->Submit(fnTask);
+    return pHandle->m_pPool->Submit(fnTask);
 }
 
 /// @brief 停止并等待任务完成。
 void CAsyncExecutor::Stop()
 {
-    if (m_pPool)
+    std::shared_ptr<detail::CExecutorHandle> pHandle = m_pHandle;
+    if (!pHandle)
     {
-        m_pPool->Stop();
-        m_pPool.reset();
+        return;
     }
+    pHandle->m_bStopped = true;
+    if (pHandle->m_pPool)
+    {
+        pHandle->m_pPool->Stop();
+    }
+    m_pHandle.reset();
 }
 
 /// @brief 是否正在运行。
 bool CAsyncExecutor::IsRunning() const
 {
-    return m_pPool != nullptr && m_pPool->IsRunning();
+    return m_pHandle != nullptr && !m_pHandle->m_bStopped &&
+           m_pHandle->m_pPool != nullptr && m_pHandle->m_pPool->IsRunning();
 }
 
 } // namespace nothrow
