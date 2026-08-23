@@ -98,7 +98,7 @@ TEST(Async_SubmitAndGet)
 /// @brief 链式任务成功（Submit → Then → Then → Get）。
 TEST(NothrowAsync_ChainGet)
 {
-    common::nothrow::CAsyncExecutor exec(2);
+    common::nothrow::CAsyncExecutor<> exec(2);
     ASSERT_TRUE(exec.Start());
 
     common::nothrow::CTaskResult<int> r =
@@ -128,7 +128,7 @@ TEST(NothrowAsync_ErrorPropagate)
 /// @brief 任务函数抛出异常 → 转为 kTaskFailed。
 TEST(NothrowAsync_ExceptionToError)
 {
-    common::nothrow::CAsyncExecutor exec(1);
+    common::nothrow::CAsyncExecutor<> exec(1);
     ASSERT_TRUE(exec.Start());
 
     common::nothrow::CTaskResult<int> r =
@@ -142,7 +142,7 @@ TEST(NothrowAsync_ExceptionToError)
 /// @brief 未启动执行器直接 Submit → kExecutorNotStarted。
 TEST(NothrowAsync_NotStarted)
 {
-    common::nothrow::CAsyncExecutor exec(1);
+    common::nothrow::CAsyncExecutor<> exec(1);
     common::nothrow::CTaskResult<int> r = exec.Submit([]() { return 1; }).Get();
     ASSERT_TRUE(r.Failed());
     ASSERT_EQ(r.Error().nCode, common::nothrow::kExecutorNotStarted);
@@ -183,7 +183,7 @@ TEST(NothrowAsync_FlatMapErrorPropagate)
 /// @brief 无返回值任务（CTaskResult&lt;void&gt;）。
 TEST(NothrowAsync_VoidTask)
 {
-    common::nothrow::CAsyncExecutor exec(1);
+    common::nothrow::CAsyncExecutor<> exec(1);
     ASSERT_TRUE(exec.Start());
 
     std::atomic<int> nDone(0);
@@ -197,7 +197,7 @@ TEST(NothrowAsync_VoidTask)
 /// @brief 并发多任务 + 多线程 Get。
 TEST(NothrowAsync_ConcurrentGet)
 {
-    common::nothrow::CAsyncExecutor exec(4);
+    common::nothrow::CAsyncExecutor<> exec(4);
     ASSERT_TRUE(exec.Start());
 
     std::vector<common::nothrow::CTask<int> > tasks;
@@ -230,7 +230,7 @@ TEST(NothrowAsync_LifetimeAfterDestroy)
 {
     common::nothrow::CTask<int> task;
     {
-        common::nothrow::CAsyncExecutor exec(1);
+        common::nothrow::CAsyncExecutor<> exec(1);
         ASSERT_TRUE(exec.Start());
         task = exec.Submit([]() { return 7; });
     } // exec 析构：Stop 等待任务完成，句柄仍被 task 持有
@@ -272,4 +272,39 @@ TEST(NothrowAsync_OnSuccessOnFailure)
     f.OnFailure([&nFail](const common::nothrow::CTaskError&) { nFail.fetch_add(1); });
     ASSERT_EQ(nOk.load(), 1);
     ASSERT_EQ(nFail.load(), 1);
+}
+
+/// @brief CTaskResult 支持自定义错误类型（类似 std::expected<T, E>）。
+TEST(NothrowAsync_CustomErrorType)
+{
+    struct MyError
+    {
+        int nCode;
+        std::string strMsg;
+    };
+
+    // 自定义错误类型 + 值
+    common::nothrow::CTaskResult<int, MyError> ok =
+        common::nothrow::CTaskResult<int, MyError>::Success(5);
+    ASSERT_TRUE(ok.Ok());
+    ASSERT_EQ(ok.Value(), 5);
+
+    // 自定义错误类型 + 失败（通用 Failure(const TError&)）
+    common::nothrow::CTaskResult<int, MyError> fail =
+        common::nothrow::CTaskResult<int, MyError>::Failure(MyError{9001, "自定义错误"});
+    ASSERT_TRUE(fail.Failed());
+    ASSERT_EQ(fail.Error().nCode, 9001);
+    ASSERT_EQ(fail.Error().strMsg, std::string("自定义错误"));
+
+    // void 特化 + 自定义错误类型
+    common::nothrow::CTaskResult<void, MyError> vfail =
+        common::nothrow::CTaskResult<void, MyError>::Failure(MyError{9002, "void 失败"});
+    ASSERT_TRUE(vfail.Failed());
+    ASSERT_EQ(vfail.Error().nCode, 9002);
+
+    // 默认 TError = CTaskError 时，(错误码, 消息) 便捷工厂仍可用
+    common::nothrow::CTaskResult<int> defaultErr =
+        common::nothrow::CTaskResult<int>::Failure(1001, "业务错误");
+    ASSERT_TRUE(defaultErr.Failed());
+    ASSERT_EQ(defaultErr.Error().nCode, 1001);
 }

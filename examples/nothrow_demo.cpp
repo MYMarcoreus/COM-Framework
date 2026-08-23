@@ -18,7 +18,7 @@ namespace no = common::nothrow;
 // ① 简单任务：Submit + Get
 void DemoSubmitAndGet()
 {
-    no::CAsyncExecutor exec(2);
+    no::CAsyncExecutor<> exec(2);
     exec.Start();
 
     no::CTaskResult<int> r = exec.Submit([]() { return 42; }).Get();
@@ -32,7 +32,7 @@ void DemoSubmitAndGet()
 // ② 链式调用：Submit → Then → Then → Get（同步变换）
 void DemoChain()
 {
-    no::CAsyncExecutor exec(2);
+    no::CAsyncExecutor<> exec(2);
     exec.Start();
 
     no::CTaskResult<int> r =
@@ -50,7 +50,7 @@ void DemoChain()
 // ③ flatMap：变换函数返回 CTask，自动平铺为下游结果
 void DemoFlatMap()
 {
-    no::CAsyncExecutor exec(2);
+    no::CAsyncExecutor<> exec(2);
     exec.Start();
 
     no::CTaskResult<std::string> r =
@@ -70,7 +70,7 @@ void DemoFlatMap()
 // ④ 错误处理：任务异常转 kTaskFailed；业务错误码沿链传播
 void DemoErrors()
 {
-    no::CAsyncExecutor exec(2);
+    no::CAsyncExecutor<> exec(2);
     exec.Start();
 
     // 4.1 任务函数抛异常 → 框架捕获转 kTaskFailed
@@ -98,7 +98,7 @@ void DemoErrors()
 // ⑤ void 任务 + OnSuccess / OnFailure 回调
 void DemoVoidAndCallbacks()
 {
-    no::CAsyncExecutor exec(1);
+    no::CAsyncExecutor<> exec(1);
     exec.Start();
 
     no::CTaskResult<void> vr = exec.Submit([]() { std::printf("⑤ void 任务执行\n"); }).Get();

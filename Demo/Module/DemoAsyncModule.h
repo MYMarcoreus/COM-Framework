@@ -3,15 +3,13 @@
 #include <cstdint>
 #include <memory>
 
+#include "Async/AsyncExecutorNoThrow.h"
 #include "Module/ScopedInterfacePtr.h"
 #include "Infra/ITimer.h"
 #include "Module/Module.h"
 
 namespace common {
-class CAsyncExecutor; // 前向声明（unique_ptr 成员只需声明，完整类型在 .cpp 引入）
-namespace nothrow {
-class CAsyncExecutor; // 无异常版执行器前向声明
-}
+class CAsyncExecutor; // 异常版执行器前向声明（unique_ptr 成员只需声明，完整类型在 .cpp 引入）
 }
 
 namespace demo {
@@ -52,7 +50,7 @@ private:
     std::int64_t m_nIntervalMs;
     sc::ScopedInterfacePtr<sc::ITimer> m_pTimer;
     std::unique_ptr<common::CAsyncExecutor> m_pExecutor;              // 异常版执行器
-    std::unique_ptr<common::nothrow::CAsyncExecutor> m_pNoThrowExecutor; // 无异常版执行器
+    std::unique_ptr<common::nothrow::CAsyncExecutor<> > m_pNoThrowExecutor; // 无异常版执行器（默认 CTaskError）
     common::TimerId m_tTimerId;
 };
 

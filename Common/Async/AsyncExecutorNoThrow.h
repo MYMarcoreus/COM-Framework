@@ -59,9 +59,6 @@
 namespace common {
 namespace nothrow {
 
-class CAsyncExecutor; // 前向声明（CTask 持有其指针，定义在下方）
-template <typename TValue> class CTask; // 前向声明（detail::IsTask / UnwrapTask 使用）
-
 /// @brief 任务错误码（无异常的错误通道）。
 ///
 /// 框架内置的错误类别；业务可自定义错误码（见 CTaskError::nCode 说明）。
@@ -101,7 +98,49 @@ struct CTaskError
     bool Failed() const { return nCode != kTaskOk; }
 };
 
-/// @brief 任务结果（类似 std::expected<T, Error>）。
+// 模板前向声明（默认模板实参引用 CTaskError，故置于 CTaskError 定义之后）。
+template <typename TError = CTaskError> class CAsyncExecutor;
+template <typename TValue, typename TError = CTaskError> class CTask;
+
+namespace detail {
+
+/// @brief 生成默认错误值：CTaskError 默认「未初始化失败」，其它错误类型用其默认构造。
+template <typename TError>
+TError MakeDefaultError()
+{
+    return TError();
+}
+
+template <>
+inline CTaskError MakeDefaultError<CTaskError>()
+{
+    return CTaskError(kTaskFailed, "uninitialized");
+}
+
+/// @brief 由错误码 + 文本生成错误值：错误类型可用「错误码 + 消息」构造时（如 CTaskError）
+///        生成对应错误；否则回退到默认错误。
+template <typename TError>
+TError MakeErrorFromCode(int nCode, const std::string& strMessage, std::true_type)
+{
+    return TError(nCode, strMessage);
+}
+
+template <typename TError>
+TError MakeErrorFromCode(int, const std::string&, std::false_type)
+{
+    return MakeDefaultError<TError>();
+}
+
+template <typename TError>
+TError MakeErrorFromCode(int nCode, const std::string& strMessage)
+{
+    return MakeErrorFromCode<TError>(nCode, strMessage,
+        typename std::is_constructible<TError, int, const std::string&>::type());
+}
+
+} // namespace detail
+
+/// @brief 任务结果（类似 std::expected&lt;T, E&gt;）。
 ///
 /// 一个结果要么「成功携带值」、要么「失败携带错误」，二者互斥：
 ///  - Ok()     为 true 时，可经 Value() 取成功值；
@@ -109,16 +148,17 @@ struct CTaskError
 /// 通过静态工厂 Success / Failure 创建。
 ///
 /// @tparam TValue 成功时携带的值类型。
-template <typename TValue>
+/// @tparam TError 错误类型（默认 CTaskError；可自定义，类似 std::expected&lt;T, E&gt;）。
+template <typename TValue, typename TError = CTaskError>
 class CTaskResult
 {
 public:
     /// 创建成功结果（拷贝 value）。
     ///
     /// @param value 成功值（拷贝存入结果）。
-    static CTaskResult<TValue> Success(const TValue& value)
+    static CTaskResult Success(const TValue& value)
     {
-        CTaskResult<TValue> r;
+        CTaskResult r;
         r.m_pValue.reset(new TValue(value));
         return r;
     }
@@ -126,21 +166,34 @@ public:
     /// 创建成功结果（移动 value，支持 move-only 值类型 / 减少一次拷贝）。
     ///
     /// @param value 成功值（移动存入结果）。
-    static CTaskResult<TValue> Success(TValue&& value)
+    static CTaskResult Success(TValue&& value)
     {
-        CTaskResult<TValue> r;
+        CTaskResult r;
         r.m_pValue.reset(new TValue(std::move(value)));
         return r;
     }
 
-    /// 创建失败结果（携带错误码与消息）。
+    /// 创建失败结果（携带任意错误类型，类似 std::unexpected&lt;E&gt;）。
+    ///
+    /// @param error 错误值。
+    static CTaskResult Failure(const TError& error)
+    {
+        CTaskResult r;
+        r.m_error = error;
+        return r;
+    }
+
+    /// 创建失败结果（错误类型可用「错误码 + 消息」构造时，如 CTaskError）。
     ///
     /// @param nCode      错误码（TaskErrorCode 内置值或业务自定义值）。
     /// @param strMessage 错误描述。
-    static CTaskResult<TValue> Failure(int nCode, const std::string& strMessage)
+    template <typename TError2 = TError>
+    static typename std::enable_if<
+        std::is_constructible<TError2, int, const std::string&>::value,
+        CTaskResult>::type Failure(int nCode, const std::string& strMessage)
     {
-        CTaskResult<TValue> r;
-        r.m_error = CTaskError(nCode, strMessage);
+        CTaskResult r;
+        r.m_error = TError2(nCode, strMessage);
         return r;
     }
 
@@ -165,40 +218,56 @@ public:
     }
 
     /// 失败时的错误（仅在 Failed() 为 true 时调用）。
-    const CTaskError& Error() const { return m_error; }
+    const TError& Error() const { return m_error; }
 
-    /// 空结果（默认失败态：kTaskFailed + "uninitialized"）；通常用 Success / Failure 工厂创建。
-    CTaskResult() : m_error(kTaskFailed, "uninitialized") {}
+    /// 空结果（默认失败态：无值，错误为默认错误）；通常用 Success / Failure 工厂创建。
+    CTaskResult() : m_error(detail::MakeDefaultError<TError>()) {}
 
 private:
     std::shared_ptr<TValue> m_pValue; // 成功值（非空 ⇔ 成功）。
-    CTaskError m_error;               // 错误信息（失败时有效）。
+    TError m_error;                   // 错误信息（失败时有效）。
 };
 
-/// @brief CTaskResult&lt;void&gt; 特化（成功无值，仅携带成败与错误）。
+/// @brief CTaskResult&lt;void, TError&gt; 特化（成功无值，仅携带成败与错误）。
 ///
 /// 用于无返回值的任务：成功时无值可取，仅 Ok() 为 true；失败时同主模板。
-template <>
-class CTaskResult<void>
+///
+/// @tparam TError 错误类型（默认 CTaskError）。
+template <typename TError>
+class CTaskResult<void, TError>
 {
 public:
     /// 创建成功结果（无值）。
-    static CTaskResult<void> Success()
+    static CTaskResult Success()
     {
-        CTaskResult<void> r;
+        CTaskResult r;
         r.m_bOk = true;
         return r;
     }
 
-    /// 创建失败结果（携带错误码与消息）。
+    /// 创建失败结果（携带任意错误类型）。
+    ///
+    /// @param error 错误值。
+    static CTaskResult Failure(const TError& error)
+    {
+        CTaskResult r;
+        r.m_bOk = false;
+        r.m_error = error;
+        return r;
+    }
+
+    /// 创建失败结果（错误类型可用「错误码 + 消息」构造时，如 CTaskError）。
     ///
     /// @param nCode      错误码（TaskErrorCode 内置值或业务自定义值）。
     /// @param strMessage 错误描述。
-    static CTaskResult<void> Failure(int nCode, const std::string& strMessage)
+    template <typename TError2 = TError>
+    static typename std::enable_if<
+        std::is_constructible<TError2, int, const std::string&>::value,
+        CTaskResult>::type Failure(int nCode, const std::string& strMessage)
     {
-        CTaskResult<void> r;
+        CTaskResult r;
         r.m_bOk = false;
-        r.m_error = CTaskError(nCode, strMessage);
+        r.m_error = TError2(nCode, strMessage);
         return r;
     }
 
@@ -209,33 +278,34 @@ public:
     bool Failed() const { return !m_bOk; }
 
     /// 失败时的错误（仅在 Failed() 为 true 时调用）。
-    const CTaskError& Error() const { return m_error; }
+    const TError& Error() const { return m_error; }
 
-    /// 空结果（默认失败态：kTaskFailed + "uninitialized"）；通常用 Success / Failure 工厂创建。
-    CTaskResult() : m_bOk(false), m_error(kTaskFailed, "uninitialized") {}
+    /// 空结果（默认失败态：无值，错误为默认错误）；通常用 Success / Failure 工厂创建。
+    CTaskResult() : m_bOk(false), m_error(detail::MakeDefaultError<TError>()) {}
 
 private:
-    bool m_bOk;         // 是否成功。
-    CTaskError m_error; // 错误信息（失败时有效）。
+    bool m_bOk;   // 是否成功。
+    TError m_error; // 错误信息（失败时有效）。
 };
 
 namespace detail {
 
 /// @brief 任务共享状态（无异常版）：结果 + 续接列表 + 同步等待。
 ///
-/// 负责管理一个任务的最终结果（CTaskResult<TValue>）、已注册的续接列表，
+/// 负责管理一个任务的最终结果（CTaskResult&lt;TValue, TError&gt;）、已注册的续接列表，
 /// 以及阻塞等待（Wait）的同步原语。线程安全：
 ///  - 状态变更（Complete / AddContinuation）由 m_mutex 保护；
 ///  - 续接在锁外调用，避免回调内重入本状态时死锁；
 ///  - Wait 用 m_cv 等待就绪。
 ///
 /// @tparam TValue 任务结果携带的值类型。
-template <typename TValue>
+/// @tparam TError 错误类型（默认 CTaskError）。
+template <typename TValue, typename TError = CTaskError>
 class CTaskState
 {
 public:
     /// 续接回调：接收最终结果（成功值或错误）。
-    using Continuation = std::function<void(const CTaskResult<TValue>&)>;
+    using Continuation = std::function<void(const CTaskResult<TValue, TError>&)>;
 
     /// 创建状态（初始未就绪）。
     CTaskState() : m_bReady(false) {}
@@ -246,7 +316,7 @@ public:
     /// 在锁外调用所有续接。
     ///
     /// @param result 最终结果（成功或失败）。
-    void Complete(const CTaskResult<TValue>& result)
+    void Complete(const CTaskResult<TValue, TError>& result)
     {
         std::vector<Continuation> vecCbs;
         {
@@ -277,7 +347,7 @@ public:
     void AddContinuation(const Continuation& fnCallback)
     {
         bool bFireNow = false;
-        CTaskResult<TValue> result;
+        CTaskResult<TValue, TError> result;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             if (m_bReady)
@@ -299,7 +369,7 @@ public:
     /// 阻塞等待结果（返回 CTaskResult，不抛异常）。
     ///
     /// 阻塞调用线程直到任务完成；返回最终结果，调用方检查 Ok()/Failed()。
-    CTaskResult<TValue> Wait()
+    CTaskResult<TValue, TError> Wait()
     {
         std::unique_lock<std::mutex> lock(m_mutex);
         m_cv.wait(lock, [this]() { return m_bReady; });
@@ -311,27 +381,29 @@ private:
     std::condition_variable m_cv;       // 通知 Wait 等待者。
     std::vector<Continuation> m_vecContinuations; // 续接列表（未完成时）。
     bool m_bReady;                      // 是否已完成。
-    CTaskResult<TValue> m_result;       // 最终结果（完成后有效）。
+    CTaskResult<TValue, TError> m_result; // 最终结果（完成后有效）。
 };
 
 /// @brief 以「成功」完成状态（结果类型非 void，携带 f() 的返回值）。
 ///
 /// @tparam TResult 结果值类型（非 void）。
+/// @tparam TError  错误类型。
 /// @tparam TFn     任务函数类型。
-template <typename TResult, typename TFn>
-void CompleteSuccess(const std::shared_ptr<CTaskState<TResult> >& pState, TFn f)
+template <typename TResult, typename TError, typename TFn>
+void CompleteSuccess(const std::shared_ptr<CTaskState<TResult, TError> >& pState, TFn f)
 {
-    pState->Complete(CTaskResult<TResult>::Success(f()));
+    pState->Complete(CTaskResult<TResult, TError>::Success(f()));
 }
 
 /// @brief 以「成功」完成状态（结果类型为 void，执行 f 但不携带值）。
 ///
-/// @tparam TFn 任务函数类型。
-template <typename TFn>
-void CompleteSuccess(const std::shared_ptr<CTaskState<void> >& pState, TFn f)
+/// @tparam TError 错误类型。
+/// @tparam TFn    任务函数类型。
+template <typename TError, typename TFn>
+void CompleteSuccess(const std::shared_ptr<CTaskState<void, TError> >& pState, TFn f)
 {
     f();
-    pState->Complete(CTaskResult<void>::Success());
+    pState->Complete(CTaskResult<void, TError>::Success());
 }
 
 /// @brief 调用结果类型（C++11 兼容，替代已弃用的 std::result_of）。
@@ -344,18 +416,18 @@ struct TInvokeResult
     using type = decltype(std::declval<TFn>()(std::declval<TArgs>()...));
 };
 
-/// @brief 是否为 CTask&lt;U&gt;（用于识别「变换函数返回任务」）。
+/// @brief 是否为 CTask&lt;U, E&gt;（用于识别「变换函数返回任务」）。
 template <typename T>
 struct IsTask : std::false_type
 {
 };
 
-template <typename U>
-struct IsTask<CTask<U> > : std::true_type
+template <typename U, typename E>
+struct IsTask<CTask<U, E> > : std::true_type
 {
 };
 
-/// @brief 解包任务类型：CTask&lt;U&gt; -&gt; U；其它 T -&gt; T。
+/// @brief 解包任务类型：CTask&lt;U, E&gt; -&gt; U；其它 T -&gt; T。
 ///
 /// 用于 Then 的返回类型：若变换函数返回 CTask&lt;TNew&gt;，则下游任务携带 TNew。
 template <typename T>
@@ -364,8 +436,8 @@ struct UnwrapTask
     using type = T;
 };
 
-template <typename U>
-struct UnwrapTask<CTask<U> >
+template <typename U, typename E>
+struct UnwrapTask<CTask<U, E> >
 {
     using type = U;
 };
@@ -392,23 +464,24 @@ struct CExecutorHandle
 /// 错误以 CTaskResult 沿链传播：上游失败时 Then 不再执行，错误传递给下游。
 ///
 /// @tparam TValue 任务携带的值类型。
-template <typename TValue>
+/// @tparam TError 错误类型（默认 CTaskError，沿链传播）。
+template <typename TValue, typename TError>
 class CTask
 {
 public:
     /// 创建空任务（未完成）。
     CTask()
         : m_pExecutor(),
-          m_pState(std::make_shared<detail::CTaskState<TValue> >())
+          m_pState(std::make_shared<detail::CTaskState<TValue, TError> >())
     {
     }
 
     /// 从已就绪结果创建任务（可启动链式调用）。
     ///
     /// @param result 已就绪的结果（成功或失败）。
-    static CTask<TValue> FromResult(const CTaskResult<TValue>& result)
+    static CTask<TValue, TError> FromResult(const CTaskResult<TValue, TError>& result)
     {
-        CTask<TValue> task;
+        CTask<TValue, TError> task;
         task.m_pState->Complete(result);
         return task;
     }
@@ -418,7 +491,7 @@ public:
     ///
     /// 支持两种变换函数：
     ///  - 返回普通值 TNew：直接作为下游结果（Then → Then → Get）；
-    ///  - 返回 CTask&lt;TNew&gt;：自动扁平化（flatMap），内部任务完成后
+    ///  - 返回 CTask&lt;TNew, TError&gt;：自动扁平化（flatMap），内部任务完成后
     ///    将其结果转发为下游结果，内部任务失败则错误沿链传播。
     ///
     /// @tparam TFn 变换函数类型（接收 TValue，返回 TNew 或 CTask&lt;TNew&gt;）。
@@ -426,12 +499,12 @@ public:
     /// @return 下游任务（携带变换后的结果类型）。
     template <typename TFn>
     CTask<typename detail::UnwrapTask<
-        typename detail::TInvokeResult<TFn, TValue>::type>::type> Then(TFn fnTransform);
+        typename detail::TInvokeResult<TFn, TValue>::type>::type, TError> Then(TFn fnTransform);
 
     /// 阻塞获取最终结果（不抛异常）。
     ///
     /// 调用线程阻塞至任务完成；返回 CTaskResult，需检查 Ok()/Failed()。
-    CTaskResult<TValue> Get() const { return m_pState->Wait(); }
+    CTaskResult<TValue, TError> Get() const { return m_pState->Wait(); }
 
     /// 注册成功回调（fire-and-forget，任务成功时触发）。
     ///
@@ -441,36 +514,38 @@ public:
     /// 注册失败回调（fire-and-forget，任务失败时触发）。
     ///
     /// @param fnCallback 失败回调（参数为错误信息）。
-    void OnFailure(const std::function<void(const CTaskError&)>& fnCallback);
+    void OnFailure(const std::function<void(const TError&)>& fnCallback);
 
 private:
-    friend class CAsyncExecutor;
-    template <typename UValue> friend class CTask;
+    template <typename UError> friend class CAsyncExecutor;
+    template <typename UValue, typename UError> friend class CTask;
 
     std::shared_ptr<detail::CExecutorHandle> m_pExecutor; // 执行器句柄（续接投递用，可空）。
-    std::shared_ptr<detail::CTaskState<TValue> > m_pState; // 任务共享状态。
+    std::shared_ptr<detail::CTaskState<TValue, TError> > m_pState; // 任务共享状态。
 };
 
 /// @brief 异步任务（无异常版，TValue 为 void 的特化）。
 ///
 /// 用于无返回值任务：OnSuccess 回调无参数；不支持 Then（void 任务无后续值可变换）。
-template <>
-class CTask<void>
+///
+/// @tparam TError 错误类型（默认 CTaskError）。
+template <typename TError>
+class CTask<void, TError>
 {
 public:
     /// 创建空任务（未完成）。
     CTask()
         : m_pExecutor(),
-          m_pState(std::make_shared<detail::CTaskState<void> >())
+          m_pState(std::make_shared<detail::CTaskState<void, TError> >())
     {
     }
 
     /// 从已就绪结果创建任务。
     ///
     /// @param result 已就绪的结果（成功或失败）。
-    static CTask<void> FromResult(const CTaskResult<void>& result)
+    static CTask<void, TError> FromResult(const CTaskResult<void, TError>& result)
     {
-        CTask<void> task;
+        CTask<void, TError> task;
         task.m_pState->Complete(result);
         return task;
     }
@@ -478,7 +553,7 @@ public:
     /// 阻塞获取最终结果（不抛异常）。
     ///
     /// 调用线程阻塞至任务完成；返回 CTaskResult，需检查 Ok()/Failed()。
-    CTaskResult<void> Get() const { return m_pState->Wait(); }
+    CTaskResult<void, TError> Get() const { return m_pState->Wait(); }
 
     /// 注册成功回调（fire-and-forget，任务成功时触发；无值参数）。
     ///
@@ -488,22 +563,26 @@ public:
     /// 注册失败回调（fire-and-forget，任务失败时触发）。
     ///
     /// @param fnCallback 失败回调（参数为错误信息）。
-    void OnFailure(const std::function<void(const CTaskError&)>& fnCallback);
+    void OnFailure(const std::function<void(const TError&)>& fnCallback);
 
 private:
-    friend class CAsyncExecutor;
-    template <typename UValue> friend class CTask;
+    template <typename UError> friend class CAsyncExecutor;
+    template <typename UValue, typename UError> friend class CTask;
 
     std::shared_ptr<detail::CExecutorHandle> m_pExecutor; // 执行器句柄（续接投递用，可空）。
-    std::shared_ptr<detail::CTaskState<void> > m_pState;  // 任务共享状态。
+    std::shared_ptr<detail::CTaskState<void, TError> > m_pState;  // 任务共享状态。
 };
 
 /// @brief 异步执行器（无异常版）。
 ///
 /// 基于线程池执行任务，支持链式调用（Submit → Then → Get）。
+/// 错误类型可自定义：Submit 产生的任务链统一携带 TError（默认 CTaskError）。
+///
+/// @tparam TError 错误类型（默认 CTaskError）。
 ///
 /// @note 生命周期：任务链通过共享句柄引用执行器线程池；执行器析构后，
 ///       已投递/已链式任务仍安全完成（无悬垂指针），新投递返回 kExecutorStopped。
+template <typename TError>
 class CAsyncExecutor
 {
 public:
@@ -520,14 +599,14 @@ public:
     /// @return true 启动成功；false 已启动或线程数为 0。
     bool Start();
 
-    /// 提交任务并返回 CTask（任务内部异常自动转为 kTaskFailed 错误）。
+    /// 提交任务并返回 CTask（任务内部异常自动转为 TError 错误）。
     ///
     /// @tparam TFn 任务函数类型（返回新任务的结果类型）。
     /// @param f 任务函数（在工作线程上执行）。
     /// @return 关联本执行器的任务；执行器未启动时任务立即以
     ///         kExecutorNotStarted 错误完成。
     template <typename TFn>
-    CTask<typename detail::TInvokeResult<TFn>::type> Submit(TFn f);
+    CTask<typename detail::TInvokeResult<TFn>::type, TError> Submit(TFn f);
 
     /// 提交无返回值任务（fire-and-forget）。
     ///
@@ -552,35 +631,37 @@ namespace detail {
 
 /// @brief 转发内部任务结果（TNew 非 void）：成功带值 / 失败带错误。
 ///
-/// @tparam TNew 内部任务的结果值类型（非 void）。
-template <typename TNew>
-void FlatMapForward(const std::shared_ptr<CTaskState<TNew> >& pNextState,
-                    CTask<TNew>& inner, std::false_type)
+/// @tparam TNew   内部任务的结果值类型（非 void）。
+/// @tparam TError 错误类型。
+template <typename TNew, typename TError>
+void FlatMapForward(const std::shared_ptr<CTaskState<TNew, TError> >& pNextState,
+                    CTask<TNew, TError>& inner, std::false_type)
 {
     inner.OnSuccess([pNextState](const TNew& value)
     {
-        pNextState->Complete(CTaskResult<TNew>::Success(value));
+        pNextState->Complete(CTaskResult<TNew, TError>::Success(value));
     });
-    inner.OnFailure([pNextState](const CTaskError& e)
+    inner.OnFailure([pNextState](const TError& e)
     {
-        pNextState->Complete(CTaskResult<TNew>::Failure(e.nCode, e.strMessage));
+        pNextState->Complete(CTaskResult<TNew, TError>::Failure(e));
     });
 }
 
 /// @brief 转发内部任务结果（TNew 为 void）：成功无值 / 失败带错误。
 ///
-/// @tparam TNew 内部任务的结果值类型（void）。
-template <typename TNew>
-void FlatMapForward(const std::shared_ptr<CTaskState<TNew> >& pNextState,
-                    CTask<TNew>& inner, std::true_type)
+/// @tparam TNew   内部任务的结果值类型（void）。
+/// @tparam TError 错误类型。
+template <typename TNew, typename TError>
+void FlatMapForward(const std::shared_ptr<CTaskState<TNew, TError> >& pNextState,
+                    CTask<TNew, TError>& inner, std::true_type)
 {
     inner.OnSuccess([pNextState]()
     {
-        pNextState->Complete(CTaskResult<TNew>::Success());
+        pNextState->Complete(CTaskResult<TNew, TError>::Success());
     });
-    inner.OnFailure([pNextState](const CTaskError& e)
+    inner.OnFailure([pNextState](const TError& e)
     {
-        pNextState->Complete(CTaskResult<TNew>::Failure(e.nCode, e.strMessage));
+        pNextState->Complete(CTaskResult<TNew, TError>::Failure(e));
     });
 }
 
@@ -589,10 +670,11 @@ void FlatMapForward(const std::shared_ptr<CTaskState<TNew> >& pNextState,
 /// f 是调用方任意代码，可能抛异常：捕获并转为错误码，防止逃逸到工作线程。
 ///
 /// @tparam TOut   下游结果值类型（非 void）。
+/// @tparam TError 错误类型。
 /// @tparam TFn    变换函数类型。
 /// @tparam TValue 上游值类型。
-template <typename TOut, typename TFn, typename TValue>
-void RunTransform(const std::shared_ptr<CTaskState<TOut> >& pNextState,
+template <typename TOut, typename TError, typename TFn, typename TValue>
+void RunTransform(const std::shared_ptr<CTaskState<TOut, TError> >& pNextState,
                   TFn f, TValue valueCopied, std::false_type)
 {
     try
@@ -602,11 +684,13 @@ void RunTransform(const std::shared_ptr<CTaskState<TOut> >& pNextState,
     }
     catch (const std::exception& e)
     {
-        pNextState->Complete(CTaskResult<TOut>::Failure(kTaskFailed, e.what()));
+        pNextState->Complete(CTaskResult<TOut, TError>::Failure(
+            MakeErrorFromCode<TError>(kTaskFailed, e.what())));
     }
     catch (...)
     {
-        pNextState->Complete(CTaskResult<TOut>::Failure(kTaskFailed, "unknown error"));
+        pNextState->Complete(CTaskResult<TOut, TError>::Failure(
+            MakeErrorFromCode<TError>(kTaskFailed, "unknown error")));
     }
 }
 
@@ -616,25 +700,28 @@ void RunTransform(const std::shared_ptr<CTaskState<TOut> >& pNextState,
 /// 从而把「返回任务的变换」自动平铺进当前链（目标 CTask&lt;void&gt; 亦支持）。
 ///
 /// @tparam TNew   内部任务的结果值类型（可为 void）。
+/// @tparam TError 错误类型。
 /// @tparam TFn    变换函数类型。
 /// @tparam TValue 上游值类型。
-template <typename TNew, typename TFn, typename TValue>
-void RunTransform(const std::shared_ptr<CTaskState<TNew> >& pNextState,
+template <typename TNew, typename TError, typename TFn, typename TValue>
+void RunTransform(const std::shared_ptr<CTaskState<TNew, TError> >& pNextState,
                   TFn f, TValue valueCopied, std::true_type)
 {
-    CTask<TNew> inner;
+    CTask<TNew, TError> inner;
     try
     {
         inner = f(valueCopied);
     }
     catch (const std::exception& e)
     {
-        pNextState->Complete(CTaskResult<TNew>::Failure(kTaskFailed, e.what()));
+        pNextState->Complete(CTaskResult<TNew, TError>::Failure(
+            MakeErrorFromCode<TError>(kTaskFailed, e.what())));
         return;
     }
     catch (...)
     {
-        pNextState->Complete(CTaskResult<TNew>::Failure(kTaskFailed, "unknown error"));
+        pNextState->Complete(CTaskResult<TNew, TError>::Failure(
+            MakeErrorFromCode<TError>(kTaskFailed, "unknown error")));
         return;
     }
     // 内部任务完成后，转发其结果（成功或失败）为下游结果（支持目标为 void）。
@@ -648,27 +735,27 @@ void RunTransform(const std::shared_ptr<CTaskState<TNew> >& pNextState,
 /// 变换函数返回普通值时同步变换；返回 CTask 时扁平化（flatMap）。
 ///
 /// @tparam TValue 本任务的值类型。
+/// @tparam TError 错误类型。
 /// @tparam TFn    变换函数类型。
-template <typename TValue>
+template <typename TValue, typename TError>
 template <typename TFn>
 CTask<typename detail::UnwrapTask<
-    typename detail::TInvokeResult<TFn, TValue>::type>::type> CTask<TValue>::Then(TFn f)
+    typename detail::TInvokeResult<TFn, TValue>::type>::type, TError> CTask<TValue, TError>::Then(TFn f)
 {
     using TResult = typename detail::TInvokeResult<TFn, TValue>::type; // 变换函数原始返回类型。
     using TOut = typename detail::UnwrapTask<TResult>::type;           // 解包后下游结果类型。
-    CTask<TOut> taskNext;
+    CTask<TOut, TError> taskNext;
     taskNext.m_pExecutor = m_pExecutor; // 沿用上游执行器句柄（续接投递用）。
-    std::shared_ptr<detail::CTaskState<TOut> > pNextState = taskNext.m_pState;
-    std::shared_ptr<detail::CExecutorHandle> pExecutor = m_pExecutor;
+    auto pNextState = taskNext.m_pState;
+    auto pExecutor = m_pExecutor;
 
     m_pState->AddContinuation(
-        [pExecutor, pNextState, f](const CTaskResult<TValue>& upResult)
+        [pExecutor, pNextState, f](const CTaskResult<TValue, TError>& upResult)
         {
-            // ① 上游失败：错误（错误码 + 消息）传播给下游，不执行变换。
+            // ① 上游失败：直接转发错误对象（支持任意 TError），不执行变换。
             if (upResult.Failed())
             {
-                pNextState->Complete(CTaskResult<TOut>::Failure(
-                    upResult.Error().nCode, upResult.Error().strMessage));
+                pNextState->Complete(CTaskResult<TOut, TError>::Failure(upResult.Error()));
                 return;
             }
             // ② 拷贝值，供异步续接安全使用（不引用上游共享状态）。
@@ -684,8 +771,8 @@ CTask<typename detail::UnwrapTask<
             {
                 if (pExecutor->m_bStopped || !pExecutor->m_pPool->Submit(fnRun))
                 {
-                    pNextState->Complete(CTaskResult<TOut>::Failure(
-                        kExecutorStopped, "CAsyncExecutor 已停止"));
+                    pNextState->Complete(CTaskResult<TOut, TError>::Failure(
+                        detail::MakeErrorFromCode<TError>(kExecutorStopped, "CAsyncExecutor 已停止")));
                 }
             }
             else
@@ -699,11 +786,12 @@ CTask<typename detail::UnwrapTask<
 /// @brief OnSuccess 实现：注册成功回调（fire-and-forget）。
 ///
 /// @tparam TValue 本任务的值类型。
-template <typename TValue>
-void CTask<TValue>::OnSuccess(const std::function<void(const TValue&)>& fnCallback)
+/// @tparam TError 错误类型。
+template <typename TValue, typename TError>
+void CTask<TValue, TError>::OnSuccess(const std::function<void(const TValue&)>& fnCallback)
 {
     m_pState->AddContinuation(
-        [fnCallback](const CTaskResult<TValue>& result)
+        [fnCallback](const CTaskResult<TValue, TError>& result)
         {
             if (result.Ok() && fnCallback)
             {
@@ -715,11 +803,12 @@ void CTask<TValue>::OnSuccess(const std::function<void(const TValue&)>& fnCallba
 /// @brief OnFailure 实现：注册失败回调（fire-and-forget）。
 ///
 /// @tparam TValue 本任务的值类型。
-template <typename TValue>
-void CTask<TValue>::OnFailure(const std::function<void(const CTaskError&)>& fnCallback)
+/// @tparam TError 错误类型。
+template <typename TValue, typename TError>
+void CTask<TValue, TError>::OnFailure(const std::function<void(const TError&)>& fnCallback)
 {
     m_pState->AddContinuation(
-        [fnCallback](const CTaskResult<TValue>& result)
+        [fnCallback](const CTaskResult<TValue, TError>& result)
         {
             if (result.Failed() && fnCallback)
             {
@@ -728,11 +817,14 @@ void CTask<TValue>::OnFailure(const std::function<void(const CTaskError&)>& fnCa
         });
 }
 
-/// @brief OnSuccess 实现（CTask&lt;void&gt; 特化）：注册成功回调（fire-and-forget，无参数）。
-inline void CTask<void>::OnSuccess(const std::function<void()>& fnCallback)
+/// @brief OnSuccess 实现（CTask&lt;void, TError&gt; 特化）：注册成功回调（fire-and-forget，无参数）。
+///
+/// @tparam TError 错误类型。
+template <typename TError>
+void CTask<void, TError>::OnSuccess(const std::function<void()>& fnCallback)
 {
     m_pState->AddContinuation(
-        [fnCallback](const CTaskResult<void>& result)
+        [fnCallback](const CTaskResult<void, TError>& result)
         {
             if (result.Ok() && fnCallback)
             {
@@ -741,11 +833,14 @@ inline void CTask<void>::OnSuccess(const std::function<void()>& fnCallback)
         });
 }
 
-/// @brief OnFailure 实现（CTask&lt;void&gt; 特化）：注册失败回调（fire-and-forget）。
-inline void CTask<void>::OnFailure(const std::function<void(const CTaskError&)>& fnCallback)
+/// @brief OnFailure 实现（CTask&lt;void, TError&gt; 特化）：注册失败回调（fire-and-forget）。
+///
+/// @tparam TError 错误类型。
+template <typename TError>
+void CTask<void, TError>::OnFailure(const std::function<void(const TError&)>& fnCallback)
 {
     m_pState->AddContinuation(
-        [fnCallback](const CTaskResult<void>& result)
+        [fnCallback](const CTaskResult<void, TError>& result)
         {
             if (result.Failed() && fnCallback)
             {
@@ -756,41 +851,120 @@ inline void CTask<void>::OnFailure(const std::function<void(const CTaskError&)>&
 
 /// @brief Submit 实现：把任务函数投递到线程池执行。
 ///
-/// 任务函数的返回值作为任务结果；内部异常捕获并转为 kTaskFailed 错误。
+/// 任务函数的返回值作为任务结果；内部异常捕获并转为 TError 错误。
 ///
-/// @tparam TFn 任务函数类型。
+/// @tparam TError 错误类型。
+/// @tparam TFn    任务函数类型。
+template <typename TError>
 template <typename TFn>
-CTask<typename detail::TInvokeResult<TFn>::type> CAsyncExecutor::Submit(TFn f)
+CTask<typename detail::TInvokeResult<TFn>::type, TError> CAsyncExecutor<TError>::Submit(TFn f)
 {
     using TResult = typename detail::TInvokeResult<TFn>::type; // 任务结果类型。
-    CTask<TResult> task;
+    CTask<TResult, TError> task;
     task.m_pExecutor = m_pHandle; // 共享执行器句柄（任务链持有时线程池不释放）。
-    std::shared_ptr<detail::CTaskState<TResult> > pState = task.m_pState;
-    std::shared_ptr<detail::CExecutorHandle> pHandle = m_pHandle;
+    auto pState = task.m_pState;
+    auto pHandle = m_pHandle;
     std::function<void()> fnRun = [pState, f]()
-    {
-        try
         {
-            // 执行任务；成功完成（值或 void）。f 是调用方任意代码，可能抛异常：
-            // 捕获并转为错误码，防止异常逃逸到工作线程（std::terminate）。
-            detail::CompleteSuccess(pState, f);
-        }
-        catch (const std::exception& e)
-        {
-            pState->Complete(CTaskResult<TResult>::Failure(kTaskFailed, e.what()));
-        }
-        catch (...)
-        {
-            pState->Complete(CTaskResult<TResult>::Failure(kTaskFailed, "unknown error"));
-        }
-    };
+            try
+            {
+                // 执行任务；成功完成（值或 void）。f 是调用方任意代码，可能抛异常：
+                // 捕获并转为错误码，防止异常逃逸到工作线程（std::terminate）。
+                detail::CompleteSuccess(pState, f);
+            }
+            catch (const std::exception& e)
+            {
+                pState->Complete(CTaskResult<TResult, TError>::Failure(
+                    detail::MakeErrorFromCode<TError>(kTaskFailed, e.what())));
+            }
+            catch (...)
+            {
+                pState->Complete(CTaskResult<TResult, TError>::Failure(
+                    detail::MakeErrorFromCode<TError>(kTaskFailed, "unknown error")));
+            }
+        };
     if (!pHandle || pHandle->m_bStopped || !pHandle->m_pPool || !pHandle->m_pPool->Submit(fnRun))
     {
         // 执行器不可用：任务立即以「未启动」错误完成。
-        pState->Complete(CTaskResult<TResult>::Failure(
-            kExecutorNotStarted, "CAsyncExecutor 未启动"));
+        pState->Complete(CTaskResult<TResult, TError>::Failure(
+            detail::MakeErrorFromCode<TError>(kExecutorNotStarted, "CAsyncExecutor 未启动")));
     }
     return task;
+}
+
+/// @brief 创建异步执行器（无异常版）。
+///
+/// @tparam TError 错误类型。
+/// @param nThreadCount 工作线程数量。
+template <typename TError>
+CAsyncExecutor<TError>::CAsyncExecutor(size_t nThreadCount) : m_nThreadCount(nThreadCount)
+{
+}
+
+/// @brief 销毁异步执行器（停止并等待任务完成）。
+template <typename TError>
+CAsyncExecutor<TError>::~CAsyncExecutor()
+{
+    Stop();
+}
+
+/// @brief 启动工作线程。
+template <typename TError>
+bool CAsyncExecutor<TError>::Start()
+{
+    if (m_pHandle)
+    {
+        return false;
+    }
+    if (m_nThreadCount == 0)
+    {
+        return false;
+    }
+    m_pHandle.reset(new detail::CExecutorHandle());
+    m_pHandle->m_pPool.reset(new common::CThreadPool(m_nThreadCount));
+    if (!m_pHandle->m_pPool->Start())
+    {
+        m_pHandle.reset();
+        return false;
+    }
+    return true;
+}
+
+/// @brief 提交无返回值任务。
+template <typename TError>
+bool CAsyncExecutor<TError>::Post(const std::function<void()>& fnTask)
+{
+    std::shared_ptr<detail::CExecutorHandle> pHandle = m_pHandle;
+    if (!pHandle || pHandle->m_bStopped || !pHandle->m_pPool)
+    {
+        return false;
+    }
+    return pHandle->m_pPool->Submit(fnTask);
+}
+
+/// @brief 停止并等待任务完成（优雅关闭）。
+template <typename TError>
+void CAsyncExecutor<TError>::Stop()
+{
+    std::shared_ptr<detail::CExecutorHandle> pHandle = m_pHandle;
+    if (!pHandle)
+    {
+        return;
+    }
+    pHandle->m_bStopped = true;
+    if (pHandle->m_pPool)
+    {
+        pHandle->m_pPool->Stop();
+    }
+    m_pHandle.reset();
+}
+
+/// @brief 是否正在运行。
+template <typename TError>
+bool CAsyncExecutor<TError>::IsRunning() const
+{
+    return m_pHandle != nullptr && !m_pHandle->m_bStopped &&
+           m_pHandle->m_pPool != nullptr && m_pHandle->m_pPool->IsRunning();
 }
 
 } // namespace nothrow

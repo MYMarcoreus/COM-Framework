@@ -60,7 +60,7 @@ bool CDemoAsyncModule::Start()
         return false;
     }
     // 无异常版执行器（错误码 + CTaskResult 演示）
-    m_pNoThrowExecutor.reset(new common::nothrow::CAsyncExecutor(2));
+    m_pNoThrowExecutor.reset(new common::nothrow::CAsyncExecutor<>(2));
     if (!m_pNoThrowExecutor->Start())
     {
         return false;
