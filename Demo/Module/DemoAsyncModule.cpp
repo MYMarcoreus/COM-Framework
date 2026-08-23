@@ -4,6 +4,7 @@
 #include <string>
 
 #include "Async/AsyncExecutor.h"
+#include "Async/AsyncExecutorNoThrow.h"
 #include "Infra/GuardedTimer.h"
 #include "Log/Logger.h"
 #include "Module/ResolveContext.h"
@@ -58,6 +59,12 @@ bool CDemoAsyncModule::Start()
     {
         return false;
     }
+    // 无异常版执行器（错误码 + CTaskResult 演示）
+    m_pNoThrowExecutor.reset(new common::nothrow::CAsyncExecutor(2));
+    if (!m_pNoThrowExecutor->Start())
+    {
+        return false;
+    }
     // 周期演示：弱引用守卫，模块停止/销毁后回调自动跳过。
     m_tTimerId = sc::AddGuardedPeriodicTimer(m_pTimer.Get(), m_nIntervalMs,
         WeakSelf<CDemoAsyncModule>(),
@@ -85,6 +92,11 @@ void CDemoAsyncModule::Stop()
     {
         m_pExecutor->Stop();
         m_pExecutor.reset();
+    }
+    if (m_pNoThrowExecutor != nullptr)
+    {
+        m_pNoThrowExecutor->Stop();
+        m_pNoThrowExecutor.reset();
     }
 }
 
@@ -138,6 +150,31 @@ void CDemoAsyncModule::RunDemo()
     // ④ 阻塞获取（演示 Get）
     int nResult = task.Get();
     common::CLogger::Instance().Info("[AsyncDemo] Get 阻塞获取=" + std::to_string(nResult));
+
+    // ⑤ 无异常版演示（错误码 + CTaskResult，风格类似 std::expected<T, Error>）
+    if (m_pNoThrowExecutor != nullptr)
+    {
+        // 链式成功：Submit → Then → Get，Get 不抛异常，检查 Ok()
+        common::nothrow::CTaskResult<int> nr =
+            m_pNoThrowExecutor->Submit([]() { return 10; })
+                .Then([](int n) { return n * 3; })
+                .Get();
+        if (nr.Ok())
+        {
+            common::CLogger::Instance().Info("[AsyncDemo] 无异常版链式=" +
+                std::to_string(nr.Value()));
+        }
+        // 失败：任务异常 → 错误码 + 消息（不抛异常）
+        common::nothrow::CTaskResult<int> nf = m_pNoThrowExecutor->Submit([]() -> int
+        {
+            throw std::runtime_error("无异常版演示错误");
+        }).Get();
+        if (nf.Failed())
+        {
+            common::CLogger::Instance().Warn(std::string("[AsyncDemo] 无异常版错误码=") +
+                std::to_string(nf.Error().nCode) + " msg=" + nf.Error().strMessage);
+        }
+    }
 }
 
 } // namespace demo

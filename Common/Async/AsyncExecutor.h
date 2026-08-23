@@ -275,16 +275,16 @@ CTask<typename std::result_of<F()>::type> CAsyncExecutor::Submit(F f)
     task.m_pExecutor = this;
     std::shared_ptr<detail::CTaskState<R> > pState = task.m_pState;
     std::function<void()> fnRun = [pState, f]()
-    {
-        try
         {
-            pState->CompleteSuccess(f());
-        }
-        catch (...)
-        {
-            pState->CompleteFailure(std::current_exception());
-        }
-    };
+            try
+            {
+                pState->CompleteSuccess(f());
+            }
+            catch (...)
+            {
+                pState->CompleteFailure(std::current_exception());
+            }
+        };
     if (!m_pPool || !m_pPool->Submit(fnRun))
     {
         pState->CompleteFailure(
