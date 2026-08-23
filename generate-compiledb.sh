@@ -32,4 +32,11 @@ for project in "${PROJECTS[@]}"; do
     echo "Generated: $PROJECT_ROOT/compile_commands.json"
 done
 
+# examples：无 Linux/ 子目录，使用独立的 examples/Makefile
+if [[ -d "$WORKSPACE_ROOT/examples" ]]; then
+    echo "Generating compile_commands.json for examples ..."
+    (cd "$WORKSPACE_ROOT/examples" && make compiledb)
+    echo "Generated: $WORKSPACE_ROOT/examples/compile_commands.json"
+fi
+
 echo "==================== compile_commands.json 生成完毕 ===================="

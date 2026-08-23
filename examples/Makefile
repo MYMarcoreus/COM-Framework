@@ -24,7 +24,7 @@ COMMON_SRCS := $(ROOT)/Common/Async/AsyncExecutorNoThrow.cpp \
 # 示例可执行文件
 TARGET_NOTHROW := $(BUILD_DIR)/nothrow_demo
 
-.PHONY: all run clean
+.PHONY: all run clean compiledb
 
 all: $(TARGET_NOTHROW)
 
@@ -35,5 +35,10 @@ $(TARGET_NOTHROW): $(MKFILE_DIR)nothrow_demo.cpp $(COMMON_SRCS)
 run: $(TARGET_NOTHROW)
 	$(TARGET_NOTHROW)
 
+# 生成 compile_commands.json（供 clangd）：先 clean 再以 dry-run 捕获全部编译命令
+compiledb:
+	$(MAKE) clean
+	compiledb -n -o $(ROOT)/examples/compile_commands.json make all
+
 clean:
-	rm -rf $(BUILD_DIR)
+	rm -rf $(BUILD_DIR) $(ROOT)/examples/compile_commands.json
