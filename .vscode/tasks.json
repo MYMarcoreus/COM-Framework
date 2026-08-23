@@ -52,6 +52,21 @@
             }
         },
         {
+            "label": "build examples",
+            "type": "shell",
+            "command": "make",
+            "options": {
+                "cwd": "${workspaceFolder}/examples"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
             "label": "clean (all projects)",
             "type": "shell",
             "command": "bash -c 'for p in Common ServerCore Demo; do make -C \"$PWD/$p/Linux\" clean; done'",

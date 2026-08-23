@@ -1,0 +1,16 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug nothrow_demo",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/examples/nothrow_demo",
+            "args": [],
+            "stopOnEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "preLaunchTask": "build examples"
+        }
+    ]
+}
