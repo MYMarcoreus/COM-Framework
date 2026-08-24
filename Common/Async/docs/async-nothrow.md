@@ -1,4 +1,4 @@
-# AsyncExecutorNoThrow 无异常版异步框架解析
+# AsyncExecutorNoThrow 无异常版异步框架解析（Option 风格）
 
 ## 1. 这是什么？为什么需要它？
 
@@ -15,16 +15,30 @@ no::CTaskResult<int> r = exec.Submit([]() { return 3; })
                              .Then([](int n) { return n * 2; })
                              .Then([](int n) { return n + 1; })
                              .Get();
-// r.Ok() == true，r.Value() == 7
+// r.HasValue() == true，r.Value() == 7
 ```
 
-**关键思想：错误不用异常传递，而是打包成一个"结果对象"**（类似 C++23 的 `std::expected<T, Error>`）：
+**关键思想：采用 Rust Option 风格（有值/无值二态）**：
 
-| 传统异常风格 | 本框架风格 |
-|---|---|
-| 函数抛 `throw`，调用方 `catch` | 函数返回 `CTaskResult`，调用方查 `Ok()/Failed()` |
-| 错误类型靠异常类区分 | 错误 = 错误码 `nCode` + 消息 `strMessage` |
-| 忘记 catch 会崩 | 忘记检查只会拿到"失败的结果" |
+- **有值（Some）**：任务算出结果，值沿链**传播**，下游继续执行；
+- **无值（None）**：链**终止**（正常提前结束），下游全部跳过。
+
+```cpp
+// 想终止链？明确返回无值即可
+no::CTaskResult<int> r = exec.Submit([]() { return -5; })
+    .Then([](int n) -> no::CTaskResult<int> {
+        if (n < 0)
+        {
+            return no::None;      // 无值 → 链终止（正常结束）
+        }
+        return n * 2;             // 有值 → 传播
+    })
+    .Then([](int n) { return n + 1; })   // 上游终止，此步被跳过
+    .Get();
+// r.HasValue() == false
+```
+
+> 错误不再是框架的一部分：**错误码是普通值**，由业务自己解释；框架只负责"有没有值"。想要"终止"语义就用 `return no::None;`。
 
 ### 和异常版 `AsyncExecutor.h` 的区别
 
@@ -32,9 +46,10 @@ no::CTaskResult<int> r = exec.Submit([]() { return 3; })
 
 | | `common::CAsyncExecutor`（异常版） | `common::nothrow::CAsyncExecutor`（本框架） |
 |---|---|---|
-| 错误传递 | `std::exception_ptr`（异常指针） | 错误码 + 消息（`CTaskError`） |
-| `Get()` 返回 | 直接返回值，失败就 `throw` | `CTaskResult<T>`，需检查 `Ok()` |
-| 任务函数抛异常 | 异常沿链传播 | 被捕获转为 `kTaskFailed` 错误码 |
+| 错误传递 | `std::exception_ptr`（异常指针） | **没有错误类型**，只有有值/无值 |
+| `Get()` 返回 | 直接返回值，失败就 `throw` | `CTaskResult<T>`，需检查 `HasValue()` |
+| 任务函数抛异常 | 异常沿链传播 | 被捕获转为**无值**（终止原因 `kException`） |
+| 业务主动终止 | 无对应概念 | `return no::None;` |
 | 调用方 | 要 `try/catch` | **零 try/catch** |
 
 ---
@@ -66,7 +81,7 @@ classDiagram
         +Then(fn) CTask
         +Get() CTaskResult
         +OnSuccess(cb) void
-        +OnFailure(cb) void
+        +OnNone(cb) void
         -m_pExecutor : CExecutorHandle
         -m_pState : CTaskState
     }
@@ -79,18 +94,16 @@ classDiagram
         -m_bReady : bool
     }
     class CTaskResult~TValue~ {
-        +Ok() bool
-        +Failed() bool
+        +HasValue() bool
         +Value() TValue
-        +Error() CTaskError
         +ValueOr(def) TValue
+        +Reason() CTaskEndReason
+        +operator bool()
         -m_pValue : TValue
-        -m_error : CTaskError
+        -m_reason : CTaskEndReason
     }
-    class CTaskError {
-        +nCode : int
-        +strMessage : string
-        +Failed() bool
+    class CNoneTag {
+        None 哨兵
     }
 
     CAsyncExecutor --> CExecutorHandle : 持有
@@ -98,7 +111,7 @@ classDiagram
     CTask --> CExecutorHandle : 引用（续接投递）
     CTask --> CTaskState : 共享状态
     CTaskState --> CTaskResult : 结果
-    CTaskResult --> CTaskError : 错误
+    CTaskResult --> CNoneTag : 由 None 产生无值
 ```
 
 **一句话理解每个角色：**
@@ -110,57 +123,60 @@ classDiagram
 | `CThreadPool` | 工人团队 | 真正干活的线程 |
 | `CTask<T>` | 一张"任务单" | 描述一件事 + 能继续追加步骤（Then） |
 | `CTaskState<T>` | 任务单背后的"台账" | 记录结果、等结果的人（续接）、通知机制 |
-| `CTaskResult<T>` | 任务的"交回单" | 要么成功带结果，要么失败带错误 |
-| `CTaskError` | 错误说明 | 错误码 + 人类可读的消息 |
+| `CTaskResult<T>` | 任务的"交回单" | 要么有值（Some），要么无值（None） |
+| `None` / `CNoneTag` | "无"哨兵 | 显式表达"本任务没有值，链终止" |
 
 ---
 
 ## 3. 核心概念逐个讲
 
-### 3.1 `CTaskResult<T>` —— 一张"要么成功要么失败"的交回单
+### 3.1 `CTaskResult<T>` —— 一张"有值或无值"的交回单
 
 ```mermaid
 stateDiagram-v2
     direction LR
     [*] --> 未完成
-    未完成 --> Ok: 成功（任务算出值）
-    未完成 --> Failed: 失败（出错）
-    Ok --> [*]
-    Failed --> [*]
+    未完成 --> 有值: 成功（任务算出值）
+    未完成 --> 无值: 终止（None / 异常 / 未启动 / 已停止）
+    有值 --> [*]
+    无值 --> [*]
 ```
 
-- **`Ok()`**：成功了吗？成功 → 用 `Value()` 取值
-- **`Failed()`**：失败了吗？失败 → 用 `Error()` 拿 `CTaskError`
-- 两者互斥：**成功必有值，失败必有错误**
-- 用工厂创建：
+- **`HasValue()`**：有值吗？有 → 用 `Value()` 取值
+- **无值**：链终止，无值不携带任何"错误对象"；只有**终止原因**（`Reason()`，仅调试用）
+- 用构造创建：
   ```cpp
-  auto ok   = CTaskResult<int>::Success(42);          // 成功带值
-  auto fail = CTaskResult<int>::Failure(1001, "出错"); // 失败带错误码+消息
+  no::CTaskResult<int> ok(42);                    // 有值（隐式构造）
+  no::CTaskResult<int> none;                      // 默认 = 无值（None）
+  no::CTaskResult<int> none2(no::None);           // 显式无值
   ```
-- 便捷：`if (r)`（`operator bool`）、`r.ValueOr(-1)`（失败给默认值）
+- 便捷：`if (r)`（`operator bool`）、`r.ValueOr(-1)`（无值给默认值）
 
-> 默认构造 = 失败态（`kTaskFailed + "uninitialized"`），防止"看起来成功其实没值"的坑。
+> 默认构造 = 无值（终止原因 `kEndNone`），语义上"任务没产出值就当作终止"。
 
-### 3.2 `CTaskError` —— 错误本身
+### 3.2 `None` 与终止原因 `CTaskEndReason`（仅调试）
 
 ```cpp
-struct CTaskError {
-    int nCode;            // 错误码：kTaskOk / kTaskFailed / 自定义业务码(如 1001)
-    std::string strMessage; // 可读描述
-    bool Failed() const;   // nCode != kTaskOk
-};
+namespace no = common::nothrow;
+
+// ① None 哨兵：显式表达"无值、链终止"
+const no::CNoneTag None = no::CNoneTag();   // 写法：return no::None;
+
+// ② 终止原因（detail 内部，仅供调试 / 日志，不参与类型系统）
+no::detail::CTaskEndReason reason = r.Reason();
 ```
 
-框架内置错误码（`TaskErrorCode`）：
+内置终止原因（`detail::CTaskEndReason`）：
 
 ```text
-kTaskOk = 0              成功
-kTaskFailed              任务函数抛了异常（被框架捕获）
-kExecutorNotStarted      执行器没 Start 就 Submit
-kExecutorStopped         执行器已停止，再投递被拒
+kEndCompleted = 0  有值（正常完成）
+kEndNone      = 1  业务返回 no::None（正常提前终止）
+kNotStarted   = 2  执行器没 Start 就 Submit
+kStopped      = 3  执行器已停止，再投递被拒
+kException    = 4  任务/变换函数抛了异常（被框架捕获转无值）
 ```
 
-> `nCode` 用 `int` 而不是枚举：业务方可以传自己的业务错误码（1000+），枚举只是框架内置的建议集合。
+> `Reason()` 不是"错误码"，只是诊断用的原因标签。业务上想区分"为什么终止"，请自己在链里传值（比如返回 `CTaskResult<enum>`），框架不替你做业务判断。
 
 ### 3.3 `CTask<T>` —— 任务单，能"接龙"
 
@@ -175,9 +191,14 @@ flowchart LR
 
 - `Submit(f)` 造第一张单
 - `Then(fn)` 往上追加步骤（上一个的结果是下一个的输入）
+  - 变换返回普通值 → 成为下游的有值
+  - 变换返回 `CTask` / `CTaskResult` → 自动平铺（flatMap）
+  - 变换返回 `no::None` → 下游无值，链终止
 - `Get()` 阻塞等到最终结果
 - `FromResult(r)` 直接拿一个现成结果起跑
-- `OnSuccess / OnFailure` 挂"成功/失败时通知我"的回调（不阻塞）
+- `OnSuccess / OnNone` 挂"有值 / 无值时通知我"的回调（不阻塞）
+
+> **`CTask<void>` 也支持 `Then`**：无参数传入，可继续接链（详见 5.7）。
 
 ### 3.4 `CTaskState<T>` —— 幕后的"台账"（内部类）
 
@@ -212,7 +233,9 @@ sequenceDiagram
 
 - 任务链持有 `shared_ptr<CExecutorHandle>`（执照副本）
 - 执行器析构 → 只把执照标记 `m_bStopped`，**线程池仍被任务链保住**
-- 已投递的任务继续跑完；新投递被拒绝 → `kExecutorStopped`
+- 已投递的任务继续跑完；新投递被拒绝 → 无值（`kStopped`）
+
+> **`CAsyncExecutor` 不再是模板类**（旧版带 `<TError>` 泛化已移除）。错误类型体系已删除，执行器就一种，直接 `no::CAsyncExecutor exec(2);` 即可。
 
 ---
 
@@ -231,10 +254,10 @@ sequenceDiagram
     Exec-->>Main: 返回 CTask
     Main->>State: Get() → Wait()（挂起等待）
     Pool->>Pool: 执行 fnRun
-    Pool->>State: Complete(CTaskResult::Success(value))
+    Pool->>State: Complete(CTaskResult(值))
     Note over State: ① 锁内：m_bReady=true，存结果<br/>② 解锁<br/>③ notify_all 叫醒 Wait
     State-->>Main: Wait 被唤醒，返回 m_result 拷贝
-    Main->>Main: 检查 r.Ok() / r.Value()
+    Main->>Main: 检查 r.HasValue() / r.Value()
 ```
 
 **要点**：`Get()` 是"阻塞等"，`Submit` 是非阻塞的；真正干活的是线程池里的工作线程。
@@ -247,12 +270,12 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    A["Submit: 3"] -->|成功值 3| B["Then: n*2"]
-    B -->|成功值 6| C["Then: n+1"]
-    C -->|成功值 7| D["Get → 7"]
+    A["Submit: 3"] -->|有值 3| B["Then: n*2"]
+    B -->|有值 6| C["Then: n+1"]
+    C -->|有值 7| D["Get → 7"]
 ```
 
-每个 `Then` 把"上一个的成功值"喂给"下一个变换函数"。
+每个 `Then` 把"上一个的有值"喂给"下一个变换函数"。
 
 ### 5.2 flatMap：变换函数返回"另一个任务"
 
@@ -276,49 +299,149 @@ exec.Submit([]() { return 3; })
     .Get();
 ```
 
-框架怎么识别"是普通值还是任务"？靠编译期类型判定（`detail::IsTask`）：
+框架怎么识别"是普通值、任务、还是结果"？靠编译期类型判定（`detail::TransformKind` + `UnwrapTask`）：
 
 ```mermaid
 flowchart TD
-    F[Then 的变换函数返回类型] --> Q{是不是 CTask?}
-    Q -- 否 --> S[直接 f(value) → 完成下游]
-    Q -- 是 --> F2[把 f(value) 得到的内部任务\n注册 OnSuccess/OnFailure]
+    F[Then 的变换函数返回类型] --> Q{是什么?}
+    Q -- 普通值 --> S[直接 f(value) → 完成下游]
+    Q -- CTask --> F2[把 f(value) 得到的内部任务<br/>注册续接]
+    Q -- CTaskResult --> F3[有值 → 继续下游<br/>无值 → 下游无值]
     F2 --> W[内部任务完成 → 转发结果给下游]
     S --> D[下游任务完成]
     W --> D
+    F3 --> D
 ```
 
-### 5.3 错误怎么沿链传播？
+### 5.3 无值终止怎么沿链传播？
 
 ```mermaid
 flowchart LR
-    A[上游失败] -->|错误码+消息| B[下一个 Then 不执行] --> C[错误原样传给下游] --> D[Get 拿到 Failed]
+    A[上游无值] -->|终止原因透传| B[下一个 Then 不执行] --> C[下游也无值] --> D[Get 拿到无值]
 ```
 
-**一旦某个环节失败，后面所有 `Then` 全部跳过**，错误一路传递到 `Get`。
+**一旦某个环节无值，后面所有 `Then` 全部跳过**，终止一路传递到 `Get`（`Reason()` 透传）。这是"正常提前结束"，不是错误。
+
+### 5.4 值在链中如何传递（共享状态信箱 + 拷贝）
+
+每个函数的结果值，靠「每个 `CTask` 背后的 `CTaskState` 共享状态」一级一级传递：
+
+```mermaid
+flowchart LR
+    subgraph 上游任务
+        S0["CTaskState#0<br/>m_result: CTaskResult&lt;int&gt;"]
+    end
+    subgraph 下游任务
+        S1["CTaskState#1<br/>m_result: CTaskResult&lt;int&gt;"]
+    end
+    F0["f0() = 3"] -->|"有值 3 移动存入"| S0
+    S0 -->|"Complete 触发续接"| C["续接回调<br/>valueCopied = 3（拷贝）"]
+    C -->|"valueCopied 拷入 lambda"| R["RunTransform<br/>f1(3) = 6"]
+    R -->|"有值 6 移动存入"| S1
+    S1 -->|"Complete 触发续接"| C2["续接回调<br/>valueCopied = 6（拷贝）"]
+    C2 --> R2["RunTransform<br/>f2(6) = 7"]
+```
+
+**完整路径（以 `Submit(f0) → Then(f1) → Then(f2)` 为例）：**
+
+| 环节 | 值在哪 | 动作 |
+|---|---|---|
+| `f0()` 返回 | 临时右值 `3` | **移动**存入 `CTaskState#0.m_result` |
+| 续接回调触发 | 参数引用 `m_result` | `upResult.Value()` 读出 `3` |
+| `valueCopied` | 续接回调局部变量 | **拷贝**一份（解耦上游生命周期） |
+| `fnRun` lambda | 捕获 `valueCopied` | 投递到线程池 |
+| `f1(valueCopied)` | 实参 | `const T&` 形参不拷贝；按值形参再拷贝 |
+| `f1()` 返回 | `6` | **移动**存入 `CTaskState#1.m_result` |
+
+**两个要点：**
+
+1. **为什么续接里要拷贝 `valueCopied`？** 上游任务可同时挂多个续接（多个 `Then`/`OnSuccess`），且续接在别的线程异步执行。若 lambda 捕获 `m_result` 的引用，上游对象析构后即悬垂。拷贝后 lambda 自己持有值，与上游完全解耦。
+2. **约束：链式传值要求 `TValue` 可拷贝**。每次 `Then` 至少 1 拷贝 + 1 移动；大对象建议用 `std::shared_ptr<T>` 作为链中 `TValue`（拷指针不拷内容）。
+
+### 5.5 执行时机：为什么没有 `Execute()`？
+
+链条是**"完成事件自动驱动"**的，不需要手动点火：
+
+1. **`Submit` 返回任务前就已投递**：`Submit(f0)` 内部在返回 `CTask` 之前就调了 `m_pPool->Submit(fnRun)` 把 `f0` 包一层入队，工作线程随即执行。`Submit` 本身就是执行入口。
+2. **`Then` 只做两件事**：算好下游类型 + 往上游 `AddContinuation` 挂回调，**不执行任何函数**。
+3. **接力靠 `Complete` 自动触发**：上游任务跑完 → `CTaskState::Complete` → 锁外依次调用所有续接 → `Then` 的续接里再把下一个变换投进线程池 → 以此类推。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant M as 主线程
+    participant P as 线程池工作线程
+    M->>P: Submit(f0) → 入队 fnRun0（返回前已投递）
+    M->>M: 返回 task0（不阻塞）
+    P->>P: 执行 f0 → Complete(result0)
+    P-->>P: 自动调用续接(第1个Then) → 投递 fnRun1
+    P->>P: 执行 f1 → Complete(result1)
+    P-->>P: 自动调用续接(第2个Then) → 投递 fnRun2
+    P->>P: 执行 f2 → Complete(result2)
+    M->>M: Get() 阻塞等 result2 就绪
+```
+
+**一句话**：链条在 `Submit` 那一刻就"点燃"，后面的 `Then` 只是往已点着的引信上接更多步骤；唯一要主动做的是 `Start()`（让线程池有工人）和 `Get()`（阻塞等结果，可省略）。
+
+### 5.6 链式调用是异步的吗？
+
+`Then` 注册是同步的（立即返回下游任务），但**变换函数是否在别的线程执行，取决于有没有活跃执行器**：
+
+| 场景 | 变换函数在哪执行 | 异步？ |
+|---|---|---|
+| 有活跃执行器（`Submit` 开的链） | 投递到**线程池工作线程** | ✅ 真异步 |
+| 无执行器（`FromResult` 开的链，或执行器已析构） | 在**触发续接的线程**上内联 | ❌ 同步 |
+| 上游无值 | 不执行变换，无值直接完成下游 | 同步传播 |
+
+另外：**上游已完成时再调 `Then`**（`AddContinuation` 的 `bFireNow` 分支），续接会在你**当前线程**立即触发；此时有执行器仍投递（异步），否则内联（同步）。
+
+**对调用方的含义：**
+
+- 别假设回调固定在某一线程（可能在任意工作线程，也可能在注册线程）；
+- 回调里访问共享变量需加锁/原子；
+- 想"确定同步"地跑一条链，用 `FromResult` 开链（无执行器全程内联）。
+
+### 5.7 `CTask<void>` 也支持 `Then`
+
+void 任务没有值，但可以继续接链：`Then` 的变换**无参数传入**：
+
+```cpp
+no::CTaskResult<int> r =
+    exec.Submit([]() { /* 干点事 */ })  // CTask<void>
+        .Then([]() { return 42; })        // void → int（无参数）
+        .Then([](int n) { return n + 8; }) // 继续正常链
+        .Get();
+// r.Value() == 50
+```
+
+- `CTaskResult<void>` 的 `HasValue()` = "任务完成与否"（无值 → 未完成/终止）
+- `OnSuccess` 回调无参；`OnNone` 回调收 `Reason()`
+- void 上游返回 `no::None` 同样会终止下游
 
 ---
 
-## 6. 错误处理模型
+## 6. 无值终止模型
 
 ```mermaid
 flowchart TD
     T[任务函数执行] --> Q{抛异常了?}
-    Q -- 是 --> E1[kTaskFailed + what()]
-    Q -- 否 --> Q2{业务代码主动失败?}
-    Q2 -- 是 --> E2[业务自定义错误码]
-    Q2 -- 否 --> E3[Success(值)]
-    E1 --> P[错误沿链传播]
+    Q -- 是 --> E1[无值 · Reason=kException]
+    Q -- 否 --> Q2{业务主动终止?}
+    Q2 -- 是（return no::None）--> E2[无值 · Reason=kEndNone]
+    Q2 -- 否 --> E3[有值（正常完成）]
+    E1 --> P[终止沿链传播]
     E2 --> P
-    P --> G[调用方 Get → Failed → 查 Error]
+    P --> G[调用方 Get → 无值 → 查 Reason]
 ```
 
-| 错误来源 | 表现 |
+| 无值来源 | 表现 |
 |---|---|
-| 任务函数 `throw` | 框架捕获 → `kTaskFailed` + `what()` 文本 |
-| 业务主动失败 | `CTaskResult::Failure(业务码, 消息)` |
-| 执行器未启动 | `kExecutorNotStarted` |
-| 执行器已停止 | `kExecutorStopped` |
+| 任务函数 `throw` | 框架捕获 → 无值（`kException`） |
+| 业务主动终止 | `return no::None;`（`kEndNone`） |
+| 执行器未启动 | 无值（`kNotStarted`） |
+| 执行器已停止 | 无值（`kStopped`） |
+
+> **注意**：框架不保留异常文本，也不定义"错误码"。任务抛异常就是"没值了"，具体为什么，业务可以在任务函数里自己记录日志或返回值。错误码是**普通值**，通过链式返回值传播，由业务自行解释。
 
 ---
 
@@ -331,7 +454,7 @@ flowchart TD
     end
     subgraph 工作线程（线程池）
         C[任务函数 f]
-        D[续接 / OnSuccess / OnFailure]
+        D[续接 / OnSuccess / OnNone]
     end
     A -.投递.-> C
     C -->|结果完成| D
@@ -341,7 +464,7 @@ flowchart TD
 **必须记住的两条规则：**
 
 1. **任务函数和续接在工作线程执行** —— 别在工作线程里碰主线程的私有数据（要加锁或用弱引用）
-2. **如果任务已经完成**，你再调 `OnSuccess/OnFailure/Then` 注册回调，回调会在**你当前线程**同步触发——所以"回调在哪个线程"不固定，别做线程假设
+2. **如果任务已经完成**，你再调 `OnSuccess/OnNone/Then` 注册回调，回调会在**你当前线程**同步触发——所以"回调在哪个线程"不固定，别做线程假设
 
 ---
 
@@ -349,11 +472,11 @@ flowchart TD
 
 | 顺序 | 看什么 | 目的 |
 |---|---|---|
-| 1 | `CTaskResult<T>`（头文件） | 先懂"结果"长什么样 |
+| 1 | `CTaskResult<T>`（头文件） | 先懂"结果"长什么样（有值/无值） |
 | 2 | `CAsyncExecutor::Submit`（实现） | 懂任务怎么被投递 |
 | 3 | `CTaskState::Complete`（实现） | **重点**：线程安全核心，锁外调续接 |
 | 4 | `CTask<T>::Then`（实现） | 懂链式怎么串起来 |
-| 5 | `detail::RunTransform` 两个重载 | 懂 flatMap 分派 |
+| 5 | `detail::RunTransform` / `RunTransformVoid` | 懂 flatMap 分派与 void 链 |
 | 6 | `CExecutorHandle` | 懂生命周期安全 |
 
 ---
@@ -367,7 +490,7 @@ namespace no = common::nothrow;
 no::CAsyncExecutor exec(2);
 exec.Start();
 no::CTaskResult<int> r = exec.Submit([]() { return 42; }).Get();
-if (r.Ok())  /* 用 r.Value() */;
+if (r.HasValue())  /* 用 r.Value() */;
 
 // ② 链式
 auto r2 = exec.Submit([]() { return 3; })
@@ -382,19 +505,66 @@ auto r3 = exec.Submit([]() { return 3; })
 
 // ④ 回调（fire-and-forget）
 no::CTask<int> t = exec.Submit([]() { return 7; });
-t.OnSuccess([](const int& v) { /* 成功 */ });
-t.OnFailure([](const no::CTaskError& e) { /* 失败 */ });
+t.OnSuccess([](const int& v) { /* 有值 */ });
+t.OnNone([](no::detail::CTaskEndReason) { /* 无值终止 */ });
 
-// ⑤ void 任务
+// ⑤ void 任务（也支持 Then）
 no::CTaskResult<void> rv = exec.Submit([]() { /* 干点事 */ }).Get();
+auto r5 = exec.Submit([]() { /* 干点事 */ })
+              .Then([]() { return 1; })   // void → 值
+              .Get();
 
-// ⑥ 手动构造结果 / 预置失败
-auto ok   = no::CTaskResult<int>::Success(1);
-auto fail = no::CTaskResult<int>::Failure(1001, "业务错误");
-auto r4   = no::CTask<int>::FromResult(fail).Then([](int){ return 0; }).Get(); // 沿链传播
+// ⑥ 手动构造结果 / 主动终止
+auto ok   = no::CTaskResult<int>(1);           // 有值
+auto none = no::CTaskResult<int>();            // 无值
+auto r4   = no::CTask<int>::FromResult(none).Then([](int){ return 0; }).Get(); // 终止传播
+
+// ⑦ 中途终止（Option 风格）
+auto r7 = exec.Submit([]() { return -5; })
+              .Then([](int n) -> no::CTaskResult<int> {
+                  if (n < 0) return no::None;  // 终止
+                  return n * 2;                // 传播
+              })
+              .Then([](int n) { return n + 1; })
+              .Get();
 
 exec.Stop(); // 优雅关闭：等已提交任务完成
 ```
+
+---
+
+## 10. 设计取舍：为什么选 eager（即时执行）而非手动触发/惰性？
+
+异步框架存在三种执行模型：
+
+| 模型 | 语义 | 触发点 | 代表 |
+|---|---|---|---|
+| **eager 即时** | "接上即跑"，链条是自动流水线 | `Submit` 调用那一刻 | JS Promise、C# `Task.Run`、Boost.Asio、Go goroutine、**本项目** |
+| **lazy 惰性** | 构建与运行分离，构建完只是描述 | 额外 `subscribe()`/`spawn()`/`get()` | Rust Future、Python asyncio、Rx 冷 Observable、`std::launch::deferred` |
+| **手动触发** | 显式 `Execute()`/`Start()` 点燃 | 用户手动调用 | C# `new Task(...).Start()` |
+
+**本项目为什么选 eager：**
+
+1. **消灭"忘记启动"这类错误类别**——手动触发漏调 = 任务永挂起、`Get()` 死等，是最难排查的 bug；eager 让链条自跑，少一个出错维度。
+2. **与 continuation 模型天然契合**——执行时机内嵌在"完成事件流"里（`Complete` 触发续接），若改手动触发等于把"何时调 `Complete`"暴露给用户。
+3. **`Submit` 本身就是启动**——触发动作存在，只是不叫 `Execute` 叫 `Submit`；`Then` 不触发因为它只是接上一步，接力由完成事件自动进行。
+
+**各语言/框架一览：**
+
+| 语言/框架 | 触发模型 | 说明 |
+|---|---|---|
+| JS Promise | eager | `new Promise(executor)` 时 executor 立即执行；`.then` 只注册 |
+| C# | 两者 | `Task.Run`/async 方法 eager；`new Task(...)` 需 `.Start()` |
+| C++ `std::async` | 默认 eager | 默认新线程立即跑；`launch::deferred` 惰性到 `get()` |
+| C++ Boost.Asio | eager | 调用 `async_*` 即发起，靠 completion handler 自动接力（与本项目同构） |
+| Rust Future | lazy | 必须 `poll`/`spawn` 才推进；可组合、可取消 |
+| Python asyncio | lazy | coroutine 对象不跑，必须 `await`/`create_task` |
+| Rx 冷 Observable | lazy | 每次 `subscribe()` 重新执行（可重放） |
+| Go goroutine | eager | `go f()` 立即调度 |
+
+**关键洞察**：基于"完成回调自动接力"的框架基本都是 eager（Promise、Asio、本项目）；lazy 的代价是必须有个"材料化"步骤（`subscribe`/`spawn`/`await`），换来可组合、可取消、可重放。本项目的定位是**一次性流水线 + 线程池执行器**，不是可重放的数据流（那是 Rx 的领域），eager 是正确选择。
+
+**如果将来真要惰性**：优先在框架外实现（把整条链封装成一个 `std::function` 工厂，需要时再 `Submit`），而不是给核心引擎加惰性模式——避免污染主路径的简单性。
 
 ---
 
@@ -402,10 +572,12 @@ exec.Stop(); // 优雅关闭：等已提交任务完成
 
 | 术语 | 含义 |
 |---|---|
-| `expected` 风格 | 结果 = 值或错误二选一（C++23 `std::expected`） |
+| Option 风格 | 结果 = 有值（Some）或无值（None），无值即终止（类似 Rust `Option` / C++ `std::optional`） |
+| `None` 哨兵 | 显式构造无值结果的标记（`CNoneTag`） |
 | `fire-and-forget` | 注册回调但不阻塞等待 |
-| `flatMap` / 平铺 | 变换返回任务时自动拆包接续 |
+| `flatMap` / 平铺 | 变换返回任务/结果时自动拆包接续 |
 | 续接 (Continuation) | 等任务结果的通知回调 |
 | 句柄 (Handle) | 共享资源引用，保命用 |
+| `CTaskEndReason` | 终止原因（仅调试/日志，不参与类型系统） |
 
 > 完整可运行示例见 `examples/nothrow_demo.cpp`（`cd examples && make run`）。

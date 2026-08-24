@@ -50,7 +50,7 @@ private:
     std::int64_t m_nIntervalMs;
     sc::ScopedInterfacePtr<sc::ITimer> m_pTimer;
     std::unique_ptr<common::CAsyncExecutor> m_pExecutor;              // 异常版执行器
-    std::unique_ptr<common::nothrow::CAsyncExecutor<> > m_pNoThrowExecutor; // 无异常版执行器（默认 CTaskError）
+    std::unique_ptr<common::nothrow::CAsyncExecutor> m_pNoThrowExecutor; // 无异常版执行器（Option 风格）
     common::TimerId m_tTimerId;
 };
 

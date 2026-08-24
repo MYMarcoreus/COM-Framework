@@ -59,8 +59,8 @@ bool CDemoAsyncModule::Start()
     {
         return false;
     }
-    // 无异常版执行器（错误码 + CTaskResult 演示）
-    m_pNoThrowExecutor.reset(new common::nothrow::CAsyncExecutor<>(2));
+    // 无异常版执行器（Option 风格：有值传播 / 无值终止）
+    m_pNoThrowExecutor.reset(new common::nothrow::CAsyncExecutor(2));
     if (!m_pNoThrowExecutor->Start())
     {
         return false;
@@ -151,28 +151,28 @@ void CDemoAsyncModule::RunDemo()
     int nResult = task.Get();
     common::CLogger::Instance().Info("[AsyncDemo] Get 阻塞获取=" + std::to_string(nResult));
 
-    // ⑤ 无异常版演示（错误码 + CTaskResult，风格类似 std::expected<T, Error>）
+    // ⑤ 无异常版演示（Option 风格：有值传播 / 无值终止）
     if (m_pNoThrowExecutor != nullptr)
     {
-        // 链式成功：Submit → Then → Get，Get 不抛异常，检查 Ok()
+        // 链式成功：Submit → Then → Get，有值传播
         common::nothrow::CTaskResult<int> nr =
             m_pNoThrowExecutor->Submit([]() { return 10; })
                 .Then([](int n) { return n * 3; })
                 .Get();
-        if (nr.Ok())
+        if (nr.HasValue())
         {
             common::CLogger::Instance().Info("[AsyncDemo] 无异常版链式=" +
                 std::to_string(nr.Value()));
         }
-        // 失败：任务异常 → 错误码 + 消息（不抛异常）
+        // 任务异常 → 无值终止（Reason=kException，不抛异常）
         common::nothrow::CTaskResult<int> nf = m_pNoThrowExecutor->Submit([]() -> int
         {
             throw std::runtime_error("无异常版演示错误");
         }).Get();
-        if (nf.Failed())
+        if (!nf.HasValue())
         {
-            common::CLogger::Instance().Warn(std::string("[AsyncDemo] 无异常版错误码=") +
-                std::to_string(nf.Error().nCode) + " msg=" + nf.Error().strMessage);
+            common::CLogger::Instance().Warn("[AsyncDemo] 无异常版无值终止: reason=" +
+                std::to_string(static_cast<int>(nf.Reason())));
         }
     }
 }
