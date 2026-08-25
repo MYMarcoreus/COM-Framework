@@ -60,7 +60,7 @@ struct CNoneTag
 {
 };
 
-/// 无值标记（返回 no::None 表示终止）。
+/// @brief 无值标记（返回 no::None 表示终止）。
 const CNoneTag None = CNoneTag{};
 
 namespace detail {
@@ -68,11 +68,11 @@ namespace detail {
 /// @brief 终止 / 未完成原因（仅用于调试区分，不参与类型系统）。
 enum CTaskEndReason
 {
-    kEndCompleted = 0, // 正常完成（有值传播 / void 完成）。
-    kEndNone,          // 业务返回 None 终止。
-    kNotStarted,       // 执行器未启动（Submit 时线程池不可用）。
-    kStopped,          // 执行器已停止（续接投递被拒）。
-    kException         // 任务/变换抛出异常（已被框架捕获转为无值终止）。
+    kEndCompleted = 0, ///< 正常完成（有值传播 / void 完成）。
+    kEndNone,          ///< 业务返回 None 终止。
+    kNotStarted,       ///< 执行器未启动（Submit 时线程池不可用）。
+    kStopped,          ///< 执行器已停止（续接投递被拒）。
+    kException         ///< 任务/变换抛出异常（已被框架捕获转为无值终止）。
 };
 
 } // namespace detail
@@ -95,36 +95,40 @@ template <typename TValue>
 class CTaskResult
 {
 public:
-    /// 默认构造：无值（None，业务终止）。
+    /// @brief 默认构造：无值（None，业务终止）。
     CTaskResult() : m_bHasValue(false), m_reason(detail::kEndNone), m_value() {}
 
-    /// 显式无值（return no::None;）。
+    /// @brief 显式无值（return no::None;）。
     CTaskResult(CNoneTag) : m_bHasValue(false), m_reason(detail::kEndNone), m_value() {}
 
-    /// 从值隐式构造有值（Some）。
+    /// @brief 从值隐式构造有值（Some）。
+    ///
+    /// @param value 结果值。
     CTaskResult(const TValue& value)
         : m_bHasValue(true), m_reason(detail::kEndCompleted), m_value(value) {}
 
-    /// 从值移动构造有值（Some，减少拷贝）。
+    /// @brief 从值移动构造有值（Some，减少拷贝）。
+    ///
+    /// @param value 结果值（移动语义）。
     CTaskResult(TValue&& value)
         : m_bHasValue(true), m_reason(detail::kEndCompleted), m_value(std::move(value)) {}
 
-    /// 是否有值（Some）。
+    /// @brief 是否有值（Some）。
     bool HasValue() const { return m_bHasValue; }
 
-    /// 有值时的值（仅在 HasValue() 为 true 时调用）。
+    /// @brief 有值时的值（仅在 HasValue() 为 true 时调用）。
     const TValue& Value() const { return m_value; }
 
-    /// 有值时的可写值（仅在 HasValue() 为 true 时调用）。
+    /// @brief 有值时的可写值（仅在 HasValue() 为 true 时调用）。
     TValue& Value() { return m_value; }
 
-    /// 终止原因（调试用；HasValue() 为 false 时区分原因）。
+    /// @brief 终止原因（调试用；HasValue() 为 false 时区分原因）。
     detail::CTaskEndReason Reason() const { return m_reason; }
 
-    /// 便捷写法：if (result)。
+    /// @brief 便捷写法：if (result)。
     explicit operator bool() const { return HasValue(); }
 
-    /// 有值返回值，无值返回 defValue。
+    /// @brief 有值返回值，无值返回 defValue。
     ///
     /// @param defValue 无值时的默认值。
     TValue ValueOr(const TValue& defValue) const
@@ -132,7 +136,9 @@ public:
         return HasValue() ? m_value : defValue;
     }
 
-    /// 内部：指定原因的无值结果（框架内部错误 / 终止原因用）。
+    /// @brief 内部：指定原因的无值结果（框架内部错误 / 终止原因用）。
+    ///
+    /// @param reason 终止原因。
     static CTaskResult MakeNone(detail::CTaskEndReason reason)
     {
         CTaskResult r;
@@ -155,22 +161,24 @@ template <>
 class CTaskResult<void>
 {
 public:
-    /// 默认构造：完成。
+    /// @brief 默认构造：完成。
     CTaskResult() : m_reason(detail::kEndCompleted) {}
 
-    /// 显式终止（return no::None;）。
+    /// @brief 显式终止（return no::None;）。
     CTaskResult(CNoneTag) : m_reason(detail::kEndNone) {}
 
-    /// 是否完成（true = 正常结束）。
+    /// @brief 是否完成（true = 正常结束）。
     bool HasValue() const { return m_reason == detail::kEndCompleted; }
 
-    /// 便捷写法：if (result)。
+    /// @brief 便捷写法：if (result)。
     explicit operator bool() const { return HasValue(); }
 
-    /// 终止原因（调试用）。
+    /// @brief 终止原因（调试用）。
     detail::CTaskEndReason Reason() const { return m_reason; }
 
-    /// 内部：指定原因的无值结果。
+    /// @brief 内部：指定原因的无值结果。
+    ///
+    /// @param reason 终止原因。
     static CTaskResult MakeNone(detail::CTaskEndReason reason)
     {
         CTaskResult r;
@@ -210,9 +218,11 @@ public:
     /// 创建状态（初始未就绪）。
     CTaskState() : m_bReady(false) {}
 
-    /// 完成并触发续接（锁外调用续接，防重入死锁）。
+    /// @brief 完成并触发续接（锁外调用续接，防重入死锁）。
     ///
     /// 仅首次生效；先唤醒 Wait，再按注册顺序在锁外调用所有续接。
+    ///
+    /// @param result 最终结果（有值 / 无值）。
     void Complete(const CTaskResult<TValue>& result)
     {
         std::vector<Continuation> vecCbs;
@@ -239,7 +249,7 @@ public:
         }
     }
 
-    /// 注册续接；任务已就绪时投递到执行器异步执行（执行器不可用则视为调用失败）。
+    /// @brief 注册续接；任务已就绪时投递到执行器异步执行（执行器不可用则视为调用失败）。
     ///
     /// @param pExecutor 执行器句柄（任务永远绑定执行器，恒非空）。
     /// @param fnCallback 续接回调（按值接收，登记时移动存储避免拷贝）。
@@ -280,7 +290,9 @@ public:
         return true;
     }
 
-    /// 阻塞等待结果。
+    /// @brief 阻塞等待结果。
+    ///
+    /// @return 最终结果（有值 / 无值）。
     auto Wait() -> CTaskResult<TValue>
     {
         std::unique_lock<std::mutex> lock(m_mutex);
@@ -486,7 +498,9 @@ template <typename TValue>
 class CTaskBase
 {
 public:
-    /// 阻塞获取最终结果（不抛异常）。
+    /// @brief 阻塞获取最终结果（不抛异常）。
+    ///
+    /// @return 最终结果（有值 / 无值）。
     auto Get() const -> CTaskResult<TValue> { return m_pState->Wait(); }
 
 protected:
@@ -516,12 +530,15 @@ template <typename TValue>
 class CTask : public CTaskBase<TValue>
 {
 public:
-    /// 链式续接：上游有值时执行 fnTransform(value)，上游无值则终止传播。
+    /// @brief 链式续接：上游有值时执行 fnTransform(value)，上游无值则终止传播。
     ///
     /// 变换函数返回三种：
     ///  - 普通值 TNew：有值传播（Then → Then → Get）；
     ///  - `CTaskResult<TNew>`：有值传播 / 无值（None）终止；
     ///  - `CTask<TNew>`：扁平化（flatMap），内部任务完成后转发其结果。
+    ///
+    /// @param fnTransform 变换函数。
+    /// @return 下游任务（延续链）。
     template <typename TFn>
     auto Then(TFn fnTransform)
         -> CTask<typename detail::TaskTraits<
@@ -531,11 +548,15 @@ public:
     using SuccessCallback = std::function<void(const TValue&)>;        // 有值回调。
     using NoneCallback = std::function<void(detail::CTaskEndReason)>;  // 无值回调。
 
-    /// 注册成功回调（有值时触发）。
+    /// @brief 注册成功回调（有值时触发）。
+    ///
+    /// @param fnCallback 有值回调。
     /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
     bool OnSuccess(SuccessCallback fnCallback);
 
-    /// 注册无值回调（链终止时触发；参数为终止原因，调试用）。
+    /// @brief 注册无值回调（链终止时触发；参数为终止原因，调试用）。
+    ///
+    /// @param fnCallback 无值回调。
     /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
     bool OnNone(NoneCallback fnCallback);
 
@@ -635,7 +656,10 @@ template <>
 class CTask<void> : public CTaskBase<void>
 {
 public:
-    /// 链式续接：上游完成时执行 fnTransform()（无参数），上游终止则传播。
+    /// @brief 链式续接：上游完成时执行 fnTransform()（无参数），上游终止则传播。
+    ///
+    /// @param fnTransform 变换函数（无参数）。
+    /// @return 下游任务（延续链）。
     template <typename TFn>
     auto Then(TFn fnTransform)
         -> CTask<typename detail::TaskTraits<
@@ -646,10 +670,14 @@ public:
     using NoneCallback = std::function<void(detail::CTaskEndReason)>;  // 无值回调。
 
     /// @brief 注册完成回调（无参数）。
+    ///
+    /// @param fnCallback 完成回调。
     /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
     bool OnSuccess(SuccessCallback fnCallback);
 
-    /// 注册无值回调（链终止时触发；参数为终止原因，调试用）。
+    /// @brief 注册无值回调（链终止时触发；参数为终止原因，调试用）。
+    ///
+    /// @param fnCallback 无值回调。
     /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
     bool OnNone(NoneCallback fnCallback);
 
@@ -721,22 +749,24 @@ auto CTask<void>::Then(TFn f)
 class CAsyncExecutor
 {
 public:
-    /// 创建执行器（指定工作线程数，默认 1）。
+    /// @brief 创建执行器（指定工作线程数，默认 1）。
+    ///
+    /// @param nThreadCount 工作线程数。
     explicit CAsyncExecutor(size_t nThreadCount = 1);
 
-    /// 不可拷贝（拷贝会共享线程池，Stop 相互影响）。
+    /// @brief 不可拷贝（拷贝会共享线程池，Stop 相互影响）。
     CAsyncExecutor(const CAsyncExecutor&) = delete;
     CAsyncExecutor& operator=(const CAsyncExecutor&) = delete;
 
-    /// 销毁执行器（停止并等待任务完成）。
+    /// @brief 销毁执行器（停止并等待任务完成）。
     ~CAsyncExecutor();
 
-    /// 启动工作线程。
+    /// @brief 启动工作线程。
     ///
     /// @return true 启动成功；false 已启动或线程数为 0。
     bool Start();
 
-    /// 提交任务并返回 CTask（任务内部异常自动转为无值终止）。
+    /// @brief 提交任务并返回 CTask（任务内部异常自动转为无值终止）。
     ///
     /// @tparam TFn 任务函数类型（返回值作为任务结果）。
     /// @param f 任务函数（在工作线程上执行）。
@@ -747,15 +777,16 @@ public:
     /// 无返回值任务类型（fire-and-forget）。
     using TaskCallback = std::function<void()>;
 
-    /// 提交无返回值任务（fire-and-forget；按值接收，移动投递避免拷贝）。
+    /// @brief 提交无返回值任务（fire-and-forget；按值接收，移动投递避免拷贝）。
     ///
+    /// @param fnTask 任务函数。
     /// @return true 提交成功；false 执行器未启动。
     bool Post(TaskCallback fnTask);
 
-    /// 停止并等待任务完成（优雅关闭）。
+    /// @brief 停止并等待任务完成（优雅关闭）。
     void Stop();
 
-    /// 是否正在运行。
+    /// @brief 是否正在运行。
     bool IsRunning() const;
 
 private:
