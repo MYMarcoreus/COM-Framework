@@ -606,10 +606,10 @@ auto CTask<TValue>::Then(TFn f)
             TValue valueCopied = upResult.Value();
 
             std::function<void()> fnRun = [pNextState, f, valueCopied]()
-            {
-                // ③ 执行变换：普通值 → 传播；CTask → flatMap；CTaskResult → 原样转发。
-                detail::RunTransform(pNextState, f, valueCopied, detail::TaskKind<TResult>());
-            };
+                {
+                    // ③ 执行变换：普通值 → 传播；CTask → flatMap；CTaskResult → 原样转发。
+                    detail::RunTransform(pNextState, f, valueCopied, detail::TaskKind<TResult>());
+                };
 
             // ④ 在执行器上执行；执行器不可用（未启动/已停止）→ 视为失败（kStopped）。
             if (pExecutor == nullptr || pExecutor->m_pPool == nullptr ||
