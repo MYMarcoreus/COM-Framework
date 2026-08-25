@@ -85,33 +85,38 @@ enum CTaskEndReason
 /// 有值通过「从值隐式构造 / CTaskResult(value)」表达；
 /// 无值通过「默认构造 / CTaskResult(no::None) / 返回 no::None」表达。
 ///
+/// 值内联存储（对标 std::optional / Rust Option）：无堆分配、无引用计数。
+/// 代价：结果拷贝为深拷贝（对小对象开销远小于堆分配）；结果类型需
+/// 「默认构造 + 可拷贝」（move-only 类型如 std::unique_ptr 不支持，
+/// 可改用 std::shared_ptr 包裹）。
+///
 /// @tparam TValue 有值时携带的值类型。
 template <typename TValue>
 class CTaskResult
 {
 public:
     /// 默认构造：无值（None，业务终止）。
-    CTaskResult() : m_pValue(), m_reason(detail::kEndNone) {}
+    CTaskResult() : m_bHasValue(false), m_reason(detail::kEndNone), m_value() {}
 
     /// 显式无值（return no::None;）。
-    CTaskResult(CNoneTag) : m_pValue(), m_reason(detail::kEndNone) {}
+    CTaskResult(CNoneTag) : m_bHasValue(false), m_reason(detail::kEndNone), m_value() {}
 
     /// 从值隐式构造有值（Some）。
     CTaskResult(const TValue& value)
-        : m_pValue(new TValue(value)), m_reason(detail::kEndCompleted) {}
+        : m_bHasValue(true), m_reason(detail::kEndCompleted), m_value(value) {}
 
-    /// 从值移动构造有值（Some，支持 move-only / 减少拷贝）。
+    /// 从值移动构造有值（Some，减少拷贝）。
     CTaskResult(TValue&& value)
-        : m_pValue(new TValue(std::move(value))), m_reason(detail::kEndCompleted) {}
+        : m_bHasValue(true), m_reason(detail::kEndCompleted), m_value(std::move(value)) {}
 
     /// 是否有值（Some）。
-    bool HasValue() const { return m_pValue != nullptr; }
+    bool HasValue() const { return m_bHasValue; }
 
     /// 有值时的值（仅在 HasValue() 为 true 时调用）。
-    const TValue& Value() const { return *m_pValue; }
+    const TValue& Value() const { return m_value; }
 
     /// 有值时的可写值（仅在 HasValue() 为 true 时调用）。
-    TValue& Value() { return *m_pValue; }
+    TValue& Value() { return m_value; }
 
     /// 终止原因（调试用；HasValue() 为 false 时区分原因）。
     detail::CTaskEndReason Reason() const { return m_reason; }
@@ -124,7 +129,7 @@ public:
     /// @param defValue 无值时的默认值。
     TValue ValueOr(const TValue& defValue) const
     {
-        return HasValue() ? *m_pValue : defValue;
+        return HasValue() ? m_value : defValue;
     }
 
     /// 内部：指定原因的无值结果（框架内部错误 / 终止原因用）。
@@ -136,8 +141,9 @@ public:
     }
 
 private:
-    std::shared_ptr<TValue> m_pValue; // 有值（非空 ⇔ Some）。
-    detail::CTaskEndReason m_reason;  // 终止原因（调试）。
+    bool m_bHasValue;                // 是否有值（Some）。
+    detail::CTaskEndReason m_reason; // 终止原因（调试）。
+    TValue m_value;                  // 内联存储的值（有值时才有效）。
 };
 
 /// @brief `CTaskResult<void>` 特化：无值即完成。

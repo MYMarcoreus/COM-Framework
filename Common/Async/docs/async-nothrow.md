@@ -98,8 +98,9 @@ classDiagram
         +ValueOr(def) TValue
         +Reason() CTaskEndReason
         +operator bool()
-        -m_pValue : TValue
+        -m_bHasValue : bool
         -m_reason : CTaskEndReason
+        -m_value : TValue
     }
     class CNoneTag {
         None 哨兵
@@ -152,6 +153,10 @@ stateDiagram-v2
 - 便捷：`if (r)`（`operator bool`）、`r.ValueOr(-1)`（无值给默认值）
 
 > 默认构造 = 无值（终止原因 `kEndNone`），语义上"任务没产出值就当作终止"。
+
+> **实现**：值**内联存储**（对标 `std::optional` / Rust `Option`）：无堆分配、无引用计数。
+> 代价是结果拷贝为深拷贝（对小对象开销远小于堆分配）。结果类型需「默认构造 + 可拷贝」；
+> move-only 类型（如 `std::unique_ptr`）不支持，可改用 `std::shared_ptr` 包裹。
 
 ### 3.2 `None` 与终止原因 `CTaskEndReason`（仅调试）
 
