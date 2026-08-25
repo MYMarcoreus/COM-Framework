@@ -257,9 +257,9 @@ public:
                 !pExecutor->m_bStopped)
             {
                 std::function<void()> fnRun = [fnCallback, result]()
-                {
-                    fnCallback(result);
-                };
+                    {
+                        fnCallback(result);
+                    };
                 if (pExecutor->m_pPool->Submit(fnRun))
                 {
                     return true;
@@ -576,7 +576,9 @@ auto CTask<TValue>::Then(TFn f)
     auto pNextState = taskNext.m_pState;
     auto pExecutor = this->m_pExecutor;
 
-    if (!this->m_pState->AddContinuation(pExecutor,
+    // 注册上游续接：未就绪 → 登记（任务完成时触发）；已就绪 → 投递到执行器异步执行。
+    // 返回 false：任务已就绪但执行器不可用，续接无法投递，下游立即以失败（kStopped）完成。
+    bool bOk = this->m_pState->AddContinuation(pExecutor,
         [pExecutor, pNextState, f](const CTaskResult<TValue>& upResult)
         {
             // ① 上游无值：终止传播（原因透传）。
@@ -585,22 +587,26 @@ auto CTask<TValue>::Then(TFn f)
                 pNextState->Complete(CTaskResult<TOut>::MakeNone(upResult.Reason()));
                 return;
             }
+
             // ② 拷贝值，供异步续接安全使用（不引用上游共享状态）。
             TValue valueCopied = upResult.Value();
+
             std::function<void()> fnRun = [pNextState, f, valueCopied]()
             {
                 // ③ 执行变换：普通值 → 传播；CTask → flatMap；CTaskResult → 原样转发。
                 detail::RunTransform(pNextState, f, valueCopied, detail::TaskKind<TResult>());
             };
+
             // ④ 在执行器上执行；执行器不可用（未启动/已停止）→ 视为失败（kStopped）。
             if (pExecutor == nullptr || pExecutor->m_pPool == nullptr ||
                 pExecutor->m_bStopped || !pExecutor->m_pPool->Submit(fnRun))
             {
                 pNextState->Complete(CTaskResult<TOut>::MakeNone(detail::kStopped));
             }
-        }))
+        });
+
+    if (!bOk)
     {
-        // 任务已就绪但执行器不可用：续接无法投递，下游立即以失败（kStopped）完成。
         pNextState->Complete(CTaskResult<TOut>::MakeNone(detail::kStopped));
     }
     return taskNext;
@@ -651,7 +657,9 @@ auto CTask<void>::Then(TFn f)
     auto pNextState = taskNext.m_pState;
     auto pExecutor = this->m_pExecutor;
 
-    if (!this->m_pState->AddContinuation(pExecutor,
+    // 注册上游续接：未就绪 → 登记（任务完成时触发）；已就绪 → 投递到执行器异步执行。
+    // 返回 false：任务已就绪但执行器不可用，续接无法投递，下游立即以失败（kStopped）完成。
+    bool bOk = this->m_pState->AddContinuation(pExecutor,
         [pExecutor, pNextState, f](const CTaskResult<void>& upResult)
         {
             // ① 上游终止：传播。
@@ -660,20 +668,22 @@ auto CTask<void>::Then(TFn f)
                 pNextState->Complete(CTaskResult<TOut>::MakeNone(upResult.Reason()));
                 return;
             }
+
             // ② 执行变换（fn 无参数）。
             std::function<void()> fnRun = [pNextState, f]()
                 {
                     detail::RunTransformVoid(pNextState, f, detail::TaskKind<TResult>());
                 };
+
             // ③ 在执行器上执行；执行器不可用（未启动/已停止）→ 视为失败（kStopped）。
             if (pExecutor == nullptr || pExecutor->m_pPool == nullptr ||
                 pExecutor->m_bStopped || !pExecutor->m_pPool->Submit(fnRun))
             {
                 pNextState->Complete(CTaskResult<TOut>::MakeNone(detail::kStopped));
             }
-        }))
+        });
+    if (!bOk)
     {
-        // 任务已就绪但执行器不可用：续接无法投递，下游立即以失败（kStopped）完成。
         pNextState->Complete(CTaskResult<TOut>::MakeNone(detail::kStopped));
     }
     return taskNext;
