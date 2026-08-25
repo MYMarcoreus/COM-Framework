@@ -10,9 +10,9 @@ namespace nothrow {
 // ====================================================================
 
 /// @brief OnSuccess 实现（`CTask<void>` 特化）。
-void CTask<void>::OnSuccess(const std::function<void()>& fnCallback)
+bool CTask<void>::OnSuccess(const std::function<void()>& fnCallback)
 {
-    m_pState->AddContinuation(
+    return m_pState->AddContinuation(this->m_pExecutor,
         [fnCallback](const CTaskResult<void>& result)
         {
             if (result.HasValue() && fnCallback)
@@ -23,9 +23,9 @@ void CTask<void>::OnSuccess(const std::function<void()>& fnCallback)
 }
 
 /// @brief OnNone 实现（`CTask<void>` 特化）。
-void CTask<void>::OnNone(const std::function<void(detail::CTaskEndReason)>& fnCallback)
+bool CTask<void>::OnNone(const std::function<void(detail::CTaskEndReason)>& fnCallback)
 {
-    m_pState->AddContinuation(
+    return m_pState->AddContinuation(this->m_pExecutor,
         [fnCallback](const CTaskResult<void>& result)
         {
             if (!result.HasValue() && fnCallback)
@@ -35,9 +35,12 @@ void CTask<void>::OnNone(const std::function<void(detail::CTaskEndReason)>& fnCa
         });
 }
 
-/// @brief 创建异步执行器。
-CAsyncExecutor::CAsyncExecutor(size_t nThreadCount) : m_nThreadCount(nThreadCount)
+/// @brief 创建异步执行器（构造即建句柄与线程池对象：执行器和线程池一定不为空）。
+CAsyncExecutor::CAsyncExecutor(size_t nThreadCount)
+    : m_pHandle(new detail::CExecutorHandle()), // 句柄（线程池对象随即创建）。
+      m_nThreadCount(nThreadCount)
 {
+    m_pHandle->m_pPool.reset(new common::CThreadPool(m_nThreadCount)); // 线程池对象总在（未启动）。
 }
 
 /// @brief 销毁异步执行器（停止并等待任务完成）。
@@ -49,19 +52,22 @@ CAsyncExecutor::~CAsyncExecutor()
 /// @brief 启动工作线程。
 bool CAsyncExecutor::Start()
 {
-    if (m_pHandle)
+    if (m_pHandle->m_pPool->IsRunning())
     {
-        return false;
+        return false; // 已启动
     }
     if (m_nThreadCount == 0)
     {
         return false;
     }
-    m_pHandle.reset(new detail::CExecutorHandle());
-    m_pHandle->m_pPool.reset(new common::CThreadPool(m_nThreadCount));
+    // 若之前 Stop 过（句柄已标记停止），重建句柄与线程池以隔离旧任务。
+    if (m_pHandle->m_bStopped)
+    {
+        m_pHandle.reset(new detail::CExecutorHandle());
+        m_pHandle->m_pPool.reset(new common::CThreadPool(m_nThreadCount));
+    }
     if (!m_pHandle->m_pPool->Start())
     {
-        m_pHandle.reset();
         return false;
     }
     return true;
@@ -71,34 +77,27 @@ bool CAsyncExecutor::Start()
 bool CAsyncExecutor::Post(const std::function<void()>& fnTask)
 {
     std::shared_ptr<detail::CExecutorHandle> pHandle = m_pHandle;
-    if (!pHandle || pHandle->m_bStopped || !pHandle->m_pPool)
+    if (pHandle->m_bStopped)
     {
         return false;
     }
-    return pHandle->m_pPool->Submit(fnTask);
+    return pHandle->m_pPool->Submit(fnTask); // 未启动 → false（投递失败）。
 }
 
 /// @brief 停止并等待任务完成（优雅关闭）。
+///
+/// 保留句柄与线程池对象：已创建任务仍绑定本执行器（m_bStopped=true，不再异步投递）。
 void CAsyncExecutor::Stop()
 {
     std::shared_ptr<detail::CExecutorHandle> pHandle = m_pHandle;
-    if (!pHandle)
-    {
-        return;
-    }
     pHandle->m_bStopped = true;
-    if (pHandle->m_pPool)
-    {
-        pHandle->m_pPool->Stop();
-    }
-    m_pHandle.reset();
+    pHandle->m_pPool->Stop(); // 线程池对象保留（未启动状态）。
 }
 
 /// @brief 是否正在运行。
 bool CAsyncExecutor::IsRunning() const
 {
-    return m_pHandle != nullptr && !m_pHandle->m_bStopped &&
-           m_pHandle->m_pPool != nullptr && m_pHandle->m_pPool->IsRunning();
+    return !m_pHandle->m_bStopped && m_pHandle->m_pPool->IsRunning();
 }
 
 } // namespace nothrow
