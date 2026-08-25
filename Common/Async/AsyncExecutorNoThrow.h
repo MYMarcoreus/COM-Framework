@@ -399,9 +399,13 @@ void FlatMapForward(const std::shared_ptr<CTaskState<TNew> >& pNextState,
 }
 
 /// @brief 执行变换（有参，变换返回普通值 / void）：有值传播，void 完成。
+///
+/// @param pNextState 下游任务状态。
+/// @param f 变换函数。
+/// @param valueCopied 上游结果值（const 引用传递，避免按值传参拷贝）。
 template <typename TOut, typename TFn, typename TValue>
 void RunTransform(const std::shared_ptr<CTaskState<TOut> >& pNextState,
-                  TFn f, TValue valueCopied, std::integral_constant<int, 0>)
+                  TFn f, const TValue& valueCopied, std::integral_constant<int, 0>)
 {
     try
     {
@@ -415,9 +419,13 @@ void RunTransform(const std::shared_ptr<CTaskState<TOut> >& pNextState,
 }
 
 /// @brief 执行变换（有参，变换返回 CTask）：扁平化 flatMap。
+///
+/// @param pNextState 下游任务状态。
+/// @param f 变换函数。
+/// @param valueCopied 上游结果值（const 引用传递，避免按值传参拷贝）。
 template <typename TNew, typename TFn, typename TValue>
 void RunTransform(const std::shared_ptr<CTaskState<TNew> >& pNextState,
-                  TFn f, TValue valueCopied, std::integral_constant<int, 1>)
+                  TFn f, const TValue& valueCopied, std::integral_constant<int, 1>)
 {
     try
     {
@@ -431,9 +439,13 @@ void RunTransform(const std::shared_ptr<CTaskState<TNew> >& pNextState,
 }
 
 /// @brief 执行变换（有参，变换返回 CTaskResult）：结果原样转发（Some/None）。
+///
+/// @param pNextState 下游任务状态。
+/// @param f 变换函数。
+/// @param valueCopied 上游结果值（const 引用传递，避免按值传参拷贝）。
 template <typename TOut, typename TFn, typename TValue>
 void RunTransform(const std::shared_ptr<CTaskState<TOut> >& pNextState,
-                  TFn f, TValue valueCopied, std::integral_constant<int, 2>)
+                  TFn f, const TValue& valueCopied, std::integral_constant<int, 2>)
 {
     try
     {
