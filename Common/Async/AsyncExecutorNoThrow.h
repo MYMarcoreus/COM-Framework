@@ -12,6 +12,22 @@
 #include "Thread/ThreadPool.h"
 
 // ====================================================================
+// 回调调试追踪（仅调试构建有效）
+//
+// 仅在非优化调试构建（make debug / -O0，即未定义 __OPTIMIZE__）下启用：
+// 任务完成触发续接、回调投递时打印当前线程 ID 与调用栈（backtrace），
+// 便于定位异步回调的触发链路（谁在哪个线程触发了这个回调）。
+// 发布构建（-O2，定义 __OPTIMIZE__）自动编译为空实现，零运行时开销。
+// ====================================================================
+#if defined(__linux__) && !defined(__OPTIMIZE__)
+    #define NOTHROW_DEBUG_TRACE 1
+    #include <execinfo.h>
+    #include <cstdio>
+    #include <cstdlib>
+    #include <thread>
+#endif
+
+// ====================================================================
 // 无异常版异步框架（Option 风格：有值 / 无值）
 // 风格类似 Rust Option / C++ std::optional
 //
@@ -192,6 +208,38 @@ private:
 
 namespace detail {
 
+/// @brief 打印回调触发调用栈（仅调试构建；发布构建为空操作，零开销）。
+///
+/// @param szWhat 触发场景描述（如「Complete 触发续接」）。
+/// @param nDepth 打印最近 N 帧（<0 表示全部）。
+inline void TraceInvoke(const char* szWhat, int nDepth = -1)
+{
+#if defined(NOTHROW_DEBUG_TRACE)
+    static const int kMaxFrames = 32;
+    void* apBuffer[kMaxFrames];
+    int nFrames = backtrace(apBuffer, kMaxFrames);
+    char** ppSymbols = backtrace_symbols(apBuffer, nFrames);
+    unsigned long nThreadId = static_cast<unsigned long>(
+        std::hash<std::thread::id>()(std::this_thread::get_id()));
+    std::fprintf(stderr, "\n[nothrow::trace] %s | thread=%lu | frames=%d\n",
+                 szWhat, nThreadId, nFrames);
+    int nStart = 0;
+    if (nDepth >= 0 && nDepth < nFrames)
+    {
+        nStart = nFrames - nDepth;
+    }
+    for (int i = nStart; i < nFrames; ++i)
+    {
+        std::fprintf(stderr, "  %2d  %s\n", i, ppSymbols[i]);
+    }
+    std::fprintf(stderr, "\n");
+    std::free(ppSymbols);
+#else
+    (void)szWhat;
+    (void)nDepth;
+#endif
+}
+
 // ===========================================================================
 // ================================= 内部类 =================================
 // ===========================================================================
@@ -240,6 +288,10 @@ public:
         // 单消费者（一个任务通常只有一个 Get 等待者）：notify_one 即可；
         // 若需多线程等待同一任务，请改回 notify_all。
         m_cv.notify_one();
+
+        // 调试：打印回调触发调用栈（仅调试构建有效，发布构建为空操作）。
+        TraceInvoke("Complete: 触发续接");
+
         for (size_t i = 0; i < vecCbs.size(); ++i)
         {
             if (vecCbs[i])
@@ -282,6 +334,8 @@ public:
                     };
                 if (pExecutor->m_pPool->Submit(std::move(fnRun)))
                 {
+                    // 调试：打印「任务已就绪 → 回调即时投递」调用栈。
+                    TraceInvoke("AddContinuation: 已就绪回调投递");
                     return true;
                 }
             }
