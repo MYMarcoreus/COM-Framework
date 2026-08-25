@@ -27,8 +27,11 @@ public:
     // 启动工作线程。
     bool Start();
 
-    // 提交任务（线程安全）。
+    // 提交任务（线程安全，拷贝投递）。
     bool Submit(const CTask& task);
+
+    // 提交任务（线程安全，移动投递：避免 std::function 拷贝）。
+    bool Submit(CTask&& task);
 
     // 停止线程池，等待所有已提交任务执行完毕。
     void Stop();

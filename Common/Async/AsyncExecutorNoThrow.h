@@ -220,7 +220,9 @@ public:
             m_result = result;
             vecCbs.swap(m_vecContinuations);
         }
-        m_cv.notify_all();
+        // 单消费者（一个任务通常只有一个 Get 等待者）：notify_one 即可；
+        // 若需多线程等待同一任务，请改回 notify_all。
+        m_cv.notify_one();
         for (size_t i = 0; i < vecCbs.size(); ++i)
         {
             if (vecCbs[i])
@@ -260,7 +262,7 @@ public:
                     {
                         fnCallback(result);
                     };
-                if (pExecutor->m_pPool->Submit(fnRun))
+                if (pExecutor->m_pPool->Submit(std::move(fnRun)))
                 {
                     return true;
                 }
@@ -490,7 +492,7 @@ protected:
     template <typename U> friend class CTask; // 各 CTask<U> 互访（Then 跨实例）。
     friend class CAsyncExecutor;              // Submit 注入执行器句柄。
 
-    std::shared_ptr<detail::CExecutorHandle> m_pExecutor;   // 执行器句柄（续接投递用，可空）。
+    std::shared_ptr<detail::CExecutorHandle> m_pExecutor;   // 执行器句柄（续接投递用）。
     std::shared_ptr<detail::CTaskState<TValue>> m_pState;  // 任务共享状态。
 };
 
@@ -599,7 +601,7 @@ auto CTask<TValue>::Then(TFn f)
 
             // ④ 在执行器上执行；执行器不可用（未启动/已停止）→ 视为失败（kStopped）。
             if (pExecutor == nullptr || pExecutor->m_pPool == nullptr ||
-                pExecutor->m_bStopped || !pExecutor->m_pPool->Submit(fnRun))
+                pExecutor->m_bStopped || !pExecutor->m_pPool->Submit(std::move(fnRun)))
             {
                 pNextState->Complete(CTaskResult<TOut>::MakeNone(detail::kStopped));
             }
@@ -677,7 +679,7 @@ auto CTask<void>::Then(TFn f)
 
             // ③ 在执行器上执行；执行器不可用（未启动/已停止）→ 视为失败（kStopped）。
             if (pExecutor == nullptr || pExecutor->m_pPool == nullptr ||
-                pExecutor->m_bStopped || !pExecutor->m_pPool->Submit(fnRun))
+                pExecutor->m_bStopped || !pExecutor->m_pPool->Submit(std::move(fnRun)))
             {
                 pNextState->Complete(CTaskResult<TOut>::MakeNone(detail::kStopped));
             }
@@ -726,10 +728,10 @@ public:
     template <typename TFn>
     auto Submit(TFn f) -> CTask<typename detail::TInvokeResult<TFn>::type>;
 
-    /// 提交无返回值任务（fire-and-forget）。
+    /// 提交无返回值任务（fire-and-forget；按值接收，移动投递避免拷贝）。
     ///
     /// @return true 提交成功；false 执行器未启动。
-    bool Post(const std::function<void()>& fnTask);
+    bool Post(std::function<void()> fnTask);
 
     /// 停止并等待任务完成（优雅关闭）。
     void Stop();
@@ -764,7 +766,7 @@ auto CAsyncExecutor::Submit(TFn f)
                 pState->Complete(CTaskResult<TResult>::MakeNone(detail::kException));
             }
         };
-    if (pHandle->m_bStopped || !pHandle->m_pPool->Submit(fnRun))
+    if (pHandle->m_bStopped || !pHandle->m_pPool->Submit(std::move(fnRun)))
     {
         // 执行器不可用（未启动/已停止）：任务立即以无值完成。
         pState->Complete(CTaskResult<TResult>::MakeNone(detail::kNotStarted));

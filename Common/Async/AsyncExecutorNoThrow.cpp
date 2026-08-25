@@ -73,15 +73,15 @@ bool CAsyncExecutor::Start()
     return true;
 }
 
-/// @brief 提交无返回值任务。
-bool CAsyncExecutor::Post(const std::function<void()>& fnTask)
+/// @brief 提交无返回值任务（fire-and-forget，按值接收 + 移动投递避免拷贝）。
+bool CAsyncExecutor::Post(std::function<void()> fnTask)
 {
     std::shared_ptr<detail::CExecutorHandle> pHandle = m_pHandle;
     if (pHandle->m_bStopped)
     {
         return false;
     }
-    return pHandle->m_pPool->Submit(fnTask); // 未启动 → false（投递失败）。
+    return pHandle->m_pPool->Submit(std::move(fnTask)); // 移动投递；未启动 → false。
 }
 
 /// @brief 停止并等待任务完成（优雅关闭）。

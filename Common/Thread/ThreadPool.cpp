@@ -37,7 +37,7 @@ bool CThreadPool::Start()
     return true;
 }
 
-/// @brief 提交任务。
+/// @brief 提交任务（拷贝投递）。
 ///
 /// 将任务加入队列并唤醒一个空闲工作线程。
 bool CThreadPool::Submit(const CTask& fnTask)
@@ -53,6 +53,27 @@ bool CThreadPool::Submit(const CTask& fnTask)
             return false;
         }
         m_dequeTasks.push_back(fnTask);
+    }
+    m_condition.notify_one();
+    return true;
+}
+
+/// @brief 提交任务（移动投递，避免 std::function 拷贝）。
+///
+/// 将任务移动进队列并唤醒一个空闲工作线程。
+bool CThreadPool::Submit(CTask&& fnTask)
+{
+    if (!fnTask)
+    {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_bRunning || m_bStopping)
+        {
+            return false;
+        }
+        m_dequeTasks.push_back(std::move(fnTask));
     }
     m_condition.notify_one();
     return true;
