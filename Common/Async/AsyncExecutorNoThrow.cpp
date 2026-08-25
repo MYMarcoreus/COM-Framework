@@ -10,7 +10,7 @@ namespace nothrow {
 // ====================================================================
 
 /// @brief OnSuccess 实现（`CTask<void>` 特化）。
-bool CTask<void>::OnSuccess(std::function<void()> fnCallback)
+bool CTask<void>::OnSuccess(SuccessCallback fnCallback)
 {
     return m_pState->AddContinuation(this->m_pExecutor,
         [fnCallback](const CTaskResult<void>& result)
@@ -23,7 +23,7 @@ bool CTask<void>::OnSuccess(std::function<void()> fnCallback)
 }
 
 /// @brief OnNone 实现（`CTask<void>` 特化）。
-bool CTask<void>::OnNone(std::function<void(detail::CTaskEndReason)> fnCallback)
+bool CTask<void>::OnNone(NoneCallback fnCallback)
 {
     return m_pState->AddContinuation(this->m_pExecutor,
         [fnCallback](const CTaskResult<void>& result)
@@ -74,7 +74,7 @@ bool CAsyncExecutor::Start()
 }
 
 /// @brief 提交无返回值任务（fire-and-forget，按值接收 + 移动投递避免拷贝）。
-bool CAsyncExecutor::Post(std::function<void()> fnTask)
+bool CAsyncExecutor::Post(TaskCallback fnTask)
 {
     std::shared_ptr<detail::CExecutorHandle> pHandle = m_pHandle;
     if (pHandle->m_bStopped)

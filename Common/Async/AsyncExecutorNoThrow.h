@@ -527,13 +527,17 @@ public:
         -> CTask<typename detail::TaskTraits<
             typename detail::TInvokeResult<TFn, TValue>::type>::ValueType>;
 
+    /// 回调类型别名。
+    using SuccessCallback = std::function<void(const TValue&)>;        // 有值回调。
+    using NoneCallback = std::function<void(detail::CTaskEndReason)>;  // 无值回调。
+
     /// 注册成功回调（有值时触发）。
     /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
-    bool OnSuccess(std::function<void(const TValue&)> fnCallback);
+    bool OnSuccess(SuccessCallback fnCallback);
 
     /// 注册无值回调（链终止时触发；参数为终止原因，调试用）。
     /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
-    bool OnNone(std::function<void(detail::CTaskEndReason)> fnCallback);
+    bool OnNone(NoneCallback fnCallback);
 
 private:
     /// 创建空任务（仅供框架内部：Then/flatMap/Submit 构造下游）。
@@ -546,7 +550,7 @@ private:
 
 /// @brief OnSuccess 实现（非 void）。
 template <typename TValue>
-bool CTask<TValue>::OnSuccess(std::function<void(const TValue&)> fnCallback)
+bool CTask<TValue>::OnSuccess(SuccessCallback fnCallback)
 {
     return this->m_pState->AddContinuation(this->m_pExecutor,
         [fnCallback](const CTaskResult<TValue>& result)
@@ -560,7 +564,7 @@ bool CTask<TValue>::OnSuccess(std::function<void(const TValue&)> fnCallback)
 
 /// @brief OnNone 实现（非 void）。
 template <typename TValue>
-bool CTask<TValue>::OnNone(std::function<void(detail::CTaskEndReason)> fnCallback)
+bool CTask<TValue>::OnNone(NoneCallback fnCallback)
 {
     return this->m_pState->AddContinuation(this->m_pExecutor,
         [fnCallback](const CTaskResult<TValue>& result)
@@ -637,13 +641,17 @@ public:
         -> CTask<typename detail::TaskTraits<
             typename detail::TInvokeResult<TFn>::type>::ValueType>;
 
+    /// 回调类型别名。
+    using SuccessCallback = std::function<void()>;                      // 完成回调。
+    using NoneCallback = std::function<void(detail::CTaskEndReason)>;  // 无值回调。
+
     /// @brief 注册完成回调（无参数）。
     /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
-    bool OnSuccess(std::function<void()> fnCallback);
+    bool OnSuccess(SuccessCallback fnCallback);
 
     /// 注册无值回调（链终止时触发；参数为终止原因，调试用）。
     /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
-    bool OnNone(std::function<void(detail::CTaskEndReason)> fnCallback);
+    bool OnNone(NoneCallback fnCallback);
 
 private:
     /// 创建空任务（仅供框架内部：Then/flatMap/Submit 构造下游）。
@@ -736,10 +744,13 @@ public:
     template <typename TFn>
     auto Submit(TFn f) -> CTask<typename detail::TInvokeResult<TFn>::type>;
 
+    /// 无返回值任务类型（fire-and-forget）。
+    using TaskCallback = std::function<void()>;
+
     /// 提交无返回值任务（fire-and-forget；按值接收，移动投递避免拷贝）。
     ///
     /// @return true 提交成功；false 执行器未启动。
-    bool Post(std::function<void()> fnTask);
+    bool Post(TaskCallback fnTask);
 
     /// 停止并等待任务完成（优雅关闭）。
     void Stop();
