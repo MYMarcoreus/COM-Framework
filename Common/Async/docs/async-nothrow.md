@@ -299,7 +299,7 @@ exec.Submit([]() { return 3; })
     .Get();
 ```
 
-框架怎么识别"是普通值、任务、还是结果"？靠编译期类型判定（`detail::TransformKind` + `UnwrapTask`）：
+框架怎么识别"是普通值、任务、还是结果"？靠编译期类型判定（`detail::TaskTraits`，同时提供 `Kind` 分派与 `ValueType` 解包）：
 
 ```mermaid
 flowchart TD

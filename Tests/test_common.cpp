@@ -239,6 +239,38 @@ TEST(NothrowAsync_VoidThenChain)
     exec.Stop();
 }
 
+/// @brief void→void 变换：void 任务 Then 返回 void 变换，链继续（正常完成）。
+TEST(NothrowAsync_VoidToVoid)
+{
+    common::nothrow::CAsyncExecutor exec(1);
+    ASSERT_TRUE(exec.Start());
+
+    std::atomic<int> nSteps(0);
+    common::nothrow::CTaskResult<void> r =
+        exec.Submit([&nSteps]() { nSteps.fetch_add(1); })      // void
+            .Then([&nSteps]() { nSteps.fetch_add(1); })        // void → void
+            .Get();
+    ASSERT_TRUE(r.HasValue()); // void→void 链正常完成
+    ASSERT_EQ(nSteps.load(), 2);
+    exec.Stop();
+}
+
+/// @brief 非 void 上游变换返回 void：消费但不产出，下游为 void 完成。
+TEST(NothrowAsync_ValueToVoid)
+{
+    common::nothrow::CAsyncExecutor exec(1);
+    ASSERT_TRUE(exec.Start());
+
+    std::atomic<int> nConsumed(0);
+    common::nothrow::CTaskResult<void> r =
+        exec.Submit([]() { return 7; })                               // int
+            .Then([&nConsumed](int n) { nConsumed.fetch_add(n); })   // int → void
+            .Get();
+    ASSERT_TRUE(r.HasValue()); // 非 void → void 链正常完成
+    ASSERT_EQ(nConsumed.load(), 7);
+    exec.Stop();
+}
+
 /// @brief 并发多任务 + 多线程 Get。
 TEST(NothrowAsync_ConcurrentGet)
 {

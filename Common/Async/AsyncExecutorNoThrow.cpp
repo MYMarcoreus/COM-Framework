@@ -9,7 +9,7 @@ namespace nothrow {
 // 避免头文件中定义导致多 TU 重复定义（ODR 违规）。
 // ====================================================================
 
-/// @brief OnSuccess 实现（CTask&lt;void&gt; 特化）。
+/// @brief OnSuccess 实现（`CTask<void>` 特化）。
 void CTask<void>::OnSuccess(const std::function<void()>& fnCallback)
 {
     m_pState->AddContinuation(
@@ -22,7 +22,7 @@ void CTask<void>::OnSuccess(const std::function<void()>& fnCallback)
         });
 }
 
-/// @brief OnNone 实现（CTask&lt;void&gt; 特化）。
+/// @brief OnNone 实现（`CTask<void>` 特化）。
 void CTask<void>::OnNone(const std::function<void(detail::CTaskEndReason)>& fnCallback)
 {
     m_pState->AddContinuation(
