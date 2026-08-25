@@ -49,9 +49,9 @@
 namespace common {
 namespace nothrow {
 
-// 模板前向声明（detail 里的 TaskTraits / FlatMapForward 需要）。
+// 前向声明（detail 里的 TaskTraits / FlatMapForward / CTaskBase 需要）。
 template <typename TValue> class CTask;
-class CAsyncExecutor; // 前向声明（CTaskBase 的 friend）。
+class CAsyncExecutor; // 前向声明（CTaskBase / CTask 的 friend）。
 
 /// @brief 无值哨兵（对标 Rust None / C++ std::nullopt）。
 ///        变换函数返回它表示「无值 → 终止链」。
@@ -379,17 +379,15 @@ template <typename TNew, typename TFn, typename TValue>
 void RunTransform(const std::shared_ptr<CTaskState<TNew> >& pNextState,
                   TFn f, TValue valueCopied, std::integral_constant<int, 1>)
 {
-    CTask<TNew> inner;
     try
     {
-        inner = f(valueCopied);
+        CTask<TNew> inner = f(valueCopied); // 直接初始化（无需默认构造）。
+        FlatMapForward(pNextState, inner, typename std::is_same<TNew, void>::type());
     }
     catch (...)
     {
         pNextState->Complete(CTaskResult<TNew>::MakeNone(kException));
-        return;
     }
-    FlatMapForward(pNextState, inner, typename std::is_same<TNew, void>::type());
 }
 
 /// @brief 执行变换（有参，变换返回 CTaskResult）：结果原样转发（Some/None）。
@@ -428,17 +426,15 @@ template <typename TNew, typename TFn>
 void RunTransformVoid(const std::shared_ptr<CTaskState<TNew> >& pNextState,
                       TFn f, std::integral_constant<int, 1>)
 {
-    CTask<TNew> inner;
     try
     {
-        inner = f();
+        CTask<TNew> inner = f(); // 直接初始化（无需默认构造）。
+        FlatMapForward(pNextState, inner, typename std::is_same<TNew, void>::type());
     }
     catch (...)
     {
         pNextState->Complete(CTaskResult<TNew>::MakeNone(kException));
-        return;
     }
-    FlatMapForward(pNextState, inner, typename std::is_same<TNew, void>::type());
 }
 
 /// @brief 执行变换（无参，void 上游的 Then 用）：变换返回 CTaskResult。
@@ -477,7 +473,7 @@ protected:
     friend class CAsyncExecutor;              // Submit 注入执行器句柄。
 
     std::shared_ptr<detail::CExecutorHandle> m_pExecutor;   // 执行器句柄（续接投递用，可空）。
-    std::shared_ptr<detail::CTaskState<TValue> > m_pState;  // 任务共享状态。
+    std::shared_ptr<detail::CTaskState<TValue>> m_pState;  // 任务共享状态。
 };
 
 /// @brief 异步任务（Option 风格），支持链式调用（Then）。
@@ -485,17 +481,13 @@ protected:
 /// 由 CAsyncExecutor::Submit / CTask::FromResult 创建；
 /// 通过 Then 串联后续步骤，Get 阻塞获取最终结果（CTaskResult，不抛异常）。
 /// 上游无值（终止）时 Then 不再执行，终止原因传播给下游。
-/// 句柄、状态与 Get 由基类 detail::CTaskBase<TValue> 提供。
+/// 句柄、状态与 Get 由基类 CTaskBase<TValue> 提供。
 ///
 /// @tparam TValue 任务携带的值类型。
 template <typename TValue>
 class CTask : public CTaskBase<TValue>
 {
 public:
-    /// 创建空任务（仅供框架内部使用：Then/flatMap 构造下游）。
-    /// @warning 空任务永不完成，直接 Get() 将永久阻塞；请用 Submit / FromResult 创建。
-    CTask() {}
-
     /// 从已就绪结果创建任务（可启动链式调用）。
     static auto FromResult(const CTaskResult<TValue>& result) -> CTask<TValue>
     {
@@ -520,7 +512,90 @@ public:
 
     /// 注册无值回调（链终止时触发；参数为终止原因，调试用）。
     void OnNone(const std::function<void(detail::CTaskEndReason)>& fnCallback);
+
+private:
+    /// 创建空任务（仅供框架内部：Then/flatMap/Submit 构造下游）。
+    /// @warning 空任务永不完成，直接 Get() 将永久阻塞。
+    CTask() {}
+
+    template <typename U> friend class CTask; // 各 CTask<U> 互访（Then 构造下游）。
+    friend class CAsyncExecutor;              // Submit 构造任务。
 };
+
+/// @brief OnSuccess 实现（非 void）。
+template <typename TValue>
+void CTask<TValue>::OnSuccess(const std::function<void(const TValue&)>& fnCallback)
+{
+    this->m_pState->AddContinuation(
+        [fnCallback](const CTaskResult<TValue>& result)
+        {
+            if (result.HasValue() && fnCallback)
+            {
+                fnCallback(result.Value());
+            }
+        });
+}
+
+/// @brief OnNone 实现（非 void）。
+template <typename TValue>
+void CTask<TValue>::OnNone(const std::function<void(detail::CTaskEndReason)>& fnCallback)
+{
+    this->m_pState->AddContinuation(
+        [fnCallback](const CTaskResult<TValue>& result)
+        {
+            if (!result.HasValue() && fnCallback)
+            {
+                fnCallback(result.Reason());
+            }
+        });
+}
+
+/// @brief Then 实现（非 void 上游）：注册上游续接，有值则投递变换，无值则传播终止。
+template <typename TValue>
+template <typename TFn>
+auto CTask<TValue>::Then(TFn f)
+    -> CTask<typename detail::TaskTraits<
+        typename detail::TInvokeResult<TFn, TValue>::type>::ValueType>
+{
+    using TResult = typename detail::TInvokeResult<TFn, TValue>::type; // 变换原始返回类型。
+    using TOut = typename detail::TaskTraits<TResult>::ValueType;      // 解包后下游结果类型。
+    CTask<TOut> taskNext;
+    taskNext.m_pExecutor = this->m_pExecutor; // 沿用上游执行器句柄（续接投递用）。
+    auto pNextState = taskNext.m_pState;
+    auto pExecutor = this->m_pExecutor;
+
+    this->m_pState->AddContinuation(
+        [pExecutor, pNextState, f](const CTaskResult<TValue>& upResult)
+        {
+            // ① 上游无值：终止传播（原因透传）。
+            if (!upResult.HasValue())
+            {
+                pNextState->Complete(CTaskResult<TOut>::MakeNone(upResult.Reason()));
+                return;
+            }
+            // ② 拷贝值，供异步续接安全使用（不引用上游共享状态）。
+            TValue valueCopied = upResult.Value();
+            std::function<void()> fnRun = [pNextState, f, valueCopied]()
+            {
+                // ③ 执行变换：普通值 → 传播；CTask → flatMap；CTaskResult → 原样转发。
+                detail::RunTransform(pNextState, f, valueCopied, detail::TaskKind<TResult>());
+            };
+            // ④ 在执行器上执行；无执行器时内联执行。
+            if (pExecutor != nullptr && pExecutor->m_pPool != nullptr)
+            {
+                if (pExecutor->m_bStopped || !pExecutor->m_pPool->Submit(fnRun))
+                {
+                    pNextState->Complete(CTaskResult<TOut>::MakeNone(detail::kStopped));
+                }
+            }
+            else
+            {
+                fnRun();
+            }
+        });
+    return taskNext;
+}
+
 
 /// @brief 异步任务（Option 风格，TValue 为 void 的特化）。
 ///
@@ -530,10 +605,6 @@ template <>
 class CTask<void> : public CTaskBase<void>
 {
 public:
-    /// 创建空任务（仅供框架内部使用：Then/flatMap 构造下游）。
-    /// @warning 空任务永不完成，直接 Get() 将永久阻塞；请用 Submit / FromResult 创建。
-    CTask() {}
-
     /// 从已就绪结果创建任务。
     static auto FromResult(const CTaskResult<void>& result) -> CTask<void>
     {
@@ -553,9 +624,15 @@ public:
 
     /// 注册无值回调（链终止时触发；参数为终止原因，调试用）。
     void OnNone(const std::function<void(detail::CTaskEndReason)>& fnCallback);
+
+private:
+    /// 创建空任务（仅供框架内部：Then/flatMap/Submit 构造下游）。
+    /// @warning 空任务永不完成，直接 Get() 将永久阻塞。
+    CTask() {}
+
+    template <typename U> friend class CTask; // 各 CTask<U> 互访（Then 构造下游）。
+    friend class CAsyncExecutor;              // Submit 构造任务。
 };
-
-
 
 /// @brief Then 实现（void 上游）：上游完成则执行 fn()（无参），终止则传播。
 template <typename TFn>
@@ -599,33 +676,8 @@ auto CTask<void>::Then(TFn f)
     return taskNext;
 }
 
-/// @brief OnSuccess 实现（非 void）。
-template <typename TValue>
-void CTask<TValue>::OnSuccess(const std::function<void(const TValue&)>& fnCallback)
-{
-    this->m_pState->AddContinuation(
-        [fnCallback](const CTaskResult<TValue>& result)
-        {
-            if (result.HasValue() && fnCallback)
-            {
-                fnCallback(result.Value());
-            }
-        });
-}
 
-/// @brief OnNone 实现（非 void）。
-template <typename TValue>
-void CTask<TValue>::OnNone(const std::function<void(detail::CTaskEndReason)>& fnCallback)
-{
-    this->m_pState->AddContinuation(
-        [fnCallback](const CTaskResult<TValue>& result)
-        {
-            if (!result.HasValue() && fnCallback)
-            {
-                fnCallback(result.Reason());
-            }
-        });
-}
+
 
 
 
@@ -705,52 +757,6 @@ auto CAsyncExecutor::Submit(TFn f)
         pState->Complete(CTaskResult<TResult>::MakeNone(detail::kNotStarted));
     }
     return task;
-}
-
-/// @brief Then 实现（非 void 上游）：注册上游续接，有值则投递变换，无值则传播终止。
-template <typename TValue>
-template <typename TFn>
-auto CTask<TValue>::Then(TFn f)
-    -> CTask<typename detail::TaskTraits<
-        typename detail::TInvokeResult<TFn, TValue>::type>::ValueType>
-{
-    using TResult = typename detail::TInvokeResult<TFn, TValue>::type; // 变换原始返回类型。
-    using TOut = typename detail::TaskTraits<TResult>::ValueType;      // 解包后下游结果类型。
-    CTask<TOut> taskNext;
-    taskNext.m_pExecutor = this->m_pExecutor; // 沿用上游执行器句柄（续接投递用）。
-    auto pNextState = taskNext.m_pState;
-    auto pExecutor = this->m_pExecutor;
-
-    this->m_pState->AddContinuation(
-        [pExecutor, pNextState, f](const CTaskResult<TValue>& upResult)
-        {
-            // ① 上游无值：终止传播（原因透传）。
-            if (!upResult.HasValue())
-            {
-                pNextState->Complete(CTaskResult<TOut>::MakeNone(upResult.Reason()));
-                return;
-            }
-            // ② 拷贝值，供异步续接安全使用（不引用上游共享状态）。
-            TValue valueCopied = upResult.Value();
-            std::function<void()> fnRun = [pNextState, f, valueCopied]()
-            {
-                // ③ 执行变换：普通值 → 传播；CTask → flatMap；CTaskResult → 原样转发。
-                detail::RunTransform(pNextState, f, valueCopied, detail::TaskKind<TResult>());
-            };
-            // ④ 在执行器上执行；无执行器时内联执行。
-            if (pExecutor != nullptr && pExecutor->m_pPool != nullptr)
-            {
-                if (pExecutor->m_bStopped || !pExecutor->m_pPool->Submit(fnRun))
-                {
-                    pNextState->Complete(CTaskResult<TOut>::MakeNone(detail::kStopped));
-                }
-            }
-            else
-            {
-                fnRun();
-            }
-        });
-    return taskNext;
 }
 } // namespace nothrow
 } // namespace common

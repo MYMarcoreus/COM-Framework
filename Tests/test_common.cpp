@@ -305,7 +305,9 @@ TEST(NothrowAsync_ConcurrentGet)
 /// @brief 生命周期加固：执行器析构后，已投递任务仍安全完成（无悬垂指针）。
 TEST(NothrowAsync_LifetimeAfterDestroy)
 {
-    common::nothrow::CTask<int> task;
+    // 空任务构造已私有化，用 FromResult 创建占位任务。
+    common::nothrow::CTask<int> task =
+        common::nothrow::CTask<int>::FromResult(common::nothrow::CTaskResult<int>());
     {
         common::nothrow::CAsyncExecutor exec(1);
         ASSERT_TRUE(exec.Start());
