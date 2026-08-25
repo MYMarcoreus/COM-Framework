@@ -10,7 +10,7 @@ namespace nothrow {
 // ====================================================================
 
 /// @brief OnSuccess 实现（`CTask<void>` 特化）。
-bool CTask<void>::OnSuccess(const std::function<void()>& fnCallback)
+bool CTask<void>::OnSuccess(std::function<void()> fnCallback)
 {
     return m_pState->AddContinuation(this->m_pExecutor,
         [fnCallback](const CTaskResult<void>& result)
@@ -23,7 +23,7 @@ bool CTask<void>::OnSuccess(const std::function<void()>& fnCallback)
 }
 
 /// @brief OnNone 实现（`CTask<void>` 特化）。
-bool CTask<void>::OnNone(const std::function<void(detail::CTaskEndReason)>& fnCallback)
+bool CTask<void>::OnNone(std::function<void(detail::CTaskEndReason)> fnCallback)
 {
     return m_pState->AddContinuation(this->m_pExecutor,
         [fnCallback](const CTaskResult<void>& result)

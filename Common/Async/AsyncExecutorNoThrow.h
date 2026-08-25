@@ -226,6 +226,7 @@ public:
             m_result = result;
             vecCbs.swap(m_vecContinuations);
         }
+
         // 单消费者（一个任务通常只有一个 Get 等待者）：notify_one 即可；
         // 若需多线程等待同一任务，请改回 notify_all。
         m_cv.notify_one();
@@ -241,9 +242,9 @@ public:
     /// 注册续接；任务已就绪时投递到执行器异步执行（执行器不可用则视为调用失败）。
     ///
     /// @param pExecutor 执行器句柄（任务永远绑定执行器，恒非空）。
-    /// @param fnCallback 续接回调。
+    /// @param fnCallback 续接回调（按值接收，登记时移动存储避免拷贝）。
     /// @return true 续接已登记或已投递；false 任务已就绪但执行器不可用（回调不执行）。
-    bool AddContinuation(const std::shared_ptr<CExecutorHandle>& pExecutor, const Continuation& fnCallback)
+    bool AddContinuation(const std::shared_ptr<CExecutorHandle>& pExecutor, Continuation fnCallback)
     {
         bool bFireNow = false;
         CTaskResult<TValue> result;
@@ -251,12 +252,13 @@ public:
             std::lock_guard<std::mutex> lock(m_mutex);
             if (!m_bReady)
             {
-                m_vecContinuations.push_back(fnCallback);
+                m_vecContinuations.push_back(std::move(fnCallback));
                 return true; // 未就绪：已登记，任务完成时触发。
             }
             bFireNow = true;
             result = m_result;
         }
+
         if (bFireNow && fnCallback)
         {
             // 任务已就绪：投递到执行器线程池异步执行（与 JS/C# 一致）。
@@ -527,11 +529,11 @@ public:
 
     /// 注册成功回调（有值时触发）。
     /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
-    bool OnSuccess(const std::function<void(const TValue&)>& fnCallback);
+    bool OnSuccess(std::function<void(const TValue&)> fnCallback);
 
     /// 注册无值回调（链终止时触发；参数为终止原因，调试用）。
     /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
-    bool OnNone(const std::function<void(detail::CTaskEndReason)>& fnCallback);
+    bool OnNone(std::function<void(detail::CTaskEndReason)> fnCallback);
 
 private:
     /// 创建空任务（仅供框架内部：Then/flatMap/Submit 构造下游）。
@@ -544,7 +546,7 @@ private:
 
 /// @brief OnSuccess 实现（非 void）。
 template <typename TValue>
-bool CTask<TValue>::OnSuccess(const std::function<void(const TValue&)>& fnCallback)
+bool CTask<TValue>::OnSuccess(std::function<void(const TValue&)> fnCallback)
 {
     return this->m_pState->AddContinuation(this->m_pExecutor,
         [fnCallback](const CTaskResult<TValue>& result)
@@ -558,7 +560,7 @@ bool CTask<TValue>::OnSuccess(const std::function<void(const TValue&)>& fnCallba
 
 /// @brief OnNone 实现（非 void）。
 template <typename TValue>
-bool CTask<TValue>::OnNone(const std::function<void(detail::CTaskEndReason)>& fnCallback)
+bool CTask<TValue>::OnNone(std::function<void(detail::CTaskEndReason)> fnCallback)
 {
     return this->m_pState->AddContinuation(this->m_pExecutor,
         [fnCallback](const CTaskResult<TValue>& result)
@@ -637,11 +639,11 @@ public:
 
     /// @brief 注册完成回调（无参数）。
     /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
-    bool OnSuccess(const std::function<void()>& fnCallback);
+    bool OnSuccess(std::function<void()> fnCallback);
 
     /// 注册无值回调（链终止时触发；参数为终止原因，调试用）。
     /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
-    bool OnNone(const std::function<void(detail::CTaskEndReason)>& fnCallback);
+    bool OnNone(std::function<void(detail::CTaskEndReason)> fnCallback);
 
 private:
     /// 创建空任务（仅供框架内部：Then/flatMap/Submit 构造下游）。
