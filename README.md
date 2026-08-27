@@ -160,27 +160,34 @@ bash build-all.sh # 构建 Common → ServerCore → LogServer → Demo → Serv
 
 ### 2. 构建与运行
 
+统一构建入口 `./build.sh`（自动发现所有含 `Linux/Makefile` 的项目，新项目只需新建 `<名称>/Linux/Makefile` 即可自动纳入）：
+
 ```bash
-# 工作区统一构建（按依赖顺序：Common → ServerCore → LogServer → Demo → ServerA → Tests）
-bash build-all.sh
-
-# 生成 compile_commands.json（供 clangd）
-bash generate-compiledb.sh
-
-# 单独构建某个项目
-make -C ServerCore/Linux all
-make -C Demo/Linux all
-
-# 运行 Demo 服务器与客户端
-./build/demo 9000
-./build/demo_client 9000
+./build.sh                    # 发布构建：所有项目 + examples（一键）
+./build.sh --debug            # 调试构建（-O0，含 examples，供 VS Code 调试）
+./build.sh --compiledb        # 生成所有项目 + examples 的 compile_commands.json（clangd）
+./build.sh --tests            # 构建并运行单元测试
+./build.sh --clean            # 清理所有构建产物
+./build.sh --list             # 列出自动发现的项目
+./build.sh Common ServerCore  # 只构建指定项目
+./build.sh --examples         # 构建 examples（可配合指定项目，如 ./build.sh --debug --examples Common）
 ```
 
-也可以在 VS Code 中运行任务（`Tasks: Run Build Task`）：
+也可用根 `Makefile` 快捷方式：`make` / `make debug` / `make compiledb` / `make run` / `make tests` / `make clean`（等价于调用 `./build.sh`）。
 
-- **build (all projects)** —— `build-all.sh`
-- **generate compile_commands (all projects)** —— `generate-compiledb.sh`
-- **run demo server** / **run demo client**
+> 旧脚本 `build-all.sh` / `generate-compiledb.sh` / `build-debug.sh` 已改为兼容包装（内部转发到 `./build.sh`）。
+
+在 VS Code 中可通过任务（`Tasks: Run Build Task`）一键执行：
+
+- **build all (release)** / **build all (debug)** —— 全量构建
+- **build (select project)** —— 运行时输入要构建的项目（支持新项目）
+- **build debug (Common + examples)** —— VS Code 调试前的构建（`launch.json` 的 `preLaunchTask`）
+- **generate compile_commands** —— 生成 compile_commands.json
+- **refresh clangd** —— 重新生成编译数据库并重启 clangd
+- **run examples** / **run tests** / **run demo server** / **run demo client**
+- **clean all**
+
+运行 Demo 服务器与客户端：`./build/demo 9000`、`./build/demo_client 9000`。
 
 ### 3. 宿主机（无 sudo）生成 compile_commands.json
 

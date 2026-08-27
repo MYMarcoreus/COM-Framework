@@ -2,9 +2,9 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "build (all projects)",
+            "label": "build all (release)",
             "type": "shell",
-            "command": "make",
+            "command": "./build.sh",
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -18,9 +18,83 @@
             }
         },
         {
-            "label": "generate compile_commands (all projects)",
+            "label": "build all (debug)",
             "type": "shell",
-            "command": "bash generate-compiledb.sh",
+            "command": "./build.sh --debug",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "build (select project)",
+            "type": "shell",
+            "command": "./build.sh ${input:project}",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "build debug (Common + examples)",
+            "type": "shell",
+            "command": "./build.sh --debug --examples Common",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "run examples",
+            "type": "shell",
+            "command": "./build.sh --examples && ./build/examples/nothrow_demo",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "run tests",
+            "type": "shell",
+            "command": "./build.sh --tests",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "generate compile_commands",
+            "type": "shell",
+            "command": "./build.sh --compiledb",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "refresh clangd",
+            "dependsOn": [
+                "generate compile_commands"
+            ],
+            "type": "command",
+            "command": "clangd.restart"
+        },
+        {
+            "label": "clean all",
+            "type": "shell",
+            "command": "./build.sh --clean",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
@@ -30,7 +104,7 @@
         {
             "label": "run demo server",
             "type": "shell",
-            "command": "./build/demo",
+            "command": "./build.sh Demo && ./build/demo",
             "group": {
                 "kind": "test",
                 "isDefault": true
@@ -44,52 +118,20 @@
         {
             "label": "run demo client",
             "type": "shell",
-            "command": "./build/demo_client",
+            "command": "./build.sh Demo && ./build/demo_client",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
                 "panel": "shared"
             }
-        },
+        }
+    ],
+    "inputs": [
         {
-            "label": "build examples",
-            "type": "shell",
-            "command": "make",
-            "options": {
-                "cwd": "${workspaceFolder}/examples"
-            },
-            "problemMatcher": [
-                "$gcc"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            }
-        },
-        {
-            "label": "build examples (debug)",
-            "type": "shell",
-            "command": "bash -c 'make -C Common/Linux clean && make -C Common/Linux debug && make -C examples clean && make -C examples CXXFLAGS=\"-std=c++11 -Wall -Wextra -O0 -g -pthread\"'",
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "problemMatcher": [
-                "$gcc"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            }
-        },
-        {
-            "label": "clean (all projects)",
-            "type": "shell",
-            "command": "bash -c 'for p in Common ServerCore Demo; do make -C \"$PWD/$p/Linux\" clean; done'",
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            }
+            "id": "project",
+            "type": "promptString",
+            "description": "输入要构建的项目名（空格分隔，如：Common ServerCore）",
+            "default": "Common"
         }
     ]
 }
