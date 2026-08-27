@@ -11,8 +11,7 @@
 
 ```text
 COM-Framework/                  # 工作区根目录（可存放多个项目）
-├── build-all.sh                 # 工作区统一构建脚本（按依赖顺序构建所有项目）
-├── generate-compiledb.sh        # 生成所有项目的 compile_commands.json（供 clangd）
+├── build.sh                     # 工作区统一构建脚本（构建 / 编译数据库 / 测试 / 清理）
 ├── .devcontainer/
 │   ├── devcontainer.json        # VS Code 开发容器配置
 │   └── Dockerfile               # 工具链：g++ / make / bear / compiledb / clangd
@@ -152,8 +151,8 @@ Demo 还验证**事件解耦通信**：`DemoNetworkModule` 启动/停止时发�
 容器基于 `ubuntu:24.04`，提供 gcc/g++、make、bear、compiledb、clangd/clang、git、gdb，并以非 root 用户 `ubuntu`（uid=1000，与宿主机一致）运行，避免容器内构建产物在宿主机上出现 root 属主问题。创建完成后 `postCreateCommand` 自动执行：
 
 ```bash
-bash generate-compiledb.sh   # 生成所有项目的 compile_commands.json（供 clangd）
-bash build-all.sh # 构建 Common → ServerCore → LogServer → Demo → ServerA → Tests
+./build.sh --compiledb       # 生成所有项目的 compile_commands.json（供 clangd）
+./build.sh                   # 构建 Common → ServerCore → LogServer → Demo → ServerA → Tests
 ```
 
 > 容器内 clangd 直接使用容器路径（`/workspace/...`）的 `compile_commands.json`，无需路径改写。
@@ -182,7 +181,7 @@ build/debug/       —— 调试产物（-O0）
 
 也可用根 `Makefile` 快捷方式：`make` / `make debug` / `make compiledb` / `make run` / `make tests` / `make clean`（等价于调用 `./build.sh`）。
 
-> 旧脚本 `build-all.sh` / `generate-compiledb.sh` / `build-debug.sh` 已改为兼容包装（内部转发到 `./build.sh`）。
+> `build.sh` 是唯一构建入口（整合了原 `build-all.sh` / `build-debug.sh` / `generate-compiledb.sh`）。
 
 在 VS Code 中可通过任务（`Tasks: Run Build Task`）一键执行：
 
@@ -205,10 +204,10 @@ build/debug/       —— 调试产物（-O0）
 
 ```bash
 bash .tools/setup_tools.sh   # 在工作区 .tools/venv 中安装 compiledb
-bash generate-compiledb.sh
+./build.sh --compiledb
 ```
 
-`generate-compiledb.sh` 会自动优先使用系统 `compiledb`，否则回退到 `.tools/venv` 中的版本。
+`./build.sh --compiledb` 会自动优先使用系统 `compiledb`，否则回退到 `.tools/venv` 中的版本。
 
 ### 4. git 子模块（第三方库）
 
@@ -234,8 +233,8 @@ git commit -m "升级 asio 到 <新标签>"
 
 | 命令 | 说明 |
 | --- | --- |
-| `bash build-all.sh` | 构建所有项目 |
-| `bash generate-compiledb.sh` | 生成所有项目的 compile_commands.json |
+| `./build.sh` | 构建所有项目 |
+| `./build.sh --compiledb` | 生成所有项目的 compile_commands.json |
 | `make -C <项目>/Linux all` | 构建单个项目 |
 | `make -C <项目>/Linux debug` | 调试构建（-O0） |
 | `make -C <项目>/Linux compiledb` | 用 compiledb 生成编译数据库 |

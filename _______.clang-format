@@ -1,0 +1,52 @@
+# ====================================================================
+# COM-Framework clang-format 配置
+#
+# 遵循项目 C++11 开发规范：
+#   - 4 空格缩进，不使用 Tab；
+#   - Allman 花括号风格（函数/类/控制语句花括号换行，namespace 保持 attach）；
+#   - lambda 体按外层作用域缩进（LambdaBodyIndentation: OuterScope）。
+#
+# 注意：LambdaBodyIndentation 需要 clang-format >= 13
+#       （clangd / clang-format 13 及以上版本支持）。
+# ====================================================================
+
+BasedOnStyle: Google
+
+# ---- 缩进 ----
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+NamespaceIndentation: None
+
+# ---- 列宽 ----
+ColumnLimit: 100
+
+# ---- 花括号（Custom 精确控制）----
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterControlStatement: Always
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: false
+  AfterStruct: true
+  AfterUnion: true
+  AfterExternBlock: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: true
+  BeforeWhile: false
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: true
+  SplitEmptyNamespace: true
+
+# ---- lambda ----
+# lambda 体按外层作用域缩进（把 lambda 当作外层作用域的普通代码块）。
+# 对比：
+#   Signature  : lambda 体相对 lambda 签名（第一个 '['）再缩进一层；
+#   OuterScope : lambda 体相对 lambda 所在外层作用域再缩进一层（本项目采用）。
+LambdaBodyIndentation: OuterScope
+# 短 lambda 允许单行（如 [this]() { return m_bReady; }）
+AllowShortLambdasOnASingleLine: All

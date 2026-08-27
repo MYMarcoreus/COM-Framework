@@ -55,10 +55,9 @@ Dockerfile
 1. `devcontainer.json`
 2. `Dockerfile`
 3. Makefile
-4. `generate-compiledb.sh`
-5. `build-all.sh`
-6. 编译器版本
-7. 依赖库
+4. `build.sh`
+5. 编译器版本
+6. 依赖库
 
 ---
 
@@ -70,7 +69,7 @@ Dockerfile
 
 ```text
 Workspace/
-├── build-all.sh
+├── build.sh
 ├── .devcontainer/
 │   ├── devcontainer.json
 │   └── Dockerfile

@@ -88,7 +88,7 @@ tail -25 Demo/demo.log
 修改代码后重新生成 `compile_commands.json` 供 clangd：
 
 ```bash
-bash generate-compiledb.sh
+./build.sh --compiledb
 ```
 
 ## 陷阱
