@@ -179,9 +179,7 @@ build/release/     —— 发布产物（demo、demo_client、logserver、server
 build/debug/       —— 调试产物（-O0）
 ```
 
-也可用根 `Makefile` 快捷方式：`make` / `make debug` / `make compiledb` / `make run` / `make tests` / `make clean`（等价于调用 `./build.sh`）。
-
-> `build.sh` 是唯一构建入口（整合了原 `build-all.sh` / `build-debug.sh` / `generate-compiledb.sh`）。
+> `build.sh` 是唯一构建入口（整合了原 `build-all.sh` / `build-debug.sh` / `generate-compiledb.sh` 与根 `Makefile`）。项目级构建用各项目 `Linux/Makefile`（由 `build.sh` 调用）。
 
 在 VS Code 中可通过任务（`Tasks: Run Build Task`）一键执行：
 
