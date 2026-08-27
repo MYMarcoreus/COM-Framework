@@ -174,7 +174,7 @@ Demo 还验证**事件解耦通信**：`DemoNetworkModule` 启动/停止时发�
 ./build.sh --clean            # 清理所有构建产物
 ./build.sh --list             # 列出自动发现的项目
 ./build.sh Common ServerCore  # 只构建指定项目
-./build.sh --examples         # 构建 examples（可配合指定项目，如 ./build.sh --debug --examples Common）
+./build.sh examples           # 只构建 examples（examples 与服务器项目同为普通项目，统一自动发现）
 ```
 
 **构建产物按模式分目录**（release 与 debug 隔离，可同时存在、互不干扰）：

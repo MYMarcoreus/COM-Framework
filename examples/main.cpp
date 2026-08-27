@@ -5,7 +5,7 @@
 // 项目结构参考标准服务器项目：main.cpp（入口）+ Linux/Makefile（构建配置）。
 // 构建与运行：
 //   cd examples/Linux && make run            # 构建并运行（release）
-//   ./build.sh --examples                    # 或经统一构建脚本（build.sh）
+//   ./build.sh examples                      # 或经统一构建脚本（examples 为普通项目）
 //
 // 用法速览（每个函数演示一类用法）：
 //   ① Submit+Get            最基本：提交任务、阻塞取结果

@@ -53,7 +53,7 @@
         {
             "label": "build debug (Common + examples)",
             "type": "shell",
-            "command": "./build.sh --debug --examples Common",
+            "command": "./build.sh --debug Common examples",
             "dependsOn": [
                 "generate compile_commands"
             ],
@@ -68,7 +68,7 @@
         {
             "label": "build examples (release)",
             "type": "shell",
-            "command": "./build.sh --examples",
+            "command": "./build.sh examples",
             "dependsOn": [
                 "generate compile_commands"
             ],
