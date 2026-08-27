@@ -108,11 +108,9 @@
         },
         {
             "label": "debug nothrow_demo (debug build)",
-            "type": "command",
-            "command": "workbench.action.debug.start",
-            "args": {
-                "configuration": "Debug nothrow_demo (debug build)"
-            }
+            "type": "debug",
+            "request": "launch",
+            "name": "Debug nothrow_demo (debug build)"
         },
         {
             "label": "run tests (terminal)",
