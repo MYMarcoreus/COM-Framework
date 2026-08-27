@@ -60,7 +60,9 @@ void DemoSubmitAndGet()
     no::CAsyncExecutor exec(2);
     ASSERT(exec.Start());
 
-    no::CTaskResult<int> r = exec.Submit([]() { return 42; }).Get();
+    // NOTHROW_TAG（= __PRETTY_FUNCTION__）：调试构建（make debug）下，
+    // 回调栈追踪会输出 task=<注册点函数名>，便于定位当前任务/回调的注册位置。
+    no::CTaskResult<int> r = exec.Submit([]() { return 42; }, NOTHROW_TAG).Get();
     ASSERT(r.HasValue());      // 有值
     ASSERT(r.Value() == 42);   // 结果正确
     std::printf("① Submit+Get: %d\n", r.Value());

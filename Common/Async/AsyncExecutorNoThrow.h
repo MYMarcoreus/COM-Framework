@@ -27,6 +27,15 @@
     #include <thread>
 #endif
 
+// 任务标签宏：调用 Submit/Then 时传入 __PRETTY_FUNCTION__（注册点函数名），
+// 便于调试时定位「当前任务/回调是哪个函数注册的」。
+// 仅调试构建有意义（存标签 + TraceInvoke 打印）；发布构建退化为 NULL，零开销。
+#if defined(NOTHROW_DEBUG_TRACE)
+    #define NOTHROW_TAG __PRETTY_FUNCTION__
+#else
+    #define NOTHROW_TAG NULL
+#endif
+
 // ====================================================================
 // 无异常版异步框架（Option 风格：有值 / 无值）
 // 风格类似 Rust Option / C++ std::optional
@@ -212,7 +221,7 @@ namespace detail {
 ///
 /// @param szWhat 触发场景描述（如「Complete 触发续接」）。
 /// @param nDepth 打印最近 N 帧（<0 表示全部）。
-inline void TraceInvoke(const char* szWhat, int nDepth = -1)
+inline void TraceInvoke(const char* szWhat, const char* szTag = NULL, int nDepth = -1)
 {
 #if defined(NOTHROW_DEBUG_TRACE)
     static const int kMaxFrames = 32;
@@ -221,8 +230,9 @@ inline void TraceInvoke(const char* szWhat, int nDepth = -1)
     char** ppSymbols = backtrace_symbols(apBuffer, nFrames);
     unsigned long nThreadId = static_cast<unsigned long>(
         std::hash<std::thread::id>()(std::this_thread::get_id()));
-    std::fprintf(stderr, "\n[nothrow::trace] %s | thread=%lu | frames=%d\n",
-                 szWhat, nThreadId, nFrames);
+    std::fprintf(stderr, "\n[nothrow::trace] %s | task=%s | thread=%lu | frames=%d\n",
+                 szWhat, (szTag != NULL && szTag[0] != '\0') ? szTag : "<unnamed>",
+                 nThreadId, nFrames);
     int nStart = 0;
     if (nDepth >= 0 && nDepth < nFrames)
     {
@@ -236,6 +246,7 @@ inline void TraceInvoke(const char* szWhat, int nDepth = -1)
     std::free(ppSymbols);
 #else
     (void)szWhat;
+    (void)szTag;
     (void)nDepth;
 #endif
 }
@@ -264,7 +275,11 @@ public:
     using Continuation = std::function<void(const CTaskResult<TValue>&)>;
 
     /// 创建状态（初始未就绪）。
-    CTaskState() : m_bReady(false) {}
+    CTaskState() : m_bReady(false)
+#if defined(NOTHROW_DEBUG_TRACE)
+        , m_pszTag("")
+#endif
+    {}
 
     /// @brief 完成并触发续接（锁外调用续接，防重入死锁）。
     ///
@@ -289,8 +304,8 @@ public:
         // 若需多线程等待同一任务，请改回 notify_all。
         m_cv.notify_one();
 
-        // 调试：打印回调触发调用栈（仅调试构建有效，发布构建为空操作）。
-        TraceInvoke("Complete: 触发续接");
+        // 调试：打印回调触发调用栈与任务标签（仅调试构建有效，发布构建为空操作）。
+        TraceInvoke("Complete: 触发续接", Tag());
 
         for (size_t i = 0; i < vecCbs.size(); ++i)
         {
@@ -334,8 +349,8 @@ public:
                     };
                 if (pExecutor->m_pPool->Submit(std::move(fnRun)))
                 {
-                    // 调试：打印「任务已就绪 → 回调即时投递」调用栈。
-                    TraceInvoke("AddContinuation: 已就绪回调投递");
+                    // 调试：打印「任务已就绪 → 回调即时投递」调用栈与任务标签。
+                    TraceInvoke("AddContinuation: 已就绪回调投递", Tag());
                     return true;
                 }
             }
@@ -354,12 +369,39 @@ public:
         return m_result;
     }
 
+    /// @brief 设置任务调试标签（任务/续接注册点的函数名）。
+    ///
+    /// 供调试定位「当前任务回调是哪个函数注册的」；发布构建为空操作。
+    ///
+    /// @param pszTag 标签（建议传 __PRETTY_FUNCTION__ / NOTHROW_TAG）。
+    void SetTag(const char* pszTag)
+    {
+#if defined(NOTHROW_DEBUG_TRACE)
+        m_pszTag = (pszTag != NULL) ? pszTag : "";
+#else
+        (void)pszTag;
+#endif
+    }
+
+    /// @brief 获取任务调试标签（发布构建恒为空串）。
+    const char* Tag() const
+    {
+#if defined(NOTHROW_DEBUG_TRACE)
+        return m_pszTag;
+#else
+        return "";
+#endif
+    }
+
 private:
     std::mutex m_mutex;                  // 保护状态与续接列表。
     std::condition_variable m_cv;        // 通知 Wait 等待者。
     std::vector<Continuation> m_vecContinuations; // 续接列表（未完成时）。
     bool m_bReady;                       // 是否已完成。
     CTaskResult<TValue> m_result;        // 最终结果（完成后有效）。
+#if defined(NOTHROW_DEBUG_TRACE)
+    const char* m_pszTag;                // 任务/续接注册点（调用方函数名），仅调试。
+#endif
 };
 
 
@@ -604,9 +646,10 @@ public:
     ///  - `CTask<TNew>`：扁平化（flatMap），内部任务完成后转发其结果。
     ///
     /// @param fnTransform 变换函数。
+    /// @param szTag 下游任务调试标签（可选，建议传 NOTHROW_TAG 定位注册点）。
     /// @return 下游任务（延续链）。
     template <typename TFn>
-    auto Then(TFn fnTransform)
+    auto Then(TFn fnTransform, const char* szTag = NULL)
         -> CTask<typename detail::TaskTraits<
             typename detail::TInvokeResult<TFn, TValue>::type>::ValueType>;
 
@@ -666,7 +709,7 @@ bool CTask<TValue>::OnNone(NoneCallback fnCallback)
 /// @brief Then 实现（非 void 上游）：注册上游续接，有值则投递变换，无值则传播终止。
 template <typename TValue>
 template <typename TFn>
-auto CTask<TValue>::Then(TFn f)
+auto CTask<TValue>::Then(TFn f, const char* szTag /* = NULL */)
     -> CTask<typename detail::TaskTraits<
         typename detail::TInvokeResult<TFn, TValue>::type>::ValueType>
 {
@@ -674,6 +717,7 @@ auto CTask<TValue>::Then(TFn f)
     using TOut = typename detail::TaskTraits<TResult>::ValueType;      // 解包后下游结果类型。
     CTask<TOut> taskNext;
     taskNext.m_pExecutor = this->m_pExecutor; // 沿用上游执行器句柄（续接投递用）。
+    taskNext.m_pState->SetTag(szTag);         // 记录下游任务调试标签（发布构建为空操作）。
     auto pNextState = taskNext.m_pState;
     auto pExecutor = this->m_pExecutor;
 
@@ -725,9 +769,10 @@ public:
     /// @brief 链式续接：上游完成时执行 fnTransform()（无参数），上游终止则传播。
     ///
     /// @param fnTransform 变换函数（无参数）。
+    /// @param szTag 下游任务调试标签（可选，建议传 NOTHROW_TAG 定位注册点）。
     /// @return 下游任务（延续链）。
     template <typename TFn>
-    auto Then(TFn fnTransform)
+    auto Then(TFn fnTransform, const char* szTag = NULL)
         -> CTask<typename detail::TaskTraits<
             typename detail::TInvokeResult<TFn>::type>::ValueType>;
 
@@ -758,7 +803,7 @@ private:
 
 /// @brief Then 实现（void 上游）：上游完成则执行 fn()（无参），终止则传播。
 template <typename TFn>
-auto CTask<void>::Then(TFn f)
+auto CTask<void>::Then(TFn f, const char* szTag /* = NULL */)
     -> CTask<typename detail::TaskTraits<
         typename detail::TInvokeResult<TFn>::type>::ValueType>
 {
@@ -766,6 +811,7 @@ auto CTask<void>::Then(TFn f)
     using TOut = typename detail::TaskTraits<TResult>::ValueType;
     CTask<TOut> taskNext;
     taskNext.m_pExecutor = this->m_pExecutor;
+    taskNext.m_pState->SetTag(szTag); // 记录下游任务调试标签（发布构建为空操作）。
     auto pNextState = taskNext.m_pState;
     auto pExecutor = this->m_pExecutor;
 
@@ -836,9 +882,10 @@ public:
     ///
     /// @tparam TFn 任务函数类型（返回值作为任务结果）。
     /// @param f 任务函数（在工作线程上执行）。
+    /// @param szTag 任务调试标签（可选，建议传 NOTHROW_TAG 定位注册点）。
     /// @return 关联本执行器的任务；执行器未启动时任务立即以无值（kNotStarted）完成。
     template <typename TFn>
-    auto Submit(TFn f) -> CTask<typename detail::TInvokeResult<TFn>::type>;
+    auto Submit(TFn f, const char* szTag = NULL) -> CTask<typename detail::TInvokeResult<TFn>::type>;
 
     /// 无返回值任务类型（fire-and-forget）。
     using TaskCallback = std::function<void()>;
@@ -862,12 +909,13 @@ private:
 
 /// @brief Submit 实现：把任务函数投递到线程池执行。
 template <typename TFn>
-auto CAsyncExecutor::Submit(TFn f)
+auto CAsyncExecutor::Submit(TFn f, const char* szTag /* = NULL */)
     -> CTask<typename detail::TInvokeResult<TFn>::type>
 {
     using TResult = typename detail::TInvokeResult<TFn>::type; // 任务结果类型。
     CTask<TResult> task;
     task.m_pExecutor = m_pHandle; // 共享执行器句柄（任务链持有时线程池不释放）。
+    task.m_pState->SetTag(szTag); // 记录任务调试标签（发布构建为空操作）。
     auto pState = task.m_pState;
     auto pHandle = m_pHandle;
     std::function<void()> fnRun = [pState, f]()
