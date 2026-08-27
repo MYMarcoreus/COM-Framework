@@ -107,9 +107,20 @@
             }
         },
         {
-            "label": "debug nothrow_demo (VS Code)",
+            "label": "debug nothrow_demo (debug build)",
             "type": "command",
-            "command": "workbench.action.debug.selectAndStartDebugging"
+            "command": "workbench.action.debug.start",
+            "args": {
+                "configuration": "Debug nothrow_demo (debug build)"
+            }
+        },
+        {
+            "label": "debug nothrow_demo (release build)",
+            "type": "command",
+            "command": "workbench.action.debug.start",
+            "args": {
+                "configuration": "Debug nothrow_demo (release build)"
+            }
         },
         {
             "label": "run tests (terminal)",
