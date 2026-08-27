@@ -20,7 +20,8 @@ set -euo pipefail
 #           3=构建模式 debug/release（可选；省略则菜单选择，默认 debug）。
 #   - debug 无法在终端任务里直接启动 VS Code 调试器，只负责构建 debug 版，
 #     实际调试请按 F5（见 .vscode/launch.json）。
-#   - 新增可执行项目时，在 executable_of() 中补充「项目 → 可执行文件」映射。
+#   - 可执行项目判定：项目根目录存在 main.cpp（不区分大小写，main.cpp/Main.cpp 等）；
+#     可执行名约定为项目名小写（如 Demo→demo、examples→examples）。
 # ====================================================================
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -30,16 +31,20 @@ MODE_ARG="${3:-}"   # 可选：构建模式 debug|release|--debug|--release
 
 cd "$ROOT"
 
-# —— 项目 → 可执行文件（相对 build/<mode>/）；空表示纯库项目（无可执行文件）——
+# —— 可执行项目判定：可构建（在自动发现列表）+ 项目根有 main.cpp（不区分大小写）——
+is_executable_project() {
+    local dir="$ROOT/$1"
+    [[ -d "$dir" ]] || return 1
+    # 项目根目录查找 main.cpp（-iname 不区分大小写）
+    find "$dir" -maxdepth 1 -iname 'main.cpp' -print -quit | grep -q .
+}
+
+# —— 可执行文件（相对 build/<mode>/）；非可执行项目返回空 ——
+# 约定：可执行名 = 项目名小写（Demo→demo、ServerA→servera、examples→examples）
 executable_of() {
-    case "$1" in
-        Demo)      echo "demo" ;;
-        ServerA)   echo "servera" ;;
-        LogServer) echo "logserver" ;;
-        Tests)     echo "tests" ;;
-        examples)  echo "examples/examples" ;;
-        *)         echo "" ;;   # Common / ServerCore 等静态库
-    esac
+    if is_executable_project "$1"; then
+        echo "$1" | tr '[:upper:]' '[:lower:]'
+    fi
 }
 
 # —— 交互式选择（read 实现；空输入用默认序号；EOF 视为取消）——

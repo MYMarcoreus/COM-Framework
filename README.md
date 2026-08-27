@@ -197,7 +197,7 @@ build/debug/       —— 调试产物（-O0）
 - **run examples (terminal)** / **run tests (terminal)** / **run demo server (terminal)** / **run demo client (terminal)** —— 普通终端运行（release 产物）
 - **clean all**
 
-**VS Code 调试**（仅 debug 构建，在调试器中运行，支持断点 / 变量 / 调用栈）：`launch.json` 提供配置 `Debug examples (debug build)`（`build/debug/examples/examples`）。启动方式：按 **F5** 或 **Run and Debug** 面板选择该配置（`tasks.json` 不提供调试任务，调试统一由 `launch.json` 驱动）。启动时会自动先执行 `preLaunchTask`（`build debug (Common + examples)`）完成调试构建。
+**VS Code 调试**（仅 debug 构建，在调试器中运行，支持断点 / 变量 / 调用栈）：`launch.json` 提供配置 `Debug examples (debug build)`（`build/debug/examples`）。启动方式：按 **F5** 或 **Run and Debug** 面板选择该配置（`tasks.json` 不提供调试任务，调试统一由 `launch.json` 驱动）。启动时会自动先执行 `preLaunchTask`（`build debug (Common + examples)`）完成调试构建。
 
 运行 Demo 服务器与客户端：`./build/release/demo 9000`、`./build/release/demo_client 9000`（调试版用 `./build/debug/...`）。
 

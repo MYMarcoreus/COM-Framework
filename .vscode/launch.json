@@ -5,7 +5,7 @@
             "name": "Debug examples (debug build)",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug/examples/examples",
+            "program": "${workspaceFolder}/build/debug/examples",
             "args": [],
             "stopOnEntry": false,
             "cwd": "${workspaceFolder}",

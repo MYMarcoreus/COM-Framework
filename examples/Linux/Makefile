@@ -1,7 +1,7 @@
 # ------------------------------------------------------------------
 # examples 示例项目 Makefile（参考标准服务器项目结构）
 #   - 项目结构：<项目>/main.cpp（入口）+ <项目>/Linux/Makefile（构建配置）
-#   - 生成 build/<模式>/examples/examples（可执行文件）
+#   - 生成 build/<模式>/examples（可执行文件）
 #   - 直接编译所需 Common 源码（AsyncExecutorNoThrow / ThreadPool），不依赖 libCommon.a
 # 可用目标:
 #   make            —— 构建 examples
@@ -24,7 +24,7 @@ PROJECT    := $(notdir $(ROOT))
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -pthread
-# 构建模式（release / debug）：产物分目录 build/<模式>/examples（由 build.sh 传入）
+# 构建模式（release / debug）：产物分目录 build/<模式>/（由 build.sh 传入）
 BUILD_MODE ?= release
 # 项目根 + Common + asio 子模块
 CPPFLAGS ?= -I$(ROOT) \
@@ -32,7 +32,7 @@ CPPFLAGS ?= -I$(ROOT) \
             -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE
 
 SRC_DIR   := $(ROOT)
-BUILD_DIR := $(WS_ROOT)/build/$(BUILD_MODE)/examples
+BUILD_DIR := $(WS_ROOT)/build/$(BUILD_MODE)
 TARGET    := $(BUILD_DIR)/examples
 
 # 示例源码（递归收集项目根下 .cpp，排除 Linux/）

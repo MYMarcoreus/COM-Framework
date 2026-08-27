@@ -151,7 +151,7 @@
         {
             "label": "run examples (terminal)",
             "type": "shell",
-            "command": "./build/release/examples/examples",
+            "command": "./build/release/examples",
             "dependsOn": [
                 "build examples (release)"
             ],
