@@ -67,6 +67,21 @@
             }
         },
         {
+            "label": "build examples (debug)",
+            "type": "shell",
+            "command": "bash -c 'make -C Common/Linux clean && make -C Common/Linux debug && make -C examples clean && make -C examples CXXFLAGS=\"-std=c++11 -Wall -Wextra -O0 -g -pthread\"'",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
             "label": "clean (all projects)",
             "type": "shell",
             "command": "bash -c 'for p in Common ServerCore Demo; do make -C \"$PWD/$p/Linux\" clean; done'",
