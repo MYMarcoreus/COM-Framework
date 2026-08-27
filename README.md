@@ -189,8 +189,9 @@ build/debug/       —— 调试产物（-O0）
 在 VS Code 中可通过任务（`Tasks: Run Build Task`）一键执行：
 
 - **build all (release)** / **build all (debug)** —— 全量构建
-- **build (select project)** / **debug (select project)** / **run (select project)** —— 自动发现项目，弹出 **VS Code 原生下拉**选择（需安装 `augustocdias.tasks-shell-input` 扩展，选项来自 `./build.sh --list`），分别执行 release 构建 / debug 构建（随后按 F5 调试）/ 构建并运行
-- **build (project menu)** / **debug (project menu)** / **run (project menu)** —— 自动发现项目并在终端弹出 select 菜单选择（零扩展兜底，见 `.tools/project_menu.sh`）
+- **build (select project)** / **run (select project)** —— 弹出 **VS Code 原生下拉**，先选构建模式（debug 默认 / release）再选项目（需安装 `augustocdias.tasks-shell-input` 扩展，项目选项来自 `./build.sh --list`），分别执行构建 / 构建并运行
+- **debug (select project)** —— 原生下拉选项目，固定 debug 构建（随后按 F5 调试）
+- **build (project menu)** / **debug (project menu)** / **run (project menu)** —— 在终端弹出菜单选择构建模式（默认 debug）与项目（零扩展兜底，见 `.tools/project_menu.sh`）
 - **build debug (Common + examples)** —— VS Code 调试前的构建（`launch.json` 的 `preLaunchTask`）
 - **generate compile_commands** —— 生成 compile_commands.json
 - **run examples (terminal)** / **run tests (terminal)** / **run demo server (terminal)** / **run demo client (terminal)** —— 普通终端运行（release 产物）

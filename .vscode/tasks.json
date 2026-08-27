@@ -38,7 +38,7 @@
         {
             "label": "build (select project)",
             "type": "shell",
-            "command": "./build.sh ${input:project}",
+            "command": "./build.sh ${input:mode} ${input:project}",
             "dependsOn": [
                 "generate compile_commands"
             ],
@@ -98,7 +98,7 @@
         {
             "label": "run (select project)",
             "type": "shell",
-            "command": "bash .tools/project_menu.sh run ${input:project}",
+            "command": "bash .tools/project_menu.sh run ${input:project} ${input:mode}",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
@@ -226,6 +226,16 @@
         }
     ],
     "inputs": [
+        {
+            "id": "mode",
+            "type": "pickString",
+            "description": "选择构建模式",
+            "options": [
+                { "label": "debug（默认）", "value": "--debug" },
+                { "label": "release", "value": "--release" }
+            ],
+            "default": "--debug"
+        },
         {
             "id": "project",
             "type": "command",
