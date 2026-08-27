@@ -68,9 +68,24 @@
         {
             "label": "build examples (release)",
             "type": "shell",
-            "command": "./build.sh --examples",            "dependsOn": [
+            "command": "./build.sh --examples",
+            "dependsOn": [
                 "generate compile_commands"
-            ],            "problemMatcher": [
+            ],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "build demo (release)",
+            "type": "shell",
+            "command": "./build.sh Common ServerCore Demo",
+            "dependsOn": [
+                "generate compile_commands"
+            ],
+            "problemMatcher": [
                 "$gcc"
             ],
             "presentation": {
@@ -81,7 +96,10 @@
         {
             "label": "run examples (terminal)",
             "type": "shell",
-            "command": "./build.sh --examples && ./build/release/examples/nothrow_demo",
+            "command": "./build/release/examples/nothrow_demo",
+            "dependsOn": [
+                "build examples (release)"
+            ],
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
@@ -96,7 +114,10 @@
         {
             "label": "run tests (terminal)",
             "type": "shell",
-            "command": "./build.sh --tests",
+            "command": "./build/release/tests",
+            "dependsOn": [
+                "build all (release)"
+            ],
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
@@ -134,7 +155,10 @@
         {
             "label": "run demo server (terminal)",
             "type": "shell",
-            "command": "./build.sh Demo && ./build/release/demo",
+            "command": "./build/release/demo",
+            "dependsOn": [
+                "build demo (release)"
+            ],
             "group": {
                 "kind": "test",
                 "isDefault": true
@@ -148,7 +172,10 @@
         {
             "label": "run demo client (terminal)",
             "type": "shell",
-            "command": "./build.sh Demo && ./build/release/demo_client",
+            "command": "./build/release/demo_client",
+            "dependsOn": [
+                "build demo (release)"
+            ],
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
