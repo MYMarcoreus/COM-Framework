@@ -1,7 +1,7 @@
 **/build/
 **/compile_commands.json
 **/.cache/
-.tools/
+.tools/venv/
 .workbuddy/
 **/demo.log
 *.log

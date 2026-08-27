@@ -51,6 +51,36 @@
             }
         },
         {
+            "label": "build (project menu)",
+            "type": "shell",
+            "command": ".tools/project_menu.sh build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "debug (project menu)",
+            "type": "shell",
+            "command": ".tools/project_menu.sh debug",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "run (project menu)",
+            "type": "shell",
+            "command": ".tools/project_menu.sh run",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
             "label": "build debug (Common + examples)",
             "type": "shell",
             "command": "./build.sh --debug Common examples",

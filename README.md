@@ -190,6 +190,7 @@ build/debug/       —— 调试产物（-O0）
 
 - **build all (release)** / **build all (debug)** —— 全量构建
 - **build (select project)** —— 运行时输入要构建的项目（支持新项目）
+- **build (project menu)** / **debug (project menu)** / **run (project menu)** —— 自动发现项目并在终端弹出菜单选择，分别执行 release 构建 / debug 构建（随后按 F5 调试）/ 构建并运行（见 `.tools/project_menu.sh`）
 - **build debug (Common + examples)** —— VS Code 调试前的构建（`launch.json` 的 `preLaunchTask`）
 - **generate compile_commands** —— 生成 compile_commands.json
 - **run examples (terminal)** / **run tests (terminal)** / **run demo server (terminal)** / **run demo client (terminal)** —— 普通终端运行（release 产物）
