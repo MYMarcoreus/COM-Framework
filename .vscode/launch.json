@@ -11,17 +11,6 @@
             "cwd": "${workspaceFolder}",
             "environment": [],
             "preLaunchTask": "build debug (Common + examples)"
-        },
-        {
-            "name": "Debug nothrow_demo (release build)",
-            "type": "lldb",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/release/examples/nothrow_demo",
-            "args": [],
-            "stopOnEntry": false,
-            "cwd": "${workspaceFolder}",
-            "environment": [],
-            "preLaunchTask": "build examples (release)"
         }
     ]
 }

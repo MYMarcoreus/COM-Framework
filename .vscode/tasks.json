@@ -115,14 +115,6 @@
             }
         },
         {
-            "label": "debug nothrow_demo (release build)",
-            "type": "command",
-            "command": "workbench.action.debug.start",
-            "args": {
-                "configuration": "Debug nothrow_demo (release build)"
-            }
-        },
-        {
             "label": "run tests (terminal)",
             "type": "shell",
             "command": "./build/release/tests",
