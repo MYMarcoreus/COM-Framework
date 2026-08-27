@@ -107,12 +107,6 @@
             }
         },
         {
-            "label": "debug nothrow_demo (debug build)",
-            "type": "debug",
-            "request": "launch",
-            "name": "Debug nothrow_demo (debug build)"
-        },
-        {
             "label": "run tests (terminal)",
             "type": "shell",
             "command": "./build/release/tests",
@@ -134,14 +128,6 @@
                 "reveal": "always",
                 "panel": "shared"
             }
-        },
-        {
-            "label": "refresh clangd",
-            "dependsOn": [
-                "generate compile_commands"
-            ],
-            "type": "command",
-            "command": "clangd.restart"
         },
         {
             "label": "clean all",
