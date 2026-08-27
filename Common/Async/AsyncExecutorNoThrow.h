@@ -27,9 +27,26 @@
     #include <thread>
 #endif
 
-// 任务标签宏：调用 Submit/Then 时传入 __PRETTY_FUNCTION__（注册点函数名），
-// 便于调试时定位「当前任务/回调是哪个函数注册的」。
-// 仅调试构建有意义（存标签 + TraceInvoke 打印）；发布构建退化为 NULL，零开销。
+// ====================================================================
+// 任务调试标签宏（NOTHROW_TAG）
+//
+// 用于给任务打调试标签：调用 Submit/Then 时作为第二个参数传入。
+// 调试构建（make debug / -O0）下，回调栈追踪（TraceInvoke）会输出
+// task=<标签>，便于定位「当前任务/回调是哪个函数注册的」。
+//
+// 用法：
+//   exec.Submit(fn, NOTHROW_TAG)   // 标签 = 当前函数名（__PRETTY_FUNCTION__）
+//   exec.Submit(fn, "fetch-user") // 自定义标签（同一函数内区分多个任务）
+//   task.Then(fn, NOTHROW_TAG)     // Then 也可打标签（标记下游任务）
+//
+// 说明：
+//   - NOTHROW_TAG 展开为 __PRETTY_FUNCTION__（注册点函数名，含签名）。
+//     它是编译期静态字符串，以 const char* 存储：零分配、程序生命周期安全。
+//   - 同一函数内多个调用点的 __PRETTY_FUNCTION__ 相同，如需逐任务区分
+//     请用自定义字符串标签（如 "fetch-user"、"write-log"）。
+//   - 发布构建（-O2）下 NOTHROW_TAG 退化为 NULL；此时标签不存储、
+//     TraceInvoke 为空实现，零运行时开销。
+// ====================================================================
 #if defined(NOTHROW_DEBUG_TRACE)
     #define NOTHROW_TAG __PRETTY_FUNCTION__
 #else
