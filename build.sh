@@ -15,8 +15,9 @@ WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #   -c, --compiledb  生成所有项目 + examples 的 compile_commands.json（clangd）
 #   -t, --tests      构建并运行单元测试（./build/tests）
 #   -C, --clean      清理所有构建产物
-#   -l, --list       列出自动发现的项目
-#   -h, --help       显示帮助
+#   -l, --list        列出自动发现的项目（可构建）
+#       --executables 列出可执行项目（可构建 + 项目根有 main.cpp）
+#   -h, --help        显示帮助
 #
 #   [项目...]        只构建指定项目（如 ./build.sh Common ServerCore）
 #
@@ -36,6 +37,7 @@ DO_COMPILEDB=0
 DO_TESTS=0
 DO_CLEAN=0
 DO_LIST=0
+DO_EXECUTABLES=0
 PROJECTS=()
 
 usage() {
@@ -50,8 +52,9 @@ COM-Framework 统一构建脚本
   -c, --compiledb  生成所有项目 + examples 的 compile_commands.json（clangd）
   -t, --tests      构建并运行单元测试（./build/tests）
   -C, --clean      清理所有构建产物
-  -l, --list       列出自动发现的项目
-  -h, --help       显示帮助
+  -l, --list        列出自动发现的项目（可构建）
+      --executables 列出可执行项目（可构建 + 项目根有 main.cpp）
+  -h, --help        显示帮助
 
 [项目...]          只构建指定项目（如 ./build.sh Common ServerCore）
 
@@ -81,6 +84,16 @@ discover_projects() {
     echo "$ordered" | tr ' ' '\n' | sed '/^$/d'
 }
 
+# 列出可执行项目（可构建项目的子集：可构建 + 项目根有 main.cpp，不区分大小写）
+list_executables() {
+    discover_projects | while IFS= read -r p; do
+        [[ -z "$p" ]] && continue
+        if find "$WORKSPACE_ROOT/$p" -maxdepth 1 -iname 'main.cpp' -print -quit | grep -q .; then
+            echo "$p"
+        fi
+    done
+}
+
 build_project() {
     local p=$1
     echo "==================== Building $p ($MODE) ===================="
@@ -108,6 +121,7 @@ parse_args() {
             -t|--tests)     DO_TESTS=1; shift ;;
             -C|--clean)     DO_CLEAN=1; shift ;;
             -l|--list)      DO_LIST=1; shift ;;
+            --executables)  DO_EXECUTABLES=1; shift ;;
             -h|--help)      usage; exit 0 ;;
             -*) echo "未知选项: $1"; usage; exit 1 ;;
             *) PROJECTS+=("$1"); shift ;;
@@ -120,6 +134,11 @@ main() {
 
     if [[ $DO_LIST -eq 1 ]]; then
         discover_projects
+        exit 0
+    fi
+
+    if [[ $DO_EXECUTABLES -eq 1 ]]; then
+        list_executables
         exit 0
     fi
 

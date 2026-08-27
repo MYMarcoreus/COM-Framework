@@ -83,7 +83,7 @@
         {
             "label": "debug (select project)",
             "type": "shell",
-            "command": "./build.sh --debug ${input:project}",
+            "command": "./build.sh --debug ${input:projectExec}",
             "dependsOn": [
                 "generate compile_commands"
             ],
@@ -98,7 +98,7 @@
         {
             "label": "run (select project)",
             "type": "shell",
-            "command": "bash .tools/project_menu.sh run ${input:project} ${input:mode}",
+            "command": "bash .tools/project_menu.sh run ${input:projectExec} ${input:mode}",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
@@ -243,7 +243,18 @@
             "args": {
                 "command": "./build.sh --list",
                 "cwd": "${workspaceFolder}",
-                "description": "选择项目（自动发现，可手动输入新项目）",
+                "description": "选择项目（全部可构建项目，可手动输入）",
+                "allowCustomValues": true
+            }
+        },
+        {
+            "id": "projectExec",
+            "type": "command",
+            "command": "shellCommand.execute",
+            "args": {
+                "command": "./build.sh --executables",
+                "cwd": "${workspaceFolder}",
+                "description": "选择可执行项目（可构建 + 有 main.cpp，可手动输入）",
                 "allowCustomValues": true
             }
         }

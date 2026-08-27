@@ -172,7 +172,8 @@ Demo 还验证**事件解耦通信**：`DemoNetworkModule` 启动/停止时发�
 ./build.sh --compiledb        # 生成所有项目 + examples 的 compile_commands.json（clangd）
 ./build.sh --tests            # 构建并运行单元测试
 ./build.sh --clean            # 清理所有构建产物
-./build.sh --list             # 列出自动发现的项目
+./build.sh --list             # 列出自动发现的项目（全部可构建）
+./build.sh --executables       # 列出可执行项目（可构建 + 项目根有 main.cpp）
 ./build.sh Common ServerCore  # 只构建指定项目
 ./build.sh examples           # 只构建 examples（examples 与服务器项目同为普通项目，统一自动发现）
 ```
@@ -189,9 +190,9 @@ build/debug/       —— 调试产物（-O0）
 在 VS Code 中可通过任务（`Tasks: Run Build Task`）一键执行：
 
 - **build all (release)** / **build all (debug)** —— 全量构建
-- **build (select project)** / **run (select project)** —— 弹出 **VS Code 原生下拉**，先选构建模式（debug 默认 / release）再选项目（需安装 `augustocdias.tasks-shell-input` 扩展，项目选项来自 `./build.sh --list`），分别执行构建 / 构建并运行
-- **debug (select project)** —— 原生下拉选项目，固定 debug 构建（随后按 F5 调试）
-- **build (project menu)** / **debug (project menu)** / **run (project menu)** —— 在终端弹出菜单选择构建模式（默认 debug）与项目（零扩展兜底，见 `.tools/project_menu.sh`）
+- **build (select project)** —— 弹出 **VS Code 原生下拉**，先选构建模式（debug 默认 / release）再选项目（全部可构建项目，选项来自 `./build.sh --list`）
+- **debug (select project)** / **run (select project)** —— 同上，但项目下拉只列出**可执行项目**（选项来自 `./build.sh --executables`：可构建 + 项目根有 `main.cpp`），分别执行 debug 构建（随后 F5 调试）/ 构建并运行
+- **build (project menu)** / **debug (project menu)** / **run (project menu)** —— 在终端弹出菜单选择构建模式（默认 debug）与项目（build 列全部，debug/run 仅列可执行项目；零扩展兜底，见 `.tools/project_menu.sh`）
 - **build debug (Common + examples)** —— VS Code 调试前的构建（`launch.json` 的 `preLaunchTask`）
 - **generate compile_commands** —— 生成 compile_commands.json
 - **run examples (terminal)** / **run tests (terminal)** / **run demo server (terminal)** / **run demo client (terminal)** —— 普通终端运行（release 产物）

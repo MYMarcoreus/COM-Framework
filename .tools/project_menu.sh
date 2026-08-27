@@ -4,7 +4,9 @@ set -euo pipefail
 # ====================================================================
 # 交互式项目/模式选择器（供 VS Code 任务调用）
 #
-#   自动发现项目（复用 ./build.sh --list），支持选择构建模式：
+#   自动发现项目，支持选择构建模式：
+#     - build：列出全部可构建项目（./build.sh --list）
+#     - debug/run：仅列出可执行项目（./build.sh --executables：可构建 + 项目根有 main.cpp）
 #     - 未指定模式：集成终端 select 菜单选择（默认 debug）
 #     - 显式指定模式（$3：debug|release 或 --debug|--release）
 #   执行：
@@ -93,10 +95,14 @@ else
     echo "构建模式: $MODE_NAME"
 fi
 
-# —— 自动发现项目（复用 build.sh --list）——
-mapfile -t PROJECTS < <(./build.sh --list)
+# —— 项目列表：build 用全部可构建项目；debug/run 用可执行项目子集 ——
+if [[ "$ACTION" == "build" ]]; then
+    mapfile -t PROJECTS < <(./build.sh --list)
+else
+    mapfile -t PROJECTS < <(./build.sh --executables)
+fi
 if [[ ${#PROJECTS[@]} -eq 0 ]]; then
-    echo "未发现任何项目（顶层缺少 <项目>/Linux/Makefile）"
+    echo "未发现可构建/可执行项目"
     exit 1
 fi
 
