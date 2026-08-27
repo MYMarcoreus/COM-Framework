@@ -4,16 +4,19 @@ set -euo pipefail
 # ====================================================================
 # 交互式项目选择器（供 VS Code 任务调用）
 #
-#   自动发现项目（复用 ./build.sh --list），在集成终端弹出菜单选择后执行：
+#   自动发现项目（复用 ./build.sh --list）：
+#     - 未指定项目：在集成终端弹出 select 菜单选择（零扩展兑底）
+#     - 显式指定项目（$2，供 VS Code 原生下拉输入调用）：直接使用
+#   执行：
 #     build —— ./build.sh <项目>            （release 构建）
 #     debug —— ./build.sh --debug <项目>    （debug 构建；随后按 F5 调试）
 #     run   —— 构建并运行所选可执行项目
 #
-# 用法：.tools/project_menu.sh [build|debug|run]
+# 用法：.tools/project_menu.sh [build|debug|run] [项目]
 #
 # 说明：
 #   - 项目列表完全自动发现（任何含 Linux/Makefile 的顶层目录）。
-#   - 这是纯 shell 方案，无需任何 VS Code 扩展。
+#   - 第一个参数是操作；第二个参数是可选的项目名（来自原生下拉输入时传入）。
 #   - debug 无法在终端任务里直接启动 VS Code 调试器，只负责构建 debug 版，
 #     实际调试请按 F5（见 .vscode/launch.json）。
 #   - 新增可执行项目时，在 executable_of() 中补充「项目 → 可执行文件」映射。
@@ -21,6 +24,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ACTION="${1:-build}"
+PROJ="${2:-}"   # 可选：显式指定项目（VS Code 原生下拉输入时传入，跳过菜单）
 
 cd "$ROOT"
 
@@ -43,18 +47,26 @@ if [[ ${#PROJECTS[@]} -eq 0 ]]; then
     exit 1
 fi
 
-echo "=================================================================="
-echo "  $ACTION —— 请选择项目"
-echo "=================================================================="
-PS3="输入编号选择项目（Ctrl+C 取消）> "
-select PROJ in "${PROJECTS[@]}"; do
-    if [[ -n "$PROJ" ]]; then
-        break
+if [[ -z "$PROJ" ]]; then
+    # —— 交互式菜单（未显式指定项目时）——
+    echo "=================================================================="
+    echo "  $ACTION —— 请选择项目"
+    echo "=================================================================="
+    PS3="输入编号选择项目（Ctrl+C 取消）> "
+    select PROJ in "${PROJECTS[@]}"; do
+        if [[ -n "$PROJ" ]]; then
+            break
+        fi
+        echo "无效选择，请重试。"
+    done
+    echo "已选择: $PROJ"
+    echo
+else
+    # —— 显式指定（VS Code 原生下拉输入）——
+    if ! printf '%s\n' "${PROJECTS[@]}" | grep -qxF "$PROJ"; then
+        echo "【警告】$PROJ 不在自动发现列表中，将尝试直接处理。"
     fi
-    echo "无效选择，请重试。"
-done
-echo "已选择: $PROJ"
-echo
+fi
 
 case "$ACTION" in
     build)

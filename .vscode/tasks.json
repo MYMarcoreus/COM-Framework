@@ -81,6 +81,31 @@
             }
         },
         {
+            "label": "debug (select project)",
+            "type": "shell",
+            "command": "./build.sh --debug ${input:project}",
+            "dependsOn": [
+                "generate compile_commands"
+            ],
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "run (select project)",
+            "type": "shell",
+            "command": "bash .tools/project_menu.sh run ${input:project}",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
             "label": "build debug (Common + examples)",
             "type": "shell",
             "command": "./build.sh --debug Common examples",
@@ -203,9 +228,14 @@
     "inputs": [
         {
             "id": "project",
-            "type": "promptString",
-            "description": "输入要构建的项目名（空格分隔，如：Common ServerCore）",
-            "default": "Common"
+            "type": "command",
+            "command": "shellCommand.execute",
+            "args": {
+                "command": "./build.sh --list",
+                "cwd": "${workspaceFolder}",
+                "description": "选择项目（自动发现，可手动输入新项目）",
+                "allowCustomValues": true
+            }
         }
     ]
 }
