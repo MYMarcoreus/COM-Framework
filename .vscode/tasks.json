@@ -5,6 +5,9 @@
             "label": "build all (release)",
             "type": "shell",
             "command": "./build.sh",
+            "dependsOn": [
+                "generate compile_commands"
+            ],
             "group": {
                 "kind": "build",
                 "isDefault": true
@@ -21,6 +24,9 @@
             "label": "build all (debug)",
             "type": "shell",
             "command": "./build.sh --debug",
+            "dependsOn": [
+                "generate compile_commands"
+            ],
             "problemMatcher": [
                 "$gcc"
             ],
@@ -33,6 +39,9 @@
             "label": "build (select project)",
             "type": "shell",
             "command": "./build.sh ${input:project}",
+            "dependsOn": [
+                "generate compile_commands"
+            ],
             "problemMatcher": [
                 "$gcc"
             ],
@@ -45,6 +54,9 @@
             "label": "build debug (Common + examples)",
             "type": "shell",
             "command": "./build.sh --debug --examples Common",
+            "dependsOn": [
+                "generate compile_commands"
+            ],
             "problemMatcher": [
                 "$gcc"
             ],
@@ -56,8 +68,9 @@
         {
             "label": "build examples (release)",
             "type": "shell",
-            "command": "./build.sh --examples",
-            "problemMatcher": [
+            "command": "./build.sh --examples",            "dependsOn": [
+                "generate compile_commands"
+            ],            "problemMatcher": [
                 "$gcc"
             ],
             "presentation": {
