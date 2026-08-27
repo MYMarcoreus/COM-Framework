@@ -12,45 +12,27 @@
 #include "Thread/ThreadPool.h"
 
 // ====================================================================
-// 回调调试追踪（仅调试构建有效）
+// 任务源码位置调试信息（仅调试构建有效）
 //
 // 仅在非优化调试构建（make debug / -O0，即未定义 __OPTIMIZE__）下启用：
-// 任务完成触发续接、回调投递时打印当前线程 ID 与调用栈（backtrace），
-// 便于定位异步回调的触发链路（谁在哪个线程触发了这个回调）。
-// 发布构建（-O2，定义 __OPTIMIZE__）自动编译为空实现，零运行时开销。
+// Submit/Then 时传入 NOTHROW_LOC，保存注册点的 __PRETTY_FUNCTION__ /
+// __FILE__ / __LINE__ 到任务状态；调试界面（watch CTaskState 字段）
+// 即可查看「当前任务/回调是哪个函数、哪个文件、第几行注册的」。
+// 发布构建（-O2，定义 __OPTIMIZE__）退化为空位置，不存储、零开销。
 // ====================================================================
 #if defined(__linux__) && !defined(__OPTIMIZE__)
     #define NOTHROW_DEBUG_TRACE 1
-    #include <execinfo.h>
-    #include <cstdio>
-    #include <cstdlib>
-    #include <thread>
 #endif
 
-// ====================================================================
-// 任务调试标签宏（NOTHROW_TAG）
-//
-// 用于给任务打调试标签：调用 Submit/Then 时作为第二个参数传入。
-// 调试构建（make debug / -O0）下，回调栈追踪（TraceInvoke）会输出
-// task=<标签>，便于定位「当前任务/回调是哪个函数注册的」。
-//
-// 用法：
-//   exec.Submit(fn, NOTHROW_TAG)   // 标签 = 当前函数名（__PRETTY_FUNCTION__）
-//   exec.Submit(fn, "fetch-user") // 自定义标签（同一函数内区分多个任务）
-//   task.Then(fn, NOTHROW_TAG)     // Then 也可打标签（标记下游任务）
-//
-// 说明：
-//   - NOTHROW_TAG 展开为 __PRETTY_FUNCTION__（注册点函数名，含签名）。
-//     它是编译期静态字符串，以 const char* 存储：零分配、程序生命周期安全。
-//   - 同一函数内多个调用点的 __PRETTY_FUNCTION__ 相同，如需逐任务区分
-//     请用自定义字符串标签（如 "fetch-user"、"write-log"）。
-//   - 发布构建（-O2）下 NOTHROW_TAG 退化为 NULL；此时标签不存储、
-//     TraceInvoke 为空实现，零运行时开销。
-// ====================================================================
+// 源码位置宏：调用 Submit/Then 时作为第二个参数传入。
+//   exec.Submit(fn, NOTHROW_LOC)   // 保存 函数名 + 文件 + 行号
+//   task.Then(fn, NOTHROW_LOC)     // Then 也可传（标记下游任务）
+// 说明：__PRETTY_FUNCTION__ / __FILE__ 是编译期静态串，以 const char* 存储，
+//       零分配、程序生命周期安全；__LINE__ 可在同一函数内区分多个调用点。
 #if defined(NOTHROW_DEBUG_TRACE)
-    #define NOTHROW_TAG __PRETTY_FUNCTION__
+    #define NOTHROW_LOC common::nothrow::CSourceLoc(__PRETTY_FUNCTION__, __FILE__, __LINE__)
 #else
-    #define NOTHROW_TAG NULL
+    #define NOTHROW_LOC common::nothrow::CSourceLoc()
 #endif
 
 // ====================================================================
@@ -104,6 +86,24 @@ struct CNoneTag
 
 /// @brief 无值标记（返回 no::None 表示终止）。
 const CNoneTag None = CNoneTag{};
+
+/// @brief 源码位置（任务/续接注册点调试信息：函数名 / 文件 / 行号）。
+///
+/// 仅调试构建存储；发布构建为空（零开销）。调试时在 watch 里查看
+/// szFunction / szFile / nLine 定位任务注册点。
+struct CSourceLoc
+{
+    const char* szFunction;  ///< __PRETTY_FUNCTION__（注册点函数名）。
+    const char* szFile;      ///< __FILE__（注册点文件）。
+    int nLine;               ///< __LINE__（注册点行号）。
+
+    /// @brief 默认：空位置。
+    CSourceLoc() : szFunction(NULL), szFile(NULL), nLine(0) {}
+
+    /// @brief 完整位置。
+    CSourceLoc(const char* pszFunction, const char* pszFile, int nLine)
+        : szFunction(pszFunction), szFile(pszFile), nLine(nLine) {}
+};
 
 namespace detail {
 
@@ -234,40 +234,6 @@ private:
 
 namespace detail {
 
-/// @brief 打印回调触发调用栈（仅调试构建；发布构建为空操作，零开销）。
-///
-/// @param szWhat 触发场景描述（如「Complete 触发续接」）。
-/// @param nDepth 打印最近 N 帧（<0 表示全部）。
-inline void TraceInvoke(const char* szWhat, const char* szTag = NULL, int nDepth = -1)
-{
-#if defined(NOTHROW_DEBUG_TRACE)
-    static const int kMaxFrames = 32;
-    void* apBuffer[kMaxFrames];
-    int nFrames = backtrace(apBuffer, kMaxFrames);
-    char** ppSymbols = backtrace_symbols(apBuffer, nFrames);
-    unsigned long nThreadId = static_cast<unsigned long>(
-        std::hash<std::thread::id>()(std::this_thread::get_id()));
-    std::fprintf(stderr, "\n[nothrow::trace] %s | task=%s | thread=%lu | frames=%d\n",
-                 szWhat, (szTag != NULL && szTag[0] != '\0') ? szTag : "<unnamed>",
-                 nThreadId, nFrames);
-    int nStart = 0;
-    if (nDepth >= 0 && nDepth < nFrames)
-    {
-        nStart = nFrames - nDepth;
-    }
-    for (int i = nStart; i < nFrames; ++i)
-    {
-        std::fprintf(stderr, "  %2d  %s\n", i, ppSymbols[i]);
-    }
-    std::fprintf(stderr, "\n");
-    std::free(ppSymbols);
-#else
-    (void)szWhat;
-    (void)szTag;
-    (void)nDepth;
-#endif
-}
-
 // ===========================================================================
 // ================================= 内部类 =================================
 // ===========================================================================
@@ -294,7 +260,7 @@ public:
     /// 创建状态（初始未就绪）。
     CTaskState() : m_bReady(false)
 #if defined(NOTHROW_DEBUG_TRACE)
-        , m_pszTag("")
+        , m_pszFunction(""), m_pszFile(""), m_nLine(0)
 #endif
     {}
 
@@ -320,9 +286,6 @@ public:
         // 单消费者（一个任务通常只有一个 Get 等待者）：notify_one 即可；
         // 若需多线程等待同一任务，请改回 notify_all。
         m_cv.notify_one();
-
-        // 调试：打印回调触发调用栈与任务标签（仅调试构建有效，发布构建为空操作）。
-        TraceInvoke("Complete: 触发续接", Tag());
 
         for (size_t i = 0; i < vecCbs.size(); ++i)
         {
@@ -366,8 +329,6 @@ public:
                     };
                 if (pExecutor->m_pPool->Submit(std::move(fnRun)))
                 {
-                    // 调试：打印「任务已就绪 → 回调即时投递」调用栈与任务标签。
-                    TraceInvoke("AddContinuation: 已就绪回调投递", Tag());
                     return true;
                 }
             }
@@ -386,27 +347,30 @@ public:
         return m_result;
     }
 
-    /// @brief 设置任务调试标签（任务/续接注册点的函数名）。
+    /// @brief 设置任务注册点源码位置（调试用）。
     ///
-    /// 供调试定位「当前任务回调是哪个函数注册的」；发布构建为空操作。
+    /// 供调试定位「当前任务回调是哪个函数/文件/行号注册的」；
+    /// 发布构建为空操作。
     ///
-    /// @param pszTag 标签（建议传 __PRETTY_FUNCTION__ / NOTHROW_TAG）。
-    void SetTag(const char* pszTag)
+    /// @param loc 源码位置（建议传 NOTHROW_LOC）。
+    void SetLoc(const CSourceLoc& loc)
     {
 #if defined(NOTHROW_DEBUG_TRACE)
-        m_pszTag = (pszTag != NULL) ? pszTag : "";
+        m_pszFunction = loc.szFunction ? loc.szFunction : "";
+        m_pszFile = loc.szFile ? loc.szFile : "";
+        m_nLine = loc.nLine;
 #else
-        (void)pszTag;
+        (void)loc;
 #endif
     }
 
-    /// @brief 获取任务调试标签（发布构建恒为空串）。
-    const char* Tag() const
+    /// @brief 获取任务注册点源码位置（发布构建恒为空）。
+    CSourceLoc Loc() const
     {
 #if defined(NOTHROW_DEBUG_TRACE)
-        return m_pszTag;
+        return CSourceLoc(m_pszFunction, m_pszFile, m_nLine);
 #else
-        return "";
+        return CSourceLoc();
 #endif
     }
 
@@ -417,7 +381,9 @@ private:
     bool m_bReady;                       // 是否已完成。
     CTaskResult<TValue> m_result;        // 最终结果（完成后有效）。
 #if defined(NOTHROW_DEBUG_TRACE)
-    const char* m_pszTag;                // 任务/续接注册点（调用方函数名），仅调试。
+    const char* m_pszFunction;           // 注册点函数名（__PRETTY_FUNCTION__）。
+    const char* m_pszFile;               // 注册点文件（__FILE__）。
+    int m_nLine;                         // 注册点行号（__LINE__）。
 #endif
 };
 
@@ -663,10 +629,10 @@ public:
     ///  - `CTask<TNew>`：扁平化（flatMap），内部任务完成后转发其结果。
     ///
     /// @param fnTransform 变换函数。
-    /// @param szTag 下游任务调试标签（可选，建议传 NOTHROW_TAG 定位注册点）。
+    /// @param loc 下游任务注册点源码位置（可选，建议传 NOTHROW_LOC 定位注册点）。
     /// @return 下游任务（延续链）。
     template <typename TFn>
-    auto Then(TFn fnTransform, const char* szTag = NULL)
+    auto Then(TFn fnTransform, const CSourceLoc& loc = CSourceLoc())
         -> CTask<typename detail::TaskTraits<
             typename detail::TInvokeResult<TFn, TValue>::type>::ValueType>;
 
@@ -726,7 +692,7 @@ bool CTask<TValue>::OnNone(NoneCallback fnCallback)
 /// @brief Then 实现（非 void 上游）：注册上游续接，有值则投递变换，无值则传播终止。
 template <typename TValue>
 template <typename TFn>
-auto CTask<TValue>::Then(TFn f, const char* szTag /* = NULL */)
+auto CTask<TValue>::Then(TFn f, const CSourceLoc& loc /* = CSourceLoc() */)
     -> CTask<typename detail::TaskTraits<
         typename detail::TInvokeResult<TFn, TValue>::type>::ValueType>
 {
@@ -734,7 +700,7 @@ auto CTask<TValue>::Then(TFn f, const char* szTag /* = NULL */)
     using TOut = typename detail::TaskTraits<TResult>::ValueType;      // 解包后下游结果类型。
     CTask<TOut> taskNext;
     taskNext.m_pExecutor = this->m_pExecutor; // 沿用上游执行器句柄（续接投递用）。
-    taskNext.m_pState->SetTag(szTag);         // 记录下游任务调试标签（发布构建为空操作）。
+    taskNext.m_pState->SetLoc(loc);           // 记录下游任务注册点源码位置（发布构建为空操作）。
     auto pNextState = taskNext.m_pState;
     auto pExecutor = this->m_pExecutor;
 
@@ -786,10 +752,10 @@ public:
     /// @brief 链式续接：上游完成时执行 fnTransform()（无参数），上游终止则传播。
     ///
     /// @param fnTransform 变换函数（无参数）。
-    /// @param szTag 下游任务调试标签（可选，建议传 NOTHROW_TAG 定位注册点）。
+    /// @param loc 下游任务注册点源码位置（可选，建议传 NOTHROW_LOC 定位注册点）。
     /// @return 下游任务（延续链）。
     template <typename TFn>
-    auto Then(TFn fnTransform, const char* szTag = NULL)
+    auto Then(TFn fnTransform, const CSourceLoc& loc = CSourceLoc())
         -> CTask<typename detail::TaskTraits<
             typename detail::TInvokeResult<TFn>::type>::ValueType>;
 
@@ -820,7 +786,7 @@ private:
 
 /// @brief Then 实现（void 上游）：上游完成则执行 fn()（无参），终止则传播。
 template <typename TFn>
-auto CTask<void>::Then(TFn f, const char* szTag /* = NULL */)
+auto CTask<void>::Then(TFn f, const CSourceLoc& loc /* = CSourceLoc() */)
     -> CTask<typename detail::TaskTraits<
         typename detail::TInvokeResult<TFn>::type>::ValueType>
 {
@@ -828,7 +794,7 @@ auto CTask<void>::Then(TFn f, const char* szTag /* = NULL */)
     using TOut = typename detail::TaskTraits<TResult>::ValueType;
     CTask<TOut> taskNext;
     taskNext.m_pExecutor = this->m_pExecutor;
-    taskNext.m_pState->SetTag(szTag); // 记录下游任务调试标签（发布构建为空操作）。
+    taskNext.m_pState->SetLoc(loc); // 记录下游任务注册点源码位置（发布构建为空操作）。
     auto pNextState = taskNext.m_pState;
     auto pExecutor = this->m_pExecutor;
 
@@ -899,10 +865,10 @@ public:
     ///
     /// @tparam TFn 任务函数类型（返回值作为任务结果）。
     /// @param f 任务函数（在工作线程上执行）。
-    /// @param szTag 任务调试标签（可选，建议传 NOTHROW_TAG 定位注册点）。
+    /// @param loc 任务注册点源码位置（可选，建议传 NOTHROW_LOC 定位注册点）。
     /// @return 关联本执行器的任务；执行器未启动时任务立即以无值（kNotStarted）完成。
     template <typename TFn>
-    auto Submit(TFn f, const char* szTag = NULL) -> CTask<typename detail::TInvokeResult<TFn>::type>;
+    auto Submit(TFn f, const CSourceLoc& loc = CSourceLoc()) -> CTask<typename detail::TInvokeResult<TFn>::type>;
 
     /// 无返回值任务类型（fire-and-forget）。
     using TaskCallback = std::function<void()>;
@@ -926,13 +892,13 @@ private:
 
 /// @brief Submit 实现：把任务函数投递到线程池执行。
 template <typename TFn>
-auto CAsyncExecutor::Submit(TFn f, const char* szTag /* = NULL */)
+auto CAsyncExecutor::Submit(TFn f, const CSourceLoc& loc /* = CSourceLoc() */)
     -> CTask<typename detail::TInvokeResult<TFn>::type>
 {
     using TResult = typename detail::TInvokeResult<TFn>::type; // 任务结果类型。
     CTask<TResult> task;
     task.m_pExecutor = m_pHandle; // 共享执行器句柄（任务链持有时线程池不释放）。
-    task.m_pState->SetTag(szTag); // 记录任务调试标签（发布构建为空操作）。
+    task.m_pState->SetLoc(loc);   // 记录任务注册点源码位置（发布构建为空操作）。
     auto pState = task.m_pState;
     auto pHandle = m_pHandle;
     std::function<void()> fnRun = [pState, f]()

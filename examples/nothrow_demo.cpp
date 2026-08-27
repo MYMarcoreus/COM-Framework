@@ -23,7 +23,7 @@
 //   ⑭ Post                  提交无返回值任务（fire-and-forget）
 //   ⑮ 未启动执行器          Submit 立即以无值（kNotStarted）完成
 //   ⑯ 类型变化链            Then 链逐级改变返回值类型（int→string→size_t）
-//   ⑰ 任务标签              NOTHROW_TAG / 自定义标签定位任务注册点（调试）
+//   ⑰ 任务源码位置          NOTHROW_LOC 保存注册点函数/文件/行号（调试）
 // ============================================================
 #include "Async/AsyncExecutorNoThrow.h"
 
@@ -61,9 +61,9 @@ void DemoSubmitAndGet()
     no::CAsyncExecutor exec(2);
     ASSERT(exec.Start());
 
-    // NOTHROW_TAG（= __PRETTY_FUNCTION__）：调试构建（make debug）下，
-    // 回调栈追踪会输出 task=<注册点函数名>，便于定位当前任务/回调的注册位置。
-    no::CTaskResult<int> r = exec.Submit([]() { return 42; }, NOTHROW_TAG).Get();
+    // NOTHROW_LOC：调试构建（make debug）下保存注册点的
+    // __PRETTY_FUNCTION__ / __FILE__ / __LINE__，调试界面可查看。
+    no::CTaskResult<int> r = exec.Submit([]() { return 42; }, NOTHROW_LOC).Get();
     ASSERT(r.HasValue());      // 有值
     ASSERT(r.Value() == 42);   // 结果正确
     std::printf("① Submit+Get: %d\n", r.Value());
@@ -77,9 +77,9 @@ void DemoChainThen()
     ASSERT(exec.Start());
 
     no::CTaskResult<int> r =
-        exec.Submit([]() { return 3; }, NOTHROW_TAG)          // task=void DemoChainThen()
-            .Then([](int n) { return n * 2; }, "② 乘2")
-            .Then([](int n) { return n + 1; }, "② 加1")
+        exec.Submit([]() { return 3; }, NOTHROW_LOC)   // 保存函数/文件/行号
+            .Then([](int n) { return n * 2; }, NOTHROW_LOC)
+            .Then([](int n) { return n + 1; }, NOTHROW_LOC)
             .Get();
     ASSERT(r.HasValue());
     ASSERT(r.Value() == 7);        // (3*2)+1
@@ -132,11 +132,11 @@ void DemoFlatMap()
     ASSERT(exec.Start());
 
     no::CTaskResult<std::string> r =
-        exec.Submit([]() { return 3; }, NOTHROW_TAG)
+        exec.Submit([]() { return 3; }, NOTHROW_LOC)
             .Then([&exec](int n) {                 // 返回新异步任务 → 自动平铺
-                return exec.Submit([n]() { return n * n; }, "④ 内层平方");
+                return exec.Submit([n]() { return n * n; }, NOTHROW_LOC);
             })
-            .Then([](int n) { return "平方 = " + std::to_string(n); }, NOTHROW_TAG)
+            .Then([](int n) { return "平方 = " + std::to_string(n); }, NOTHROW_LOC)
             .Get();
     ASSERT(r.HasValue());
     ASSERT(r.Value() == "平方 = 9");   // 3*3 后转字符串
@@ -327,24 +327,6 @@ void DemoNotStarted()
                 static_cast<int>(r.Reason()));
 }
 
-// ⑰ 任务调试标签（NOTHROW_TAG）：调试构建（make debug）下回调栈追踪会输出
-//    task=<注册点函数名>；同一函数内可用自定义字符串区分多个任务/环节。
-void DemoTaskTag()
-{
-    no::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
-
-    no::CTaskResult<int> r =
-        exec.Submit([]() { return 1; }, NOTHROW_TAG)   // task=void DemoTaskTag()
-            .Then([](int n) { return n + 1; }, "加一")
-            .Then([](int n) { return n * 10; }, "乘十")
-            .Get();
-    ASSERT(r.HasValue());
-    ASSERT(r.Value() == 20);   // (1+1)*10
-    std::printf("⑰ 任务标签: 结果=%d（NOTHROW_TAG / 自定义标签）\n", r.Value());
-    exec.Stop();
-}
-
 // ⑯ 类型变化链：Then 链上每级返回值类型都不同（CTask<int> → string → size_t）
 void DemoTypeChangingChain()
 {
@@ -359,6 +341,24 @@ void DemoTypeChangingChain()
     ASSERT(r.HasValue());
     ASSERT(r.Value() == static_cast<std::size_t>(2)); // "30" 的长度
     std::printf("⑯ 类型变化链: int→string→size_t，长度=%zu\n", r.Value());
+    exec.Stop();
+}
+
+// ⑰ 任务源码位置（NOTHROW_LOC）：调试构建（make debug）下保存注册点
+//    函数名/文件/行号；同一函数内多个调用点可用行号（__LINE__）区分。
+void DemoTaskTag()
+{
+    no::CAsyncExecutor exec(2);
+    ASSERT(exec.Start());
+
+    no::CTaskResult<int> r =
+        exec.Submit([]() { return 1; }, NOTHROW_LOC)
+            .Then([](int n) { return n + 1; }, NOTHROW_LOC)
+            .Then([](int n) { return n * 10; }, NOTHROW_LOC)
+            .Get();
+    ASSERT(r.HasValue());
+    ASSERT(r.Value() == 20);   // (1+1)*10
+    std::printf("⑰ 任务源码位置: 结果=%d（函数/文件/行号）\n", r.Value());
     exec.Stop();
 }
 
