@@ -191,10 +191,11 @@ build/debug/       —— 调试产物（-O0）
 - **build debug (Common + examples)** —— VS Code 调试前的构建（`launch.json` 的 `preLaunchTask`）
 - **generate compile_commands** —— 生成 compile_commands.json
 - **refresh clangd** —— 重新生成编译数据库并重启 clangd
-- **run examples / run tests / run demo server / run demo client** —— 各分 **release / debug** 两个任务（终端运行）
+- **run examples (terminal)** / **run tests (terminal)** / **run demo server (terminal)** / **run demo client (terminal)** —— 普通终端运行（release 产物）
+- **debug nothrow_demo (VS Code)** —— 在 VS Code 调试器中运行（需选择 `launch.json` 配置）
 - **clean all**
 
-**VS Code 调试**：`launch.json` 提供两个配置——`Debug nothrow_demo (debug build)`（`build/debug/...`）与 `Debug nothrow_demo (release build)`（`build/release/...`）。
+**VS Code 调试**（在调试器中运行，支持断点 / 变量 / 调用栈）：`launch.json` 提供两个配置——`Debug nothrow_demo (debug build)`（`build/debug/...`）与 `Debug nothrow_demo (release build)`（`build/release/...`）。按 **F5** 或 **Run and Debug** 面板启动，也可运行任务 **debug nothrow_demo (VS Code)**。
 
 运行 Demo 服务器与客户端：`./build/release/demo 9000`、`./build/release/demo_client 9000`（调试版用 `./build/debug/...`）。
 

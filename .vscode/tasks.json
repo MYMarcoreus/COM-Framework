@@ -66,7 +66,7 @@
             }
         },
         {
-            "label": "run examples (release)",
+            "label": "run examples (terminal)",
             "type": "shell",
             "command": "./build.sh --examples && ./build/release/examples/nothrow_demo",
             "problemMatcher": [],
@@ -76,29 +76,14 @@
             }
         },
         {
-            "label": "run examples (debug)",
-            "type": "shell",
-            "command": "./build.sh --debug --examples && ./build/debug/examples/nothrow_demo",
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated"
-            }
+            "label": "debug nothrow_demo (VS Code)",
+            "type": "command",
+            "command": "workbench.action.debug.selectAndStartDebugging"
         },
         {
-            "label": "run tests (release)",
+            "label": "run tests (terminal)",
             "type": "shell",
             "command": "./build.sh --tests",
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated"
-            }
-        },
-        {
-            "label": "run tests (debug)",
-            "type": "shell",
-            "command": "./build.sh --debug --tests",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
@@ -134,7 +119,7 @@
             }
         },
         {
-            "label": "run demo server (release)",
+            "label": "run demo server (terminal)",
             "type": "shell",
             "command": "./build.sh Demo && ./build/release/demo",
             "group": {
@@ -148,29 +133,9 @@
             }
         },
         {
-            "label": "run demo server (debug)",
-            "type": "shell",
-            "command": "./build.sh --debug Demo && ./build/debug/demo",
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated"
-            }
-        },
-        {
-            "label": "run demo client (release)",
+            "label": "run demo client (terminal)",
             "type": "shell",
             "command": "./build.sh Demo && ./build/release/demo_client",
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            }
-        },
-        {
-            "label": "run demo client (debug)",
-            "type": "shell",
-            "command": "./build.sh --debug Demo && ./build/debug/demo_client",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
