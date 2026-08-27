@@ -51,36 +51,6 @@
             }
         },
         {
-            "label": "build (project menu)",
-            "type": "shell",
-            "command": ".tools/project_menu.sh build",
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated"
-            }
-        },
-        {
-            "label": "debug (project menu)",
-            "type": "shell",
-            "command": ".tools/project_menu.sh debug",
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated"
-            }
-        },
-        {
-            "label": "run (project menu)",
-            "type": "shell",
-            "command": ".tools/project_menu.sh run",
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated"
-            }
-        },
-        {
             "label": "debug (select project)",
             "type": "shell",
             "command": "./build.sh --debug ${input:projectExec}",
@@ -98,7 +68,7 @@
         {
             "label": "run (select project)",
             "type": "shell",
-            "command": "bash .tools/project_menu.sh run ${input:projectExec} ${input:mode}",
+            "command": "bash .tools/run_project.sh ${input:projectExec} ${input:mode}",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",

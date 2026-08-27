@@ -191,8 +191,7 @@ build/debug/       —— 调试产物（-O0）
 
 - **build all (release)** / **build all (debug)** —— 全量构建
 - **build (select project)** —— 弹出 **VS Code 原生下拉**，先选构建模式（debug 默认 / release）再选项目（全部可构建项目，选项来自 `./build.sh --list`）
-- **debug (select project)** / **run (select project)** —— 同上，但项目下拉只列出**可执行项目**（选项来自 `./build.sh --executables`：可构建 + 项目根有 `main.cpp`），分别执行 debug 构建（随后 F5 调试）/ 构建并运行
-- **build (project menu)** / **debug (project menu)** / **run (project menu)** —— 在终端弹出菜单选择构建模式（默认 debug）与项目（build 列全部，debug/run 仅列可执行项目；零扩展兜底，见 `.tools/project_menu.sh`）
+- **debug (select project)** / **run (select project)** —— 同上，但项目下拉只列出**可执行项目**（选项来自 `./build.sh --executables`：可构建 + 项目根有 `main.cpp`），分别执行 debug 构建（随后 F5 调试）/ 构建并运行（见 `.tools/run_project.sh`）
 - **build debug (Common + examples)** —— VS Code 调试前的构建（`launch.json` 的 `preLaunchTask`）
 - **generate compile_commands** —— 生成 compile_commands.json
 - **run examples (terminal)** / **run tests (terminal)** / **run demo server (terminal)** / **run demo client (terminal)** —— 普通终端运行（release 产物）
