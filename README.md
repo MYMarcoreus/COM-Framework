@@ -187,7 +187,7 @@ build/debug/       —— 调试产物（-O0）
 
 > `build.sh` 是唯一构建入口（整合了原 `build-all.sh` / `build-debug.sh` / `generate-compiledb.sh` 与根 `Makefile`）。项目级构建用各项目 `Linux/Makefile`（由 `build.sh` 调用）。
 
-在 VS Code 中可通过任务（`Tasks: Run Task`）执行（select 由原生下拉驱动）：
+在 VS Code 中可通过任务（`Tasks: Run Task`）执行（select 由原生下拉驱动；完整的接入与跨机器复刻指南见 [docs/vscode-select-dropdown.md](docs/vscode-select-dropdown.md)）：
 
 - **build (select project)** —— 先选构建模式（debug 默认 / release）再选项目（全部可构建项目，选项来自 `./build.sh --list`）
 - **debug (select project)** / **run (select project)** —— 项目下拉只列出**可执行项目**（选项来自 `./build.sh --executables`：可构建 + 项目根有 `main.cpp`），分别执行 debug 构建（随后 F5 调试）/ 构建并运行（见 `.tools/run_project.sh`）
