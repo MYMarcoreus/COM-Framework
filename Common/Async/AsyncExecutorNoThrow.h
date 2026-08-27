@@ -260,7 +260,7 @@ public:
     /// 创建状态（初始未就绪）。
     CTaskState() : m_bReady(false)
 #if defined(NOTHROW_DEBUG_TRACE)
-        , m_pszFunction(""), m_pszFile(""), m_nLine(0)
+        , m_loc()
 #endif
     {}
 
@@ -356,9 +356,7 @@ public:
     void SetLoc(const CSourceLoc& loc)
     {
 #if defined(NOTHROW_DEBUG_TRACE)
-        m_pszFunction = loc.szFunction ? loc.szFunction : "";
-        m_pszFile = loc.szFile ? loc.szFile : "";
-        m_nLine = loc.nLine;
+        m_loc = loc;
 #else
         (void)loc;
 #endif
@@ -368,7 +366,7 @@ public:
     CSourceLoc Loc() const
     {
 #if defined(NOTHROW_DEBUG_TRACE)
-        return CSourceLoc(m_pszFunction, m_pszFile, m_nLine);
+        return m_loc;
 #else
         return CSourceLoc();
 #endif
@@ -381,9 +379,7 @@ private:
     bool m_bReady;                       // 是否已完成。
     CTaskResult<TValue> m_result;        // 最终结果（完成后有效）。
 #if defined(NOTHROW_DEBUG_TRACE)
-    const char* m_pszFunction;           // 注册点函数名（__PRETTY_FUNCTION__）。
-    const char* m_pszFile;               // 注册点文件（__FILE__）。
-    int m_nLine;                         // 注册点行号（__LINE__）。
+    CSourceLoc m_loc;                    // 任务注册点源码位置（调试用）。
 #endif
 };
 

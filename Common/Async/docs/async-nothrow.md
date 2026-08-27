@@ -581,4 +581,4 @@ exec.Stop(); // 优雅关闭：等已提交任务完成
 | 句柄 (Handle) | 共享资源引用，保命用 |
 | `CTaskEndReason` | 终止原因（仅调试/日志，不参与类型系统） |
 
-> 完整可运行示例见 `examples/nothrow_demo.cpp`（`cd examples && make run`）。
+> 完整可运行示例见 `examples/main.cpp`（`cd examples/Linux && make run`）。

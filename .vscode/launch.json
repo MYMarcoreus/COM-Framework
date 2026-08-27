@@ -2,14 +2,14 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug nothrow_demo (debug build)",
+            "name": "Debug examples (debug build)",
             "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/build/debug/examples/nothrow_demo",
+            "program": "${workspaceFolder}/build/debug/examples/examples",
             "args": [],
             "stopOnEntry": false,
             "cwd": "${workspaceFolder}",
-            "environment": [],
+            "env": {},
             "preLaunchTask": "build debug (Common + examples)"
         }
     ]

@@ -66,8 +66,10 @@ EOF
 # 自动发现项目：含 Linux/Makefile 的顶层目录，按 KNOWN_ORDER 排序 + 追加未知
 discover_projects() {
     local all
+    # examples 是示例项目（由 build_examples 专门构建），不纳入服务器项目自动发现
     all=$(find "$WORKSPACE_ROOT" -maxdepth 3 -type f -path "$WORKSPACE_ROOT/*/Linux/Makefile" 2>/dev/null \
-        | sed "s#$WORKSPACE_ROOT/##; s#/Linux/Makefile##" | sort -u)
+        | sed "s#$WORKSPACE_ROOT/##; s#/Linux/Makefile##" | sort -u \
+        | grep -vx 'examples' || true)
     local ordered=""
     local p
     for p in "${KNOWN_ORDER[@]}"; do
@@ -105,7 +107,7 @@ compiledb_project() {
 build_examples() {
     echo "==================== Building examples ($MODE) ===================="
     # release / debug 产物分目录（build/<模式>/examples），互不干扰
-    (cd "$WORKSPACE_ROOT/examples" && make BUILD_MODE=$MODE CXXFLAGS="$FLAGS")
+    (cd "$WORKSPACE_ROOT/examples/Linux" && make BUILD_MODE=$MODE CXXFLAGS="$FLAGS")
 }
 
 parse_args() {
@@ -143,7 +145,7 @@ main() {
     if [[ $DO_CLEAN -eq 1 ]]; then
         for mode in release debug; do
             for p in "${projects[@]}"; do clean_project "$p" "$mode"; done
-            (cd "$WORKSPACE_ROOT/examples" && make clean BUILD_MODE=$mode >/dev/null 2>&1) || true
+            (cd "$WORKSPACE_ROOT/examples/Linux" && make clean BUILD_MODE=$mode >/dev/null 2>&1) || true
         done
         rm -rf "$WORKSPACE_ROOT/build/release" "$WORKSPACE_ROOT/build/debug"
         echo "==================== 已清理所有构建产物 ===================="
@@ -152,7 +154,7 @@ main() {
 
     if [[ $DO_COMPILEDB -eq 1 ]]; then
         for p in "${projects[@]}"; do compiledb_project "$p"; done
-        (cd "$WORKSPACE_ROOT/examples" && make compiledb)
+        (cd "$WORKSPACE_ROOT/examples/Linux" && make compiledb)
         echo "==================== compile_commands.json 生成完毕 ===================="
         exit 0
     fi

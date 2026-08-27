@@ -96,7 +96,7 @@
         {
             "label": "run examples (terminal)",
             "type": "shell",
-            "command": "./build/release/examples/nothrow_demo",
+            "command": "./build/release/examples/examples",
             "dependsOn": [
                 "build examples (release)"
             ],
@@ -105,12 +105,6 @@
                 "reveal": "always",
                 "panel": "dedicated"
             }
-        },
-        {
-            "label": "debug nothrow_demo (debug build)",
-            "type": "debug",
-            "request": "launch",
-            "name": "Debug nothrow_demo (debug build)"
         },
         {
             "label": "run tests (terminal)",

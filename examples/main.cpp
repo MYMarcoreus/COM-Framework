@@ -2,10 +2,10 @@
 // AsyncExecutorNoThrow 完整示例（无异常版异步框架，Option 风格）
 // 有值/无值，风格类似 Rust Option / C++ std::optional
 //
-// 编译：
-//   g++ -std=c++11 -pthread -I Common -I Common/ThirdParty/asio/asio/include
-//       -DASIO_STANDALONE examples/nothrow_demo.cpp
-//       Common/Async/AsyncExecutorNoThrow.cpp Common/Thread/ThreadPool.cpp
+// 项目结构参考标准服务器项目：main.cpp（入口）+ Linux/Makefile（构建配置）。
+// 构建与运行：
+//   cd examples/Linux && make run            # 构建并运行（release）
+//   ./build.sh --examples                    # 或经统一构建脚本（build.sh）
 //
 // 用法速览（每个函数演示一类用法）：
 //   ① Submit+Get            最基本：提交任务、阻塞取结果

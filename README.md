@@ -84,6 +84,11 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 │   ├── main.cpp
 │   └── Linux/Makefile           # 生成 build/tests（make run 运行全部用例）
 │
+├── examples/                    # 示例项目（参考标准项目结构，直接编译所需 Common 源码）
+│   ├── main.cpp                 # 示例入口（AsyncExecutorNoThrow 完整示例）
+│   └── Linux/
+│       └── Makefile             # 生成 build/examples（cd examples/Linux && make run）
+│
 └── build/                       # 构建产物（.o / .a / 可执行文件）
 ```
 
@@ -188,10 +193,9 @@ build/debug/       —— 调试产物（-O0）
 - **build debug (Common + examples)** —— VS Code 调试前的构建（`launch.json` 的 `preLaunchTask`）
 - **generate compile_commands** —— 生成 compile_commands.json
 - **run examples (terminal)** / **run tests (terminal)** / **run demo server (terminal)** / **run demo client (terminal)** —— 普通终端运行（release 产物）
-- **debug nothrow_demo (debug build)** —— 在 VS Code 调试器中启动（`type: debug` 任务唤起 `launch.json` 的对应配置；若环境不支持该任务类型，请用 **F5** / Run and Debug）
 - **clean all**
 
-**VS Code 调试**（仅 debug 构建，在调试器中运行，支持断点 / 变量 / 调用栈）：`launch.json` 提供配置 `Debug nothrow_demo (debug build)`（`build/debug/...`）。启动方式：按 **F5** 或 **Run and Debug** 面板（最可靠），或运行任务 **debug nothrow_demo (debug build)**（`type: debug` 任务唤起该配置）。无论哪种方式都会自动先执行 `preLaunchTask` 构建。
+**VS Code 调试**（仅 debug 构建，在调试器中运行，支持断点 / 变量 / 调用栈）：`launch.json` 提供配置 `Debug examples (debug build)`（`build/debug/examples/examples`）。启动方式：按 **F5** 或 **Run and Debug** 面板选择该配置（`tasks.json` 不提供调试任务，调试统一由 `launch.json` 驱动）。启动时会自动先执行 `preLaunchTask`（`build debug (Common + examples)`）完成调试构建。
 
 运行 Demo 服务器与客户端：`./build/release/demo 9000`、`./build/release/demo_client 9000`（调试版用 `./build/debug/...`）。
 
