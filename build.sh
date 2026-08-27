@@ -33,8 +33,6 @@ DEBUG_FLAGS="-std=c++11 -Wall -Wextra -O0 -g -pthread"
 
 MODE="release"
 FLAGS="$RELEASE_FLAGS"
-# 全局构建模式标记（build/.mode）：记录上次构建模式，切换时清理重建
-GLOBAL_MODE_FILE="$WORKSPACE_ROOT/build/.mode"
 DO_COMPILEDB=0
 DO_EXAMPLES=0
 DO_TESTS=0
@@ -89,25 +87,25 @@ discover_projects() {
 build_project() {
     local p=$1
     echo "==================== Building $p ($MODE) ===================="
-    (cd "$WORKSPACE_ROOT/$p/Linux" && make all CXXFLAGS="$FLAGS")
+    (cd "$WORKSPACE_ROOT/$p/Linux" && make all BUILD_MODE=$MODE CXXFLAGS="$FLAGS")
 }
 
 clean_project() {
-    local p=$1
-    echo "Cleaning $p ..."
-    (cd "$WORKSPACE_ROOT/$p/Linux" && make clean >/dev/null 2>&1) || true
+    local p=$1 mode=$2
+    echo "Cleaning $p ($mode) ..."
+    (cd "$WORKSPACE_ROOT/$p/Linux" && make clean BUILD_MODE=$mode >/dev/null 2>&1) || true
 }
 
 compiledb_project() {
     local p=$1
     echo "Generating compile_commands.json for $p ..."
-    (cd "$WORKSPACE_ROOT/$p/Linux" && make compiledb)
+    (cd "$WORKSPACE_ROOT/$p/Linux" && make compiledb BUILD_MODE=$MODE)
 }
 
 build_examples() {
     echo "==================== Building examples ($MODE) ===================="
-    # 模式切换时的清理由 main 的全局模式检测统一处理
-    (cd "$WORKSPACE_ROOT/examples" && make CXXFLAGS="$FLAGS")
+    # release / debug 产物分目录（build/<模式>/examples），互不干扰
+    (cd "$WORKSPACE_ROOT/examples" && make BUILD_MODE=$MODE CXXFLAGS="$FLAGS")
 }
 
 parse_args() {
@@ -143,9 +141,11 @@ main() {
     fi
 
     if [[ $DO_CLEAN -eq 1 ]]; then
-        for p in "${projects[@]}"; do clean_project "$p"; done
-        (cd "$WORKSPACE_ROOT/examples" && make clean >/dev/null 2>&1) || true
-        rm -f "$GLOBAL_MODE_FILE"
+        for mode in release debug; do
+            for p in "${projects[@]}"; do clean_project "$p" "$mode"; done
+            (cd "$WORKSPACE_ROOT/examples" && make clean BUILD_MODE=$mode >/dev/null 2>&1) || true
+        done
+        rm -rf "$WORKSPACE_ROOT/build/release" "$WORKSPACE_ROOT/build/debug"
         echo "==================== 已清理所有构建产物 ===================="
         exit 0
     fi
@@ -157,15 +157,7 @@ main() {
         exit 0
     fi
 
-    # 构建模式切换检测：release ↔ debug 变化时清理旧产物，确保 -O0/-O2 真正生效
-    if [[ -f "$GLOBAL_MODE_FILE" && "$(cat "$GLOBAL_MODE_FILE" 2>/dev/null)" != "$MODE" ]]; then
-        echo "检测到构建模式切换（$MODE），清理旧产物 ..."
-        for p in "${projects[@]}"; do clean_project "$p"; done
-        (cd "$WORKSPACE_ROOT/examples" && make clean >/dev/null 2>&1) || true
-    fi
-    mkdir -p "$WORKSPACE_ROOT/build"
-    echo "$MODE" > "$GLOBAL_MODE_FILE"
-
+    # release / debug 产物分目录（build/<模式>/），互不干扰，无需切换时清理
     for p in "${projects[@]}"; do
         build_project "$p"
     done
@@ -176,7 +168,7 @@ main() {
 
     if [[ $DO_TESTS -eq 1 ]]; then
         echo "==================== 运行单元测试 ===================="
-        "$WORKSPACE_ROOT/build/tests"
+        "$WORKSPACE_ROOT/build/$MODE/tests"
     fi
 
     echo "==================== Build finished ===================="

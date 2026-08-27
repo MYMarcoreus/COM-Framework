@@ -13,7 +13,9 @@
 
 MKFILE_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 ROOT       := $(abspath $(MKFILE_DIR)/..)
-BUILD_DIR  := $(ROOT)/build/examples
+# 构建模式（release / debug）：产物分目录 build/<模式>/examples（由 build.sh 传入）
+BUILD_MODE ?= release
+BUILD_DIR  := $(ROOT)/build/$(BUILD_MODE)/examples
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -pthread

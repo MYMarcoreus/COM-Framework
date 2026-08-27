@@ -18,6 +18,8 @@ PROJECT    := $(notdir $(ROOT))
 
 CXX      ?= g++
 CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -pthread
+# 构建模式（release / debug）：产物分目录 build/<模式>/（由 build.sh 传入）
+BUILD_MODE ?= release
 # 本项目各模块目录 + 第三方子模块（asio / inih）
 CPPFLAGS ?= -I$(ROOT) \
             -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE \
@@ -26,7 +28,7 @@ LDFLAGS  ?=
 LDLIBS   ?=
 
 SRC_DIR   := $(ROOT)
-BUILD_DIR := $(WS_ROOT)/build
+BUILD_DIR := $(WS_ROOT)/build/$(BUILD_MODE)
 TARGET    := $(BUILD_DIR)/libCommon.a
 
 # 递归收集各模块目录下的 .cpp（排除 Linux / ThirdParty）

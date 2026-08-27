@@ -173,6 +173,13 @@ bash build-all.sh # 构建 Common → ServerCore → LogServer → Demo → Serv
 ./build.sh --examples         # 构建 examples（可配合指定项目，如 ./build.sh --debug --examples Common）
 ```
 
+**构建产物按模式分目录**（release 与 debug 隔离，可同时存在、互不干扰）：
+
+```text
+build/release/     —— 发布产物（demo、demo_client、logserver、servera、tests、lib*.a、examples/）
+build/debug/       —— 调试产物（-O0）
+```
+
 也可用根 `Makefile` 快捷方式：`make` / `make debug` / `make compiledb` / `make run` / `make tests` / `make clean`（等价于调用 `./build.sh`）。
 
 > 旧脚本 `build-all.sh` / `generate-compiledb.sh` / `build-debug.sh` 已改为兼容包装（内部转发到 `./build.sh`）。
@@ -184,10 +191,12 @@ bash build-all.sh # 构建 Common → ServerCore → LogServer → Demo → Serv
 - **build debug (Common + examples)** —— VS Code 调试前的构建（`launch.json` 的 `preLaunchTask`）
 - **generate compile_commands** —— 生成 compile_commands.json
 - **refresh clangd** —— 重新生成编译数据库并重启 clangd
-- **run examples** / **run tests** / **run demo server** / **run demo client**
+- **run examples / run tests / run demo server / run demo client** —— 各分 **release / debug** 两个任务（终端运行）
 - **clean all**
 
-运行 Demo 服务器与客户端：`./build/demo 9000`、`./build/demo_client 9000`。
+**VS Code 调试**：`launch.json` 提供两个配置——`Debug nothrow_demo (debug build)`（`build/debug/...`）与 `Debug nothrow_demo (release build)`（`build/release/...`）。
+
+运行 Demo 服务器与客户端：`./build/release/demo 9000`、`./build/release/demo_client 9000`（调试版用 `./build/debug/...`）。
 
 ### 3. 宿主机（无 sudo）生成 compile_commands.json
 

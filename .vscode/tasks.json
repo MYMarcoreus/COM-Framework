@@ -54,9 +54,21 @@
             }
         },
         {
-            "label": "run examples",
+            "label": "build examples (release)",
             "type": "shell",
-            "command": "./build.sh --examples && ./build/examples/nothrow_demo",
+            "command": "./build.sh --examples",
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "run examples (release)",
+            "type": "shell",
+            "command": "./build.sh --examples && ./build/release/examples/nothrow_demo",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
@@ -64,9 +76,29 @@
             }
         },
         {
-            "label": "run tests",
+            "label": "run examples (debug)",
+            "type": "shell",
+            "command": "./build.sh --debug --examples && ./build/debug/examples/nothrow_demo",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "run tests (release)",
             "type": "shell",
             "command": "./build.sh --tests",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "run tests (debug)",
+            "type": "shell",
+            "command": "./build.sh --debug --tests",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
@@ -102,9 +134,9 @@
             }
         },
         {
-            "label": "run demo server",
+            "label": "run demo server (release)",
             "type": "shell",
-            "command": "./build.sh Demo && ./build/demo",
+            "command": "./build.sh Demo && ./build/release/demo",
             "group": {
                 "kind": "test",
                 "isDefault": true
@@ -116,9 +148,29 @@
             }
         },
         {
-            "label": "run demo client",
+            "label": "run demo server (debug)",
             "type": "shell",
-            "command": "./build.sh Demo && ./build/demo_client",
+            "command": "./build.sh --debug Demo && ./build/debug/demo",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "run demo client (release)",
+            "type": "shell",
+            "command": "./build.sh Demo && ./build/release/demo_client",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "run demo client (debug)",
+            "type": "shell",
+            "command": "./build.sh --debug Demo && ./build/debug/demo_client",
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
