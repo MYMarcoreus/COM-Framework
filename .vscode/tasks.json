@@ -2,40 +2,6 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "build all (release)",
-            "type": "shell",
-            "command": "./build.sh",
-            "dependsOn": [
-                "generate compile_commands"
-            ],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "problemMatcher": [
-                "$gcc"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            }
-        },
-        {
-            "label": "build all (debug)",
-            "type": "shell",
-            "command": "./build.sh --debug",
-            "dependsOn": [
-                "generate compile_commands"
-            ],
-            "problemMatcher": [
-                "$gcc"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            }
-        },
-        {
             "label": "build (select project)",
             "type": "shell",
             "command": "./build.sh ${input:mode} ${input:project}",
@@ -91,103 +57,9 @@
             }
         },
         {
-            "label": "build examples (release)",
-            "type": "shell",
-            "command": "./build.sh examples",
-            "dependsOn": [
-                "generate compile_commands"
-            ],
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            }
-        },
-        {
-            "label": "build demo (release)",
-            "type": "shell",
-            "command": "./build.sh Common ServerCore Demo",
-            "dependsOn": [
-                "generate compile_commands"
-            ],
-            "problemMatcher": [
-                "$gcc"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            }
-        },
-        {
-            "label": "run examples (terminal)",
-            "type": "shell",
-            "command": "./build/release/examples",
-            "dependsOn": [
-                "build examples (release)"
-            ],
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated"
-            }
-        },
-        {
-            "label": "run tests (terminal)",
-            "type": "shell",
-            "command": "./build/release/tests",
-            "dependsOn": [
-                "build all (release)"
-            ],
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated"
-            }
-        },
-        {
             "label": "generate compile_commands",
             "type": "shell",
             "command": "./build.sh --compiledb",
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            }
-        },
-        {
-            "label": "clean all",
-            "type": "shell",
-            "command": "./build.sh --clean",
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            }
-        },
-        {
-            "label": "run demo server (terminal)",
-            "type": "shell",
-            "command": "./build/release/demo",
-            "dependsOn": [
-                "build demo (release)"
-            ],
-            "group": {
-                "kind": "test",
-                "isDefault": true
-            },
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated"
-            }
-        },
-        {
-            "label": "run demo client (terminal)",
-            "type": "shell",
-            "command": "./build/release/demo_client",
-            "dependsOn": [
-                "build demo (release)"
-            ],
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",

@@ -187,15 +187,14 @@ build/debug/       —— 调试产物（-O0）
 
 > `build.sh` 是唯一构建入口（整合了原 `build-all.sh` / `build-debug.sh` / `generate-compiledb.sh` 与根 `Makefile`）。项目级构建用各项目 `Linux/Makefile`（由 `build.sh` 调用）。
 
-在 VS Code 中可通过任务（`Tasks: Run Build Task`）一键执行：
+在 VS Code 中可通过任务（`Tasks: Run Task`）执行（select 由原生下拉驱动）：
 
-- **build all (release)** / **build all (debug)** —— 全量构建
-- **build (select project)** —— 弹出 **VS Code 原生下拉**，先选构建模式（debug 默认 / release）再选项目（全部可构建项目，选项来自 `./build.sh --list`）
-- **debug (select project)** / **run (select project)** —— 同上，但项目下拉只列出**可执行项目**（选项来自 `./build.sh --executables`：可构建 + 项目根有 `main.cpp`），分别执行 debug 构建（随后 F5 调试）/ 构建并运行（见 `.tools/run_project.sh`）
+- **build (select project)** —— 先选构建模式（debug 默认 / release）再选项目（全部可构建项目，选项来自 `./build.sh --list`）
+- **debug (select project)** / **run (select project)** —— 项目下拉只列出**可执行项目**（选项来自 `./build.sh --executables`：可构建 + 项目根有 `main.cpp`），分别执行 debug 构建（随后 F5 调试）/ 构建并运行（见 `.tools/run_project.sh`）
 - **build debug (Common + examples)** —— VS Code 调试前的构建（`launch.json` 的 `preLaunchTask`）
-- **generate compile_commands** —— 生成 compile_commands.json
-- **run examples (terminal)** / **run tests (terminal)** / **run demo server (terminal)** / **run demo client (terminal)** —— 普通终端运行（release 产物）
-- **clean all**
+- **generate compile_commands** —— 生成 compile_commands.json（供 clangd）
+
+> 全量构建 / 清理等批量操作不再提供任务，直接使用 `./build.sh`（全量）与 `./build.sh --clean`（清理）。
 
 **VS Code 调试**（仅 debug 构建，在调试器中运行，支持断点 / 变量 / 调用栈）：`launch.json` 提供配置 `Debug examples (debug build)`（`build/debug/examples`）。启动方式：按 **F5** 或 **Run and Debug** 面板选择该配置（`tasks.json` 不提供调试任务，调试统一由 `launch.json` 驱动）。启动时会自动先执行 `preLaunchTask`（`build debug (Common + examples)`）完成调试构建。
 
