@@ -11,7 +11,7 @@ namespace sc {
 
 /// @brief 日志模块。
 ///
-/// 内部代理 common::CLogger 全局单例。
+/// 内部代理 common::log::CLogger 全局单例。
 class CLoggerModule : public CModule, public ILogger
 {
 public:

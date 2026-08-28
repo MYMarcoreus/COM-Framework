@@ -44,16 +44,16 @@ void CLoggerModule::Shutdown()
 
 /// @brief 设置日志级别。
 ///
-/// @param level 对应 common::LogLevel 的枚举值。
+/// @param level 对应 common::log::LogLevel 的枚举值。
 void CLoggerModule::SetLevel(int level)
 {
-    common::CLogger::Instance().SetLevel(static_cast<common::LogLevel>(level));
+    common::log::CLogger::Instance().SetLevel(static_cast<common::log::LogLevel>(level));
 }
 
 /// @brief 启用文件输出。
 bool CLoggerModule::OpenFile(const std::string& path)
 {
-    return common::CLogger::Instance().OpenFile(path);
+    return common::log::CLogger::Instance().OpenFile(path);
 }
 
 /// @brief 设置单个日志文件最大字节数。
@@ -61,37 +61,37 @@ bool CLoggerModule::OpenFile(const std::string& path)
 /// @param nMaxBytes 文件上限；0 表示不滚动。
 void CLoggerModule::SetMaxFileSize(std::uint64_t nMaxBytes)
 {
-    common::CLogger::Instance().SetMaxFileSize(nMaxBytes);
+    common::log::CLogger::Instance().SetMaxFileSize(nMaxBytes);
 }
 
 /// @brief 跟踪日志。
 void CLoggerModule::Trace(const std::string& message)
 {
-    common::CLogger::Instance().Trace(message);
+    common::log::CLogger::Instance().Trace(message);
 }
 
 /// @brief 调试日志。
 void CLoggerModule::Debug(const std::string& message)
 {
-    common::CLogger::Instance().Debug(message);
+    common::log::CLogger::Instance().Debug(message);
 }
 
 /// @brief 信息日志。
 void CLoggerModule::Info(const std::string& message)
 {
-    common::CLogger::Instance().Info(message);
+    common::log::CLogger::Instance().Info(message);
 }
 
 /// @brief 警告日志。
 void CLoggerModule::Warn(const std::string& message)
 {
-    common::CLogger::Instance().Warn(message);
+    common::log::CLogger::Instance().Warn(message);
 }
 
 /// @brief 错误日志。
 void CLoggerModule::Error(const std::string& message)
 {
-    common::CLogger::Instance().Error(message);
+    common::log::CLogger::Instance().Error(message);
 }
 
 } // namespace sc

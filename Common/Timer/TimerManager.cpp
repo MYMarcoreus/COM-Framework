@@ -1,6 +1,7 @@
 #include "Timer/TimerManager.h"
 
 namespace common {
+namespace timer {
 
 /// @brief 创建定时器管理器。
 CTimerManager::CTimerManager()
@@ -202,4 +203,5 @@ void CTimerManager::Schedule(std::shared_ptr<asio::steady_timer> pTimer, TimerId
         });
 }
 
+} // namespace timer
 } // namespace common

@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace common {
+namespace thread {
 
 /// @brief 线程池。
 ///
@@ -55,4 +56,5 @@ private:
     bool m_bStopping;
 };
 
+} // namespace thread
 } // namespace common

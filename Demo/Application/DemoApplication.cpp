@@ -152,7 +152,7 @@ bool CDemoApplication::OnInitialize()
             if (event.data != nullptr && event.size == sizeof(std::uint16_t))
             {
                 std::uint16_t port = *static_cast<const std::uint16_t*>(event.data);
-                common::CLogger::Instance().Info(
+                common::log::CLogger::Instance().Info(
                     "[Event] 收到 network.started，端口 " + std::to_string(port));
             }
         });
@@ -160,13 +160,13 @@ bool CDemoApplication::OnInitialize()
     m_tEventStopId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStopped,
         [](const sc::Event&)
         {
-            common::CLogger::Instance().Info("[Event] 收到 network.stopped");
+            common::log::CLogger::Instance().Info("[Event] 收到 network.stopped");
         });
     // 订阅自定义事件（由 OnStart 中 PublishAsync 异步发布，工作线程处理）
     m_tDemoEventId = m_pEventDispatcher->Subscribe("demo.hello",
         [](const sc::Event&)
         {
-            common::CLogger::Instance().Info("[Event] 收到 demo.hello（异步分发）");
+            common::log::CLogger::Instance().Info("[Event] 收到 demo.hello（异步分发）");
         });
     return true;
 }

@@ -24,12 +24,12 @@ int main(int argc, char* argv[])
 
     if (!app.Initialize())
     {
-        common::CLogger::Instance().Error("LogServer 初始化失败");
+        common::log::CLogger::Instance().Error("LogServer 初始化失败");
         return -1;
     }
     if (!app.Start())
     {
-        common::CLogger::Instance().Error("LogServer 启动失败（端口可能被占用）");
+        common::log::CLogger::Instance().Error("LogServer 启动失败（端口可能被占用）");
         app.Shutdown();
         return -1;
     }
@@ -37,6 +37,6 @@ int main(int argc, char* argv[])
     int nResult = app.Run();
 
     app.Shutdown();
-    common::CLogger::Instance().Info("LogServer 服务器已退出");
+    common::log::CLogger::Instance().Info("LogServer 服务器已退出");
     return nResult;
 }

@@ -43,8 +43,8 @@ private:
     void CheckReload();
 
     std::int64_t m_nIntervalMs;
-    common::CTimerManager m_timer;
-    common::TimerId m_tTimerId;
+    common::timer::CTimerManager m_timer;
+    common::timer::TimerId m_tTimerId;
     ScopedInterfacePtr<IConfig> m_pConfig;
     ScopedInterfacePtr<IEventDispatcher> m_pEventDispatcher;
 };

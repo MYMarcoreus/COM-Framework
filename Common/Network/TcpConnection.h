@@ -14,6 +14,7 @@
 #include "Network/Buffer.h"
 
 namespace common {
+namespace network {
 
 /// @brief TCP 连接（基于 asio）。
 ///
@@ -101,4 +102,5 @@ private:
     std::chrono::steady_clock::time_point m_lastActive;
 };
 
+} // namespace network
 } // namespace common

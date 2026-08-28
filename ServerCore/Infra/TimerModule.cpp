@@ -31,21 +31,21 @@ bool CTimerModule::Start()
 }
 
 /// @brief 添加一次性定时器。
-common::TimerId CTimerModule::AddTimer(std::int64_t delayMs,
-                                         const common::TimerCallback& callback)
+common::timer::TimerId CTimerModule::AddTimer(std::int64_t delayMs,
+                                                const common::timer::TimerCallback& callback)
 {
     return m_timer.AddTimer(delayMs, callback);
 }
 
 /// @brief 添加周期性定时器。
-common::TimerId CTimerModule::AddPeriodicTimer(std::int64_t intervalMs,
-                                                 const common::TimerCallback& callback)
+common::timer::TimerId CTimerModule::AddPeriodicTimer(std::int64_t intervalMs,
+                                                        const common::timer::TimerCallback& callback)
 {
     return m_timer.AddPeriodicTimer(intervalMs, callback);
 }
 
 /// @brief 取消定时器。
-bool CTimerModule::Cancel(common::TimerId id)
+bool CTimerModule::Cancel(common::timer::TimerId id)
 {
     return m_timer.Cancel(id);
 }

@@ -4,7 +4,6 @@
 #include <string>
 
 #include "Async/AsyncExecutor.h"
-#include "Async/AsyncExecutorNoThrow.h"
 #include "Infra/GuardedTimer.h"
 #include "Log/Logger.h"
 #include "Module/ResolveContext.h"
@@ -15,7 +14,7 @@ namespace demo {
 ///
 /// @param intervalMs 演示周期（毫秒，小于 100 按 100 处理）。
 CDemoAsyncModule::CDemoAsyncModule(std::int64_t intervalMs)
-    : sc::CModule("async-demo"), m_nIntervalMs(intervalMs), m_tTimerId(common::kInvalidTimerId)
+    : sc::CModule("async-demo"), m_nIntervalMs(intervalMs), m_tTimerId(common::timer::kInvalidTimerId)
 {
     // 依赖定时器接口模块：周期触发演示。
     AddDependency(sc::IID_ITimer());
@@ -44,7 +43,7 @@ bool CDemoAsyncModule::Initialize(const sc::CResolveContext& ctx)
 
 /// @brief 启动自建执行器并注册周期演示定时器。
 ///
-/// 自建 common::CAsyncExecutor：CTask 链式调用需要具体类型
+/// 自建 common::async::CAsyncExecutor：CTask 链式调用需要具体类型
 /// （IAsyncExecutor 接口只暴露 Post，模板无法进虚函数表）。
 ///
 /// @return true 启动成功；false 执行器或定时器接口缺失。
@@ -54,14 +53,8 @@ bool CDemoAsyncModule::Start()
     {
         return false;
     }
-    m_pExecutor.reset(new common::CAsyncExecutor(2));
+    m_pExecutor.reset(new common::async::CAsyncExecutor(2));
     if (!m_pExecutor->Start())
-    {
-        return false;
-    }
-    // 无异常版执行器（Option 风格：有值传播 / 无值终止）
-    m_pNoThrowExecutor.reset(new common::nothrow::CAsyncExecutor(2));
-    if (!m_pNoThrowExecutor->Start())
     {
         return false;
     }
@@ -80,23 +73,18 @@ bool CDemoAsyncModule::Start()
 /// CAsyncExecutor::Stop 等待已提交任务完成（优雅关闭）。
 void CDemoAsyncModule::Stop()
 {
-    if (m_tTimerId != common::kInvalidTimerId)
+    if (m_tTimerId != common::timer::kInvalidTimerId)
     {
         if (m_pTimer != nullptr)
         {
             m_pTimer->Cancel(m_tTimerId);
         }
-        m_tTimerId = common::kInvalidTimerId;
+        m_tTimerId = common::timer::kInvalidTimerId;
     }
     if (m_pExecutor != nullptr)
     {
         m_pExecutor->Stop();
         m_pExecutor.reset();
-    }
-    if (m_pNoThrowExecutor != nullptr)
-    {
-        m_pNoThrowExecutor->Stop();
-        m_pNoThrowExecutor.reset();
     }
 }
 
@@ -115,65 +103,37 @@ void CDemoAsyncModule::RunDemo()
         return;
     }
 
-    // ① 链式调用：Submit → Then → Then（多阶段流水线 3 → 6 → 7）
-    common::CTask<int> task = m_pExecutor->Submit([]() { return 3; })
-        .Then([](int n) { return n * 2; })
-        .Then([](int n) { return n + 1; });
-
-    // ② 多回调 fan-out：同一任务多个消费者（全部触发）
-    task.OnSuccess([](int n)
+    // ① 链式调用：Submit → Then → Get（有值传播）
+    common::async::CTaskResult<int> nr =
+        m_pExecutor->Submit([]() { return 10; })
+            .Then([](int n) { return n * 3; })
+            .Get();
+    if (nr.HasValue())
     {
-        common::CLogger::Instance().Info("[AsyncDemo] 链式结果=" + std::to_string(n));
-    });
-    task.OnSuccess([](int n)
-    {
-        common::CLogger::Instance().Info("[AsyncDemo] fan-out 第二个消费者收到=" + std::to_string(n));
-    });
+        common::log::CLogger::Instance().Info("[AsyncDemo] 链式=" + std::to_string(nr.Value()));
+    }
 
-    // ③ 异常沿链传播：OnFailure 处理上游异常
-    common::CTask<int> failTask = m_pExecutor->Submit([]() -> int
+    // ② 多回调 fan-out：同一任务多个 OnSuccess 消费者
+    common::async::CTask<int> t = m_pExecutor->Submit([]() { return 7; });
+    t.OnSuccess([](const int& v)
+    {
+        common::log::CLogger::Instance().Info("[AsyncDemo] fan-out 结果=" + std::to_string(v));
+    });
+    t.OnSuccess([](const int& v)
+    {
+        common::log::CLogger::Instance().Info("[AsyncDemo] fan-out 第二个消费者=" + std::to_string(v));
+    });
+    t.Get();
+
+    // ③ 任务异常 → 无值终止（不抛异常）
+    common::async::CTaskResult<int> nf = m_pExecutor->Submit([]() -> int
     {
         throw std::runtime_error("演示用异常");
-    });
-    failTask.OnFailure([](const std::exception_ptr& eptr)
+    }).Get();
+    if (!nf.HasValue())
     {
-        try
-        {
-            std::rethrow_exception(eptr);
-        }
-        catch (const std::exception& e)
-        {
-            common::CLogger::Instance().Warn(std::string("[AsyncDemo] 异常沿链传播: ") + e.what());
-        }
-    });
-
-    // ④ 阻塞获取（演示 Get）
-    int nResult = task.Get();
-    common::CLogger::Instance().Info("[AsyncDemo] Get 阻塞获取=" + std::to_string(nResult));
-
-    // ⑤ 无异常版演示（Option 风格：有值传播 / 无值终止）
-    if (m_pNoThrowExecutor != nullptr)
-    {
-        // 链式成功：Submit → Then → Get，有值传播
-        common::nothrow::CTaskResult<int> nr =
-            m_pNoThrowExecutor->Submit([]() { return 10; })
-                .Then([](int n) { return n * 3; })
-                .Get();
-        if (nr.HasValue())
-        {
-            common::CLogger::Instance().Info("[AsyncDemo] 无异常版链式=" +
-                std::to_string(nr.Value()));
-        }
-        // 任务异常 → 无值终止（Reason=kException，不抛异常）
-        common::nothrow::CTaskResult<int> nf = m_pNoThrowExecutor->Submit([]() -> int
-        {
-            throw std::runtime_error("无异常版演示错误");
-        }).Get();
-        if (!nf.HasValue())
-        {
-            common::CLogger::Instance().Warn("[AsyncDemo] 无异常版无值终止: reason=" +
-                std::to_string(static_cast<int>(nf.Reason())));
-        }
+        common::log::CLogger::Instance().Warn("[AsyncDemo] 异常转无值: reason=" +
+            std::to_string(static_cast<int>(nf.Reason())));
     }
 }
 

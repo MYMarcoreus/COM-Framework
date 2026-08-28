@@ -13,7 +13,7 @@
 #include "Network/INetwork.h"
 #include "Observability/IMetrics.h"
 
-namespace common { class CTcpServer; }
+namespace common { namespace network { class CTcpServer; } }
 
 namespace sc {
 
@@ -90,7 +90,7 @@ public:
     SC_DECLARE_INTERFACE_MAP();
 
 private:
-    std::unique_ptr<common::CTcpServer> m_pServer;
+    std::unique_ptr<common::network::CTcpServer> m_pServer;
     ScopedInterfacePtr<INetworkHandler> m_pHandler;
     ScopedInterfacePtr<IMetrics> m_pMetrics;
     std::map<ConnectionId, void*> m_mapConnCtx;

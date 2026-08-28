@@ -10,6 +10,7 @@
 #include "asio.hpp"
 
 namespace common {
+namespace network {
 
 /// @brief UDP Socket（基于 asio）。
 ///
@@ -62,4 +63,5 @@ private:
     std::atomic<bool> m_bRunning;
 };
 
+} // namespace network
 } // namespace common

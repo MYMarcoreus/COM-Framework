@@ -12,6 +12,7 @@
 #include "Network/Buffer.h"
 
 namespace common {
+namespace network {
 
 /// @brief TCP 客户端（基于 asio）。
 ///
@@ -101,4 +102,5 @@ private:
     std::atomic<bool> m_bCloseNotified;
 };
 
+} // namespace network
 } // namespace common

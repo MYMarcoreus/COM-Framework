@@ -13,7 +13,7 @@ namespace sc {
 /// @param nIntervalMs 重载检测周期（毫秒，<100 按 100 处理）。
 CConfigReloadModule::CConfigReloadModule(std::int64_t nIntervalMs)
     : CModule("config-reload"),
-      m_nIntervalMs(nIntervalMs), m_tTimerId(common::kInvalidTimerId)
+      m_nIntervalMs(nIntervalMs), m_tTimerId(common::timer::kInvalidTimerId)
 {
     // 依赖配置接口模块：拓扑排序保证其先初始化 / 启动。
     AddDependency(IID_IConfig());
@@ -69,10 +69,10 @@ bool CConfigReloadModule::Start()
 /// @brief 停止定时器。
 void CConfigReloadModule::Stop()
 {
-    if (m_tTimerId != common::kInvalidTimerId)
+    if (m_tTimerId != common::timer::kInvalidTimerId)
     {
         m_timer.Cancel(m_tTimerId);
-        m_tTimerId = common::kInvalidTimerId;
+        m_tTimerId = common::timer::kInvalidTimerId;
     }
     m_timer.Stop();
 }
@@ -100,7 +100,7 @@ void CConfigReloadModule::CheckReload()
         {
             m_pEventDispatcher->Publish(sc::events::kConfigReloaded, nullptr, 0);
         }
-        common::CLogger::Instance().Info("配置已热加载，发布 config.reloaded 事件");
+        common::log::CLogger::Instance().Info("配置已热加载，发布 config.reloaded 事件");
     }
 }
 

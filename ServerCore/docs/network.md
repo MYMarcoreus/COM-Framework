@@ -6,7 +6,7 @@
 |---|---|
 | `INetwork` | 网络接口：启动 / 停止 / 发送 / 关闭 / 统计 / 连接级上下文 |
 | `INetworkHandler` | 网络事件回调：`OnAccept` / `OnData` / `OnClose` |
-| `CNetworkModule` | 实现 `INetwork`，内部封装 `common::CTcpServer`（asio） |
+| `CNetworkModule` | 实现 `INetwork`，内部封装 `common::network::CTcpServer`（asio） |
 | `CTcpServerModule` | 通用 TCP 装配模块：解析网络 / 处理 / 事件接口并启动 |
 
 ## 数据流

@@ -3,23 +3,19 @@
 #include <cstdint>
 #include <memory>
 
-#include "Async/AsyncExecutorNoThrow.h"
+#include "Async/AsyncExecutor.h"
 #include "Module/ScopedInterfacePtr.h"
 #include "Infra/ITimer.h"
 #include "Module/Module.h"
-
-namespace common {
-class CAsyncExecutor; // 异常版执行器前向声明（unique_ptr 成员只需声明，完整类型在 .cpp 引入）
-}
 
 namespace demo {
 
 /// @brief 异步框架演示模块。
 ///
-/// 演示 common::CAsyncExecutor / CTask 的异步能力：
-///  - 链式调用：Submit → Then → Then（多阶段流水线）；
+/// 演示 common::async::CAsyncExecutor / CTask 的异步能力：
+///  - 链式调用：Submit → Then → Get（多阶段流水线）；
 ///  - 多回调 fan-out：同一任务多个 OnSuccess 消费者；
-///  - 异常沿链传播：OnFailure 处理上游异常；
+///  - 任务异常 → 无值终止（不抛异常）；
 ///  - 阻塞获取：Get()。
 ///
 /// 周期性（ITimer + 弱引用守卫）触发一次完整演示。
@@ -49,9 +45,8 @@ private:
 
     std::int64_t m_nIntervalMs;
     sc::ScopedInterfacePtr<sc::ITimer> m_pTimer;
-    std::unique_ptr<common::CAsyncExecutor> m_pExecutor;              // 异常版执行器
-    std::unique_ptr<common::nothrow::CAsyncExecutor> m_pNoThrowExecutor; // 无异常版执行器（Option 风格）
-    common::TimerId m_tTimerId;
+    std::unique_ptr<common::async::CAsyncExecutor> m_pExecutor; // 异步执行器（Option 风格）
+    common::timer::TimerId m_tTimerId;                                 // 周期演示定时器 id
 };
 
 } // namespace demo

@@ -6,6 +6,7 @@
 #include <string>
 
 namespace common {
+namespace log {
 
 /// @brief 日志级别。
 enum class LogLevel
@@ -81,4 +82,5 @@ private:
     static const int kMaxBackupCount = 5;
 };
 
+} // namespace log
 } // namespace common

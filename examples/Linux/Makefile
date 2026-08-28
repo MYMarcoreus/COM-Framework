@@ -2,7 +2,7 @@
 # examples 示例项目 Makefile（参考标准服务器项目结构）
 #   - 项目结构：<项目>/main.cpp（入口）+ <项目>/Linux/Makefile（构建配置）
 #   - 生成 build/<模式>/examples（可执行文件）
-#   - 直接编译所需 Common 源码（AsyncExecutorNoThrow / ThreadPool），不依赖 libCommon.a
+#   - 直接编译所需 Common 源码（AsyncExecutor / ThreadPool），不依赖 libCommon.a
 # 可用目标:
 #   make            —— 构建 examples
 #   make run        —— 构建并运行
@@ -41,7 +41,7 @@ OBJS := $(foreach src,$(SRCS),$(BUILD_DIR)/$(PROJECT)_$(subst /,_,$(patsubst $(S
 DEPS := $(OBJS:.o=.d)
 
 # 示例依赖的 Common 源码（直接编译，不依赖 libCommon.a；后续示例若依赖更多模块在此追加）
-COMMON_SRCS := $(WS_ROOT)/Common/Async/AsyncExecutorNoThrow.cpp \
+COMMON_SRCS := $(WS_ROOT)/Common/Async/AsyncExecutor.cpp \
                $(WS_ROOT)/Common/Thread/ThreadPool.cpp
 COMMON_OBJS := $(foreach src,$(COMMON_SRCS),$(BUILD_DIR)/$(PROJECT)_$(subst /,_,$(patsubst $(WS_ROOT)/Common/%.cpp,%,$(src))).o)
 COMMON_DEPS := $(COMMON_OBJS:.o=.d)

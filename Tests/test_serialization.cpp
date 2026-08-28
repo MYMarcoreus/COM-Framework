@@ -14,7 +14,7 @@ namespace {
 /// @brief 写读往返：各字段类型一致。\n
 TEST(Serialization_RoundTrip)
 {
-    common::CBinaryWriter writer;
+    common::serialization::CBinaryWriter writer;
     writer.WriteU8(0xAB);
     writer.WriteU16(0x1234);
     writer.WriteU32(0xDEADBEEF);
@@ -23,7 +23,7 @@ TEST(Serialization_RoundTrip)
     writer.WriteString("hello");
     writer.WriteBytes("raw", 3);
 
-    common::CBinaryReader reader(writer.Data());
+    common::serialization::CBinaryReader reader(writer.Data());
     std::uint8_t u8 = 0;
     std::uint16_t u16 = 0;
     std::uint32_t u32 = 0;
@@ -53,7 +53,7 @@ TEST(Serialization_RoundTrip)
 /// @brief 字节序：U16 小端编码验证。\n
 TEST(Serialization_LittleEndian)
 {
-    common::CBinaryWriter writer;
+    common::serialization::CBinaryWriter writer;
     writer.WriteU16(0x0102);
     writer.WriteU32(0x01020304);
     const std::string& data = writer.Data();
@@ -70,7 +70,7 @@ TEST(Serialization_BoundaryCheck)
 {
     // 只有 2 字节，读 U32 应失败
     const char szData[2] = { '\x01', '\x02' };
-    common::CBinaryReader reader(szData, 2);
+    common::serialization::CBinaryReader reader(szData, 2);
     std::uint32_t u32 = 0;
     ASSERT_TRUE(!reader.ReadU32(&u32));
     ASSERT_TRUE(reader.Failed());
@@ -80,11 +80,11 @@ TEST(Serialization_BoundaryCheck)
 /// @brief 空字符串 / 空字节串往返。\n
 TEST(Serialization_EmptyString)
 {
-    common::CBinaryWriter writer;
+    common::serialization::CBinaryWriter writer;
     writer.WriteString("");
     writer.WriteBytes(nullptr, 0);
 
-    common::CBinaryReader reader(writer.Data());
+    common::serialization::CBinaryReader reader(writer.Data());
     std::string str;
     std::string bytes;
     ASSERT_TRUE(reader.ReadString(&str));

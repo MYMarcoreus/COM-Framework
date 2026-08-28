@@ -3,6 +3,7 @@
 #include <cstring>
 
 namespace common {
+namespace serialization {
 
 /// @brief 从缓冲创建读取器。
 CBinaryReader::CBinaryReader(const char* pData, size_t nSize)
@@ -181,4 +182,5 @@ bool CBinaryReader::Failed() const
     return m_bFailed;
 }
 
+} // namespace serialization
 } // namespace common

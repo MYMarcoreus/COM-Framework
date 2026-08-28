@@ -5,6 +5,7 @@
 #include <vector>
 
 namespace common {
+namespace network {
 
 /// @brief 网络数据缓冲区。
 ///
@@ -56,4 +57,5 @@ private:
     size_t m_nWriteIndex;
 };
 
+} // namespace network
 } // namespace common

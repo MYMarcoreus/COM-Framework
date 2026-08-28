@@ -214,7 +214,7 @@ std::string CDemoService::GetStatus() const
 /// @brief 记录日志。
 void CDemoService::Log(const std::string& message)
 {
-    common::CLogger::Instance().Info("[CDemoService] " + message);
+    common::log::CLogger::Instance().Info("[CDemoService] " + message);
 }
 
 } // namespace demo

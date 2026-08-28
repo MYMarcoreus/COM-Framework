@@ -76,7 +76,7 @@ bool CTcpServerModule::Start()
     {
         m_pEventDispatcher->Publish(sc::events::kNetworkStarted, &m_nPort, sizeof(m_nPort));
     }
-    common::CLogger::Instance().Info("TCP 服务器已启动，监听端口 " + std::to_string(m_nPort));
+    common::log::CLogger::Instance().Info("TCP 服务器已启动，监听端口 " + std::to_string(m_nPort));
     return true;
 }
 

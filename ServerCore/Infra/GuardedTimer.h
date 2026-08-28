@@ -23,8 +23,8 @@ namespace sc {
 ///       });
 /// @endcode
 ///
-/// @tparam TimerT 定时器类型（sc::ITimer 或 common::CTimerManager，须提供
-///                AddPeriodicTimer(int64, const common::TimerCallback&)）
+/// @tparam TimerT 定时器类型（sc::ITimer 或 common::timer::CTimerManager，须提供
+///                AddPeriodicTimer(int64, const common::timer::TimerCallback&)）
 /// @tparam T      弱引用目标类型（IModule / 具体类型等，须为 IUnknown 派生）
 /// @tparam F      回调类型（lambda / 函数对象，推导得到）
 ///
@@ -35,7 +35,7 @@ namespace sc {
 ///
 /// @return 定时器标识（取消时用）。
 template <typename TimerT, typename T, typename F>
-common::TimerId AddGuardedPeriodicTimer(
+common::timer::TimerId AddGuardedPeriodicTimer(
     TimerT* pTimer, std::int64_t nIntervalMs,
     const CWeakPtr<T>& spWeak, F fnCallback)
 {

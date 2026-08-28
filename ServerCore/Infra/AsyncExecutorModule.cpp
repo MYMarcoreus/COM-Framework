@@ -39,7 +39,7 @@ bool CAsyncExecutorModule::Start()
     {
         return false;
     }
-    m_pExecutor.reset(new common::CAsyncExecutor(m_nThreadCount));
+    m_pExecutor.reset(new common::async::CAsyncExecutor(m_nThreadCount));
     return m_pExecutor->Start();
 }
 

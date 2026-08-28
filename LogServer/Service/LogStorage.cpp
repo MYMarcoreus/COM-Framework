@@ -35,7 +35,7 @@ bool CLogStorage::SetDirectory(const std::string& strDir)
     }
     if (!CreateDirectories(strDir))
     {
-        common::CLogger::Instance().Error(
+        common::log::CLogger::Instance().Error(
             "[CLogStorage] 创建日志目录失败: " + strDir);
         return false;
     }
@@ -73,7 +73,7 @@ bool CLogStorage::Write(const LogRecord& record)
     std::ofstream& stream = StreamFor(strSource);
     if (!stream.is_open())
     {
-        common::CLogger::Instance().Error(
+        common::log::CLogger::Instance().Error(
             "[CLogStorage] 打开日志文件失败: " + strSource);
         return false;
     }

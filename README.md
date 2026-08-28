@@ -85,7 +85,7 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 │   └── Linux/Makefile           # 生成 build/tests（make run 运行全部用例）
 │
 ├── examples/                    # 示例项目（参考标准项目结构，直接编译所需 Common 源码）
-│   ├── main.cpp                 # 示例入口（AsyncExecutorNoThrow 完整示例）
+│   ├── main.cpp                 # 示例入口（AsyncExecutor 完整示例）
 │   └── Linux/
 │       └── Makefile             # 生成 build/examples（cd examples/Linux && make run）
 │

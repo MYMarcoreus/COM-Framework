@@ -3,6 +3,7 @@
 #include <cstring>
 
 namespace common {
+namespace network {
 
 /// @brief 创建网络缓冲区。
 ///
@@ -122,4 +123,5 @@ void CBuffer::EnsureWritable(size_t nLen)
     m_nReadIndex = 0;
 }
 
+} // namespace network
 } // namespace common

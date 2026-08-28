@@ -47,30 +47,30 @@ void CServerLoggerModule::Shutdown()
 bool CServerLoggerModule::Initialize(const sc::CResolveContext& ctx)
 {
     // ① 通过 IConfig 读取日志级别配置
-    int level = static_cast<int>(common::LogLevel::kInfo);
+    int level = static_cast<int>(common::log::LogLevel::kInfo);
     sc::IConfig* config = ctx.Resolve<sc::IConfig>();
     if (config != nullptr)
     {
         std::string levelStr = config->GetString("log.level", "info");
         if (levelStr == "trace")
         {
-            level = static_cast<int>(common::LogLevel::kTrace);
+            level = static_cast<int>(common::log::LogLevel::kTrace);
         }
         else if (levelStr == "debug")
         {
-            level = static_cast<int>(common::LogLevel::kDebug);
+            level = static_cast<int>(common::log::LogLevel::kDebug);
         }
         else if (levelStr == "warn")
         {
-            level = static_cast<int>(common::LogLevel::kWarn);
+            level = static_cast<int>(common::log::LogLevel::kWarn);
         }
         else if (levelStr == "error")
         {
-            level = static_cast<int>(common::LogLevel::kError);
+            level = static_cast<int>(common::log::LogLevel::kError);
         }
         else
         {
-            level = static_cast<int>(common::LogLevel::kInfo);
+            level = static_cast<int>(common::log::LogLevel::kInfo);
         }
     }
 

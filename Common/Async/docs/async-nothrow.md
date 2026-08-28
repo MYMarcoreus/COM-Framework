@@ -1,11 +1,11 @@
-# AsyncExecutorNoThrow 无异常版异步框架解析（Option 风格）
+# AsyncExecutor 无异常版异步框架解析（Option 风格）
 
 ## 1. 这是什么？为什么需要它？
 
 这是 **ServerCore/Common 提供的一套"不抛异常"的异步任务框架**。它允许你像这样写异步代码：
 
 ```cpp
-namespace no = common::nothrow;
+namespace no = common::async;
 
 no::CAsyncExecutor exec(2);   // 一个 2 线程的"任务加工厂"
 exec.Start();
@@ -44,7 +44,7 @@ no::CTaskResult<int> r = exec.Submit([]() { return -5; })
 
 项目里有两套并行实现，别搞混：
 
-| | `common::CAsyncExecutor`（异常版） | `common::nothrow::CAsyncExecutor`（本框架） |
+| | ~~`common::CAsyncExecutor`（异常版，已删除）~~ | `common::async::CAsyncExecutor`（本框架） |
 |---|---|---|
 | 错误传递 | `std::exception_ptr`（异常指针） | **没有错误类型**，只有有值/无值 |
 | `Get()` 返回 | 直接返回值，失败就 `throw` | `CTaskResult<T>`，需检查 `HasValue()` |
@@ -161,7 +161,7 @@ stateDiagram-v2
 ### 3.2 `None` 与终止原因 `CTaskEndReason`（仅调试）
 
 ```cpp
-namespace no = common::nothrow;
+namespace no = common::async;
 
 // ① None 哨兵：显式表达"无值、链终止"
 const no::CNoneTag None = no::CNoneTag();   // 写法：return no::None;
@@ -486,7 +486,7 @@ flowchart TD
 ## 9. 常见用法速查
 
 ```cpp
-namespace no = common::nothrow;
+namespace no = common::async;
 
 // ① 简单提交
 no::CAsyncExecutor exec(2);

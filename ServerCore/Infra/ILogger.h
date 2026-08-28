@@ -8,7 +8,7 @@
 
 namespace sc {
 
-/// @brief 日志接口（模块化适配 common::CLogger）。
+/// @brief 日志接口（模块化适配 common::log::CLogger）。
 ///
 /// 使模块通过模块管理器按接口获取日志能力，而非直接访问全局单例。
 SC_INTERFACE(ILogger, "sc::ILogger", "7f70d36c-e774-49c0-9f0e-0d59b5c0adf8")
@@ -16,7 +16,7 @@ SC_INTERFACE(ILogger, "sc::ILogger", "7f70d36c-e774-49c0-9f0e-0d59b5c0adf8")
 public:
     virtual ~ILogger() {}
 
-    // 设置日志级别（取值对应 common::LogLevel）。
+    // 设置日志级别（取值对应 common::log::LogLevel）。
     virtual void SetLevel(int level) = 0;
 
     // 启用文件输出。

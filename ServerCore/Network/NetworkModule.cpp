@@ -59,9 +59,9 @@ bool CNetworkModule::StartTcpServer(uint16_t nPort, INetworkHandler* pHandler)
     m_pHandler.Reset(pHandler);
 
     // 将模块接口回调适配为 Common CTcpServer 的 std::function 回调
-    std::unique_ptr<common::CTcpServer> pNewServer(new common::CTcpServer());
-    common::CTcpServer::AcceptCallback fnAccept =
-        [this](common::ConnectionId nId, const std::string& strPeer)
+    std::unique_ptr<common::network::CTcpServer> pNewServer(new common::network::CTcpServer());
+    common::network::CTcpServer::AcceptCallback fnAccept =
+        [this](common::network::ConnectionId nId, const std::string& strPeer)
         {
             if (m_pMetrics != nullptr)
             {
@@ -74,8 +74,8 @@ bool CNetworkModule::StartTcpServer(uint16_t nPort, INetworkHandler* pHandler)
                 m_pHandler->OnAccept(nId, strPeer);
             }
         };
-    common::CTcpServer::DataCallback fnData =
-        [this](common::ConnectionId nId, const char* pData, size_t nLen)
+    common::network::CTcpServer::DataCallback fnData =
+        [this](common::network::ConnectionId nId, const char* pData, size_t nLen)
         {
             if (m_pMetrics != nullptr)
             {
@@ -86,8 +86,8 @@ bool CNetworkModule::StartTcpServer(uint16_t nPort, INetworkHandler* pHandler)
                 m_pHandler->OnData(nId, pData, nLen);
             }
         };
-    common::CTcpServer::CloseCallback fnClose =
-        [this](common::ConnectionId nId)
+    common::network::CTcpServer::CloseCallback fnClose =
+        [this](common::network::ConnectionId nId)
         {
             if (m_pMetrics != nullptr)
             {
@@ -118,7 +118,7 @@ bool CNetworkModule::StartTcpServer(uint16_t nPort, INetworkHandler* pHandler)
 /// 先释放 server 所有权，再在锁外停止，避免等待事件循环线程时死锁。
 void CNetworkModule::Stop()
 {
-    common::CTcpServer* pServer = nullptr;
+    common::network::CTcpServer* pServer = nullptr;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         pServer = m_pServer.release();

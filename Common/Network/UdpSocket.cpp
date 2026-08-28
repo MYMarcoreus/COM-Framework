@@ -3,6 +3,7 @@
 #include <functional>
 
 namespace common {
+namespace network {
 
 /// @brief 创建 UDP Socket。
 CUdpSocket::CUdpSocket()
@@ -161,4 +162,5 @@ void CUdpSocket::HandleReceive(const asio::error_code& ec, size_t nBytes)
     }
 }
 
+} // namespace network
 } // namespace common

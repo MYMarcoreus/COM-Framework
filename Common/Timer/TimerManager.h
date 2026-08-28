@@ -13,6 +13,7 @@
 #include "asio.hpp"
 
 namespace common {
+namespace timer {
 
 /// @brief 无效定时器标识。
 static const std::uint64_t kInvalidTimerId = 0;
@@ -78,4 +79,5 @@ private:
     std::atomic<bool> m_bRunning;
 };
 
+} // namespace timer
 } // namespace common

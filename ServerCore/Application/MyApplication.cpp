@@ -268,7 +268,7 @@ int CMyApplication::OnRun()
             {
                 strReport += "\n[metrics]\n" + strMetrics;
             }
-            common::CLogger::Instance().Info("[Status]\n" + strReport);
+            common::log::CLogger::Instance().Info("[Status]\n" + strReport);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }

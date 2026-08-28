@@ -11,9 +11,9 @@ namespace demo {
 /// @brief 创建日志上报模块。
 ///
 /// @param config 应用配置（读取 [logserver] 段）。
-CDemoLogReporterModule::CDemoLogReporterModule(const common::CConfig& config)
+CDemoLogReporterModule::CDemoLogReporterModule(const common::config::CConfig& config)
     : sc::CModule("logreporter"), m_config(config),
-      m_nPort(9200), m_nIntervalMs(5000), m_tTimerId(common::kInvalidTimerId)
+      m_nPort(9200), m_nIntervalMs(5000), m_tTimerId(common::timer::kInvalidTimerId)
 {
     // 依赖 ITimer 接口模块：生命周期拓扑排序保证其先初始化 / 启动。
     AddDependency(sc::IID_ITimer());
@@ -80,13 +80,13 @@ bool CDemoLogReporterModule::Start()
 /// 只取消本模块注册的定时器（共享的 ITimer 线程由 TimerModule 生命周期统一管理）。
 void CDemoLogReporterModule::Stop()
 {
-    if (m_tTimerId != common::kInvalidTimerId)
+    if (m_tTimerId != common::timer::kInvalidTimerId)
     {
         if (m_pTimer != nullptr)
         {
             m_pTimer->Cancel(m_tTimerId);
         }
-        m_tTimerId = common::kInvalidTimerId;
+        m_tTimerId = common::timer::kInvalidTimerId;
     }
     m_client.Stop();
 }
@@ -122,7 +122,7 @@ void CDemoLogReporterModule::ReportStatus()
     std::string strPacket = logserver::CLogProtocol::BuildSubmit(record);
     if (!m_client.Send(strPacket.data(), strPacket.size()))
     {
-        common::CLogger::Instance().Warn("[CDemoLogReporterModule] 日志上报发送失败");
+        common::log::CLogger::Instance().Warn("[CDemoLogReporterModule] 日志上报发送失败");
     }
 }
 

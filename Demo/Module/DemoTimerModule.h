@@ -34,7 +34,7 @@ public:
 private:
     std::int64_t m_nIntervalMs;
     sc::ScopedInterfacePtr<sc::ITimer> m_pTimer;
-    common::TimerId m_tTimerId;
+    common::timer::TimerId m_tTimerId;
 };
 
 } // namespace demo

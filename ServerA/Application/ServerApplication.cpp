@@ -103,14 +103,14 @@ bool CServerApplication::OnInitialize()
             if (event.data != nullptr && event.size == sizeof(std::uint16_t))
             {
                 std::uint16_t port = *static_cast<const std::uint16_t*>(event.data);
-                common::CLogger::Instance().Info(
+                common::log::CLogger::Instance().Info(
                     "[Event] ServerA 网络已启动，端口 " + std::to_string(port));
             }
         });
     m_tEventStopId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStopped,
         [](const sc::Event&)
         {
-            common::CLogger::Instance().Info("[Event] ServerA 网络已停止");
+            common::log::CLogger::Instance().Info("[Event] ServerA 网络已停止");
         });
     return true;
 }

@@ -11,7 +11,7 @@ namespace demo {
 ///
 /// @param intervalMs 周期日志间隔（毫秒），小于 100 时按 100 处理。
 CDemoTimerModule::CDemoTimerModule(std::int64_t intervalMs)
-    : sc::CModule("timer"), m_nIntervalMs(intervalMs), m_tTimerId(common::kInvalidTimerId)
+    : sc::CModule("timer"), m_nIntervalMs(intervalMs), m_tTimerId(common::timer::kInvalidTimerId)
 {
     // 依赖 ITimer 接口模块：生命周期拓扑排序保证其先初始化 / 启动。
     AddDependency(sc::IID_ITimer());
@@ -58,7 +58,7 @@ bool CDemoTimerModule::Start()
             std::string strMessage = "Demo 服务器运行中 (module=";
             strMessage += sp->GetName();
             strMessage += ")";
-            common::CLogger::Instance().Info(strMessage);
+            common::log::CLogger::Instance().Info(strMessage);
         });
     return true;
 }
@@ -69,13 +69,13 @@ bool CDemoTimerModule::Start()
 /// 共享的 ITimer 线程由 TimerModule 生命周期统一管理。
 void CDemoTimerModule::Stop()
 {
-    if (m_tTimerId != common::kInvalidTimerId)
+    if (m_tTimerId != common::timer::kInvalidTimerId)
     {
         if (m_pTimer != nullptr)
         {
             m_pTimer->Cancel(m_tTimerId);
         }
-        m_tTimerId = common::kInvalidTimerId;
+        m_tTimerId = common::timer::kInvalidTimerId;
     }
 }
 

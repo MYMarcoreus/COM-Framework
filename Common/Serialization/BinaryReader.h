@@ -5,6 +5,7 @@
 #include <string>
 
 namespace common {
+namespace serialization {
 
 /// @brief 二进制读取器（小端字节序，带边界检查）。
 ///
@@ -63,4 +64,5 @@ private:
     bool m_bFailed;
 };
 
+} // namespace serialization
 } // namespace common

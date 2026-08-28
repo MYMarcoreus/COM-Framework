@@ -11,7 +11,7 @@ namespace sc {
 
 /// @brief 定时器模块。
 ///
-/// 内部持有 common::CTimerManager 实例。
+/// 内部持有 common::timer::CTimerManager 实例。
 class CTimerModule : public CModule, public ITimer
 {
 public:
@@ -21,18 +21,18 @@ public:
 
     bool Initialize(const CResolveContext& ctx) override;
     bool Start() override;
-    common::TimerId AddTimer(std::int64_t delayMs,
-                             const common::TimerCallback& callback) override;
-    common::TimerId AddPeriodicTimer(std::int64_t intervalMs,
-                                     const common::TimerCallback& callback) override;
-    bool Cancel(common::TimerId id) override;
+    common::timer::TimerId AddTimer(std::int64_t delayMs,
+                                    const common::timer::TimerCallback& callback) override;
+    common::timer::TimerId AddPeriodicTimer(std::int64_t intervalMs,
+                                            const common::timer::TimerCallback& callback) override;
+    bool Cancel(common::timer::TimerId id) override;
     void Stop() override;
     void Shutdown() override;
 
     SC_DECLARE_INTERFACE_MAP();
 
 private:
-    common::CTimerManager m_timer;
+    common::timer::CTimerManager m_timer;
 };
 
 } // namespace sc

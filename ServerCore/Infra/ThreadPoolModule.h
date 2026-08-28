@@ -13,7 +13,7 @@ namespace sc {
 
 /// @brief 线程池模块。
 ///
-/// 内部持有 common::CThreadPool 实例。
+/// 内部持有 common::thread::CThreadPool 实例。
 class CThreadPoolModule : public CModule, public IThreadPool
 {
 public:
@@ -30,7 +30,7 @@ public:
     SC_DECLARE_INTERFACE_MAP();
 
 private:
-    std::unique_ptr<common::CThreadPool> m_pPool;
+    std::unique_ptr<common::thread::CThreadPool> m_pPool;
     size_t m_nThreadCount;
 };
 

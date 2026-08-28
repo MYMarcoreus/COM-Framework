@@ -1,6 +1,7 @@
 #include "Thread/ThreadPool.h"
 
 namespace common {
+namespace thread {
 
 /// @brief 创建线程池。
 ///
@@ -141,4 +142,5 @@ void CThreadPool::WorkerLoop()
     }
 }
 
+} // namespace thread
 } // namespace common

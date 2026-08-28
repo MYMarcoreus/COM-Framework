@@ -12,7 +12,7 @@ namespace demo {
 class CDemoLoggerModule : public sc::CModule
 {
 public:
-    explicit CDemoLoggerModule(const common::CConfig& config);
+    explicit CDemoLoggerModule(const common::config::CConfig& config);
 
     virtual ~CDemoLoggerModule();
 
@@ -25,7 +25,7 @@ public:
     void Shutdown() override;
 
 private:
-    const common::CConfig& m_config;
+    const common::config::CConfig& m_config;
 };
 
 } // namespace demo

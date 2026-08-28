@@ -11,7 +11,7 @@ namespace sc {
 
 /// @brief 配置模块。
 ///
-/// 内部持有独立 common::CConfig 实例。
+/// 内部持有独立 common::config::CConfig 实例。
 class CConfigModule : public CModule, public IConfig
 {
 public:
@@ -34,7 +34,7 @@ public:
     SC_DECLARE_INTERFACE_MAP();
 
 private:
-    common::CConfig m_config;
+    common::config::CConfig m_config;
 };
 
 } // namespace sc

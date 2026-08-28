@@ -3,6 +3,7 @@
 #include <functional>
 
 namespace common {
+namespace network {
 
 /// @brief 创建 TCP 客户端。
 CTcpClient::CTcpClient()
@@ -262,4 +263,5 @@ void CTcpClient::NotifyClose()
     }
 }
 
+} // namespace network
 } // namespace common

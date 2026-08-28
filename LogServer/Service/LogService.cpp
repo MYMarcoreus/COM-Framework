@@ -161,7 +161,7 @@ void CLogService::HandlePing(sc::ConnectionId id)
 /// @brief 记录服务器自身日志。
 void CLogService::Log(const std::string& strMessage)
 {
-    common::CLogger::Instance().Info("[CLogService] " + strMessage);
+    common::log::CLogger::Instance().Info("[CLogService] " + strMessage);
 }
 
 } // namespace logserver

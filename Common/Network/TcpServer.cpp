@@ -5,6 +5,7 @@
 #include <vector>
 
 namespace common {
+namespace network {
 
 /// @brief 创建 TCP 服务器。
 CTcpServer::CTcpServer()
@@ -408,4 +409,5 @@ std::string CTcpServer::PeerAddress(ConnectionId nId) const
     return it->second;
 }
 
+} // namespace network
 } // namespace common

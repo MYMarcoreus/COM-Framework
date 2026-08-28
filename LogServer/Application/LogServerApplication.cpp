@@ -109,20 +109,20 @@ bool CLogServerApplication::OnInitialize()
             if (event.data != nullptr && event.size == sizeof(std::uint16_t))
             {
                 std::uint16_t nPort = *static_cast<const std::uint16_t*>(event.data);
-                common::CLogger::Instance().Info(
+                common::log::CLogger::Instance().Info(
                     "[Event] LogServer 网络已启动，端口 " + std::to_string(nPort));
             }
         });
     m_tEventStopId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStopped,
         [](const sc::Event&)
         {
-            common::CLogger::Instance().Info("[Event] LogServer 网络已停止");
+            common::log::CLogger::Instance().Info("[Event] LogServer 网络已停止");
         });
     // 订阅配置变更事件（由 CConfigReloadModule 广播）
     m_tConfigReloadId = m_pEventDispatcher->Subscribe(sc::events::kConfigReloaded,
         [](const sc::Event&)
         {
-            common::CLogger::Instance().Info("[Event] 收到 config.reloaded，配置已热加载");
+            common::log::CLogger::Instance().Info("[Event] 收到 config.reloaded，配置已热加载");
         });
     return true;
 }

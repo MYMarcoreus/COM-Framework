@@ -5,6 +5,7 @@
 #include <string>
 
 namespace common {
+namespace serialization {
 
 /// @brief 二进制写入器（小端字节序）。
 ///
@@ -56,4 +57,5 @@ private:
     std::string m_buffer;
 };
 
+} // namespace serialization
 } // namespace common

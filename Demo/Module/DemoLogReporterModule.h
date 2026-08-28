@@ -21,7 +21,7 @@ namespace demo {
 class CDemoLogReporterModule : public sc::CModule
 {
 public:
-    explicit CDemoLogReporterModule(const common::CConfig& config);
+    explicit CDemoLogReporterModule(const common::config::CConfig& config);
 
     virtual ~CDemoLogReporterModule();
 
@@ -44,13 +44,13 @@ private:
     // 当前时间戳（epoch 秒）。
     static std::uint64_t Now();
 
-    const common::CConfig& m_config;
+    const common::config::CConfig& m_config;
     std::string m_strHost;
     std::uint16_t m_nPort;
     std::int64_t m_nIntervalMs;
     sc::ScopedInterfacePtr<sc::ITimer> m_pTimer;
-    common::TimerId m_tTimerId;
-    common::CTcpClient m_client;
+    common::timer::TimerId m_tTimerId;
+    common::network::CTcpClient m_client;
 };
 
 } // namespace demo

@@ -1,5 +1,5 @@
 // ============================================================
-// AsyncExecutorNoThrow 完整示例（无异常版异步框架，Option 风格）
+// AsyncExecutor 完整示例（无异常版异步框架，Option 风格）
 // 有值/无值，风格类似 Rust Option / C++ std::optional
 //
 // 项目结构参考标准服务器项目：main.cpp（入口）+ Linux/Makefile（构建配置）。
@@ -25,7 +25,7 @@
 //   ⑯ 类型变化链            Then 链逐级改变返回值类型（int→string→size_t）
 //   ⑰ 任务源码位置          NOTHROW_LOC 保存注册点函数/文件/行号（调试）
 // ============================================================
-#include "Async/AsyncExecutorNoThrow.h"
+#include "Async/AsyncExecutor.h"
 
 #include <atomic>
 #include <cstdio>
@@ -36,7 +36,7 @@
 #include <thread>
 #include <vector>
 
-namespace no = common::nothrow;
+namespace no = common::async;
 
 // ============================================================
 // 轻量 ASSERT（示例自我校验用，MFC 命名风格）

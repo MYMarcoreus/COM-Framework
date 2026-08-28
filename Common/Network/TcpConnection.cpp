@@ -3,6 +3,7 @@
 #include <chrono>
 
 namespace common {
+namespace network {
 
 namespace
 {
@@ -238,4 +239,5 @@ void CTcpConnection::HandleError(const asio::error_code& ec)
     }
 }
 
+} // namespace network
 } // namespace common

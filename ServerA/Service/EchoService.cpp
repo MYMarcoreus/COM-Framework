@@ -79,7 +79,7 @@ void CEchoService::OnClose(sc::ConnectionId id)
 /// @brief 记录日志。
 void CEchoService::Log(const std::string& message)
 {
-    common::CLogger::Instance().Info("[CEchoService] " + message);
+    common::log::CLogger::Instance().Info("[CEchoService] " + message);
 }
 
 } // namespace servera

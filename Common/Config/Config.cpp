@@ -7,6 +7,7 @@
 #include "ini.h"
 
 namespace common {
+namespace config {
 
 namespace
 {
@@ -133,4 +134,5 @@ std::time_t CConfig::FileMtime(const std::string& strPath)
     return st.st_mtime;
 }
 
+} // namespace config
 } // namespace common

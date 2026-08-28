@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 
 namespace common {
+namespace log {
 
 /// @brief 获取日志器单例。
 CLogger& CLogger::Instance()
@@ -200,4 +201,5 @@ std::uint64_t CLogger::FileSize(const std::string& strPath)
     return static_cast<std::uint64_t>(st.st_size);
 }
 
+} // namespace log
 } // namespace common

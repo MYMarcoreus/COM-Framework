@@ -39,7 +39,7 @@ bool CThreadPoolModule::Start()
     {
         return false;
     }
-    m_pPool.reset(new common::CThreadPool(m_nThreadCount));
+    m_pPool.reset(new common::thread::CThreadPool(m_nThreadCount));
     return m_pPool->Start();
 }
 

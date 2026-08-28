@@ -174,7 +174,7 @@ TEST(Logger_FileRotation)
 {
     std::string strPath = "/tmp/logger_rot_" +
                           std::to_string(static_cast<long long>(::getpid())) + ".log";
-    common::CLogger& logger = common::CLogger::Instance();
+    common::log::CLogger& logger = common::log::CLogger::Instance();
     logger.OpenFile(strPath);
     logger.SetMaxFileSize(100); // 100 字节触发滚动
 
@@ -198,15 +198,15 @@ TEST(Logger_FileRotation)
 /// @brief TCP 连接数上限：达到上限后新连接被直接关闭，不触发 Accept 回调。
 TEST(Network_ConnectionLimit)
 {
-    common::CTcpServer server;
+    common::network::CTcpServer server;
     server.SetMaxConnections(1);
     std::uint16_t nPort = static_cast<std::uint16_t>(20000 + (::getpid() % 5000));
 
     std::atomic<int> nAccept(0);
     if (!server.Start(nPort,
-            [&nAccept](common::ConnectionId, const std::string&) { nAccept.fetch_add(1); },
-            [](common::ConnectionId, const char*, size_t) {},
-            [](common::ConnectionId) {}))
+            [&nAccept](common::network::ConnectionId, const std::string&) { nAccept.fetch_add(1); },
+            [](common::network::ConnectionId, const char*, size_t) {},
+            [](common::network::ConnectionId) {}))
     {
         ASSERT_TRUE(false); // 端口被占用（测试环境偶然冲突）
     }

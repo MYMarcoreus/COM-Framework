@@ -15,6 +15,7 @@
 #include "Network/TcpConnection.h"
 
 namespace common {
+namespace network {
 
 /// @brief TCP 服务器（基于 asio）。
 ///
@@ -121,4 +122,5 @@ private:
     std::unique_ptr<asio::steady_timer> m_pIdleTimer;
 };
 
+} // namespace network
 } // namespace common

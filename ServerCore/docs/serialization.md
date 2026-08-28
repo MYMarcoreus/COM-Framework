@@ -15,7 +15,7 @@ Common 提供轻量二进制序列化基础设施（小端字节序，带边界�
 | `Data() / Take() / Size() / Empty() / Clear()` | 缓冲访问 |
 
 ```cpp
-common::CBinaryWriter writer;
+common::serialization::CBinaryWriter writer;
 writer.WriteU8(0xAB);
 writer.WriteU32(0xDEADBEEF);
 writer.WriteString("hello");
@@ -30,7 +30,7 @@ std::string payload = writer.Take();   // 移出缓冲
 （位置保持不动），调用方可决定丢弃整条消息。
 
 ```cpp
-common::CBinaryReader reader(payload);
+common::serialization::CBinaryReader reader(payload);
 std::uint8_t u8; std::uint32_t u32; std::string str; std::string bytes;
 if (!reader.ReadU8(&u8))  return;      // 边界失败
 if (!reader.ReadU32(&u32)) return;

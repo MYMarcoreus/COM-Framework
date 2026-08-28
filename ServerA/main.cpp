@@ -25,12 +25,12 @@ int main(int argc, char* argv[])
 
     if (!app.Initialize())
     {
-        common::CLogger::Instance().Error("ServerA 初始化失败");
+        common::log::CLogger::Instance().Error("ServerA 初始化失败");
         return -1;
     }
     if (!app.Start())
     {
-        common::CLogger::Instance().Error("ServerA 启动失败（端口可能被占用）");
+        common::log::CLogger::Instance().Error("ServerA 启动失败（端口可能被占用）");
         app.Shutdown();
         return -1;
     }
@@ -38,7 +38,7 @@ int main(int argc, char* argv[])
     int result = app.Run();
 
     app.Shutdown();
-    common::CLogger::Instance().Info(
+    common::log::CLogger::Instance().Info(
         "ServerA 已退出，运行 " + std::to_string(app.UptimeSeconds()) + " 秒");
     return result;
 }

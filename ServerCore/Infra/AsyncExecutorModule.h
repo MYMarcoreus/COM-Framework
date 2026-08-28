@@ -13,7 +13,7 @@ namespace sc {
 
 /// @brief 异步执行器模块。
 ///
-/// 内部持有 common::CAsyncExecutor 实例。
+/// 内部持有 common::async::CAsyncExecutor 实例。
 class CAsyncExecutorModule : public CModule, public IAsyncExecutor
 {
 public:
@@ -30,7 +30,7 @@ public:
     SC_DECLARE_INTERFACE_MAP();
 
 private:
-    std::unique_ptr<common::CAsyncExecutor> m_pExecutor;
+    std::unique_ptr<common::async::CAsyncExecutor> m_pExecutor;
     size_t m_nThreadCount;
 };
 

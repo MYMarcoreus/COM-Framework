@@ -36,7 +36,7 @@ protected:
 
 private:
     std::uint16_t m_nPort;
-    common::CConfig m_config;
+    common::config::CConfig m_config;
     sc::ScopedInterfacePtr<sc::IEventDispatcher> m_pEventDispatcher;
     sc::SubscriptionId m_tEventStartId;
     sc::SubscriptionId m_tEventStopId;

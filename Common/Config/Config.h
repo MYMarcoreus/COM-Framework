@@ -5,6 +5,7 @@
 #include <string>
 
 namespace common {
+namespace config {
 
 /// @brief 配置管理器。
 ///
@@ -49,4 +50,5 @@ private:
     std::time_t m_nFileMtime;
 };
 
+} // namespace config
 } // namespace common

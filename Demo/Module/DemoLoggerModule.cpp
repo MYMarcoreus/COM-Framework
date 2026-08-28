@@ -9,7 +9,7 @@ namespace demo {
 /// @brief 创建日志模块。
 ///
 /// @param config 应用配置，用于读取日志级别与文件。
-CDemoLoggerModule::CDemoLoggerModule(const common::CConfig& config)
+CDemoLoggerModule::CDemoLoggerModule(const common::config::CConfig& config)
     : sc::CModule("logger"), m_config(config)
 {
 }
@@ -46,27 +46,27 @@ void CDemoLoggerModule::Shutdown()
 /// @return true。
 bool CDemoLoggerModule::Initialize(const sc::CResolveContext& /*ctx*/)
 {
-    common::CLogger& logger = common::CLogger::Instance();
+    common::log::CLogger& logger = common::log::CLogger::Instance();
     std::string level = m_config.GetString("log.level", "info");
     if (level == "trace")
     {
-        logger.SetLevel(common::LogLevel::kTrace);
+        logger.SetLevel(common::log::LogLevel::kTrace);
     }
     else if (level == "debug")
     {
-        logger.SetLevel(common::LogLevel::kDebug);
+        logger.SetLevel(common::log::LogLevel::kDebug);
     }
     else if (level == "warn")
     {
-        logger.SetLevel(common::LogLevel::kWarn);
+        logger.SetLevel(common::log::LogLevel::kWarn);
     }
     else if (level == "error")
     {
-        logger.SetLevel(common::LogLevel::kError);
+        logger.SetLevel(common::log::LogLevel::kError);
     }
     else
     {
-        logger.SetLevel(common::LogLevel::kInfo);
+        logger.SetLevel(common::log::LogLevel::kInfo);
     }
     std::string logFile = m_config.GetString("log.file", "");
     if (!logFile.empty())

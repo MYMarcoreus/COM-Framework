@@ -47,7 +47,7 @@ void CLogServerLoggerModule::Shutdown()
 bool CLogServerLoggerModule::Initialize(const sc::CResolveContext& ctx)
 {
     // ① 通过 IConfig 读取日志级别配置
-    int nLevel = static_cast<int>(common::LogLevel::kInfo);
+    int nLevel = static_cast<int>(common::log::LogLevel::kInfo);
     std::string strFilePath = "logserver.log";
     sc::IConfig* pConfig = ctx.Resolve<sc::IConfig>();
     if (pConfig != nullptr)
@@ -55,19 +55,19 @@ bool CLogServerLoggerModule::Initialize(const sc::CResolveContext& ctx)
         std::string strLevel = pConfig->GetString("log.level", "info");
         if (strLevel == "trace")
         {
-            nLevel = static_cast<int>(common::LogLevel::kTrace);
+            nLevel = static_cast<int>(common::log::LogLevel::kTrace);
         }
         else if (strLevel == "debug")
         {
-            nLevel = static_cast<int>(common::LogLevel::kDebug);
+            nLevel = static_cast<int>(common::log::LogLevel::kDebug);
         }
         else if (strLevel == "warn")
         {
-            nLevel = static_cast<int>(common::LogLevel::kWarn);
+            nLevel = static_cast<int>(common::log::LogLevel::kWarn);
         }
         else if (strLevel == "error")
         {
-            nLevel = static_cast<int>(common::LogLevel::kError);
+            nLevel = static_cast<int>(common::log::LogLevel::kError);
         }
         strFilePath = pConfig->GetString("log.file", "logserver.log");
     }
