@@ -14,9 +14,9 @@
 
 | C# | 本项目 |
 |---|---|
-| `int a = await task;` | `CO_AWAIT(m_a, task);`（m_a 为帧成员） |
-| `int a = await Foo();` | `CO_AWAIT(m_a, []() { return Foo(); });` |
-| `await voidTask;` | `CO_AWAIT_VOID(voidTask);` |
+| `await task;` | `CO_AWAIT(task);`（纯等待，主版本） |
+| `int a = await task;` | `CO_AWAIT_INTO(m_a, task);`（落地值，m_a 为帧成员） |
+| `int a = await Foo();` | `CO_AWAIT_INTO(m_a, []() { return Foo(); });` |
 | `await Task.WhenAll(t1, t2);` | `CO_AWAIT_ALL(m_a, t1, m_b, t2);` |
 | `return value;` | `CO_RETURN(value);` |
 | 失败处理（异常 / 降级） | `await` 无值 → 整体终止（`Reason()` 区分） |
@@ -33,14 +33,14 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(m_nA, []() { return 3; });            // 裸 lambda 自动 Submit
-        CO_AWAIT(m_nB, [this]() { return m_nA * 2; }); // 捕获 this 读帧变量
-        CO_RETURN(m_nA + m_nB);                        // return 值（正常结束）
-        CO_END();                                      // 兜底：无值终止
+        CO_AWAIT_INTO(m_nA, []() { return 3; });            // 落地值：裸 lambda 自动 Submit
+        CO_AWAIT_INTO(m_nB, [this]() { return m_nA * 2; }); // 捕获 this 读帧变量
+        CO_RETURN(m_nA + m_nB);                             // return 值（正常结束）
+        CO_END();                                           // 兜底：无值终止
     }
 
 private:
-    int m_nA; // 跨 await 变量 = 派生类成员（帧）
+    int m_nA; // 落地值目标 = 派生类成员（帧）
     int m_nB;
 };
 
@@ -59,51 +59,52 @@ exec.Stop();
 | 宏 | 说明 |
 |---|---|
 | `CO_BEGIN()` | 状态机入口（Duff's device 的 `switch` 开头，每个协程体一对）。 |
-| `CO_AWAIT(target, expr)` | await 任务并写入 target；挂起，恢复后 target 直接用。 |
-| `CO_AWAIT_VOID(expr)` | await void 任务（完成后恢复）。 |
-| `CO_AWAIT_WAIT(expr)` | 纯等待任意任务（返回值忽略），值由共享数据传递。 |
+| `CO_AWAIT(expr)` | **主版本**：纯等待任意任务（void / 非 void），忽略返回值；值经外部共享 `shared_ptr` 传递。 |
+| `CO_AWAIT_INTO(target, expr)` | 落地值（非 void 专用）：await 任务并写入 target，恢复后 target 直接用。 |
 | `CO_AWAIT_ALL(目标1, 任务1, 目标2, 任务2, ...)` | 并行 await 多任务，全部完成恢复。 |
 | `CO_RETURN(expr)` | 协程正常结束（有值）。 |
 | `CO_RETURN_VOID()` | 协程正常结束（void 完成）。 |
 | `CO_END()` | 状态机结尾（兜底无值终止）。 |
 
 `expr`（任务）支持三种传法，自动分派：
-- **已提交任务** `CTask<U>`（可链式 `Then`/`flatMap`）：`CO_AWAIT(m_r, exec.Submit(fn).Then(...))`
+- **已提交任务** `CTask<U>`（可链式 `Then`/`flatMap`）：`CO_AWAIT_INTO(m_r, exec.Submit(fn).Then(...))`
 - **裸 lambda / 函数对象**：自动 `Submit` 到执行器执行（免写 `exec.Submit`）
 - **子协程** `child.AsTask()`：await 嵌套协程
 
-`target` 可为任意可写左值：成员（`m_nA`）、解引用（`*sp`）、成员访问（`sp->field`）。
+`CO_AWAIT_INTO` 的 `target` 可为任意可写左值：成员（`m_nA`）、解引用（`*sp`）、成员访问（`sp->field`）。
 
-## 5. 数据传递（三种模式）
+## 5. 数据传递
 
 无栈协程的固有约束：**跨 await 的变量不能用函数内局部变量**（挂起时 `Run()` 栈弹出，
-恢复时重入重建）。三种可行模式：
+恢复时重入重建）。推荐做法：
 
-**① 简单值 → 派生类成员（帧）**
+**① 共享 shared_ptr（主推，配合主版本 CO_AWAIT）**
+
+外部定义共享智能指针，任务 lambda 捕获并写入结果；**不同协程共享同一 shared_ptr
+即可交换数据**，无需 target：
 
 ```cpp
-int m_nPort;   // 帧成员，跨 await 存活
-CO_AWAIT(m_nPort, []() { return 读配置(); });
+std::shared_ptr<int> spVal = std::make_shared<int>(0);   // 外部共享
+// 协程内：任务 lambda 写共享对象，纯等待
+CO_AWAIT([this]() { *m_spVal = 42; });    // 值经共享指针传递
+CO_RETURN(*m_spVal);
 ```
 
-**② 动态数据 → shared_ptr 成员（含纯等待 `CO_AWAIT_WAIT`）**
+**② 落地值（CO_AWAIT_INTO）→ 帧成员 / 解引用**
 
 ```cpp
-std::shared_ptr<Result> m_sp;   // shared_ptr 随协程常驻（可外部传入，多协程共享）
+int m_nPort;                                   // 帧成员，跨 await 存活
+CO_AWAIT_INTO(m_nPort, []() { return 读配置(); });
 
-// 方式 A：target = sp->field（编译期类型检查 + 值落地）
-CO_AWAIT(m_sp->field, []() { return 42; });
-
-// 方式 B：CO_AWAIT_WAIT 纯等待 —— 任务捕获 sp 直接写结果，await 不取返回值
-CO_AWAIT_WAIT([this]() { return 查服务(m_sp); });   // 非 void，值走 sp
-CO_AWAIT_WAIT([this]() { m_sp->聚合(); });          // void
+std::shared_ptr<Result> m_sp;                  // shared_ptr 随协程常驻
+CO_AWAIT_INTO(m_sp->field, []() { return 42; });   // target = sp->field
 ```
 
 **③ 嵌套子协程 → shared_ptr 子协程 + `AsTask()`**
 
 ```cpp
 std::shared_ptr<CChildCoro> m_spChild;   // 子协程（已 CoStart）
-CO_AWAIT(m_nR, m_spChild->AsTask());     // await 子协程结果
+CO_AWAIT_INTO(m_nR, m_spChild->AsTask());     // await 子协程结果
 ```
 
 ## 6. 并行 await（CO_AWAIT_ALL）
@@ -131,7 +132,7 @@ private:
 
 - 全部任务有值 → 各自写入目标后恢复；
 - **任一任务无值** → 协程整体终止（原因透传，与顺序 await 一致）；
-- void 任务暂不支持（并行 void 请用多个 `CO_AWAIT_VOID`）。
+- void 任务暂不支持（并行 void 请用多个 `CO_AWAIT`）。
 
 ## 7. 生命周期
 
@@ -155,7 +156,7 @@ private:
 - **跨 await 变量必须存帧**（成员 / shared_ptr 成员 / 子协程），不能用函数内局部变量；
 - `CO_BEGIN()` / `CO_END()` 必须保留（Duff's device 的 `switch` 骨架，无法隐藏）；
 - **每个协程宏独占一行**（`__LINE__` 作恢复点标签，同一行两个宏冲突）；
-- `CO_AWAIT_ALL` 目标须为左值；void 任务用 `CO_AWAIT_VOID`；
+- `CO_AWAIT_ALL` 目标须为左值；void 任务用 `CO_AWAIT`（纯等待）；
 - 无栈协程无法做到「真·局部变量自动保留」——若需要（`int x = await task` 且 x 为纯局部），
   需切换到**有栈协程**（路线 B）或 **C++20 原生协程**。
 

@@ -12,17 +12,20 @@
 // Duff's device 状态机，用法贴近 C# async/await。
 //
 // C# 对照：
-//   int a = await task;              →  CO_AWAIT(m_a, task);    // m_a 为帧成员
-//   int a = await Foo();             →  CO_AWAIT(m_a, []{ return Foo(); });
-//   await voidTask;                  →  CO_AWAIT_VOID(voidTask);
+//   await task;                      →  CO_AWAIT(task);            // 纯等待（主版本）
+//   int a = await task;              →  CO_AWAIT_INTO(m_a, task);  // 落地值（帧成员）
+//   int a = await Foo();             →  CO_AWAIT_INTO(m_a, []{ return Foo(); });
 //   return value;                    →  CO_RETURN(value);
 //
-// CO_AWAIT 的「任务」支持多种传法：
-//  - 已提交任务（CTask<U>，可链式）：CO_AWAIT(m_a, exec.Submit(fn).Then(...))
-//  - 裸 lambda / 函数对象：自动投递到执行器执行（免写 Submit）
-//  - 子协程（CCoroutine::AsTask()）：await 嵌套协程
-// target 可为任意可写左值（成员、*sp 解引用、sp->field），恢复后自动写入。
-// CO_AWAIT_WAIT(expr) 纯等待（忽略返回值，值走共享数据）；CO_AWAIT_ALL(...) 并行 await。
+// 主版本 CO_AWAIT(expr)：纯等待任意任务（void / 非 void），忽略返回值；
+//   跨协程传递值用「外部共享 shared_ptr」：任务 lambda 捕获共享对象直接写结果，
+//   不同协程共享同一 shared_ptr 即可交换数据，无需 target。
+// CO_AWAIT_INTO(target, expr)：落地值（非 void 专用），结果写入 target
+//   （任意可写左值：成员、*sp 解引用、sp->field），恢复后直接用。
+// CO_AWAIT_ALL(...) 并行 await 多任务（C# Task.WhenAll）。
+//
+// expr（任务）支持：已提交 CTask<U>（可链式）/ 裸 lambda（自动 Submit）/
+//   子协程 AsTask()。
 //
 // 核心语义（与 CTask 的 Option 风格一致）：
 //  - CO_AWAIT 挂起（return 让出线程，线程回线程池），任务有值/无值后由
@@ -76,13 +79,13 @@ struct CAwaitAllGroup
 /// 宏写成「C# async/await」风格：await 即挂起（return 让出线程）、值到后
 /// 由执行器投递 Resume 继续，结果自动写入目标变量。
 ///
-/// CO_AWAIT 的「任务」可直接传裸 lambda / 函数对象（自动 Submit 到执行器），
-/// 或已提交的 CTask（支持链式）；target 可为任意可写左值（成员、*sp 解引用）。
+/// 主版本 CO_AWAIT(expr)：纯等待任意任务（void / 非 void），值经「外部共享
+/// shared_ptr」传递（不同协程共享同一 shared_ptr 即可交换数据）；
+/// CO_AWAIT_INTO(target, expr)：落地值（非 void 专用），target 可为任意可写左值。
 ///
 /// 数据传递（无栈协程的固有约束，跨 await 变量不能用函数内局部变量）：
-///  - 简单值：存为派生类成员（帧）；
-///  - 更灵活：用 shared_ptr 成员持有数据对象，CO_AWAIT(*sp, ...) 写入，
-///    任务 lambda 可捕获 sp 跨任务传递（shared_ptr 须随协程常驻）。
+///  - 共享数据：外部定义 shared_ptr，任务 lambda 捕获并写入，协程间共享；
+///  - 简单值落地：CO_AWAIT_INTO 写入帧成员 / *sp。
 ///
 /// 结果经 Get() 获取（与 CTask::Get 语义一致，不抛异常）。
 ///
@@ -158,7 +161,7 @@ protected:
     /// @brief 当前恢复点（状态机步号；CO_BEGIN 的 switch 用）。
     int Step() const { return m_nStep.load(); }
 
-    /// @brief await 任务并写入目标（C# 风格：CO_AWAIT(target, expr)）。
+    /// @brief await 任务并写入目标（落地值：CO_AWAIT_INTO(target, expr)，非 void 专用）。
     ///
     /// expr 支持两种：
     ///  - 已提交任务 CTask<U>（可链式 Then/flatMap）；
@@ -179,30 +182,18 @@ protected:
                     detail::IsCTask<typename std::decay<TExpr>::type>::value>());
     }
 
-    /// @brief await void 任务（C# 风格：CO_AWAIT_VOID(expr)）。
+    /// @brief await 任务并忽略返回值（主版本：CO_AWAIT(expr)）。
     ///
-    /// expr 支持已提交 CTask<void> 或裸 lambda（返回 void，自动 Submit）。
-    ///
-    /// @tparam TExpr 任务表达式类型。
-    /// @param nLine 恢复点标签（宏自动传 __LINE__）。
-    /// @param expr 任务（已提交 CTask<void> 或裸 lambda）。
-    template <typename TExpr>
-    void AwaitVoid(int nLine, TExpr expr)
-    {
-        DoAwaitVoid(nLine, expr,
-                    std::integral_constant<bool,
-                        detail::IsCTask<typename std::decay<TExpr>::type>::value>());
-    }
-
-    /// @brief 纯等待任务完成（不写 target，值由调用方经共享数据传递）。
-    ///
-    /// 适合「外部共享智能指针、协程间共享传值」模式：任务 lambda 捕获共享
-    /// 对象直接写结果，await 只负责挂起 / 恢复；任务返回值被忽略
-    /// （任意类型，void 也可）。
+    /// expr 支持任意任务（void / 非 void）：
+    ///  - 已提交任务 CTask<U>（可链式 Then/flatMap）；
+    ///  - 裸 lambda / 函数对象：自动 Submit 到执行器执行。
+    /// 结果不经返回值传递——需要值时用「外部共享 shared_ptr」：任务 lambda
+    /// 捕获共享对象直接写结果，不同协程共享同一 shared_ptr 即可交换数据。
+    /// 挂起；任务完成后恢复；无值则标记终止（原因透传）。
     ///
     /// @tparam TExpr 任务表达式类型。
     /// @param nLine 恢复点标签（宏自动传 __LINE__）。
-    /// @param expr 任务（已提交 CTask<U> 或裸 lambda）。
+    /// @param expr 任务（已提交 CTask 或裸 lambda）。
     template <typename TExpr>
     void AwaitWait(int nLine, TExpr expr)
     {
@@ -215,7 +206,7 @@ protected:
     ///
     /// 参数成对 (目标, 任务)：任务可为裸 lambda（自动 Submit）或已提交 CTask<U>。
     /// 全部有值 → 结果写入各自目标后恢复；任一任务无值 → 协程终止（原因透传）。
-    /// void 任务暂不支持（并行 void 请用多个 CO_AWAIT_VOID）。
+    /// void 任务暂不支持（并行 void 请用多个 CO_AWAIT）。
     ///
     /// @param nLine 恢复点标签（宏自动传 __LINE__）。
     /// @param args 成对的 (目标, 任务) 序列。
@@ -325,7 +316,7 @@ private:
         CompleteNone(reason);
     }
 
-    // ---- await 分派与续接注册（AwaitInto / AwaitVoid 内部）----
+    // ---- await 分派与续接注册（AwaitInto / AwaitWait 内部）----
 
     /// 已提交任务 CTask<U> → 直接用。
     template <typename TExpr, typename TDst>
@@ -333,7 +324,7 @@ private:
     {
         using R = typename std::decay<TExpr>::type;
         using U = typename detail::TaskTraits<R>::ValueType;
-        static_assert(!std::is_same<U, void>::value, "void 任务请用 CO_AWAIT_VOID");
+        static_assert(!std::is_same<U, void>::value, "void 任务请用 CO_AWAIT");
         m_nStep.store(nLine, std::memory_order_release);
         CTask<U> task = expr; // expr 为 CTask<U>。
         RegisterAwait(task, pTarget);
@@ -345,7 +336,7 @@ private:
     {
         using R = typename std::decay<TExpr>::type;
         using U = typename detail::TInvokeResult<R>::type;
-        static_assert(!std::is_same<U, void>::value, "void 任务请用 CO_AWAIT_VOID");
+        static_assert(!std::is_same<U, void>::value, "void 任务请用 CO_AWAIT");
         m_nStep.store(nLine, std::memory_order_release);
         if (m_pExec == nullptr)
         {
@@ -356,33 +347,31 @@ private:
         RegisterAwait(task, pTarget);
     }
 
-    /// 已提交任务 CTask<void> → 直接用。
+    /// 已提交任务 CTask<U> → 直接用（纯等待，忽略返回值）。
     template <typename TExpr>
-    void DoAwaitVoid(int nLine, TExpr expr, std::true_type)
+    void DoAwaitWait(int nLine, TExpr expr, std::true_type)
     {
         using R = typename std::decay<TExpr>::type;
         using U = typename detail::TaskTraits<R>::ValueType;
-        static_assert(std::is_same<U, void>::value, "非 void 任务请用 CO_AWAIT");
         m_nStep.store(nLine, std::memory_order_release);
-        CTask<void> task = expr; // expr 为 CTask<void>。
-        RegisterAwaitVoid(task);
+        CTask<U> task = expr; // expr 为 CTask<U>。
+        RegisterAwaitWait(task);
     }
 
-    /// 裸 lambda（返回 void）→ 自动 Submit。
+    /// 裸 lambda / 函数对象 → 自动 Submit（纯等待，忽略返回值）。
     template <typename TExpr>
-    void DoAwaitVoid(int nLine, TExpr expr, std::false_type)
+    void DoAwaitWait(int nLine, TExpr expr, std::false_type)
     {
         using R = typename std::decay<TExpr>::type;
         using U = typename detail::TInvokeResult<R>::type;
-        static_assert(std::is_same<U, void>::value, "非 void 任务请用 CO_AWAIT");
         m_nStep.store(nLine, std::memory_order_release);
         if (m_pExec == nullptr)
         {
             Terminate(detail::kStopped);
             return;
         }
-        CTask<void> task = m_pExec->Submit(expr);
-        RegisterAwaitVoid(task);
+        CTask<U> task = m_pExec->Submit(expr);
+        RegisterAwaitWait(task);
     }
 
     /// 注册非 void 任务续接：有值写 pTarget 并恢复；无值标记终止并恢复。
@@ -407,63 +396,16 @@ private:
         }
     }
 
-    /// 注册 void 任务续接：完成恢复；无值标记终止并恢复。
+    /// 注册非 void 任务续接（纯等待，忽略返回值）：完成恢复；无值标记终止并恢复。
     /// 回调捕获自持强引用，保证协程对象存活到回调执行完毕。
-    void RegisterAwaitVoid(CTask<void>& task)
-    {
-        std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        bool bOk = task.OnSuccess([spSelf, this]()
-        {
-            PostResume();
-        });
-        task.OnNone([spSelf, this](detail::CTaskEndReason reason)
-        {
-            MarkTerminated(reason); // await 到无值 → 协程终止（原因透传）。
-            PostResume();
-        });
-        if (!bOk)
-        {
-            Terminate(detail::kStopped);
-        }
-    }
-
-    // ---- 纯等待（AwaitWait 内部）----
-
-    /// 已提交任务 CTask<U> → 直接用（忽略返回值）。
-    template <typename TExpr>
-    void DoAwaitWait(int nLine, TExpr expr, std::true_type)
-    {
-        using R = typename std::decay<TExpr>::type;
-        using U = typename detail::TaskTraits<R>::ValueType;
-        m_nStep.store(nLine, std::memory_order_release);
-        CTask<U> task = expr;
-        RegisterAwaitWait(task, typename std::is_same<U, void>::type());
-    }
-
-    /// 裸 lambda / 函数对象 → 自动 Submit（忽略返回值）。
-    template <typename TExpr>
-    void DoAwaitWait(int nLine, TExpr expr, std::false_type)
-    {
-        using R = typename std::decay<TExpr>::type;
-        using U = typename detail::TInvokeResult<R>::type;
-        m_nStep.store(nLine, std::memory_order_release);
-        if (m_pExec == nullptr)
-        {
-            Terminate(detail::kStopped);
-            return;
-        }
-        CTask<U> task = m_pExec->Submit(expr);
-        RegisterAwaitWait(task, typename std::is_same<U, void>::type());
-    }
-
-    /// 注册非 void 任务续接：忽略值，完成即恢复。
     template <typename U>
-    void RegisterAwaitWait(CTask<U>& task, std::false_type)
+    typename std::enable_if<!std::is_void<U>::value, void>::type
+    RegisterAwaitWait(CTask<U>& task)
     {
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
         bool bOk = task.OnSuccess([spSelf, this](const U&)
         {
-            PostResume();
+            PostResume(); // 忽略值；值由调用方经共享 shared_ptr 传递。
         });
         task.OnNone([spSelf, this](detail::CTaskEndReason reason)
         {
@@ -476,9 +418,8 @@ private:
         }
     }
 
-    /// 注册 void 任务续接：完成即恢复。
-    template <typename U>
-    void RegisterAwaitWait(CTask<U>& task, std::true_type)
+    /// 注册 void 任务续接（纯等待）：完成恢复；无值标记终止并恢复。
+    void RegisterAwaitWait(CTask<void>& task)
     {
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
         bool bOk = task.OnSuccess([spSelf, this]()
@@ -619,40 +560,30 @@ std::shared_ptr<TCoroutine> CAsyncExecutor::CoStart(TArgs&&... args)
 //   void Run() override
 //   {
 //       CO_BEGIN();
-//       // 等价 C#：m_nPort = await 读配置();   （裸 lambda 自动 Submit）
-//       CO_AWAIT(m_nPort, []() { return 读配置(); });
-//       // 等价 C#：m_strDb = await 连DB(m_nPort); （捕获 this 读成员）
-//       CO_AWAIT(m_strDb, [this]() { return 连DB(m_nPort); });
-//       // 等价 C#：await 写日志();              （void 裸 lambda 自动 Submit）
-//       CO_AWAIT_VOID([this]() { 写日志(m_strDb); });
-//       CO_RETURN(结果(m_nPort, m_strDb));     // return 值（正常结束）
+//       // 纯等待（主版本）：值经外部共享 shared_ptr 传递
+//       CO_AWAIT([]() { 读配置(*m_spCfg); });   // 任务写共享对象
+//       // 落地值：结果写入帧成员 / *sp（非 void 专用）
+//       CO_AWAIT_INTO(m_strDb, [this]() { return 连DB(m_spCfg->port); });
+//       // 等价 C#：await 写日志();              （void 任务，纯等待）
+//       CO_AWAIT([this]() { 写日志(m_strDb); });
+//       CO_RETURN(结果(m_spCfg, m_strDb));     // return 值（正常结束）
 //       CO_END();                             // 兜底：无值终止
 //   }
 // ====================================================================
 #define CO_BEGIN()  switch (Step()) { case 0:;
 
-#define CO_AWAIT(target, expr) \
-    AwaitInto(__LINE__, (expr), &(target)); \
-    return; \
-    case __LINE__: \
-    if (IsTerminated()) \
-    { \
-        CompleteNone(Reason()); \
-        return; \
-    }
-
-#define CO_AWAIT_VOID(expr) \
-    AwaitVoid(__LINE__, (expr)); \
-    return; \
-    case __LINE__: \
-    if (IsTerminated()) \
-    { \
-        CompleteNone(Reason()); \
-        return; \
-    }
-
-#define CO_AWAIT_WAIT(expr) \
+#define CO_AWAIT(expr) \
     AwaitWait(__LINE__, (expr)); \
+    return; \
+    case __LINE__: \
+    if (IsTerminated()) \
+    { \
+        CompleteNone(Reason()); \
+        return; \
+    }
+
+#define CO_AWAIT_INTO(target, expr) \
+    AwaitInto(__LINE__, (expr), &(target)); \
     return; \
     case __LINE__: \
     if (IsTerminated()) \

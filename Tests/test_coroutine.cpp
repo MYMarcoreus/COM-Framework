@@ -22,8 +22,8 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(m_nA, []() { return 3; });            // 裸 lambda 自动 Submit
-        CO_AWAIT(m_nB, [this]() { return m_nA * 2; }); // 捕获 this
+        CO_AWAIT_INTO(m_nA, []() { return 3; });            // 落地值（非 void）
+        CO_AWAIT_INTO(m_nB, [this]() { return m_nA * 2; }); // 捕获 this
         CO_RETURN(m_nA + m_nB);
         CO_END();
     }
@@ -42,7 +42,7 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT_VOID([this]() { m_nDone.fetch_add(1); });
+        CO_AWAIT([this]() { m_nDone.fetch_add(1); }); // 纯等待（void 任务）
         CO_RETURN(m_nDone.load());
         CO_END();
     }
@@ -60,7 +60,7 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(m_nAfter, []() -> int { throw std::runtime_error("boom"); });
+        CO_AWAIT_INTO(m_nAfter, []() -> int { throw std::runtime_error("boom"); });
         // 上游终止 → 不会执行到这里（case 处 IsTerminated() 拦截）。
         CO_RETURN(m_nAfter);
         CO_END();
@@ -79,7 +79,7 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT_VOID([this]() { m_pCounter->fetch_add(1); });
+        CO_AWAIT([this]() { m_pCounter->fetch_add(1); }); // 纯等待
         CO_RETURN_VOID();
         CO_END();
     }
@@ -97,7 +97,7 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(m_nV, m_pExec->Submit([]() { return 3; })
+        CO_AWAIT_INTO(m_nV, m_pExec->Submit([]() { return 3; })
                             .Then([this](int n) { return m_pExec->Submit([n]() { return n * 10; }); })
                             .Then([](int n) { return n + 5; }));
         CO_RETURN(m_nV);
@@ -118,8 +118,8 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(*m_spResult, []() { return 42; });  // target = *sp（解引用）
-        CO_AWAIT_VOID([this]() { *m_spResult += 1; });   // void 裸 lambda
+        CO_AWAIT_INTO(*m_spResult, []() { return 42; });  // 落地值：target = *sp
+        CO_AWAIT([this]() { *m_spResult += 1; });          // 纯等待
         CO_RETURN(*m_spResult);
         CO_END();
     }
@@ -137,7 +137,7 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(m_nV, []() { return 7; });
+        CO_AWAIT_INTO(m_nV, []() { return 7; });
         CO_RETURN(m_nV);
         CO_END();
     }
@@ -156,7 +156,7 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(m_nR, m_spChild->AsTask()); // await 子协程结果。
+        CO_AWAIT_INTO(m_nR, m_spChild->AsTask()); // await 子协程结果。
         CO_RETURN(m_nR * 2);
         CO_END();
     }
@@ -208,25 +208,25 @@ private:
     int m_nB;
 };
 
-// 共享 sp + 纯等待：任务经捕获的 sp 写结果，CO_AWAIT_WAIT 只等待。
+// 主版本 CO_AWAIT 纯等待：非 void 任务忽略返回值，值经外部共享 shared_ptr 传递。
 class CSharedWaitCoro : public common::async::CCoroutine<int>
 {
 public:
-    CSharedWaitCoro() : m_sp(std::make_shared<int>(0)) {}
+    explicit CSharedWaitCoro(const std::shared_ptr<int>& spVal) : m_spVal(spVal) {}
 
     void Run() override
     {
         CO_BEGIN();
-        // 非 void 任务：返回值忽略，结果经 sp 传递。
-        CO_AWAIT_WAIT([this]() { *m_sp = 41; return true; });
-        // void 任务。
-        CO_AWAIT_WAIT([this]() { *m_sp += 1; });
-        CO_RETURN(*m_sp);
+        // ① 纯等待非 void 任务（返回值忽略）。
+        CO_AWAIT([]() { return 5; });
+        // ② 任务 lambda 捕获共享对象写结果（值经共享指针传递）。
+        CO_AWAIT([this]() { *m_spVal = 42; });
+        CO_RETURN(*m_spVal);
         CO_END();
     }
 
-    // 共享结果（协程成员持有；也可由外部传入，多协程共享）。
-    std::shared_ptr<int> m_sp;
+private:
+    std::shared_ptr<int> m_spVal;
 };
 
 } // namespace
@@ -383,15 +383,16 @@ TEST(Coroutine_AwaitAllNone)
     exec.Stop();
 }
 
-/// @brief 共享 sp + 纯等待（CO_AWAIT_WAIT）：任务经 sp 写结果，await 只等待。
+/// @brief 主版本 CO_AWAIT 纯等待：非 void 忽略返回值，值经共享 shared_ptr 传递。
 TEST(Coroutine_SharedPtrWait)
 {
     common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
 
-    std::shared_ptr<CSharedWaitCoro> pCoro = exec.CoStart<CSharedWaitCoro>();
+    std::shared_ptr<int> spVal = std::make_shared<int>(0);
+    std::shared_ptr<CSharedWaitCoro> pCoro = exec.CoStart<CSharedWaitCoro>(spVal);
     common::async::CTaskResult<int> r = pCoro->Get();
     ASSERT_TRUE(r.HasValue());
-    ASSERT_EQ(r.Value(), 42); // 41 + 1
+    ASSERT_EQ(r.Value(), 42);
     exec.Stop();
 }
