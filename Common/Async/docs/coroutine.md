@@ -61,6 +61,7 @@ exec.Stop();
 | `CO_BEGIN()` | 状态机入口（Duff's device 的 `switch` 开头，每个协程体一对）。 |
 | `CO_AWAIT(target, expr)` | await 任务并写入 target；挂起，恢复后 target 直接用。 |
 | `CO_AWAIT_VOID(expr)` | await void 任务（完成后恢复）。 |
+| `CO_AWAIT_WAIT(expr)` | 纯等待任意任务（返回值忽略），值由共享数据传递。 |
 | `CO_AWAIT_ALL(目标1, 任务1, 目标2, 任务2, ...)` | 并行 await 多任务，全部完成恢复。 |
 | `CO_RETURN(expr)` | 协程正常结束（有值）。 |
 | `CO_RETURN_VOID()` | 协程正常结束（void 完成）。 |
@@ -85,12 +86,17 @@ int m_nPort;   // 帧成员，跨 await 存活
 CO_AWAIT(m_nPort, []() { return 读配置(); });
 ```
 
-**② 动态数据 → shared_ptr 成员**
+**② 动态数据 → shared_ptr 成员（含纯等待 `CO_AWAIT_WAIT`）**
 
 ```cpp
-std::shared_ptr<Result> m_sp;   // shared_ptr 随协程常驻
-CO_AWAIT(m_sp->field, []() { return 42; });  // target = sp->field
-CO_AWAIT_VOID([this]() { m_sp->Do(); });     // task lambda 捕获 sp 跨任务传递
+std::shared_ptr<Result> m_sp;   // shared_ptr 随协程常驻（可外部传入，多协程共享）
+
+// 方式 A：target = sp->field（编译期类型检查 + 值落地）
+CO_AWAIT(m_sp->field, []() { return 42; });
+
+// 方式 B：CO_AWAIT_WAIT 纯等待 —— 任务捕获 sp 直接写结果，await 不取返回值
+CO_AWAIT_WAIT([this]() { return 查服务(m_sp); });   // 非 void，值走 sp
+CO_AWAIT_WAIT([this]() { m_sp->聚合(); });          // void
 ```
 
 **③ 嵌套子协程 → shared_ptr 子协程 + `AsTask()`**

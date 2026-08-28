@@ -22,7 +22,7 @@
 //  - 裸 lambda / 函数对象：自动投递到执行器执行（免写 Submit）
 //  - 子协程（CCoroutine::AsTask()）：await 嵌套协程
 // target 可为任意可写左值（成员、*sp 解引用、sp->field），恢复后自动写入。
-// CO_AWAIT_ALL(...) 并行 await 多任务（C# Task.WhenAll）。
+// CO_AWAIT_WAIT(expr) 纯等待（忽略返回值，值走共享数据）；CO_AWAIT_ALL(...) 并行 await。
 //
 // 核心语义（与 CTask 的 Option 风格一致）：
 //  - CO_AWAIT 挂起（return 让出线程，线程回线程池），任务有值/无值后由
@@ -190,6 +190,23 @@ protected:
     void AwaitVoid(int nLine, TExpr expr)
     {
         DoAwaitVoid(nLine, expr,
+                    std::integral_constant<bool,
+                        detail::IsCTask<typename std::decay<TExpr>::type>::value>());
+    }
+
+    /// @brief 纯等待任务完成（不写 target，值由调用方经共享数据传递）。
+    ///
+    /// 适合「外部共享智能指针、协程间共享传值」模式：任务 lambda 捕获共享
+    /// 对象直接写结果，await 只负责挂起 / 恢复；任务返回值被忽略
+    /// （任意类型，void 也可）。
+    ///
+    /// @tparam TExpr 任务表达式类型。
+    /// @param nLine 恢复点标签（宏自动传 __LINE__）。
+    /// @param expr 任务（已提交 CTask<U> 或裸 lambda）。
+    template <typename TExpr>
+    void AwaitWait(int nLine, TExpr expr)
+    {
+        DoAwaitWait(nLine, expr,
                     std::integral_constant<bool,
                         detail::IsCTask<typename std::decay<TExpr>::type>::value>());
     }
@@ -410,6 +427,75 @@ private:
         }
     }
 
+    // ---- 纯等待（AwaitWait 内部）----
+
+    /// 已提交任务 CTask<U> → 直接用（忽略返回值）。
+    template <typename TExpr>
+    void DoAwaitWait(int nLine, TExpr expr, std::true_type)
+    {
+        using R = typename std::decay<TExpr>::type;
+        using U = typename detail::TaskTraits<R>::ValueType;
+        m_nStep.store(nLine, std::memory_order_release);
+        CTask<U> task = expr;
+        RegisterAwaitWait(task, typename std::is_same<U, void>::type());
+    }
+
+    /// 裸 lambda / 函数对象 → 自动 Submit（忽略返回值）。
+    template <typename TExpr>
+    void DoAwaitWait(int nLine, TExpr expr, std::false_type)
+    {
+        using R = typename std::decay<TExpr>::type;
+        using U = typename detail::TInvokeResult<R>::type;
+        m_nStep.store(nLine, std::memory_order_release);
+        if (m_pExec == nullptr)
+        {
+            Terminate(detail::kStopped);
+            return;
+        }
+        CTask<U> task = m_pExec->Submit(expr);
+        RegisterAwaitWait(task, typename std::is_same<U, void>::type());
+    }
+
+    /// 注册非 void 任务续接：忽略值，完成即恢复。
+    template <typename U>
+    void RegisterAwaitWait(CTask<U>& task, std::false_type)
+    {
+        std::shared_ptr<void> spSelf = m_wpSelf.lock();
+        bool bOk = task.OnSuccess([spSelf, this](const U&)
+        {
+            PostResume();
+        });
+        task.OnNone([spSelf, this](detail::CTaskEndReason reason)
+        {
+            MarkTerminated(reason); // await 到无值 → 协程终止（原因透传）。
+            PostResume();
+        });
+        if (!bOk)
+        {
+            Terminate(detail::kStopped);
+        }
+    }
+
+    /// 注册 void 任务续接：完成即恢复。
+    template <typename U>
+    void RegisterAwaitWait(CTask<U>& task, std::true_type)
+    {
+        std::shared_ptr<void> spSelf = m_wpSelf.lock();
+        bool bOk = task.OnSuccess([spSelf, this]()
+        {
+            PostResume();
+        });
+        task.OnNone([spSelf, this](detail::CTaskEndReason reason)
+        {
+            MarkTerminated(reason); // await 到无值 → 协程终止（原因透传）。
+            PostResume();
+        });
+        if (!bOk)
+        {
+            Terminate(detail::kStopped);
+        }
+    }
+
     // ---- 并行 await（AwaitAll 内部）----
 
     /// 递归处理成对的 (目标, 任务)。
@@ -557,6 +643,16 @@ std::shared_ptr<TCoroutine> CAsyncExecutor::CoStart(TArgs&&... args)
 
 #define CO_AWAIT_VOID(expr) \
     AwaitVoid(__LINE__, (expr)); \
+    return; \
+    case __LINE__: \
+    if (IsTerminated()) \
+    { \
+        CompleteNone(Reason()); \
+        return; \
+    }
+
+#define CO_AWAIT_WAIT(expr) \
+    AwaitWait(__LINE__, (expr)); \
     return; \
     case __LINE__: \
     if (IsTerminated()) \

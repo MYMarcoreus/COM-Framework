@@ -208,6 +208,27 @@ private:
     int m_nB;
 };
 
+// 共享 sp + 纯等待：任务经捕获的 sp 写结果，CO_AWAIT_WAIT 只等待。
+class CSharedWaitCoro : public common::async::CCoroutine<int>
+{
+public:
+    CSharedWaitCoro() : m_sp(std::make_shared<int>(0)) {}
+
+    void Run() override
+    {
+        CO_BEGIN();
+        // 非 void 任务：返回值忽略，结果经 sp 传递。
+        CO_AWAIT_WAIT([this]() { *m_sp = 41; return true; });
+        // void 任务。
+        CO_AWAIT_WAIT([this]() { *m_sp += 1; });
+        CO_RETURN(*m_sp);
+        CO_END();
+    }
+
+    // 共享结果（协程成员持有；也可由外部传入，多协程共享）。
+    std::shared_ptr<int> m_sp;
+};
+
 } // namespace
 
 /// @brief 顺序两次 await，结果正确（3 + 3*2 = 9）。
@@ -359,5 +380,18 @@ TEST(Coroutine_AwaitAllNone)
     common::async::CTaskResult<int> r = pCoro->Get();
     ASSERT_TRUE(!r.HasValue());
     ASSERT_EQ(r.Reason(), common::async::detail::kException);
+    exec.Stop();
+}
+
+/// @brief 共享 sp + 纯等待（CO_AWAIT_WAIT）：任务经 sp 写结果，await 只等待。
+TEST(Coroutine_SharedPtrWait)
+{
+    common::async::CAsyncExecutor exec(1);
+    ASSERT_TRUE(exec.Start());
+
+    std::shared_ptr<CSharedWaitCoro> pCoro = exec.CoStart<CSharedWaitCoro>();
+    common::async::CTaskResult<int> r = pCoro->Get();
+    ASSERT_TRUE(r.HasValue());
+    ASSERT_EQ(r.Value(), 42); // 41 + 1
     exec.Stop();
 }
