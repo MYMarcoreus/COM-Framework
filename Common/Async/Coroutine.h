@@ -72,6 +72,22 @@ struct CAwaitAllGroup
     CAwaitAllGroup() : nPending(0), bNone(0), nReason(kEndNone) {}
 };
 
+/// @brief 忽略任务返回值（纯等待 CO_AWAIT / CO_AWAIT_ALL 用）。
+struct CIgnoreValue
+{
+    template <typename U> void operator()(const U&) const {}
+    void operator()() const {}
+};
+
+/// @brief 落地值写目标（CO_AWAIT_INTO / CO_AWAIT_ALL_INTO 用）。
+template <typename TDst>
+struct CWriteTarget
+{
+    explicit CWriteTarget(TDst* pTarget) : m_pTarget(pTarget) {}
+    template <typename U> void operator()(const U& v) const { *m_pTarget = v; }
+    TDst* m_pTarget;
+};
+
 } // namespace detail
 
 /// @brief 无栈协程基类（Option 风格，基于 CAsyncExecutor + CTask）。
@@ -178,9 +194,8 @@ protected:
     template <typename TExpr, typename TDst>
     void AwaitInto(int nLine, TExpr expr, TDst* pTarget)
     {
-        DoAwait(nLine, expr, pTarget,
-                std::integral_constant<bool,
-                    detail::IsCTask<typename std::decay<TExpr>::type>::value>());
+        m_nStep.store(nLine, std::memory_order_release);
+        RegisterTask(MakeTask(expr), detail::CWriteTarget<TDst>(pTarget));
     }
 
     /// @brief await 任务并忽略返回值（主版本：CO_AWAIT(expr)）。
@@ -198,9 +213,8 @@ protected:
     template <typename TExpr>
     void AwaitWait(int nLine, TExpr expr)
     {
-        DoAwaitWait(nLine, expr,
-                    std::integral_constant<bool,
-                        detail::IsCTask<typename std::decay<TExpr>::type>::value>());
+        m_nStep.store(nLine, std::memory_order_release);
+        RegisterTask(MakeTask(expr), detail::CIgnoreValue());
     }
 
     /// @brief 并行 await 多任务（主版本：CO_AWAIT_ALL(任务, ...)）。
@@ -222,7 +236,7 @@ protected:
         pGroup->nPending.store(static_cast<int>(sizeof...(TArgs)),
                                std::memory_order_relaxed);
 
-        AwaitAllWaitImpl(pGroup, std::forward<TArgs>(args)...);
+        AwaitAllImpl(pGroup, std::forward<TArgs>(args)...);
     }
 
     /// @brief 并行 await 多任务并落地值（CO_AWAIT_ALL_INTO(目标, 任务, ...)）。
@@ -245,7 +259,7 @@ protected:
         pGroup->nPending.store(static_cast<int>(sizeof...(TArgs) / 2),
                                std::memory_order_relaxed);
 
-        AwaitAllImpl(pGroup, std::forward<TArgs>(args)...);
+        AwaitAllIntoImpl(pGroup, std::forward<TArgs>(args)...);
     }
 
     /// @brief 最近一次 await 是否无值终止（None / 异常）。
@@ -339,73 +353,46 @@ private:
         CompleteNone(reason);
     }
 
-    // ---- await 分派与续接注册（AwaitInto / AwaitWait 内部）----
+    // ---- 任务规整：CTask 直接用 / 裸 lambda 自动 Submit（MakeTask）----
 
     /// 已提交任务 CTask<U> → 直接用。
-    template <typename TExpr, typename TDst>
-    void DoAwait(int nLine, TExpr expr, TDst* pTarget, std::true_type)
-    {
-        using R = typename std::decay<TExpr>::type;
-        using U = typename detail::TaskTraits<R>::ValueType;
-        static_assert(!std::is_same<U, void>::value, "void 任务请用 CO_AWAIT");
-        m_nStep.store(nLine, std::memory_order_release);
-        CTask<U> task = expr; // expr 为 CTask<U>。
-        RegisterAwait(task, pTarget);
-    }
-
-    /// 裸 lambda / 函数对象 → 自动 Submit 到执行器。
-    template <typename TExpr, typename TDst>
-    void DoAwait(int nLine, TExpr expr, TDst* pTarget, std::false_type)
-    {
-        using R = typename std::decay<TExpr>::type;
-        using U = typename detail::TInvokeResult<R>::type;
-        static_assert(!std::is_same<U, void>::value, "void 任务请用 CO_AWAIT");
-        m_nStep.store(nLine, std::memory_order_release);
-        if (m_pExec == nullptr)
-        {
-            Terminate(detail::kStopped);
-            return;
-        }
-        CTask<U> task = m_pExec->Submit(expr);
-        RegisterAwait(task, pTarget);
-    }
-
-    /// 已提交任务 CTask<U> → 直接用（纯等待，忽略返回值）。
     template <typename TExpr>
-    void DoAwaitWait(int nLine, TExpr expr, std::true_type)
+    auto MakeTask(TExpr expr, std::true_type)
+        -> CTask<typename detail::TaskTraits<typename std::decay<TExpr>::type>::ValueType>
     {
-        using R = typename std::decay<TExpr>::type;
-        using U = typename detail::TaskTraits<R>::ValueType;
-        m_nStep.store(nLine, std::memory_order_release);
-        CTask<U> task = expr; // expr 为 CTask<U>。
-        RegisterAwaitWait(task);
+        return expr; // expr 为 CTask<U>。
     }
 
-    /// 裸 lambda / 函数对象 → 自动 Submit（纯等待，忽略返回值）。
+    /// 裸 lambda / 函数对象 → 自动 Submit（m_pExec 恒非空：协程绑定执行器）。
     template <typename TExpr>
-    void DoAwaitWait(int nLine, TExpr expr, std::false_type)
+    auto MakeTask(TExpr expr, std::false_type)
+        -> CTask<typename detail::TInvokeResult<typename std::decay<TExpr>::type>::type>
     {
-        using R = typename std::decay<TExpr>::type;
-        using U = typename detail::TInvokeResult<R>::type;
-        m_nStep.store(nLine, std::memory_order_release);
-        if (m_pExec == nullptr)
-        {
-            Terminate(detail::kStopped);
-            return;
-        }
-        CTask<U> task = m_pExec->Submit(expr);
-        RegisterAwaitWait(task);
+        return m_pExec->Submit(expr);
     }
 
-    /// 注册非 void 任务续接：有值写 pTarget 并恢复；无值标记终止并恢复。
+    /// 任务表达式 → 统一 CTask<U>。
+    template <typename TExpr>
+    auto MakeTask(TExpr expr)
+        -> decltype(MakeTask(expr, std::integral_constant<bool,
+            detail::IsCTask<typename std::decay<TExpr>::type>::value>()))
+    {
+        return MakeTask(expr, std::integral_constant<bool,
+            detail::IsCTask<typename std::decay<TExpr>::type>::value>());
+    }
+
+    // ---- 顺序 await 续接注册（RegisterTask）----
+
+    /// 非 void 任务：完成时 onSuccess(v)；无值标记终止并恢复。
     /// 回调捕获自持强引用，保证协程对象存活到回调执行完毕。
-    template <typename U, typename TDst>
-    void RegisterAwait(CTask<U>& task, TDst* pTarget)
+    template <typename U, typename TOnSuccess>
+    typename std::enable_if<!std::is_void<U>::value, void>::type
+    RegisterTask(CTask<U> task, TOnSuccess onSuccess)
     {
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        bool bOk = task.OnSuccess([spSelf, pTarget, this](const U& v)
+        bool bOk = task.OnSuccess([spSelf, onSuccess, this](const U& v)
         {
-            *pTarget = v; // 结果直接写入目标（帧变量），恢复后即可用。
+            onSuccess(v);
             PostResume();
         });
         task.OnNone([spSelf, this](detail::CTaskEndReason reason)
@@ -419,34 +406,14 @@ private:
         }
     }
 
-    /// 注册非 void 任务续接（纯等待，忽略返回值）：完成恢复；无值标记终止并恢复。
-    /// 回调捕获自持强引用，保证协程对象存活到回调执行完毕。
-    template <typename U>
-    typename std::enable_if<!std::is_void<U>::value, void>::type
-    RegisterAwaitWait(CTask<U>& task)
+    /// void 任务：完成时 onSuccess()；无值标记终止并恢复。
+    template <typename TOnSuccess>
+    void RegisterTask(CTask<void> task, TOnSuccess onSuccess)
     {
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        bool bOk = task.OnSuccess([spSelf, this](const U&)
+        bool bOk = task.OnSuccess([spSelf, onSuccess, this]()
         {
-            PostResume(); // 忽略值；值由调用方经共享 shared_ptr 传递。
-        });
-        task.OnNone([spSelf, this](detail::CTaskEndReason reason)
-        {
-            MarkTerminated(reason); // await 到无值 → 协程终止（原因透传）。
-            PostResume();
-        });
-        if (!bOk)
-        {
-            Terminate(detail::kStopped);
-        }
-    }
-
-    /// 注册 void 任务续接（纯等待）：完成恢复；无值标记终止并恢复。
-    void RegisterAwaitWait(CTask<void>& task)
-    {
-        std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        bool bOk = task.OnSuccess([spSelf, this]()
-        {
+            onSuccess();
             PostResume();
         });
         task.OnNone([spSelf, this](detail::CTaskEndReason reason)
@@ -464,165 +431,81 @@ private:
 
     /// 递归处理纯等待任务列表（CO_AWAIT_ALL）。
     template <typename TExpr, typename... TRest>
-    void AwaitAllWaitImpl(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
-                          TExpr expr, TRest&&... rest)
-    {
-        RegisterAllWaitTask(pGroup, expr,
-                            std::integral_constant<bool,
-                                detail::IsCTask<typename std::decay<TExpr>::type>::value>());
-        AwaitAllWaitImpl(pGroup, std::forward<TRest>(rest)...);
-    }
-
-    /// 递归终止。
-    void AwaitAllWaitImpl(const std::shared_ptr<detail::CAwaitAllGroup>&) {}
-
-    /// 单个任务：已提交 CTask<U>（纯等待，忽略返回值）。
-    template <typename TExpr>
-    void RegisterAllWaitTask(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
-                             TExpr expr, std::true_type)
-    {
-        using R = typename std::decay<TExpr>::type;
-        using U = typename detail::TaskTraits<R>::ValueType;
-        CTask<U> task = expr;
-        RegisterAllWaitContinuation(pGroup, task);
-    }
-
-    /// 单个任务：裸 lambda → 自动 Submit（纯等待，忽略返回值）。
-    template <typename TExpr>
-    void RegisterAllWaitTask(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
-                             TExpr expr, std::false_type)
-    {
-        using R = typename std::decay<TExpr>::type;
-        using U = typename detail::TInvokeResult<R>::type;
-        if (m_pExec == nullptr)
-        {
-            MarkTerminated(detail::kStopped);
-            AllDone(pGroup); // 该任务计为完成（无值终止）。
-            return;
-        }
-        CTask<U> task = m_pExec->Submit(expr);
-        RegisterAllWaitContinuation(pGroup, task);
-    }
-
-    /// 注册单个任务续接到并行组（纯等待，非 void）：完成 AllDone；无值记录终止原因。
-    template <typename U>
-    typename std::enable_if<!std::is_void<U>::value, void>::type
-    RegisterAllWaitContinuation(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
-                                CTask<U>& task)
-    {
-        std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        bool bOk = task.OnSuccess([pGroup, spSelf, this](const U&)
-        {
-            AllDone(pGroup); // 忽略值；值由调用方经共享 shared_ptr 传递。
-        });
-        task.OnNone([pGroup, spSelf, this](detail::CTaskEndReason reason)
-        {
-            int nExpected = 0;
-            if (pGroup->bNone.compare_exchange_strong(nExpected, 1))
-            {
-                pGroup->nReason.store(reason, std::memory_order_relaxed); // 首个无值原因。
-            }
-            AllDone(pGroup);
-        });
-        if (!bOk)
-        {
-            MarkTerminated(detail::kStopped);
-            AllDone(pGroup);
-        }
-    }
-
-    /// 注册单个任务续接到并行组（纯等待，void）。
-    void RegisterAllWaitContinuation(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
-                                     CTask<void>& task)
-    {
-        std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        bool bOk = task.OnSuccess([pGroup, spSelf, this]()
-        {
-            AllDone(pGroup);
-        });
-        task.OnNone([pGroup, spSelf, this](detail::CTaskEndReason reason)
-        {
-            int nExpected = 0;
-            if (pGroup->bNone.compare_exchange_strong(nExpected, 1))
-            {
-                pGroup->nReason.store(reason, std::memory_order_relaxed); // 首个无值原因。
-            }
-            AllDone(pGroup);
-        });
-        if (!bOk)
-        {
-            MarkTerminated(detail::kStopped);
-            AllDone(pGroup);
-        }
-    }
-
-    /// 递归处理成对的 (目标, 任务)。
-    template <typename TDst, typename TExpr, typename... TRest>
     void AwaitAllImpl(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
-                      TDst& target, TExpr expr, TRest&&... rest)
+                      TExpr expr, TRest&&... rest)
     {
-        RegisterAllTask(pGroup, expr, &target,
-                        std::integral_constant<bool,
-                            detail::IsCTask<typename std::decay<TExpr>::type>::value>());
+        RegisterAllTask(pGroup, MakeTask(expr), detail::CIgnoreValue());
         AwaitAllImpl(pGroup, std::forward<TRest>(rest)...);
     }
 
     /// 递归终止。
     void AwaitAllImpl(const std::shared_ptr<detail::CAwaitAllGroup>&) {}
 
-    /// 单个任务：已提交 CTask<U>。
-    template <typename TExpr, typename TDst>
-    void RegisterAllTask(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
-                         TExpr expr, TDst* pTarget, std::true_type)
+    /// 递归处理成对的 (目标, 任务)（CO_AWAIT_ALL_INTO）。
+    template <typename TDst, typename TExpr, typename... TRest>
+    void AwaitAllIntoImpl(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
+                          TDst& target, TExpr expr, TRest&&... rest)
     {
-        using R = typename std::decay<TExpr>::type;
-        using U = typename detail::TaskTraits<R>::ValueType;
-        static_assert(!std::is_same<U, void>::value, "CO_AWAIT_ALL 暂不支持 void 任务");
-        CTask<U> task = expr;
-        RegisterAllContinuation(pGroup, task, pTarget);
+        RegisterAllTask(pGroup, MakeTask(expr), detail::CWriteTarget<TDst>(&target));
+        AwaitAllIntoImpl(pGroup, std::forward<TRest>(rest)...);
     }
 
-    /// 单个任务：裸 lambda → 自动 Submit。
-    template <typename TExpr, typename TDst>
-    void RegisterAllTask(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
-                         TExpr expr, TDst* pTarget, std::false_type)
+    /// 递归终止。
+    void AwaitAllIntoImpl(const std::shared_ptr<detail::CAwaitAllGroup>&) {}
+
+    /// 记录首个无值原因。
+    void RecordNone(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
+                    detail::CTaskEndReason reason)
     {
-        using R = typename std::decay<TExpr>::type;
-        using U = typename detail::TInvokeResult<R>::type;
-        static_assert(!std::is_same<U, void>::value, "CO_AWAIT_ALL 暂不支持 void 任务");
-        if (m_pExec == nullptr)
+        int nExpected = 0;
+        if (pGroup->bNone.compare_exchange_strong(nExpected, 1))
         {
-            MarkTerminated(detail::kStopped);
-            AllDone(pGroup); // 该任务计为完成（无值终止）。
-            return;
+            pGroup->nReason.store(reason, std::memory_order_relaxed);
         }
-        CTask<U> task = m_pExec->Submit(expr);
-        RegisterAllContinuation(pGroup, task, pTarget);
     }
 
-    /// 注册单个任务续接到并行组：有值写 pTarget；无值记录首个终止原因。
-    template <typename U, typename TDst>
-    void RegisterAllContinuation(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
-                                 CTask<U>& task, TDst* pTarget)
+    /// 注册单个任务到并行组（非 void）：onSuccess 落地/忽略；无值记录终止原因。
+    template <typename U, typename TOnSuccess>
+    typename std::enable_if<!std::is_void<U>::value, void>::type
+    RegisterAllTask(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
+                    CTask<U> task, TOnSuccess onSuccess)
     {
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        bool bOk = task.OnSuccess([pGroup, pTarget, spSelf, this](const U& v)
+        bool bOk = task.OnSuccess([pGroup, spSelf, onSuccess, this](const U& v)
         {
-            *pTarget = v;
+            onSuccess(v);
             AllDone(pGroup);
         });
         task.OnNone([pGroup, spSelf, this](detail::CTaskEndReason reason)
         {
-            int nExpected = 0;
-            if (pGroup->bNone.compare_exchange_strong(nExpected, 1))
-            {
-                pGroup->nReason.store(reason, std::memory_order_relaxed); // 首个无值原因。
-            }
+            RecordNone(pGroup, reason);
             AllDone(pGroup);
         });
         if (!bOk)
         {
-            // 任务已就绪但执行器不可用：该任务计为完成（无值终止）。
+            MarkTerminated(detail::kStopped);
+            AllDone(pGroup);
+        }
+    }
+
+    /// 注册单个任务到并行组（void）。
+    template <typename TOnSuccess>
+    void RegisterAllTask(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
+                         CTask<void> task, TOnSuccess onSuccess)
+    {
+        std::shared_ptr<void> spSelf = m_wpSelf.lock();
+        bool bOk = task.OnSuccess([pGroup, spSelf, onSuccess, this]()
+        {
+            onSuccess();
+            AllDone(pGroup);
+        });
+        task.OnNone([pGroup, spSelf, this](detail::CTaskEndReason reason)
+        {
+            RecordNone(pGroup, reason);
+            AllDone(pGroup);
+        });
+        if (!bOk)
+        {
             MarkTerminated(detail::kStopped);
             AllDone(pGroup);
         }
