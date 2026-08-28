@@ -17,7 +17,8 @@
 | `await task;` | `CO_AWAIT(task);`（纯等待，主版本） |
 | `int a = await task;` | `CO_AWAIT_INTO(m_a, task);`（落地值，m_a 为帧成员） |
 | `int a = await Foo();` | `CO_AWAIT_INTO(m_a, []() { return Foo(); });` |
-| `await Task.WhenAll(t1, t2);` | `CO_AWAIT_ALL(m_a, t1, m_b, t2);` |
+| `await Task.WhenAll(t1, t2);` | `CO_AWAIT_ALL(t1, t2);`（纯等待并行） |
+| 并行并落地值 | `CO_AWAIT_ALL_INTO(m_a, t1, m_b, t2);` |
 | `return value;` | `CO_RETURN(value);` |
 | 失败处理（异常 / 降级） | `await` 无值 → 整体终止（`Reason()` 区分） |
 
@@ -61,7 +62,8 @@ exec.Stop();
 | `CO_BEGIN()` | 状态机入口（Duff's device 的 `switch` 开头，每个协程体一对）。 |
 | `CO_AWAIT(expr)` | **主版本**：纯等待任意任务（void / 非 void），忽略返回值；值经外部共享 `shared_ptr` 传递。 |
 | `CO_AWAIT_INTO(target, expr)` | 落地值（非 void 专用）：await 任务并写入 target，恢复后 target 直接用。 |
-| `CO_AWAIT_ALL(目标1, 任务1, 目标2, 任务2, ...)` | 并行 await 多任务，全部完成恢复。 |
+| `CO_AWAIT_ALL(任务1, 任务2, ...)` | 并行纯等待多任务（忽略返回值，值走共享 shared_ptr），全部完成恢复。 |
+| `CO_AWAIT_ALL_INTO(目标1, 任务1, 目标2, 任务2, ...)` | 并行落地值：结果写入各自目标，全部完成恢复。 |
 | `CO_RETURN(expr)` | 协程正常结束（有值）。 |
 | `CO_RETURN_VOID()` | 协程正常结束（void 完成）。 |
 | `CO_END()` | 状态机结尾（兜底无值终止）。 |
@@ -107,32 +109,34 @@ std::shared_ptr<CChildCoro> m_spChild;   // 子协程（已 CoStart）
 CO_AWAIT_INTO(m_nR, m_spChild->AsTask());     // await 子协程结果
 ```
 
-## 6. 并行 await（CO_AWAIT_ALL）
+## 6. 并行 await（CO_AWAIT_ALL / CO_AWAIT_ALL_INTO）
+
+**① 纯等待并行（主版本 CO_AWAIT_ALL）**：忽略返回值，值经共享 shared_ptr 传递：
 
 ```cpp
-class CAllCoro : public common::async::CCoroutine<int>
+std::shared_ptr<std::atomic<int> > spVal = ...;   // 外部共享
+void Run() override
 {
-public:
-    CAllCoro() : m_nA(0), m_nB(0), m_nC(0) {}
-
-    void Run() override
-    {
-        CO_BEGIN();
-        CO_AWAIT_ALL(m_nA, []() { return 查服务A(); },   // 并行提交，全部完成恢复
-                     m_nB, []() { return 查服务B(); },
-                     m_nC, []() { return 查服务C(); });
-        CO_RETURN(聚合(m_nA, m_nB, m_nC));
-        CO_END();
-    }
-
-private:
-    int m_nA, m_nB, m_nC;
-};
+    CO_BEGIN();
+    CO_AWAIT_ALL([this]() { 查服务A(*m_spVal); },   // 并行提交，全部完成恢复
+                 [this]() { 查服务B(*m_spVal); },
+                 []() { return 无关返回值; });       // 非 void 任务，返回值忽略
+    CO_RETURN(m_spVal->load());
+    CO_END();
+}
 ```
 
-- 全部任务有值 → 各自写入目标后恢复；
+**② 并行落地值（CO_AWAIT_ALL_INTO）**：结果写入各自目标：
+
+```cpp
+CO_AWAIT_ALL_INTO(m_nA, []() { return 查服务A(); },
+                  m_nB, []() { return 查服务B(); });
+CO_RETURN(聚合(m_nA, m_nB));
+```
+
+- 全部任务完成 → 恢复（纯等待）或各自写入目标后恢复（落地值）；
 - **任一任务无值** → 协程整体终止（原因透传，与顺序 await 一致）；
-- void 任务暂不支持（并行 void 请用多个 `CO_AWAIT`）。
+- `CO_AWAIT_ALL_INTO` 的 void 任务暂不支持（并行 void 请用 `CO_AWAIT_ALL`）。
 
 ## 7. 生命周期
 
@@ -156,7 +160,7 @@ private:
 - **跨 await 变量必须存帧**（成员 / shared_ptr 成员 / 子协程），不能用函数内局部变量；
 - `CO_BEGIN()` / `CO_END()` 必须保留（Duff's device 的 `switch` 骨架，无法隐藏）；
 - **每个协程宏独占一行**（`__LINE__` 作恢复点标签，同一行两个宏冲突）；
-- `CO_AWAIT_ALL` 目标须为左值；void 任务用 `CO_AWAIT`（纯等待）；
+- `CO_AWAIT_ALL_INTO` 目标须为左值；并行 void 请用 `CO_AWAIT_ALL`（纯等待）；
 - 无栈协程无法做到「真·局部变量自动保留」——若需要（`int x = await task` 且 x 为纯局部），
   需切换到**有栈协程**（路线 B）或 **C++20 原生协程**。
 

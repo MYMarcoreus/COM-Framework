@@ -175,9 +175,9 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT_ALL(m_nA, []() { return 1; },
-                     m_nB, []() { return 2; },
-                     m_nC, []() { return 3; });
+        CO_AWAIT_ALL_INTO(m_nA, []() { return 1; },
+                          m_nB, []() { return 2; },
+                          m_nC, []() { return 3; });
         CO_RETURN(m_nA + m_nB + m_nC);
         CO_END();
     }
@@ -197,8 +197,8 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT_ALL(m_nA, []() { return 1; },
-                     m_nB, []() -> int { throw std::runtime_error("boom"); });
+        CO_AWAIT_ALL_INTO(m_nA, []() { return 1; },
+                          m_nB, []() -> int { throw std::runtime_error("boom"); });
         CO_RETURN(m_nA + m_nB);
         CO_END();
     }
@@ -227,6 +227,27 @@ public:
 
 private:
     std::shared_ptr<int> m_spVal;
+};
+
+// 并行纯等待（CO_AWAIT_ALL 主版本）：忽略返回值，值经共享 shared_ptr 传递。
+class CAllWaitCoro : public common::async::CCoroutine<int>
+{
+public:
+    explicit CAllWaitCoro(const std::shared_ptr<std::atomic<int> >& spVal) : m_spVal(spVal) {}
+
+    void Run() override
+    {
+        CO_BEGIN();
+        // 并行三个任务：两个写共享原子变量，一个返回非 void（返回值忽略）。
+        CO_AWAIT_ALL([this]() { m_spVal->fetch_add(1); },
+                     [this]() { m_spVal->fetch_add(2); },
+                     []() { return 100; });
+        CO_RETURN(m_spVal->load());
+        CO_END();
+    }
+
+private:
+    std::shared_ptr<std::atomic<int> > m_spVal;
 };
 
 } // namespace
@@ -394,5 +415,19 @@ TEST(Coroutine_SharedPtrWait)
     common::async::CTaskResult<int> r = pCoro->Get();
     ASSERT_TRUE(r.HasValue());
     ASSERT_EQ(r.Value(), 42);
+    exec.Stop();
+}
+
+/// @brief 主版本 CO_AWAIT_ALL 并行纯等待：忽略返回值，值经共享 shared_ptr 传递。
+TEST(Coroutine_AwaitAllWait)
+{
+    common::async::CAsyncExecutor exec(2);
+    ASSERT_TRUE(exec.Start());
+
+    std::shared_ptr<std::atomic<int> > spVal = std::make_shared<std::atomic<int> >(0);
+    std::shared_ptr<CAllWaitCoro> pCoro = exec.CoStart<CAllWaitCoro>(spVal);
+    common::async::CTaskResult<int> r = pCoro->Get();
+    ASSERT_TRUE(r.HasValue());
+    ASSERT_EQ(r.Value(), 3); // 1 + 2（共享原子变量累加）
     exec.Stop();
 }
