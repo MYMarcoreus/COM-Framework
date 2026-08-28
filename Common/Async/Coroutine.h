@@ -103,8 +103,18 @@ public:
     /// @brief 协程体（派生类实现，用 CO_BEGIN / ... / CO_END 宏）。
     virtual void Run() = 0;
 
-    /// 允许执行器创建 / 复位 / 调度协程。
-    friend class CAsyncExecutor;
+    /// @brief 在指定执行器上启动协程（绑定 + 复位 + 投递首次执行）。
+    ///
+    /// 由 CAsyncExecutor::CoStart 调用；执行器须存活于协程生命周期
+    /// （未启动时协程立即以 kStopped 终止）。
+    ///
+    /// @param pExec 执行器指针。
+    void Start(CAsyncExecutor* pExec)
+    {
+        BindExecutor(pExec);
+        Reset();
+        PostResume();
+    }
 
 protected:
     // ---------------- 宏接口 ----------------
@@ -175,7 +185,7 @@ protected:
     }
 
 private:
-    /// @brief 绑定执行器（CoStart 调用；friend CAsyncExecutor）。
+    /// @brief 绑定执行器（Start 调用）。
     ///
     /// @param pExec 执行器指针（自动 Submit / Resume 调度用；须存活于协程）。
     void BindExecutor(CAsyncExecutor* pExec)
@@ -195,10 +205,8 @@ private:
     /// @brief 把 Resume 投递到执行器（串行调度；执行器不可用 → kStopped 终止）。
     void PostResume()
     {
-        if (m_pExec != nullptr && m_pExec->m_pHandle != nullptr &&
-            m_pExec->m_pHandle->m_pPool != nullptr &&
-            !m_pExec->m_pHandle->m_bStopped &&
-            m_pExec->m_pHandle->m_pPool->Submit([this]() { Resume(); }))
+        // 经公开接口 Post 投递：内部已检查停止标志与线程池可用性。
+        if (m_pExec != nullptr && m_pExec->Post([this]() { Resume(); }))
         {
             return;
         }
@@ -345,9 +353,7 @@ std::shared_ptr<TCoroutine> CAsyncExecutor::CoStart(TArgs&&... args)
 {
     std::shared_ptr<TCoroutine> pCoro =
         std::make_shared<TCoroutine>(std::forward<TArgs>(args)...);
-    pCoro->BindExecutor(this);
-    pCoro->Reset();
-    pCoro->PostResume(); // 投递首次执行（未启动 → 立即 kStopped 终止）。
+    pCoro->Start(this); // 绑定 + 复位 + 投递首次执行（未启动 → 立即 kStopped 终止）。
     return pCoro;
 }
 
