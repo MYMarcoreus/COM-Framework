@@ -26,8 +26,8 @@
 //  - CO_AWAIT 挂起（return 让出线程，线程回线程池），任务有值/无值后由
 //    执行器投递 Resume 继续，结果自动写入目标变量；
 //  - await 到无值（None / 异常）→ 协程终止（原因透传，与 CTask 链一致）；
-//  - 生命周期：绑定执行器句柄（CExecutorHandle），执行器析构/Stop 后
-//    已挂起协程安全以 kStopped 终止，不悬垂。
+//  - 生命周期：绑定执行器（CAsyncExecutor*，须存活于协程）；执行器 Stop
+//    后已挂起协程安全以 kStopped 终止，不悬垂。
 //
 // 约束（无栈协程固有）：
 //  - 跨 await 的变量必须存放为派生类成员（帧），不能用函数内局部变量
@@ -82,7 +82,6 @@ public:
     /// @brief 创建协程（未绑定执行器；经 CAsyncExecutor::CoStart 启动）。
     CCoroutine()
         : m_pState(std::make_shared<detail::CTaskState<TValue> >()),
-          m_pExecutor(),
           m_pExec(nullptr),
           m_nStep(0),
           m_bTerminated(false),
@@ -178,12 +177,9 @@ protected:
 private:
     /// @brief 绑定执行器（CoStart 调用；friend CAsyncExecutor）。
     ///
-    /// @param pExecutor 执行器句柄（Resume 调度 / 生命周期）。
-    /// @param pExec 执行器指针（自动 Submit 裸 lambda 用；须存活于协程）。
-    void BindExecutor(const std::shared_ptr<detail::CExecutorHandle>& pExecutor,
-                      CAsyncExecutor* pExec)
+    /// @param pExec 执行器指针（自动 Submit / Resume 调度用；须存活于协程）。
+    void BindExecutor(CAsyncExecutor* pExec)
     {
-        m_pExecutor = pExecutor;
         m_pExec = pExec;
     }
 
@@ -199,9 +195,10 @@ private:
     /// @brief 把 Resume 投递到执行器（串行调度；执行器不可用 → kStopped 终止）。
     void PostResume()
     {
-        if (m_pExecutor != nullptr && m_pExecutor->m_pPool != nullptr &&
-            !m_pExecutor->m_bStopped &&
-            m_pExecutor->m_pPool->Submit([this]() { Resume(); }))
+        if (m_pExec != nullptr && m_pExec->m_pHandle != nullptr &&
+            m_pExec->m_pHandle->m_pPool != nullptr &&
+            !m_pExec->m_pHandle->m_bStopped &&
+            m_pExec->m_pHandle->m_pPool->Submit([this]() { Resume(); }))
         {
             return;
         }
@@ -331,8 +328,7 @@ private:
 
 private:
     std::shared_ptr<detail::CTaskState<TValue> > m_pState; // 协程最终结果。
-    std::shared_ptr<detail::CExecutorHandle> m_pExecutor;  // 执行器句柄（Resume 调度）。
-    CAsyncExecutor* m_pExec;                               // 执行器指针（自动 Submit 用）。
+    CAsyncExecutor* m_pExec;                               // 执行器指针（自动 Submit / Resume 调度）。
     std::atomic<int> m_nStep;                              // 状态机步号（恢复点）。
     std::atomic<bool> m_bTerminated;                       // await 到无值 → 终止。
     std::atomic<int> m_reason;                             // 终止原因。
@@ -349,7 +345,7 @@ std::shared_ptr<TCoroutine> CAsyncExecutor::CoStart(TArgs&&... args)
 {
     std::shared_ptr<TCoroutine> pCoro =
         std::make_shared<TCoroutine>(std::forward<TArgs>(args)...);
-    pCoro->BindExecutor(m_pHandle, this);
+    pCoro->BindExecutor(this);
     pCoro->Reset();
     pCoro->PostResume(); // 投递首次执行（未启动 → 立即 kStopped 终止）。
     return pCoro;

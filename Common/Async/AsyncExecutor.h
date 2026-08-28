@@ -76,6 +76,7 @@ namespace async {
 
 // 前向声明（detail 里的 TaskTraits / FlatMapForward / CTaskBase 需要）。
 template <typename TValue> class CTask;
+template <typename TValue> class CCoroutine; // 前向声明（协程，见 Coroutine.h）。
 class CAsyncExecutor; // 前向声明（CTaskBase / CTask 的 friend）。
 
 /// @brief 无值哨兵（对标 Rust None / C++ std::nullopt）。
@@ -840,6 +841,9 @@ auto CTask<void>::Then(TFn f, const CSourceLoc& loc /* = CSourceLoc() */)
 class CAsyncExecutor
 {
 public:
+    /// 协程访问执行器句柄（Resume 调度 / 自动 Submit，见 Coroutine.h）。
+    template <typename TValue> friend class CCoroutine;
+
     /// @brief 创建执行器（指定工作线程数，默认 1）。
     ///
     /// @param nThreadCount 工作线程数。
