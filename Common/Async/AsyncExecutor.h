@@ -283,9 +283,9 @@ public:
             vecCbs.swap(m_vecContinuations);
         }
 
-        // 单消费者（一个任务通常只有一个 Get 等待者）：notify_one 即可；
-        // 若需多线程等待同一任务，请改回 notify_all。
-        m_cv.notify_one();
+        // 支持多线程等待同一任务（并发 Get）：notify_all 唤醒所有等待者。
+        // 单等待者场景与 notify_one 等价；无等待者时为空操作。
+        m_cv.notify_all();
 
         for (size_t i = 0; i < vecCbs.size(); ++i)
         {
