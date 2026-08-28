@@ -875,6 +875,19 @@ public:
     /// @return true 提交成功；false 执行器未启动。
     bool Post(TaskCallback fnTask);
 
+    /// @brief 创建并启动协程（投递首次 Resume；返回 shared_ptr 管理生命周期）。
+    ///
+    /// 协程类型须继承 common::async::CCoroutine<TValue> 并实现 Run()（用
+    /// CO_BEGIN / CO_AWAIT / CO_RETURN / CO_END 宏写成顺序代码）。
+    /// 定义见 "Async/Coroutine.h"。
+    ///
+    /// @tparam TCoroutine 协程类型。
+    /// @tparam TArgs 协程构造参数类型。
+    /// @param args 转发给 TCoroutine 构造函数的参数。
+    /// @return 协程对象；调用方须持有直到完成（Get() 取结果），勿丢弃。
+    template <typename TCoroutine, typename... TArgs>
+    std::shared_ptr<TCoroutine> CoStart(TArgs&&... args);
+
     /// @brief 停止并等待任务完成（优雅关闭）。
     void Stop();
 
