@@ -128,6 +128,86 @@ public:
     std::shared_ptr<int> m_spResult;
 };
 
+// 子协程（嵌套 await 用）。
+class CChildCoro : public common::async::CCoroutine<int>
+{
+public:
+    CChildCoro() : m_nV(0) {}
+
+    void Run() override
+    {
+        CO_BEGIN();
+        CO_AWAIT(m_nV, []() { return 7; });
+        CO_RETURN(m_nV);
+        CO_END();
+    }
+
+private:
+    int m_nV;
+};
+
+// 父协程：await 子协程（AsTask）。
+class CParentCoro : public common::async::CCoroutine<int>
+{
+public:
+    explicit CParentCoro(const std::shared_ptr<CChildCoro>& spChild)
+        : m_spChild(spChild), m_nR(0) {}
+
+    void Run() override
+    {
+        CO_BEGIN();
+        CO_AWAIT(m_nR, m_spChild->AsTask()); // await 子协程结果。
+        CO_RETURN(m_nR * 2);
+        CO_END();
+    }
+
+private:
+    std::shared_ptr<CChildCoro> m_spChild;
+    int m_nR;
+};
+
+// 并行 await 三个任务。
+class CAllCoro : public common::async::CCoroutine<int>
+{
+public:
+    CAllCoro() : m_nA(0), m_nB(0), m_nC(0) {}
+
+    void Run() override
+    {
+        CO_BEGIN();
+        CO_AWAIT_ALL(m_nA, []() { return 1; },
+                     m_nB, []() { return 2; },
+                     m_nC, []() { return 3; });
+        CO_RETURN(m_nA + m_nB + m_nC);
+        CO_END();
+    }
+
+private:
+    int m_nA;
+    int m_nB;
+    int m_nC;
+};
+
+// 并行 await 含异常任务 → 整体终止。
+class CAllNoneCoro : public common::async::CCoroutine<int>
+{
+public:
+    CAllNoneCoro() : m_nA(0), m_nB(0) {}
+
+    void Run() override
+    {
+        CO_BEGIN();
+        CO_AWAIT_ALL(m_nA, []() { return 1; },
+                     m_nB, []() -> int { throw std::runtime_error("boom"); });
+        CO_RETURN(m_nA + m_nB);
+        CO_END();
+    }
+
+private:
+    int m_nA;
+    int m_nB;
+};
+
 } // namespace
 
 /// @brief 顺序两次 await，结果正确（3 + 3*2 = 9）。
@@ -226,4 +306,58 @@ TEST(Coroutine_NotStartedStopped)
     common::async::CTaskResult<int> r = pCoro->Get();
     ASSERT_TRUE(!r.HasValue());
     ASSERT_EQ(r.Reason(), common::async::detail::kStopped);
+}
+
+/// @brief 用户提前释放 shared_ptr，已投递的 Resume/回调仍安全（对象延迟析构）。
+TEST(Coroutine_LifetimeReleasedEarly)
+{
+    common::async::CAsyncExecutor exec(1);
+    ASSERT_TRUE(exec.Start());
+
+    {
+        // 协程 await 两次；作用域结束即释放 pCoro（不 Get）。
+        std::shared_ptr<CSeqCoro> pCoro = exec.CoStart<CSeqCoro>();
+    }
+    exec.Stop(); // 等待所有任务完成（含协程的 Resume）。
+    // 未悬垂 / 未崩溃即通过。
+}
+
+/// @brief 嵌套协程：父协程 await 子协程（AsTask）。
+TEST(Coroutine_NestedAwait)
+{
+    common::async::CAsyncExecutor exec(1);
+    ASSERT_TRUE(exec.Start());
+
+    std::shared_ptr<CChildCoro> pChild = exec.CoStart<CChildCoro>();
+    std::shared_ptr<CParentCoro> pParent = exec.CoStart<CParentCoro>(pChild);
+    common::async::CTaskResult<int> r = pParent->Get();
+    ASSERT_TRUE(r.HasValue());
+    ASSERT_EQ(r.Value(), 14); // 7 * 2
+    exec.Stop();
+}
+
+/// @brief 并行 await 三个任务，全部完成恢复（1+2+3=6）。
+TEST(Coroutine_AwaitAll)
+{
+    common::async::CAsyncExecutor exec(3);
+    ASSERT_TRUE(exec.Start());
+
+    std::shared_ptr<CAllCoro> pCoro = exec.CoStart<CAllCoro>();
+    common::async::CTaskResult<int> r = pCoro->Get();
+    ASSERT_TRUE(r.HasValue());
+    ASSERT_EQ(r.Value(), 6);
+    exec.Stop();
+}
+
+/// @brief 并行 await 含异常任务 → 协程以 kException 终止。
+TEST(Coroutine_AwaitAllNone)
+{
+    common::async::CAsyncExecutor exec(2);
+    ASSERT_TRUE(exec.Start());
+
+    std::shared_ptr<CAllNoneCoro> pCoro = exec.CoStart<CAllNoneCoro>();
+    common::async::CTaskResult<int> r = pCoro->Get();
+    ASSERT_TRUE(!r.HasValue());
+    ASSERT_EQ(r.Reason(), common::async::detail::kException);
+    exec.Stop();
 }

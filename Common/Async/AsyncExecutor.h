@@ -888,6 +888,22 @@ public:
     template <typename TCoroutine, typename... TArgs>
     std::shared_ptr<TCoroutine> CoStart(TArgs&&... args);
 
+    /// @brief 用已有任务状态构造 CTask（内部用：协程 AsTask 把协程暴露为任务）。
+    ///
+    /// 复用已创建的任务共享状态，返回绑定本执行器句柄的 CTask（续接投递走本执行器）。
+    ///
+    /// @tparam TValue 任务值类型。
+    /// @param pState 已创建的任务共享状态。
+    /// @return 绑定该状态的 CTask。
+    template <typename TValue>
+    CTask<TValue> AdoptState(const std::shared_ptr<detail::CTaskState<TValue> >& pState)
+    {
+        CTask<TValue> task; // CAsyncExecutor 是 CTask 的 friend，可构造。
+        task.m_pExecutor = m_pHandle;
+        task.m_pState = pState;
+        return task;
+    }
+
     /// @brief 停止并等待任务完成（优雅关闭）。
     void Stop();
 

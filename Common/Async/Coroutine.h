@@ -17,10 +17,12 @@
 //   await voidTask;                  →  CO_AWAIT_VOID(voidTask);
 //   return value;                    →  CO_RETURN(value);
 //
-// CO_AWAIT 的「任务」支持两种传法：
+// CO_AWAIT 的「任务」支持多种传法：
 //  - 已提交任务（CTask<U>，可链式）：CO_AWAIT(m_a, exec.Submit(fn).Then(...))
 //  - 裸 lambda / 函数对象：自动投递到执行器执行（免写 Submit）
+//  - 子协程（CCoroutine::AsTask()）：await 嵌套协程
 // target 可为任意可写左值（成员、*sp 解引用、sp->field），恢复后自动写入。
+// CO_AWAIT_ALL(...) 并行 await 多任务（C# Task.WhenAll）。
 //
 // 核心语义（与 CTask 的 Option 风格一致）：
 //  - CO_AWAIT 挂起（return 让出线程，线程回线程池），任务有值/无值后由
@@ -34,7 +36,8 @@
 //    （局部变量声明会与 switch-case 恢复点冲突）；
 //  - 协程体仍需 CO_BEGIN / CO_END 包裹（Duff's device 的 switch 骨架）；
 //  - 每个协程宏独占一行（__LINE__ 作恢复点标签，同一行两个宏会冲突）；
-//  - CoStart 返回的 shared_ptr 必须被持有直到完成（Resume 访问协程对象）。
+//  - CoStart 返回的 shared_ptr 须持有到完成以取结果；框架内部 Resume/回调
+//    捕获自持强引用，提前释放也不会悬垂（对象存活到最后一个 Resume 执行完）。
 // ====================================================================
 
 namespace common {
@@ -54,6 +57,15 @@ template <typename T>
 struct IsCTask
 {
     static const bool value = (TaskTraits<T>::Kind == 1);
+};
+
+/// @brief 并行 await 组状态（CO_AWAIT_ALL 用）。
+struct CAwaitAllGroup
+{
+    std::atomic<int> nPending; // 剩余未完成任务数。
+    std::atomic<int> bNone;    // 是否有任务无值（0/1）。
+    std::atomic<int> nReason;  // 首个无值原因（bNone 时有效）。
+    CAwaitAllGroup() : nPending(0), bNone(0), nReason(kEndNone) {}
 };
 
 } // namespace detail
@@ -83,6 +95,7 @@ public:
     CCoroutine()
         : m_pState(std::make_shared<detail::CTaskState<TValue> >()),
           m_pExec(nullptr),
+          m_wpSelf(),
           m_nStep(0),
           m_bTerminated(false),
           m_reason(detail::kEndNone)
@@ -114,6 +127,29 @@ public:
         BindExecutor(pExec);
         Reset();
         PostResume();
+    }
+
+    /// @brief 注入自持弱引用（CoStart 调用；Resume/回调生命周期加固）。
+    ///
+    /// 使已投递的 Resume / 续接回调捕获强引用：调用方提前释放 shared_ptr 后，
+    /// 协程对象仍存活到最后一个 Resume 执行完毕（不悬垂）。
+    ///
+    /// @param sp 协程对象的 shared_ptr（CoStart 返回的）。
+    void SetSelf(const std::shared_ptr<void>& sp)
+    {
+        m_wpSelf = sp;
+    }
+
+    /// @brief 本协程作为可 await 的任务（供外层 CO_AWAIT(m_r, child.AsTask())）。
+    ///
+    /// 复用本协程的结果状态；须先 CoStart 启动（绑定执行器）后才有效。
+    /// 子协程完成（CO_RETURN/终止）后，await 它的外层恢复。
+    ///
+    /// @return 绑定本协程结果状态的 CTask<TValue>。
+    CTask<TValue> AsTask()
+    {
+        // 须先 CoStart 启动（绑定执行器）后调用。
+        return m_pExec->AdoptState<TValue>(m_pState);
     }
 
 protected:
@@ -156,6 +192,29 @@ protected:
         DoAwaitVoid(nLine, expr,
                     std::integral_constant<bool,
                         detail::IsCTask<typename std::decay<TExpr>::type>::value>());
+    }
+
+    /// @brief 并行 await 多任务（C# Task.WhenAll）：全部完成后恢复。
+    ///
+    /// 参数成对 (目标, 任务)：任务可为裸 lambda（自动 Submit）或已提交 CTask<U>。
+    /// 全部有值 → 结果写入各自目标后恢复；任一任务无值 → 协程终止（原因透传）。
+    /// void 任务暂不支持（并行 void 请用多个 CO_AWAIT_VOID）。
+    ///
+    /// @param nLine 恢复点标签（宏自动传 __LINE__）。
+    /// @param args 成对的 (目标, 任务) 序列。
+    template <typename... TArgs>
+    void AwaitAll(int nLine, TArgs&&... args)
+    {
+        static_assert(sizeof...(TArgs) % 2 == 0,
+                      "CO_AWAIT_ALL 参数须成对：(目标, 任务), ...");
+        m_nStep.store(nLine, std::memory_order_release);
+
+        std::shared_ptr<detail::CAwaitAllGroup> pGroup =
+            std::make_shared<detail::CAwaitAllGroup>();
+        pGroup->nPending.store(static_cast<int>(sizeof...(TArgs) / 2),
+                               std::memory_order_relaxed);
+
+        AwaitAllImpl(pGroup, std::forward<TArgs>(args)...);
     }
 
     /// @brief 最近一次 await 是否无值终止（None / 异常）。
@@ -203,10 +262,23 @@ private:
     }
 
     /// @brief 把 Resume 投递到执行器（串行调度；执行器不可用 → kStopped 终止）。
+    ///
+    /// 投递的 Resume 捕获自持强引用：调用方提前释放 shared_ptr 后，协程对象
+    /// 仍存活到 Resume 执行完毕（不悬垂）。
     void PostResume()
     {
-        // 经公开接口 Post 投递：内部已检查停止标志与线程池可用性。
-        if (m_pExec != nullptr && m_pExec->Post([this]() { Resume(); }))
+        if (m_pExec == nullptr)
+        {
+            Terminate(detail::kStopped);
+            return;
+        }
+        std::shared_ptr<void> spSelf = m_wpSelf.lock();
+        if (!spSelf)
+        {
+            Terminate(detail::kStopped); // 无强引用（理论不应发生）。
+            return;
+        }
+        if (m_pExec->Post([spSelf, this]() { Resume(); }))
         {
             return;
         }
@@ -297,15 +369,17 @@ private:
     }
 
     /// 注册非 void 任务续接：有值写 pTarget 并恢复；无值标记终止并恢复。
+    /// 回调捕获自持强引用，保证协程对象存活到回调执行完毕。
     template <typename U, typename TDst>
     void RegisterAwait(CTask<U>& task, TDst* pTarget)
     {
-        bool bOk = task.OnSuccess([this, pTarget](const U& v)
+        std::shared_ptr<void> spSelf = m_wpSelf.lock();
+        bool bOk = task.OnSuccess([spSelf, pTarget, this](const U& v)
         {
             *pTarget = v; // 结果直接写入目标（帧变量），恢复后即可用。
             PostResume();
         });
-        task.OnNone([this](detail::CTaskEndReason reason)
+        task.OnNone([spSelf, this](detail::CTaskEndReason reason)
         {
             MarkTerminated(reason); // await 到无值 → 协程终止（原因透传）。
             PostResume();
@@ -317,13 +391,15 @@ private:
     }
 
     /// 注册 void 任务续接：完成恢复；无值标记终止并恢复。
+    /// 回调捕获自持强引用，保证协程对象存活到回调执行完毕。
     void RegisterAwaitVoid(CTask<void>& task)
     {
-        bool bOk = task.OnSuccess([this]()
+        std::shared_ptr<void> spSelf = m_wpSelf.lock();
+        bool bOk = task.OnSuccess([spSelf, this]()
         {
             PostResume();
         });
-        task.OnNone([this](detail::CTaskEndReason reason)
+        task.OnNone([spSelf, this](detail::CTaskEndReason reason)
         {
             MarkTerminated(reason); // await 到无值 → 协程终止（原因透传）。
             PostResume();
@@ -334,9 +410,98 @@ private:
         }
     }
 
+    // ---- 并行 await（AwaitAll 内部）----
+
+    /// 递归处理成对的 (目标, 任务)。
+    template <typename TDst, typename TExpr, typename... TRest>
+    void AwaitAllImpl(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
+                      TDst& target, TExpr expr, TRest&&... rest)
+    {
+        RegisterAllTask(pGroup, expr, &target,
+                        std::integral_constant<bool,
+                            detail::IsCTask<typename std::decay<TExpr>::type>::value>());
+        AwaitAllImpl(pGroup, std::forward<TRest>(rest)...);
+    }
+
+    /// 递归终止。
+    void AwaitAllImpl(const std::shared_ptr<detail::CAwaitAllGroup>&) {}
+
+    /// 单个任务：已提交 CTask<U>。
+    template <typename TExpr, typename TDst>
+    void RegisterAllTask(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
+                         TExpr expr, TDst* pTarget, std::true_type)
+    {
+        using R = typename std::decay<TExpr>::type;
+        using U = typename detail::TaskTraits<R>::ValueType;
+        static_assert(!std::is_same<U, void>::value, "CO_AWAIT_ALL 暂不支持 void 任务");
+        CTask<U> task = expr;
+        RegisterAllContinuation(pGroup, task, pTarget);
+    }
+
+    /// 单个任务：裸 lambda → 自动 Submit。
+    template <typename TExpr, typename TDst>
+    void RegisterAllTask(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
+                         TExpr expr, TDst* pTarget, std::false_type)
+    {
+        using R = typename std::decay<TExpr>::type;
+        using U = typename detail::TInvokeResult<R>::type;
+        static_assert(!std::is_same<U, void>::value, "CO_AWAIT_ALL 暂不支持 void 任务");
+        if (m_pExec == nullptr)
+        {
+            MarkTerminated(detail::kStopped);
+            AllDone(pGroup); // 该任务计为完成（无值终止）。
+            return;
+        }
+        CTask<U> task = m_pExec->Submit(expr);
+        RegisterAllContinuation(pGroup, task, pTarget);
+    }
+
+    /// 注册单个任务续接到并行组：有值写 pTarget；无值记录首个终止原因。
+    template <typename U, typename TDst>
+    void RegisterAllContinuation(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup,
+                                 CTask<U>& task, TDst* pTarget)
+    {
+        std::shared_ptr<void> spSelf = m_wpSelf.lock();
+        bool bOk = task.OnSuccess([pGroup, pTarget, spSelf, this](const U& v)
+        {
+            *pTarget = v;
+            AllDone(pGroup);
+        });
+        task.OnNone([pGroup, spSelf, this](detail::CTaskEndReason reason)
+        {
+            int nExpected = 0;
+            if (pGroup->bNone.compare_exchange_strong(nExpected, 1))
+            {
+                pGroup->nReason.store(reason, std::memory_order_relaxed); // 首个无值原因。
+            }
+            AllDone(pGroup);
+        });
+        if (!bOk)
+        {
+            // 任务已就绪但执行器不可用：该任务计为完成（无值终止）。
+            MarkTerminated(detail::kStopped);
+            AllDone(pGroup);
+        }
+    }
+
+    /// 一个任务完成：全部完成时恢复（任一无值则终止）。
+    void AllDone(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup)
+    {
+        if (pGroup->nPending.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        {
+            if (pGroup->bNone.load(std::memory_order_relaxed))
+            {
+                MarkTerminated(static_cast<detail::CTaskEndReason>(
+                    pGroup->nReason.load(std::memory_order_relaxed)));
+            }
+            PostResume();
+        }
+    }
+
 private:
     std::shared_ptr<detail::CTaskState<TValue> > m_pState; // 协程最终结果。
     CAsyncExecutor* m_pExec;                               // 执行器指针（自动 Submit / Resume 调度）。
+    std::weak_ptr<void> m_wpSelf;                          // 自持弱引用（Resume/回调生命周期加固）。
     std::atomic<int> m_nStep;                              // 状态机步号（恢复点）。
     std::atomic<bool> m_bTerminated;                       // await 到无值 → 终止。
     std::atomic<int> m_reason;                             // 终止原因。
@@ -353,7 +518,8 @@ std::shared_ptr<TCoroutine> CAsyncExecutor::CoStart(TArgs&&... args)
 {
     std::shared_ptr<TCoroutine> pCoro =
         std::make_shared<TCoroutine>(std::forward<TArgs>(args)...);
-    pCoro->Start(this); // 绑定 + 复位 + 投递首次执行（未启动 → 立即 kStopped 终止）。
+    pCoro->SetSelf(pCoro); // 自持弱引用：Resume/回调生命周期加固。
+    pCoro->Start(this);    // 绑定 + 复位 + 投递首次执行（未启动 → 立即 kStopped 终止）。
     return pCoro;
 }
 
@@ -391,6 +557,16 @@ std::shared_ptr<TCoroutine> CAsyncExecutor::CoStart(TArgs&&... args)
 
 #define CO_AWAIT_VOID(expr) \
     AwaitVoid(__LINE__, (expr)); \
+    return; \
+    case __LINE__: \
+    if (IsTerminated()) \
+    { \
+        CompleteNone(Reason()); \
+        return; \
+    }
+
+#define CO_AWAIT_ALL(...) \
+    AwaitAll(__LINE__, __VA_ARGS__); \
     return; \
     case __LINE__: \
     if (IsTerminated()) \
