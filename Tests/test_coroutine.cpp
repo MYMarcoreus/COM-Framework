@@ -22,10 +22,8 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(m_pExec->Submit([]() { return 3; }));
-        m_nA = GetValue<int>();
-        CO_AWAIT(m_pExec->Submit([this]() { return m_nA * 2; }));
-        m_nB = GetValue<int>();
+        CO_AWAIT(m_nA, m_pExec->Submit([]() { return 3; }));
+        CO_AWAIT(m_nB, m_pExec->Submit([this]() { return m_nA * 2; }));
         CO_RETURN(m_nA + m_nB);
         CO_END();
     }
@@ -65,8 +63,8 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(m_pExec->Submit([]() -> int { throw std::runtime_error("boom"); }));
-        m_nAfter = GetValue<int>(); // 不会执行（上游终止）。
+        CO_AWAIT(m_nAfter, m_pExec->Submit([]() -> int { throw std::runtime_error("boom"); }));
+        // 上游终止 → 不会执行到这里（case 处 IsTerminated() 拦截）。
         CO_RETURN(m_nAfter);
         CO_END();
     }
@@ -105,10 +103,9 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(m_pExec->Submit([]() { return 3; })
-                     .Then([this](int n) { return m_pExec->Submit([n]() { return n * 10; }); })
-                     .Then([](int n) { return n + 5; }));
-        m_nV = GetValue<int>();
+        CO_AWAIT(m_nV, m_pExec->Submit([]() { return 3; })
+                            .Then([this](int n) { return m_pExec->Submit([n]() { return n * 10; }); })
+                            .Then([](int n) { return n + 5; }));
         CO_RETURN(m_nV);
         CO_END();
     }
