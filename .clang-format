@@ -1,0 +1,99 @@
+# ====================================================================
+# COM-Framework clang-format 配置
+#
+# 以 Common/Async/AsyncExecutorNoThrow.h/.cpp 的实际排版为准重写。
+# 遵循项目 C++11 开发规范：
+#   - 4 空格缩进，不使用 Tab；
+#   - Allman 花括号风格（函数/类/控制语句花括号换行，namespace 保持 attach）；
+#   - 二元运算符换行时留在行尾（= / && / || …），. / -> 恒换到行首；
+#   - 嵌套模板闭合角括号保留空格（CTask<U> >，Standard: Cpp03）；
+#   - #if 内的预处理指令按嵌套层级缩进（BeforeHash）；
+#   - lambda 花括号换行、体按外层作用域缩进（OuterScope）。
+#
+# 注意：LambdaBodyIndentation 需要 clang-format >= 13
+#       （clangd / clang-format 13 及以上版本支持）。
+# ====================================================================
+
+BasedOnStyle: Google
+
+# ---- 标准 / 模板 ----
+# C++11 项目，但代码统一写作 C++03 式「> >」（如 CTask<U> > / std::vector<int> >），
+# 用 Cpp03 保留闭合角括号间的空格（Cpp11+ 会合并为 >>）。
+Standard: Cpp03
+
+# ---- 缩进 ----
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+NamespaceIndentation: None
+# #if / #else / #endif 内的指令按嵌套层级缩进（#define 缩进 4 格）。
+IndentPPDirectives: BeforeHash
+
+# ---- 列宽 ----
+ColumnLimit: 100
+
+# ---- 对齐 ----
+# 续行对齐到开括号（函数签名如 RunTransform(...) 的续行对齐到参数列）。
+AlignAfterOpenBracket: Align
+# 行尾注释列对齐（成员变量注释、using 别名注释等）。
+AlignTrailingComments: true
+# 指针/引用贴近类型名（const char* / const TValue&）。
+PointerAlignment: Left
+# 参数允许装箱（一行放多个参数），首参保留在首行。
+BinPackParameters: true
+BinPackArguments: true
+AllowAllParametersOfDeclarationOnNextLine: true
+AllowAllArgumentsOnNextLine: true
+
+# ---- 花括号（Custom 精确控制）----
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterControlStatement: Always
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: false
+  AfterStruct: true
+  AfterUnion: true
+  AfterExternBlock: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: true
+  BeforeWhile: false
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: true
+  SplitEmptyNamespace: true
+
+# ---- 换行 ----
+# 二元运算符换行时留在行尾（if (a || b ||\n    c)）；
+# 成员访问 . / -> 为 clang-format 固有行为，恒换到行首（链式调用）。
+BreakBeforeBinaryOperators: None
+# 构造函数初始化列表：冒号换到行首，后续初始化项对齐其下。
+BreakConstructorInitializers: BeforeColon
+# 保留大节分隔的连续空行（AsyncExecutorNoThrow.h 中节前最多 7 行）。
+MaxEmptyLinesToKeep: 7
+
+# ---- 短语句 ----
+# 类内单行函数允许单行（bool HasValue() const { return ...; }）。
+AllowShortFunctionsOnASingleLine: Inline
+# if 无 else 时允许单行（如 if (n < 0) return no::None;）。
+AllowShortIfStatementsOnASingleLine: WithoutElse
+
+# ---- 空格 ----
+# C 风格强转后不加空格：(void)loc;
+SpaceAfterCStyleCast: false
+
+# ---- lambda ----
+# lambda 花括号换行（BeforeLambdaBody: true），体按外层作用域缩进。
+LambdaBodyIndentation: OuterScope
+# 短 lambda 允许单行（如 [this]() { return m_bReady; }）
+AllowShortLambdasOnASingleLine: All
+
+# ---- 杂项（Google 默认，与代码一致，显式声明）----
+# 命名空间闭合注释：} // namespace detail
+FixNamespaceComments: true
+# include 分类排序（系统 <...> 在前、项目 "..." 在后）。
+IncludeBlocks: Regroup
+SortIncludes: true
