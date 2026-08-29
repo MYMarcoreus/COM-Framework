@@ -1,16 +1,16 @@
 /// @file test_perf.cpp
-/// Common 异步框架性能测试（common::async 协程 / 任务链）。
+/// 协程/任务框架基准测试（common::async）。
 ///
-/// 目标：测量关键路径吞吐（ops/s）并打印报告；同时验证结果正确性。
-/// 断言策略：只用极宽松下限（防灾难性退化），不做精确耗时断言（避免 flaky）。
-/// 所有测试应在 release（-O2）下运行以获得有意义的吞吐数据。
+/// 运行：./build/release/tests --benchmark（输出对比表格并与基准文件比较）
+/// 重新校准：./build/release/tests --update-benchmark
+/// 基准文件：benchmarks.txt（ns/op，容差 ±30%，超限判 FAIL）。
+/// 所有基准在 release（-O2）下测量；基线与协程同方法（批量提交→并发完成→逐个取）。
 
-#include <chrono>
-#include <cstdio>
 #include <memory>
 #include <vector>
 
 #include "TestFramework.h"
+#include "Benchmark.h"
 
 #include "Async/AsyncExecutor.h"
 #include "Async/Coroutine.h"
@@ -143,38 +143,15 @@ private:
     int m_nV;
 };
 
-// ------------------------------------------------------------------
-// 计时辅助
-// ------------------------------------------------------------------
-
-/// @brief 执行被测操作并打印吞吐报告。
-///
-/// @param szName 报告名称。
-/// @param nOps 操作数（用于计算速率）。
-/// @param fn 被测操作（无参数）。
-/// @return 吞吐（ops/s）。
-template <typename TFn>
-double RunTimed(const char* szName, long nOps, TFn fn)
-{
-    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
-    fn();
-    std::chrono::steady_clock::time_point t1 = std::chrono::steady_clock::now();
-    double dMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    double dRate = (dMs > 0.0) ? (static_cast<double>(nOps) * 1000.0 / dMs) : 0.0;
-    std::printf("[PERF ] %-30s %8ld ops  %10.1f ms  -> %12.0f ops/s\n",
-                szName, nOps, dMs, dRate);
-    return dRate;
-}
-
 } // namespace
 
 // ------------------------------------------------------------------
-// 性能测试
+// 基准测试（BENCHMARK 注册；框架测量 ns/op 并与基准文件比较）
 // ------------------------------------------------------------------
 
-/// @brief 基线：批量 Submit + 批量 Get（无协程）吞吐，作为协程开销对比基准。
-/// 与协程测试同方法（批量提交 → 并发完成 → 逐个取结果），保证对比公平。
-TEST(Perf_SubmitBaseline)
+/// @brief 基线：批量 Submit + 批量 Get（无协程），作为协程开销对比基准。
+/// 与协程基准同方法（批量提交 → 并发完成 → 逐个取），保证对比公平。
+BENCHMARK(SubmitBaseline, 50000)
 {
     common::async::CAsyncExecutor exec(4);
     ASSERT_TRUE(exec.Start());
@@ -182,25 +159,20 @@ TEST(Perf_SubmitBaseline)
     const long nOps = 50000;
     std::vector<common::async::CTask<int> > vTasks;
     vTasks.reserve(static_cast<size_t>(nOps));
-    double dRate = RunTimed("Submit+Get baseline", nOps, [&]()
+    for (long i = 0; i < nOps; ++i)
     {
-        for (long i = 0; i < nOps; ++i)
-        {
-            vTasks.push_back(exec.Submit(
-                [i]() { return static_cast<int>(i % 7); }));
-        }
-        for (long i = 0; i < nOps; ++i)
-        {
-            common::async::CTaskResult<int> r = vTasks[i].Get();
-            ASSERT_TRUE(r.HasValue());
-        }
-    });
-    ASSERT_TRUE(dRate > 1000.0); // 极宽松下限：防灾难性退化。
+        vTasks.push_back(exec.Submit([i]() { return static_cast<int>(i % 7); }));
+    }
+    for (long i = 0; i < nOps; ++i)
+    {
+        common::async::CTaskResult<int> r = vTasks[i].Get();
+        ASSERT_TRUE(r.HasValue());
+    }
     exec.Stop();
 }
 
-/// @brief 协程创建 + 单次 await + 完成 的吞吐。
-TEST(Perf_SequentialAwait)
+/// @brief 协程创建 + 单次 await + 完成的吞吐。
+BENCHMARK(SequentialAwait, 20000)
 {
     common::async::CAsyncExecutor exec(4);
     ASSERT_TRUE(exec.Start());
@@ -208,25 +180,21 @@ TEST(Perf_SequentialAwait)
     const long nOps = 20000;
     std::vector<std::shared_ptr<CPerfSeqCoro> > vCoros;
     vCoros.reserve(static_cast<size_t>(nOps));
-    double dRate = RunTimed("CoStart+Get (1 await)", nOps, [&]()
+    for (long i = 0; i < nOps; ++i)
     {
-        for (long i = 0; i < nOps; ++i)
-        {
-            vCoros.push_back(exec.CoStart<CPerfSeqCoro>());
-        }
-        for (long i = 0; i < nOps; ++i)
-        {
-            common::async::CTaskResult<int> r = vCoros[i]->Get();
-            ASSERT_TRUE(r.HasValue());
-            ASSERT_EQ(r.Value(), 7);
-        }
-    });
-    ASSERT_TRUE(dRate > 100.0);
+        vCoros.push_back(exec.CoStart<CPerfSeqCoro>());
+    }
+    for (long i = 0; i < nOps; ++i)
+    {
+        common::async::CTaskResult<int> r = vCoros[i]->Get();
+        ASSERT_TRUE(r.HasValue());
+        ASSERT_EQ(r.Value(), 7);
+    }
     exec.Stop();
 }
 
 /// @brief 每个协程 8 次顺序 await（恢复路径吞吐）。
-TEST(Perf_MultiAwait)
+BENCHMARK(MultiAwait, 5000)
 {
     common::async::CAsyncExecutor exec(4);
     ASSERT_TRUE(exec.Start());
@@ -234,25 +202,21 @@ TEST(Perf_MultiAwait)
     const long nOps = 5000; // 每个 8 次 await = 40000 次恢复。
     std::vector<std::shared_ptr<CPerfMultiCoro> > vCoros;
     vCoros.reserve(static_cast<size_t>(nOps));
-    double dRate = RunTimed("CoStart+Get (8 await)", nOps, [&]()
+    for (long i = 0; i < nOps; ++i)
     {
-        for (long i = 0; i < nOps; ++i)
-        {
-            vCoros.push_back(exec.CoStart<CPerfMultiCoro>());
-        }
-        for (long i = 0; i < nOps; ++i)
-        {
-            common::async::CTaskResult<int> r = vCoros[i]->Get();
-            ASSERT_TRUE(r.HasValue());
-            ASSERT_EQ(r.Value(), 8);
-        }
-    });
-    ASSERT_TRUE(dRate > 100.0);
+        vCoros.push_back(exec.CoStart<CPerfMultiCoro>());
+    }
+    for (long i = 0; i < nOps; ++i)
+    {
+        common::async::CTaskResult<int> r = vCoros[i]->Get();
+        ASSERT_TRUE(r.HasValue());
+        ASSERT_EQ(r.Value(), 8);
+    }
     exec.Stop();
 }
 
 /// @brief 4 路并行 await（并行组吞吐）。
-TEST(Perf_AwaitAll)
+BENCHMARK(AwaitAll, 5000)
 {
     common::async::CAsyncExecutor exec(4);
     ASSERT_TRUE(exec.Start());
@@ -260,25 +224,21 @@ TEST(Perf_AwaitAll)
     const long nOps = 5000; // 每组 4 路 = 20000 个子任务。
     std::vector<std::shared_ptr<CPerfAllCoro> > vCoros;
     vCoros.reserve(static_cast<size_t>(nOps));
-    double dRate = RunTimed("CoStart+Get (4-way ALL)", nOps, [&]()
+    for (long i = 0; i < nOps; ++i)
     {
-        for (long i = 0; i < nOps; ++i)
-        {
-            vCoros.push_back(exec.CoStart<CPerfAllCoro>());
-        }
-        for (long i = 0; i < nOps; ++i)
-        {
-            common::async::CTaskResult<int> r = vCoros[i]->Get();
-            ASSERT_TRUE(r.HasValue());
-            ASSERT_EQ(r.Value(), 10);
-        }
-    });
-    ASSERT_TRUE(dRate > 100.0);
+        vCoros.push_back(exec.CoStart<CPerfAllCoro>());
+    }
+    for (long i = 0; i < nOps; ++i)
+    {
+        common::async::CTaskResult<int> r = vCoros[i]->Get();
+        ASSERT_TRUE(r.HasValue());
+        ASSERT_EQ(r.Value(), 10);
+    }
     exec.Stop();
 }
 
 /// @brief 嵌套协程（父 await 子 AsTask）吞吐。
-TEST(Perf_Nested)
+BENCHMARK(Nested, 10000)
 {
     common::async::CAsyncExecutor exec(4);
     ASSERT_TRUE(exec.Start());
@@ -288,29 +248,24 @@ TEST(Perf_Nested)
     std::vector<std::shared_ptr<CPerfChildCoro> > vChildren;
     vParents.reserve(static_cast<size_t>(nOps));
     vChildren.reserve(static_cast<size_t>(nOps));
-    double dRate = RunTimed("CoStart+Get (nested child)", nOps, [&]()
+    for (long i = 0; i < nOps; ++i)
     {
-        for (long i = 0; i < nOps; ++i)
-        {
-            vChildren.push_back(exec.CoStart<CPerfChildCoro>());
-            vParents.push_back(exec.CoStart<CPerfParentCoro>(vChildren.back()));
-        }
-        for (long i = 0; i < nOps; ++i)
-        {
-            common::async::CTaskResult<int> r = vParents[i]->Get();
-            ASSERT_TRUE(r.HasValue());
-            ASSERT_EQ(r.Value(), 4);
-        }
-    });
-    ASSERT_TRUE(dRate > 100.0);
+        vChildren.push_back(exec.CoStart<CPerfChildCoro>());
+        vParents.push_back(exec.CoStart<CPerfParentCoro>(vChildren.back()));
+    }
+    for (long i = 0; i < nOps; ++i)
+    {
+        common::async::CTaskResult<int> r = vParents[i]->Get();
+        ASSERT_TRUE(r.HasValue());
+        ASSERT_EQ(r.Value(), 4);
+    }
     exec.Stop();
 }
 
-/// @brief CTask::Then 链 vs 协程完成同等 3 步工作，报告比率。
-///
-/// 说明：协程每步 await 都 Submit 一个新任务（含调度开销），而 CTask 链的
-/// Then 是纯续接（不额外入池），故协程吞吐低于链属正常，比率反映架构开销。
-TEST(Perf_ChainVsCoroutine)
+/// @brief CTask::Then 链（3 步）吞吐。
+/// 与 Coroutine3Step 对比：协程每步 await 都 Submit（含调度开销），
+/// 链的 Then 是纯续接（不额外入池），比率反映架构开销。
+BENCHMARK(Chain3Step, 20000)
 {
     common::async::CAsyncExecutor exec(4);
     ASSERT_TRUE(exec.Start());
@@ -318,69 +273,63 @@ TEST(Perf_ChainVsCoroutine)
     const long nOps = 20000;
     std::vector<common::async::CTask<int> > vTasks;
     vTasks.reserve(static_cast<size_t>(nOps));
-    double dChain = RunTimed("CTask::Then chain (3-step)", nOps, [&]()
+    for (long i = 0; i < nOps; ++i)
     {
-        for (long i = 0; i < nOps; ++i)
-        {
-            vTasks.push_back(exec.Submit([]() { return 3; })
-                                 .Then([](int n) { return n * 2; })
-                                 .Then([](int n) { return n + 1; }));
-        }
-        for (long i = 0; i < nOps; ++i)
-        {
-            common::async::CTaskResult<int> r = vTasks[i].Get();
-            ASSERT_TRUE(r.HasValue());
-            ASSERT_EQ(r.Value(), 7);
-        }
-    });
+        vTasks.push_back(exec.Submit([]() { return 3; })
+                             .Then([](int n) { return n * 2; })
+                             .Then([](int n) { return n + 1; }));
+    }
+    for (long i = 0; i < nOps; ++i)
+    {
+        common::async::CTaskResult<int> r = vTasks[i].Get();
+        ASSERT_TRUE(r.HasValue());
+        ASSERT_EQ(r.Value(), 7);
+    }
+    exec.Stop();
+}
 
+/// @brief 协程版 3 步链吞吐（与 Chain3Step 对比）。
+BENCHMARK(Coroutine3Step, 20000)
+{
+    common::async::CAsyncExecutor exec(4);
+    ASSERT_TRUE(exec.Start());
+
+    const long nOps = 20000;
     std::vector<std::shared_ptr<CPerfChainCoro> > vCoros;
     vCoros.reserve(static_cast<size_t>(nOps));
-    double dCoro = RunTimed("CCoroutine (3-step)", nOps, [&]()
+    for (long i = 0; i < nOps; ++i)
     {
-        for (long i = 0; i < nOps; ++i)
-        {
-            vCoros.push_back(exec.CoStart<CPerfChainCoro>());
-        }
-        for (long i = 0; i < nOps; ++i)
-        {
-            common::async::CTaskResult<int> r = vCoros[i]->Get();
-            ASSERT_TRUE(r.HasValue());
-            ASSERT_EQ(r.Value(), 7);
-        }
-    });
-
-    double dRatio = (dChain > 0.0) ? (dCoro / dChain) : 0.0;
-    std::printf("[PERF ] %-30s coroutine/chain = %.3f\n",
-                "coroutine vs chain ratio", dRatio);
-    ASSERT_TRUE(dCoro > 100.0);
+        vCoros.push_back(exec.CoStart<CPerfChainCoro>());
+    }
+    for (long i = 0; i < nOps; ++i)
+    {
+        common::async::CTaskResult<int> r = vCoros[i]->Get();
+        ASSERT_TRUE(r.HasValue());
+        ASSERT_EQ(r.Value(), 7);
+    }
     exec.Stop();
 }
 
 /// @brief 压力：3000 个协程并发完成（单次 await），结果正确性 + 吞吐。
-TEST(Perf_Stress)
+BENCHMARK(Stress3000, 3000)
 {
     common::async::CAsyncExecutor exec(8);
     ASSERT_TRUE(exec.Start());
 
     const long nOps = 3000;
-    double dRate = RunTimed("Stress 3000 coroutines", nOps, [&]()
+    std::vector<std::shared_ptr<CPerfSeqCoro> > vCoros;
+    vCoros.reserve(static_cast<size_t>(nOps));
+    for (long i = 0; i < nOps; ++i)
     {
-        std::vector<std::shared_ptr<CPerfSeqCoro> > vCoros;
-        vCoros.reserve(static_cast<size_t>(nOps));
-        for (long i = 0; i < nOps; ++i)
-        {
-            vCoros.push_back(exec.CoStart<CPerfSeqCoro>());
-        }
-        long nSum = 0;
-        for (long i = 0; i < nOps; ++i)
-        {
-            common::async::CTaskResult<int> r = vCoros[i]->Get();
-            ASSERT_TRUE(r.HasValue());
-            nSum += r.Value();
-        }
-        ASSERT_EQ(nSum, 7 * nOps);
-    });
-    ASSERT_TRUE(dRate > 100.0);
+        vCoros.push_back(exec.CoStart<CPerfSeqCoro>());
+    }
+    long nSum = 0;
+    for (long i = 0; i < nOps; ++i)
+    {
+        common::async::CTaskResult<int> r = vCoros[i]->Get();
+        ASSERT_TRUE(r.HasValue());
+        nSum += r.Value();
+    }
+    ASSERT_EQ(nSum, 7 * nOps);
     exec.Stop();
 }
