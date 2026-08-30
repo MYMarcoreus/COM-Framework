@@ -460,33 +460,25 @@ void CompleteSuccess(const std::shared_ptr<CTaskState<void> >& pState, TFn f)
     pState->Complete(CTaskResult<void>()); // 完成。
 }
 
-/// @brief 转发内部任务结果（TNew 非 void）。
+/// @brief 转发内部任务结果（TNew 非 void）：一次 OnResult 注册，有值/无值原样转发。
 template <typename TNew>
 void FlatMapForward(const std::shared_ptr<CTaskState<TNew> >& pNextState,
                     CTask<TNew>& inner, std::false_type)
 {
-    inner.OnSuccess([pNextState](const TNew& value)
+    inner.OnResult([pNextState](const CTaskResult<TNew>& result)
     {
-        pNextState->Complete(CTaskResult<TNew>(value));
-    });
-    inner.OnNone([pNextState](CTaskEndReason reason)
-    {
-        pNextState->Complete(CTaskResult<TNew>::MakeNone(reason));
+        pNextState->Complete(result); // 原样转发（Some / None）。
     });
 }
 
-/// @brief 转发内部任务结果（TNew 为 void）。
+/// @brief 转发内部任务结果（TNew 为 void）：一次 OnResult 注册。
 template <typename TNew>
 void FlatMapForward(const std::shared_ptr<CTaskState<TNew> >& pNextState,
                     CTask<TNew>& inner, std::true_type)
 {
-    inner.OnSuccess([pNextState]()
+    inner.OnResult([pNextState](const CTaskResult<void>& result)
     {
-        pNextState->Complete(CTaskResult<TNew>());
-    });
-    inner.OnNone([pNextState](CTaskEndReason reason)
-    {
-        pNextState->Complete(CTaskResult<TNew>::MakeNone(reason));
+        pNextState->Complete(result); // 原样转发（完成 / None）。
     });
 }
 
