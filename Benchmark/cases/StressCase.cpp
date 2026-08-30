@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -49,6 +50,54 @@ private:
     std::atomic<uint64_t>* m_pDone;
     int m_value;
 };
+
+/// 多生产者吞吐：K 个提交线程并行提交 total 个任务，测线程池真实并行吞吐。
+/// 消除窗口压测中「单提交线程」瓶颈（单生产者仅反映 Post 速率而非消费能力），
+/// 对齐 librf 多生产者/消费者方法。
+inline void RunMultiProducer(const std::string& group, const std::string& name,
+                             const std::function<void(const std::function<void()>&)>& submit,
+                             const std::function<void()>& stop,
+                             int producers, uint64_t total, const std::string& note)
+{
+    // 预热：提交一小批并等完成（让工作线程进入忙碌状态，丢弃）。
+    {
+        std::atomic<uint64_t> warm(0);
+        for (int i = 0; i < producers; ++i)
+            for (int k = 0; k < 2000; ++k)
+                submit([&warm]() { warm.fetch_add(1, std::memory_order_relaxed); });
+        benchmark::WaitDone(warm, static_cast<uint64_t>(producers) * 2000);
+    }
+
+    std::atomic<uint64_t> done(0);
+    const uint64_t perThread = total / static_cast<uint64_t>(producers);
+    double t0 = benchmark::NowNs();
+    std::vector<std::thread> ths;
+    ths.reserve(static_cast<size_t>(producers));
+    for (int i = 0; i < producers; ++i)
+    {
+        ths.emplace_back([&, perThread]() {
+            for (uint64_t k = 0; k < perThread; ++k)
+                submit([&done]() { done.fetch_add(1, std::memory_order_release); });
+        });
+    }
+    for (size_t i = 0; i < ths.size(); ++i)
+        ths[i].join();
+    benchmark::WaitDone(done, perThread * static_cast<uint64_t>(producers));
+    double t1 = benchmark::NowNs();
+    stop();
+
+    const double ops = (t1 - t0) > 0.0
+        ? (perThread * static_cast<uint64_t>(producers)) / ((t1 - t0) / 1e9)
+        : 0.0;
+    benchmark::Result r;
+    r.group = group;
+    r.name = name;
+    r.mean_ns = ops > 0.0 ? 1e9 / ops : 0.0;
+    r.ops_per_sec = ops;
+    r.note = note;
+    r.is_stress = true;
+    benchmark::Registry::Instance().Add(r);
+}
 
 } // namespace
 
@@ -134,6 +183,24 @@ void RunStressCases()
                                 1000, kMs, wrap, done,
                                 "并发简单协程：CoStart+1×await+完成");
         exec.Stop();
+    }
+
+    // 多生产者吞吐：4 个提交线程并行提交（消除单生产者瓶颈），测真实并行上限。
+    {
+        bench::PoolEngine eng;
+        eng.Start(kThreads);
+        RunMultiProducer(group, "CThreadPool (4 producers × 4 threads)",
+                         [&eng](const std::function<void()>& f) { eng.Submit(f); },
+                         [&eng]() { eng.Stop(); },
+                         4, 500000, "4 提交线程并行 × 4 工作线程");
+    }
+    {
+        bench::AsyncEngine eng;
+        eng.Start(kThreads);
+        RunMultiProducer(group, "CAsyncExecutor (4 producers × 4 threads)",
+                         [&eng](const std::function<void()>& f) { eng.Submit(f); },
+                         [&eng]() { eng.Stop(); },
+                         4, 500000, "4 提交线程并行 × 4 工作线程");
     }
 
     // ---------------- 停止延迟 ----------------

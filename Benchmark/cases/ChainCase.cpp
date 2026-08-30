@@ -31,6 +31,8 @@ void RunChainCases()
     }
 
     // CAsyncExecutor Then 链（长度 1 / 5 / 20 / 100）。
+    // 注：数值为「构建 + 执行 + 取值」合计（每次 Then 含下游状态分配与续接登记），
+    //     无法与执行完全分离（链构建后续接自动触发执行）。
     for (size_t i = 0; i < 4; ++i)
     {
         const int n = lens[i];
@@ -42,7 +44,7 @@ void RunChainCases()
                 volatile int s = task.Get().Value();
                 (void)s;
             },
-            21, "构建 n 级 Then + 执行 + 取值");
+            21, "构建 n 级 Then + 执行 + 取值（合计）");
     }
 
     exec.Stop();

@@ -90,7 +90,8 @@ void RunResumableCases()
             r.p50_ns = createNs;
             r.p99_ns = createNs;
             r.ops_per_sec = createNs > 0 ? 1e9 / createNs : 0.0;
-            r.note = "CoStart 投递（make_shared + 首 Resume），4 线程";
+            r.note = "CoStart 投递（make_shared + 首 Resume），4 线程；"
+                     "含后台并行执行，小数量（x100）并行不足数值偏高";
             benchmark::Registry::Instance().Add(r);
         }
         // 切换成本入库。

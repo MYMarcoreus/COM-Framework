@@ -92,11 +92,12 @@ inline double NowNs()
 // @param note     说明文字。
 // ====================================================================
 inline void BenchOp(const std::string& group, const std::string& name,
-                    std::function<void()> fn, int samples = 41,
+                    std::function<void()> fn, int samples = 101,
                     const std::string& note = std::string())
 {
-    // 1) 预热（丢弃：让缓存、线程、分配器就绪）。
-    for (int i = 0; i < 8; ++i)
+    // 1) 预热（丢弃：让缓存、线程、分配器就绪；异步操作含唤醒休眠工作线程，
+    //    预热次数需足够让工作线程进入忙碌状态）。
+    for (int i = 0; i < 20; ++i)
         fn();
 
     // 2) 探测单次耗时 → 决定批大小（目标 100μs / 批，摊销循环开销）。

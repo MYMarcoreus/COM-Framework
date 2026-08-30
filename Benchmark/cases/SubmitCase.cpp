@@ -3,22 +3,24 @@
 #include "cases/Engines.h"
 #include "framework/Bench.h"
 
-#include <future>
+#include <atomic>
 #include <string>
 #include <thread>
 
 namespace {
 
-/// 通过 promise 等待单任务完成（对三种异步引擎统一语义）。
+/// 提交单任务并通过原子计数忙等其完成。
+/// 用原子计数 + 忙等（yield）而非 std::promise：避免每次 promise 构造的
+/// 堆分配与 condvar 开销污染绝对数值，三方引擎统一语义、更真实。
 template <typename TEngine>
-inline void RunOneWithPromise(TEngine& eng, const std::function<void()>& work)
+inline void RunOneWithDone(TEngine& eng, const std::function<void()>& work)
 {
-    std::promise<void> p;
-    eng.Submit([&p, &work]() {
+    std::atomic<uint64_t> done(0);
+    eng.Submit([&done, &work]() {
         work();
-        p.set_value();
+        done.fetch_add(1, std::memory_order_release);
     });
-    p.get_future().wait();
+    benchmark::WaitDone(done, 1);
 }
 
 } // namespace
@@ -41,7 +43,7 @@ void RunSubmitCases()
         bench::PoolEngine eng;
         eng.Start(kThreads);
         benchmark::BenchOp(group, "CThreadPool (1 thread)",
-            [&eng]() { RunOneWithPromise(eng, []() {}); },
+            [&eng]() { RunOneWithDone(eng, []() {}); },
             41, "mutex+condvar 线程池，提交→执行→唤醒");
         eng.Stop();
     }
@@ -51,7 +53,7 @@ void RunSubmitCases()
         bench::AsyncEngine eng;
         eng.Start(kThreads);
         benchmark::BenchOp(group, "CAsyncExecutor (1 thread)",
-            [&eng]() { RunOneWithPromise(eng, []() {}); },
+            [&eng]() { RunOneWithDone(eng, []() {}); },
             41, "任务链框架（Option 风格），提交→执行→唤醒");
         eng.Stop();
     }
@@ -61,7 +63,7 @@ void RunSubmitCases()
         bench::AsioEngine eng;
         eng.Start(kThreads);
         benchmark::BenchOp(group, "asio::post (1 thread)",
-            [&eng]() { RunOneWithPromise(eng, []() {}); },
+            [&eng]() { RunOneWithDone(eng, []() {}); },
             41, "行业标准异步库（本项目自带）");
         eng.Stop();
     }
