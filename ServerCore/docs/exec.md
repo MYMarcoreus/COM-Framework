@@ -1,5 +1,7 @@
 # Exec 并发调度框架
 
+> 详细文档：**[使用指南](exec-usage.md)** ｜ **[实现文档](exec-impl.md)**（本页为概述）
+
 ServerCore 的**新并发控制框架**：全局线程池 + 模块级读写调度 + 业务流程回调栈。
 设计目标替代旧异步/协程框架作为模块业务的并发控制手段，**不依赖**
 `common::async::CAsyncExecutor` / `CCoroutine`，仅依赖全局线程池

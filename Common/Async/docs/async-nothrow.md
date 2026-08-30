@@ -1,5 +1,7 @@
 # AsyncExecutor 无异常版异步框架解析（Option 风格）
 
+> 详细文档：**[使用指南](async-usage.md)** ｜ **[实现文档](async-impl.md)**（本页为概念解析）
+
 ## 1. 这是什么？为什么需要它？
 
 这是 **ServerCore/Common 提供的一套"不抛异常"的异步任务框架**。它允许你像这样写异步代码：

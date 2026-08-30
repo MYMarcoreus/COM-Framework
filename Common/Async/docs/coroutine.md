@@ -1,5 +1,7 @@
 # 无栈协程 CCoroutine 使用指南（common::async）
 
+> 详细文档：**[使用指南](coroutine-usage.md)** ｜ **[实现文档](coroutine-impl.md)**（本页为入门指南）
+
 ## 1. 这是什么？
 
 `CCoroutine` 是 `common::async` 提供的一套**无栈协程**：基于 `CAsyncExecutor` + `CTask`，
