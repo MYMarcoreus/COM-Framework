@@ -390,14 +390,17 @@ private:
     RegisterTask(CTask<U> task, TOnSuccess onSuccess)
     {
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        bool bOk = task.OnSuccess([spSelf, onSuccess, this](const U& v)
+        // 合并 OnSuccess/OnNone 为一次 OnResult 注册：省 1 次续接分配 + 1 次锁 + 1 次回调。
+        bool bOk = task.OnResult([spSelf, onSuccess, this](const CTaskResult<U>& result)
         {
-            onSuccess(v);
-            PostResume();
-        });
-        task.OnNone([spSelf, this](detail::CTaskEndReason reason)
-        {
-            MarkTerminated(reason); // await 到无值 → 协程终止（原因透传）。
+            if (result.HasValue())
+            {
+                onSuccess(result.Value()); // 有值：落地 / 忽略。
+            }
+            else
+            {
+                MarkTerminated(result.Reason()); // 无值 → 协程终止（原因透传）。
+            }
             PostResume();
         });
         if (!bOk)
@@ -411,14 +414,17 @@ private:
     void RegisterTask(CTask<void> task, TOnSuccess onSuccess)
     {
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        bool bOk = task.OnSuccess([spSelf, onSuccess, this]()
+        // 合并 OnSuccess/OnNone 为一次 OnResult 注册。
+        bool bOk = task.OnResult([spSelf, onSuccess, this](const CTaskResult<void>& result)
         {
-            onSuccess();
-            PostResume();
-        });
-        task.OnNone([spSelf, this](detail::CTaskEndReason reason)
-        {
-            MarkTerminated(reason); // await 到无值 → 协程终止（原因透传）。
+            if (result.HasValue())
+            {
+                onSuccess();
+            }
+            else
+            {
+                MarkTerminated(result.Reason());
+            }
             PostResume();
         });
         if (!bOk)
@@ -471,14 +477,17 @@ private:
                     CTask<U> task, TOnSuccess onSuccess)
     {
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        bool bOk = task.OnSuccess([pGroup, spSelf, onSuccess, this](const U& v)
+        // 合并 OnSuccess/OnNone 为一次 OnResult 注册。
+        bool bOk = task.OnResult([pGroup, spSelf, onSuccess, this](const CTaskResult<U>& result)
         {
-            onSuccess(v);
-            AllDone(pGroup);
-        });
-        task.OnNone([pGroup, spSelf, this](detail::CTaskEndReason reason)
-        {
-            RecordNone(pGroup, reason);
+            if (result.HasValue())
+            {
+                onSuccess(result.Value());
+            }
+            else
+            {
+                RecordNone(pGroup, result.Reason());
+            }
             AllDone(pGroup);
         });
         if (!bOk)
@@ -494,14 +503,17 @@ private:
                          CTask<void> task, TOnSuccess onSuccess)
     {
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        bool bOk = task.OnSuccess([pGroup, spSelf, onSuccess, this]()
+        // 合并 OnSuccess/OnNone 为一次 OnResult 注册。
+        bool bOk = task.OnResult([pGroup, spSelf, onSuccess, this](const CTaskResult<void>& result)
         {
-            onSuccess();
-            AllDone(pGroup);
-        });
-        task.OnNone([pGroup, spSelf, this](detail::CTaskEndReason reason)
-        {
-            RecordNone(pGroup, reason);
+            if (result.HasValue())
+            {
+                onSuccess();
+            }
+            else
+            {
+                RecordNone(pGroup, result.Reason());
+            }
             AllDone(pGroup);
         });
         if (!bOk)

@@ -652,6 +652,13 @@ public:
     /// 回调类型别名。
     using SuccessCallback = std::function<void(const TValue&)>;        // 有值回调。
     using NoneCallback = std::function<void(detail::CTaskEndReason)>;  // 无值回调。
+    using ResultCallback = std::function<void(const CTaskResult<TValue>&)>; // 结果回调。
+
+    /// @brief 注册结果回调（有值或无值统一触发一次）。
+    ///
+    /// @param fnCallback 结果回调（接收最终 CTaskResult）。
+    /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
+    bool OnResult(ResultCallback fnCallback);
 
     /// @brief 注册成功回调（有值时触发）。
     ///
@@ -686,6 +693,13 @@ bool CTask<TValue>::OnSuccess(SuccessCallback fnCallback)
                 fnCallback(result.Value());
             }
         });
+}
+
+/// @brief OnResult 实现（非 void）：结果回调一次注册（有值/无值统一）。
+template <typename TValue>
+bool CTask<TValue>::OnResult(ResultCallback fnCallback)
+{
+    return this->m_pState->AddContinuation(this->m_pExecutor, std::move(fnCallback));
 }
 
 /// @brief OnNone 实现（非 void）。
@@ -775,6 +789,13 @@ public:
     /// 回调类型别名。
     using SuccessCallback = std::function<void()>;                      // 完成回调。
     using NoneCallback = std::function<void(detail::CTaskEndReason)>;  // 无值回调。
+    using ResultCallback = std::function<void(const CTaskResult<void>&)>; // 结果回调。
+
+    /// @brief 注册结果回调（有值或无值统一触发一次）。
+    ///
+    /// @param fnCallback 结果回调（接收最终 CTaskResult）。
+    /// @return true 注册/投递成功；false 任务已就绪但执行器不可用（回调不执行）。
+    bool OnResult(ResultCallback fnCallback);
 
     /// @brief 注册完成回调（无参数）。
     ///

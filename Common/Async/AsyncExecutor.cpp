@@ -35,6 +35,12 @@ bool CTask<void>::OnNone(NoneCallback fnCallback)
         });
 }
 
+/// @brief OnResult 实现（`CTask<void>` 特化）：结果回调一次注册（有值/无值统一）。
+bool CTask<void>::OnResult(ResultCallback fnCallback)
+{
+    return m_pState->AddContinuation(this->m_pExecutor, std::move(fnCallback));
+}
+
 /// @brief 创建异步执行器（构造即建句柄与线程池对象：执行器和线程池一定不为空）。
 CAsyncExecutor::CAsyncExecutor(size_t nThreadCount)
     : m_pHandle(new detail::CExecutorHandle()), // 句柄（线程池对象随即创建）。
