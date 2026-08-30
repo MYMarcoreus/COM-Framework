@@ -1,11 +1,13 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <condition_variable>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -339,11 +341,24 @@ public:
 
     /// @brief 阻塞等待结果。
     ///
+    /// 短任务场景先自旋（有限时长），避免每次 Get 的「睡→醒」futex 往返；
+    /// 超时仍未就绪再回退到 condvar 阻塞（长等待场景不浪费 CPU）。
+    ///
     /// @return 最终结果（有值 / 无值）。
     auto Wait() -> CTaskResult<TValue>
     {
+        // 自旋：m_bReady 原子读（Complete 的 store 有 release 语义，
+        // 看到就绪即可安全读取 m_result——最终在锁内读）。
+        const auto spinDeadline =
+            std::chrono::steady_clock::now() + std::chrono::microseconds(50);
+        while (!m_bReady.load(std::memory_order_acquire) &&
+               std::chrono::steady_clock::now() < spinDeadline)
+        {
+            std::this_thread::yield();
+        }
+
         std::unique_lock<std::mutex> lock(m_mutex);
-        m_cv.wait(lock, [this]() { return m_bReady; });
+        m_cv.wait(lock, [this]() { return m_bReady.load(std::memory_order_acquire); });
         return m_result;
     }
 
@@ -376,7 +391,7 @@ private:
     std::mutex m_mutex;                  // 保护状态与续接列表。
     std::condition_variable m_cv;        // 通知 Wait 等待者。
     std::vector<Continuation> m_vecContinuations; // 续接列表（未完成时）。
-    bool m_bReady;                       // 是否已完成。
+    std::atomic<bool> m_bReady;             // 是否已完成（原子：供 Wait 无锁自旋）。
     CTaskResult<TValue> m_result;        // 最终结果（完成后有效）。
 #if defined(NOTHROW_DEBUG_TRACE)
     CSourceLoc m_loc;                    // 任务注册点源码位置（调试用）。
