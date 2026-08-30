@@ -1,5 +1,7 @@
 #include "Thread/ThreadPool.h"
 
+#include <chrono>
+
 namespace common {
 namespace thread {
 
@@ -138,6 +140,21 @@ void CThreadPool::WorkerLoop()
         CTask fnTask;
         {
             std::unique_lock<std::mutex> lock(m_mutex);
+            if (m_dequeTasks.empty() && !m_bStopping)
+            {
+                // A1 混合等待：短暂自旋（读原子 pending，不持锁），任务刚提交时
+                // 线程未睡可直接取，减少「睡→醒」futex 往返（单任务延迟主要成本）。
+                lock.unlock();
+                const auto spinUntil =
+                    std::chrono::steady_clock::now() + std::chrono::microseconds(30);
+                while (std::chrono::steady_clock::now() < spinUntil)
+                {
+                    if (m_nPending.load(std::memory_order_acquire) > 0)
+                        break; // 有任务入队 → 回锁直接取。
+                    std::this_thread::yield();
+                }
+                lock.lock();
+            }
             m_condition.wait(lock, [this]() { return m_bStopping || !m_dequeTasks.empty(); });
             if (m_bStopping && m_dequeTasks.empty())
             {
