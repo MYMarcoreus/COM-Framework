@@ -32,11 +32,11 @@ void RunSubmitCases()
 
     // 基线：直接函数调用（理论下限）。
     benchmark::BenchOp(group, "direct_call (baseline)",
-        []() { volatile int s = 42; (void)s; }, 41, "直接调用，无调度");
+        []() { volatile int s = 42; (void)s; }, 7, "直接调用，无调度");
 
     // 最重基线：每任务新建线程 + join（线程创建成本参考）。
     benchmark::BenchOp(group, "std::thread (per-task)",
-        []() { std::thread t([]() {}); t.join(); }, 21, "每任务创建线程，无复用");
+        []() { std::thread t([]() {}); t.join(); }, 5, "每任务创建线程，无复用");
 
     // CThreadPool（1 工作线程）。
     {
@@ -44,7 +44,7 @@ void RunSubmitCases()
         eng.Start(kThreads);
         benchmark::BenchOp(group, "CThreadPool (1 thread)",
             [&eng]() { RunOneWithDone(eng, []() {}); },
-            41, "mutex+condvar 线程池，提交→执行→唤醒");
+            7, "mutex+condvar 线程池，提交→执行→唤醒");
         eng.Stop();
     }
 
@@ -54,7 +54,7 @@ void RunSubmitCases()
         eng.Start(kThreads);
         benchmark::BenchOp(group, "CAsyncExecutor (1 thread)",
             [&eng]() { RunOneWithDone(eng, []() {}); },
-            41, "任务链框架（Option 风格），提交→执行→唤醒");
+            7, "任务链框架（Option 风格），提交→执行→唤醒");
         eng.Stop();
     }
 
@@ -64,7 +64,7 @@ void RunSubmitCases()
         eng.Start(kThreads);
         benchmark::BenchOp(group, "asio::post (1 thread)",
             [&eng]() { RunOneWithDone(eng, []() {}); },
-            41, "行业标准异步库（本项目自带）");
+            7, "行业标准异步库（本项目自带）");
         eng.Stop();
     }
 }

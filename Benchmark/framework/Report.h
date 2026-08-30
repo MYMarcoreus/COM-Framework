@@ -137,8 +137,8 @@ inline std::string BuildMarkdown()
             }
             else
             {
-                os << "| 实现 | 均值(ns/op) | P50(ns) | P99(ns) | 吞吐(ops/s) | 相对基线 | 说明 |\n";
-                os << "|---|---|---|---|---|---|---|\n";
+                os << "| 实现 | 均值(ns/op) | P50(ns) | P90(ns) | P99(ns) | stddev(ns) | 吞吐(ops/s) | 相对基线 | 说明 |\n";
+                os << "|---|---|---|---|---|---|---|---|---|\n";
             }
         }
 
@@ -167,7 +167,9 @@ inline std::string BuildMarkdown()
             os << "| " << r.name
                << " | " << FmtDouble(r.mean_ns, 1)
                << " | " << FmtDouble(r.p50_ns, 1)
+               << " | " << FmtDouble(r.p90_ns, 1)
                << " | " << FmtDouble(r.p99_ns, 1)
+               << " | " << FmtDouble(r.stddev_ns, 1)
                << " | " << FmtOps(r.ops_per_sec)
                << " | " << rel
                << " | " << r.note << " |\n";

@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -44,8 +45,10 @@ struct Result
     std::string group;      // 分组（表格 section 标题）。
     std::string name;       // 实现 / 用例名。
     double mean_ns = 0.0;   // 均值 ns/op（压力模式下为 平均窗口耗时 ns）。
-    double p50_ns = 0.0;    // P50 ns。
-    double p99_ns = 0.0;    // P99 ns。
+    double p50_ns = 0.0;    // P50（中位数）ns——抗环境噪声的主指标。
+    double p90_ns = 0.0;    // P90 ns。
+    double p99_ns = 0.0;    // P99 ns（长尾）。
+    double stddev_ns = 0.0; // 标准差 ns（稳定性）。
     double ops_per_sec = 0.0; // 吞吐（ops/s）。
     std::string note;       // 说明（参数 / 环境）。
     bool is_stress = false; // true：压力结果（表格按压力列渲染）。
@@ -83,26 +86,31 @@ inline double NowNs()
 }
 
 // ====================================================================
-// 微基准执行器：预热 + 自适应批处理 + 多轮采样。
+// 微基准执行器：预热 + 自适应迭代 + 多轮采样 + 增强统计。
+//
+// 借鉴 Google Benchmark 的方法：
+//   - 自适应迭代：探测单次耗时 → 每轮迭代数使总时长 ~kTargetMs，保证每轮
+//     统计充分（而非固定采样数，短/长操作都能测得准）；
+//   - 多轮取统计：跑 reps 轮，P50（中位数）为主指标抗环境噪声，P90/P99
+//     看长尾，stddev 看稳定性（适配当前高噪声环境）；
+//   - 预热充分（30 次）让工作线程忙起来。
 //
 // @param group    分组名（表格 section）。
 // @param name     实现 / 用例名。
 // @param fn       一个逻辑操作（同步语义：含异步时须自行等待完成）。
-// @param samples  采样轮数（默认 41，P99 需要一定样本量）。
+// @param reps     采样轮数（默认 7；每轮自适应迭代，总时长 ~20ms）。
 // @param note     说明文字。
 // ====================================================================
 inline void BenchOp(const std::string& group, const std::string& name,
-                    std::function<void()> fn, int samples = 101,
+                    std::function<void()> fn, int reps = 7,
                     const std::string& note = std::string())
 {
-    // 1) 预热（丢弃：让缓存、线程、分配器就绪；异步操作含唤醒休眠工作线程，
-    //    预热次数需足够让工作线程进入忙碌状态）。
-    for (int i = 0; i < 20; ++i)
+    // 1) 预热（丢弃：让缓存、线程、分配器就绪；异步操作含唤醒休眠工作线程）。
+    for (int i = 0; i < 30; ++i)
         fn();
 
-    // 2) 探测单次耗时 → 决定批大小（目标 100μs / 批，摊销循环开销）。
-    const int kProbe = 200;
-    const double kTargetNs = 100000.0; // 100μs
+    // 2) 探测单次耗时（整块计时取平均）→ 决定自适应迭代次数。
+    const int kProbe = 300;
     double t0 = NowNs();
     for (int i = 0; i < kProbe; ++i)
         fn();
@@ -110,46 +118,59 @@ inline void BenchOp(const std::string& group, const std::string& name,
     double nsPerOp = (t1 - t0) / kProbe;
     if (nsPerOp <= 0.0)
         nsPerOp = 1.0;
-    int batch = 1;
-    if (nsPerOp < kTargetNs)
-    {
-        batch = static_cast<int>(kTargetNs / nsPerOp);
-        if (batch < 1)
-            batch = 1;
-        if (batch > 200000)
-            batch = 200000;
-    }
 
-    // 3) 多轮采样（每轮测一个批的总耗时 → 平均到单次）。
+    // 3) 自适应迭代：每轮总时长 ~2ms（保证短/长操作统计充分；旧调用处显式
+    //    传入的 41/21 轮 × 2ms 总时长仍可接受）。
+    const double kTargetNs = 2.0 * 1e6; // 2ms / 轮。
+    long iterations = static_cast<long>(kTargetNs / nsPerOp);
+    if (iterations < 1)
+        iterations = 1;
+    if (iterations > 50000000L)
+        iterations = 50000000L;
+
+    // 4) 多轮采样：每轮均值（ns/op），reps 轮取统计（抗环境噪声）。
     std::vector<double> vec;
-    vec.reserve(static_cast<size_t>(samples));
-    for (int s = 0; s < samples; ++s)
+    vec.reserve(static_cast<size_t>(reps));
+    for (int r = 0; r < reps; ++r)
     {
         double a = NowNs();
-        for (int i = 0; i < batch; ++i)
+        for (long i = 0; i < iterations; ++i)
             fn();
         double b = NowNs();
-        vec.push_back((b - a) / batch);
+        vec.push_back((b - a) / iterations);
     }
 
-    // 4) 统计 均值 / P50 / P99。
+    // 5) 统计：mean / P50 / P90 / P99 / stddev。
     std::sort(vec.begin(), vec.end());
     double sum = 0.0;
     for (size_t i = 0; i < vec.size(); ++i)
         sum += vec[i];
     double mean = sum / vec.size();
     double p50 = vec[vec.size() / 2];
+    size_t idx90 = static_cast<size_t>(vec.size() * 0.90);
+    if (idx90 >= vec.size())
+        idx90 = vec.size() - 1;
     size_t idx99 = static_cast<size_t>(vec.size() * 0.99);
     if (idx99 >= vec.size())
         idx99 = vec.size() - 1;
+    double p90 = vec[idx90];
     double p99 = vec[idx99];
+    double var = 0.0;
+    for (size_t i = 0; i < vec.size(); ++i)
+    {
+        double d = vec[i] - mean;
+        var += d * d;
+    }
+    double stddev = vec.size() > 1 ? std::sqrt(var / (vec.size() - 1)) : 0.0;
 
     Result r;
     r.group = group;
     r.name = name;
     r.mean_ns = mean;
     r.p50_ns = p50;
+    r.p90_ns = p90;
     r.p99_ns = p99;
+    r.stddev_ns = stddev;
     r.ops_per_sec = (mean > 0.0) ? 1e9 / mean : 0.0;
     r.note = note;
     Registry::Instance().Add(r);

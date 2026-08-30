@@ -58,7 +58,7 @@ void RunCoroutineCases()
 
     // 基线：直接函数调用。
     benchmark::BenchOp(group, "direct_call (baseline)",
-        []() { volatile int s = 42; (void)s; }, 41, "直接调用");
+        []() { volatile int s = 42; (void)s; }, 7, "直接调用");
 
     // 等价单任务：Submit + Get。
     benchmark::BenchOp(group, "CAsyncExecutor single task",
@@ -66,7 +66,7 @@ void RunCoroutineCases()
             volatile int s = exec.Submit([]() { return 42; }).Get().Value();
             (void)s;
         },
-        41, "提交单个任务并取值");
+        7, "提交单个任务并取值");
 
     // 简单协程：CoStart + 一次 await + 完成。
     benchmark::BenchOp(group, "CCoroutine start+await+done",
@@ -75,7 +75,7 @@ void RunCoroutineCases()
             volatile int s = p->Get().Value();
             (void)s;
         },
-        41, "CoStart → 一次 CO_AWAIT → CO_RETURN");
+        7, "CoStart → 一次 CO_AWAIT → CO_RETURN");
 
     // 10 级链：直接函数。
     benchmark::BenchOp(group, "direct chain x10",
@@ -87,7 +87,7 @@ void RunCoroutineCases()
             s = v;
             (void)s;
         },
-        41, "循环 10 次");
+        7, "循环 10 次");
 
     // 10 级链：CAsyncExecutor Then。
     benchmark::BenchOp(group, "CAsyncExecutor chain x10",
@@ -98,7 +98,7 @@ void RunCoroutineCases()
             volatile int s = task.Get().Value();
             (void)s;
         },
-        21, "10 级 Then 链");
+        5, "10 级 Then 链");
 
     // 10 级链：协程 10 次 await。
     benchmark::BenchOp(group, "CCoroutine chain x10 (10 await)",
@@ -107,7 +107,7 @@ void RunCoroutineCases()
             volatile int s = p->Get().Value();
             (void)s;
         },
-        21, "10 次 CO_AWAIT_INTO 挂起/恢复");
+        5, "10 次 CO_AWAIT_INTO 挂起/恢复");
 
     exec.Stop();
 }
