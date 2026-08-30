@@ -47,5 +47,22 @@ void RunChainCases()
             21, "构建 n 级 Then + 执行 + 取值（合计）");
     }
 
+    // CAsyncExecutor flatMap 链（变换返回 CTask → 触发 FlatMapForward 转发路径）。
+    for (size_t i = 0; i < 4; ++i)
+    {
+        const int n = lens[i];
+        benchmark::BenchOp(group, "CAsyncExecutor flatMap chain x" + std::to_string(n),
+            [&exec, n]() {
+                auto task = exec.Submit([]() { return 0; });
+                for (int k = 0; k < n; ++k)
+                    task = task.Then([&exec](int x) {
+                        return exec.Submit([x]() { return x + 1; }); // 返回 CTask → flatMap
+                    });
+                volatile int s = task.Get().Value();
+                (void)s;
+            },
+            21, "n 级 flatMap（每级内嵌 Submit），验证 FlatMapForward 路径");
+    }
+
     exec.Stop();
 }
