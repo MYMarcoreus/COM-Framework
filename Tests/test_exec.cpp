@@ -513,3 +513,158 @@ TEST(Exec_Rw_Stress)
     ASSERT_TRUE(rwA.ModState().nViolations.load() == 0);
     ASSERT_TRUE(rwB.ModState().nViolations.load() == 0);
 }
+
+/// @brief 高并发读：32 线程、读上限 16，验证读确实大规模并行且不超上限。
+TEST(Exec_Rw_HighConcurrencyRead)
+{
+    const int kThreads = 32;
+    const int kMaxReaders = 16;
+    const int kFlows = 128;
+    CThreadPool pool(kThreads);
+    ASSERT_TRUE(pool.Start());
+    CGlobalDispatcher dispatcher(&pool);
+    CReaderModule reader(&pool, kMaxReaders);
+    dispatcher.RegisterScheduler("reader", reader.Scheduler());
+
+    STestState state;
+    for (int i = 0; i < kFlows; ++i)
+    {
+        ASSERT_TRUE(dispatcher.Dispatch(
+            [&reader, &state](const std::shared_ptr<CBusinessFlow>& spFlow)
+            {
+                reader.SubmitRead(spFlow, &state);
+                spFlow->Callbacks().Push([&state]() { state.nFlowDone.fetch_add(1); });
+            }));
+    }
+
+    const bool bDone = WaitUntil(
+        [&state]() { return state.nFlowDone.load() == kFlows; }, 15000);
+    pool.Stop();
+    ASSERT_TRUE(bDone);
+    ASSERT_TRUE(state.nReadDone.load() == kFlows);
+    ASSERT_TRUE(reader.ModState().nPeakReaders.load() >= 8);       // 高并发确实发生
+    ASSERT_TRUE(reader.ModState().nPeakReaders.load() <= kMaxReaders); // 不超上限
+    ASSERT_TRUE(reader.ModState().nViolations.load() == 0);
+}
+
+/// @brief 多生产者并发投递：8 个线程同时 Dispatch，验证并发提交路径无竞争、
+///        调度器在多生产 / 多线程并发进入下仍保持读写互斥与精确计数。
+TEST(Exec_Rw_MultiProducerDispatch)
+{
+    const int kThreads = 32;
+    const int kProducers = 8;
+    const int kFlowsPerProducer = 500;
+    const int kModules = 4;
+    const int kFlows = kProducers * kFlowsPerProducer;
+
+    CThreadPool pool(kThreads);
+    ASSERT_TRUE(pool.Start());
+    CGlobalDispatcher dispatcher(&pool);
+
+    // 4 个读写混合模块（unique_ptr 持有：CModuleScheduler 含 mutex 不可拷贝）
+    std::vector<std::unique_ptr<CRwModule>> vecModules;
+    for (int m = 0; m < kModules; ++m)
+    {
+        std::unique_ptr<CRwModule> spMod(new CRwModule(&pool, 8));
+        dispatcher.RegisterScheduler("M" + std::to_string(m), spMod->Scheduler());
+        vecModules.push_back(std::move(spMod));
+    }
+
+    STestState state;
+    std::atomic<long> nDispatchFail(0);
+
+    // 8 个生产者线程并发投递业务请求
+    std::vector<std::thread> vecProducers;
+    for (int p = 0; p < kProducers; ++p)
+    {
+        vecProducers.push_back(std::thread([&, p]()
+        {
+            for (int i = 0; i < kFlowsPerProducer; ++i)
+            {
+                const int nReadMod = (p + i) % kModules;
+                const int nWriteMod = (p + i + 1) % kModules;
+                if (!dispatcher.Dispatch(
+                        [&, nReadMod, nWriteMod](const std::shared_ptr<CBusinessFlow>& spFlow)
+                        {
+                            vecModules[nReadMod]->SubmitRead(spFlow, &state);
+                            vecModules[nWriteMod]->SubmitWrite(spFlow, &state);
+                            spFlow->Callbacks().Push([&state]() { state.nFlowDone.fetch_add(1); });
+                        }))
+                {
+                    nDispatchFail.fetch_add(1);
+                }
+            }
+        }));
+    }
+    for (std::vector<std::thread>::iterator it = vecProducers.begin();
+         it != vecProducers.end(); ++it)
+    {
+        it->join();
+    }
+
+    const bool bDone = WaitUntil(
+        [&state]() { return state.nFlowDone.load() == kFlows; }, 30000);
+    pool.Stop();
+    ASSERT_TRUE(bDone);
+    ASSERT_TRUE(nDispatchFail.load() == 0); // 全部投递成功
+    ASSERT_TRUE(state.nReadDone.load() == kFlows);
+    ASSERT_TRUE(state.nWriteDone.load() == kFlows);
+    for (int m = 0; m < kModules; ++m)
+    {
+        ASSERT_TRUE(vecModules[m]->ModState().nPeakWriters.load() == 1); // 各模块写唯一
+        ASSERT_TRUE(vecModules[m]->ModState().nViolations.load() == 0);  // 无违例
+    }
+}
+
+/// @brief 多模块高并发压力：64 线程、16 模块、8000 流程确定性散布读写。
+///        逐模块验证：读不超上限、写唯一、无违例；全局计数精确。
+TEST(Exec_Rw_ManyModulesStress)
+{
+    const int kThreads = 64;
+    const int kModules = 16;
+    const int kFlows = 8000;
+
+    CThreadPool pool(kThreads);
+    ASSERT_TRUE(pool.Start());
+    CGlobalDispatcher dispatcher(&pool);
+
+    // 16 个读写混合模块，每模块读上限 4..7（验证上限在高压下不被突破）
+    std::vector<std::unique_ptr<CRwModule>> vecModules;
+    std::vector<int> vecReadCaps;
+    for (int m = 0; m < kModules; ++m)
+    {
+        const int nCap = 4 + (m % 4);
+        std::unique_ptr<CRwModule> spMod(new CRwModule(&pool, nCap));
+        dispatcher.RegisterScheduler("M" + std::to_string(m), spMod->Scheduler());
+        vecReadCaps.push_back(nCap);
+        vecModules.push_back(std::move(spMod));
+    }
+
+    STestState state;
+    for (int i = 0; i < kFlows; ++i)
+    {
+        // 确定性散布到各模块（可复现）
+        const int nReadMod = (i * 5 + 1) % kModules;
+        const int nWriteMod = (i * 7 + 3) % kModules;
+        ASSERT_TRUE(dispatcher.Dispatch(
+            [&, nReadMod, nWriteMod](const std::shared_ptr<CBusinessFlow>& spFlow)
+            {
+                vecModules[nReadMod]->SubmitRead(spFlow, &state);
+                vecModules[nWriteMod]->SubmitWrite(spFlow, &state);
+                spFlow->Callbacks().Push([&state]() { state.nFlowDone.fetch_add(1); });
+            }));
+    }
+
+    const bool bDone = WaitUntil(
+        [&state]() { return state.nFlowDone.load() == kFlows; }, 60000);
+    pool.Stop();
+    ASSERT_TRUE(bDone);
+    ASSERT_TRUE(state.nReadDone.load() == kFlows);
+    ASSERT_TRUE(state.nWriteDone.load() == kFlows);
+    for (int m = 0; m < kModules; ++m)
+    {
+        ASSERT_TRUE(vecModules[m]->ModState().nPeakReaders.load() <= vecReadCaps[m]); // 读不超上限
+        ASSERT_TRUE(vecModules[m]->ModState().nPeakWriters.load() == 1);             // 写唯一
+        ASSERT_TRUE(vecModules[m]->ModState().nViolations.load() == 0);              // 无违例
+    }
+}

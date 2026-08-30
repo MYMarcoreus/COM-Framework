@@ -54,6 +54,7 @@ private:
     std::vector<std::thread> m_vecWorkers;
     std::deque<CTask> m_dequeTasks;
     std::atomic<long> m_nPending;        // 待处理任务数（Submit +1，WorkerLoop 取出 -1）。
+    size_t m_nIdleWorkers;               // 空闲工作线程数（WorkerLoop 维护，Submit 用于按需唤醒）。
     mutable std::mutex m_mutex;
     std::condition_variable m_condition;
     size_t m_nThreadCount;
