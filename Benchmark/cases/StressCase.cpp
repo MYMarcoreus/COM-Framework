@@ -1,11 +1,13 @@
 #include "StressCase.h"
 
+#include "Async/Coroutine.h"
 #include "cases/Engines.h"
 #include "framework/Bench.h"
 
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -24,6 +26,29 @@ inline void RunStressFor(const std::string& group, const std::string& name,
     benchmark::StressWindow(group, name, window, ms, wrap, done, note);
     stop();
 }
+
+/// 压力协程：一次 await 后完成（完成时对共享计数 +1）。
+/// 用于多线程协程吞吐测试（并发 CoStart 多个独立协程）。
+class StressCoro : public common::async::CCoroutine<int>
+{
+public:
+    explicit StressCoro(std::atomic<uint64_t>* pDone)
+        : m_pDone(pDone), m_value(0) {}
+
+    void Run() override
+    {
+        CO_BEGIN();
+        CO_AWAIT_INTO(m_value, []() { return 42; });
+        if (m_pDone != nullptr)
+            m_pDone->fetch_add(1, std::memory_order_release);
+        CO_RETURN(m_value);
+        CO_END();
+    }
+
+private:
+    std::atomic<uint64_t>* m_pDone;
+    int m_value;
+};
 
 } // namespace
 
@@ -92,6 +117,23 @@ void RunStressCases()
                                 300, kMs, wrap, done,
                                 "每条=Submit+10×Then+完成计数");
         eng.Stop();
+    }
+
+    // CCoroutine：多线程协程吞吐（4 线程，并发 CoStart 独立协程）。
+    // 验证协程 ResumeInline（内联续接）在多线程下的调度表现；
+    // 协程实例相互独立，内联不会破坏并行度（与 Then 链不同）。
+    {
+        common::async::CAsyncExecutor exec(4);
+        exec.Start();
+        std::atomic<uint64_t> done(0);
+        std::function<void()> wrap = [&]() {
+            std::shared_ptr<StressCoro> p = exec.CoStart<StressCoro>(&done);
+            (void)p; // 生命周期由框架自持强引用保证，提前释放安全。
+        };
+        benchmark::StressWindow(group, "CCoroutine (4 threads)",
+                                1000, kMs, wrap, done,
+                                "并发简单协程：CoStart+1×await+完成");
+        exec.Stop();
     }
 
     // ---------------- 停止延迟 ----------------
