@@ -31,7 +31,7 @@ void RunStressCases()
 {
     const std::string group = "4. 压力测试（4 线程，窗口式稳定吞吐）";
     const int kThreads = 4;
-    const int kMs = 2000;
+    const int kMs = 4000;
 
     // CThreadPool（4 线程，窗口 500）。
     {
@@ -40,7 +40,7 @@ void RunStressCases()
         RunStressFor(group, "CThreadPool (4 threads)",
                      [&eng](const std::function<void()>& f) { eng.Submit(f); },
                      [&eng]() { eng.Stop(); },
-                     500, kMs, "mutex+condvar 线程池");
+                     1000, kMs, "mutex+condvar 线程池");
     }
 
     // CAsyncExecutor（4 线程，窗口 500）。
@@ -50,7 +50,7 @@ void RunStressCases()
         RunStressFor(group, "CAsyncExecutor (4 threads)",
                      [&eng](const std::function<void()>& f) { eng.Submit(f); },
                      [&eng]() { eng.Stop(); },
-                     500, kMs, "任务链框架");
+                     1000, kMs, "任务链框架");
     }
 
     // asio::post（4 线程，窗口 500）。
@@ -60,7 +60,7 @@ void RunStressCases()
         RunStressFor(group, "asio::post (4 threads)",
                      [&eng](const std::function<void()>& f) { eng.Submit(f); },
                      [&eng]() { eng.Stop(); },
-                     500, kMs, "行业标准异步库");
+                     1000, kMs, "行业标准异步库");
     }
 
     // CAsyncExecutor（4 线程，大窗口 5000，观察背压）。
@@ -89,7 +89,7 @@ void RunStressCases()
                         { done.fetch_add(1, std::memory_order_release); });
         };
         benchmark::StressWindow(group, "CAsyncExecutor 10-level chain (4 threads)",
-                                100, kMs, wrap, done,
+                                300, kMs, wrap, done,
                                 "每条=Submit+10×Then+完成计数");
         eng.Stop();
     }
