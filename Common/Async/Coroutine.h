@@ -330,6 +330,33 @@ private:
         Terminate(detail::kStopped); // 执行器已停止/不可用 → 安全终止，不悬垂。
     }
 
+    /// @brief 内联续接（负载感知，C9）：任务完成回调已运行在工作线程上，
+    ///        线程池无积压（队列空）时直接在此线程继续执行协程体，省去
+    ///        Post 回线程池的 1 次入队 + futex 唤醒；有积压时投递，保任务
+    ///        级并行度（修正无脑内联破坏并行的教训）。
+    ///
+    /// 用 thread_local 深度计数限制连续内联层数防爆栈；超限 / 执行器停止 /
+    /// 队列有积压时回退 PostResume（语义不变）。
+    void ResumeInline()
+    {
+        static thread_local int s_inlineDepth = 0;
+        static const int kMaxInlineResume = 64;
+
+        if (m_pExec == nullptr || m_pExec->IsStopped())
+        {
+            Terminate(detail::kStopped);
+            return;
+        }
+        if (m_pExec->IsIdle() && s_inlineDepth < kMaxInlineResume)
+        {
+            ++s_inlineDepth;
+            Resume();
+            --s_inlineDepth;
+            return;
+        }
+        PostResume(); // 队列有积压 / 深度超限：投递，保并行度 / 防爆栈。
+    }
+
     /// @brief 在当前线程继续执行协程体（状态机从 m_nStep 恢复）。
     ///
     /// 终止判定由协程体宏完成（case 处 IsTerminated() → CompleteNone），
@@ -401,7 +428,7 @@ private:
             {
                 MarkTerminated(result.Reason()); // 无值 → 协程终止（原因透传）。
             }
-            PostResume();
+            ResumeInline(); // 负载感知内联 / 投递。
         });
         if (!bOk)
         {
@@ -425,7 +452,7 @@ private:
             {
                 MarkTerminated(result.Reason());
             }
-            PostResume();
+            ResumeInline(); // 负载感知内联 / 投递。
         });
         if (!bOk)
         {
@@ -533,7 +560,7 @@ private:
                 MarkTerminated(static_cast<detail::CTaskEndReason>(
                     pGroup->nReason.load(std::memory_order_relaxed)));
             }
-            PostResume();
+            ResumeInline(); // 负载感知内联 / 投递。
         }
     }
 

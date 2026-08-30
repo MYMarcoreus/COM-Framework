@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -43,12 +44,16 @@ public:
     // 是否正在运行。
     bool IsRunning() const;
 
+    // 待处理任务数（队列中未取出的；供协程负载感知判断）。
+    size_t PendingCount() const;
+
 private:
     // 工作线程循环。
     void WorkerLoop();
 
     std::vector<std::thread> m_vecWorkers;
     std::deque<CTask> m_dequeTasks;
+    std::atomic<long> m_nPending;        // 待处理任务数（Submit +1，WorkerLoop 取出 -1）。
     mutable std::mutex m_mutex;
     std::condition_variable m_condition;
     size_t m_nThreadCount;

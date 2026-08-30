@@ -7,7 +7,8 @@ namespace thread {
 ///
 /// @param nThreadCount 工作线程数量。
 CThreadPool::CThreadPool(size_t nThreadCount)
-    : m_nThreadCount(nThreadCount), m_bRunning(false), m_bStopping(false)
+    : m_nPending(0), m_nThreadCount(nThreadCount),
+      m_bRunning(false), m_bStopping(false)
 {
 }
 
@@ -54,6 +55,7 @@ bool CThreadPool::Submit(const CTask& fnTask)
             return false;
         }
         m_dequeTasks.push_back(fnTask);
+        m_nPending.fetch_add(1, std::memory_order_relaxed);
     }
     m_condition.notify_one();
     return true;
@@ -75,6 +77,7 @@ bool CThreadPool::Submit(CTask&& fnTask)
             return false;
         }
         m_dequeTasks.push_back(std::move(fnTask));
+        m_nPending.fetch_add(1, std::memory_order_relaxed);
     }
     m_condition.notify_one();
     return true;
@@ -119,6 +122,14 @@ bool CThreadPool::IsRunning() const
     return m_bRunning;
 }
 
+/// @brief 返回待处理任务数（队列中未取出的）。
+///
+/// 轻量原子读（不加锁）；供协程负载感知判断（队列空 → 内联续接安全）。
+size_t CThreadPool::PendingCount() const
+{
+    return static_cast<size_t>(m_nPending.load(std::memory_order_relaxed));
+}
+
 /// @brief 工作线程循环。
 void CThreadPool::WorkerLoop()
 {
@@ -134,6 +145,7 @@ void CThreadPool::WorkerLoop()
             }
             fnTask = m_dequeTasks.front();
             m_dequeTasks.pop_front();
+            m_nPending.fetch_sub(1, std::memory_order_relaxed);
         }
         if (fnTask)
         {

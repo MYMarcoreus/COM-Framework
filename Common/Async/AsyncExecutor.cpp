@@ -117,5 +117,11 @@ bool CAsyncExecutor::IsStopped() const
     return m_pHandle->m_bStopped.load(std::memory_order_relaxed);
 }
 
+/// @brief 线程池是否空闲（无排队任务）。
+bool CAsyncExecutor::IsIdle() const
+{
+    return m_pHandle->m_pPool->PendingCount() == 0;
+}
+
 } // namespace async
 } // namespace common

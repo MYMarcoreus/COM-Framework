@@ -953,6 +953,11 @@ public:
     /// 轻量查询（原子读，不加锁）；供协程内联续接判断继续执行是否安全。
     bool IsStopped() const;
 
+    /// @brief 线程池是否空闲（无排队任务：队列空，内联续接不阻塞并行）。
+    ///
+    /// 轻量查询（原子读，不加锁）；供协程负载感知内联（C9）判断。
+    bool IsIdle() const;
+
 private:
     std::shared_ptr<detail::CExecutorHandle> m_pHandle; // 执行器句柄（任务链共享）。
     size_t m_nThreadCount;                              // 工作线程数。
