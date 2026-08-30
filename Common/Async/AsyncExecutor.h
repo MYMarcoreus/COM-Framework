@@ -276,11 +276,11 @@ public:
         std::vector<Continuation> vecCbs;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            if (m_bReady)
+            if (m_bReady.load(std::memory_order_relaxed))
             {
                 return;
             }
-            m_bReady = true;
+            m_bReady.store(true, std::memory_order_relaxed); // 锁内写；relaxed 即可。
             m_result = result;
             vecCbs.swap(m_vecContinuations);
         }
@@ -309,7 +309,7 @@ public:
         CTaskResult<TValue> result;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            if (!m_bReady)
+            if (!m_bReady.load(std::memory_order_relaxed))
             {
                 m_vecContinuations.push_back(std::move(fnCallback));
                 return true; // 未就绪：已登记，任务完成时触发。
@@ -347,18 +347,18 @@ public:
     /// @return 最终结果（有值 / 无值）。
     auto Wait() -> CTaskResult<TValue>
     {
-        // 自旋：m_bReady 原子读（Complete 的 store 有 release 语义，
-        // 看到就绪即可安全读取 m_result——最终在锁内读）。
+        // 自旋：m_bReady 用 relaxed 读（真正的同步由 m_mutex 保证；锁外
+        // 自旋仅作『可能就绪』的宽松提示，最终锁内 pred 决定，无数据竞争）。
         const auto spinDeadline =
             std::chrono::steady_clock::now() + std::chrono::microseconds(50);
-        while (!m_bReady.load(std::memory_order_acquire) &&
+        while (!m_bReady.load(std::memory_order_relaxed) &&
                std::chrono::steady_clock::now() < spinDeadline)
         {
             std::this_thread::yield();
         }
 
         std::unique_lock<std::mutex> lock(m_mutex);
-        m_cv.wait(lock, [this]() { return m_bReady.load(std::memory_order_acquire); });
+        m_cv.wait(lock, [this]() { return m_bReady.load(std::memory_order_relaxed); });
         return m_result;
     }
 
@@ -391,7 +391,9 @@ private:
     std::mutex m_mutex;                  // 保护状态与续接列表。
     std::condition_variable m_cv;        // 通知 Wait 等待者。
     std::vector<Continuation> m_vecContinuations; // 续接列表（未完成时）。
-    std::atomic<bool> m_bReady;             // 是否已完成（原子：供 Wait 无锁自旋）。
+    // 是否已完成。原子化仅为 Wait 锁外自旋读取；全部访问用 relaxed，
+    // 真正的同步由 m_mutex 保证（relaxed 开销等价普通 bool，无 barrier）。
+    std::atomic<bool> m_bReady;
     CTaskResult<TValue> m_result;        // 最终结果（完成后有效）。
 #if defined(NOTHROW_DEBUG_TRACE)
     CSourceLoc m_loc;                    // 任务注册点源码位置（调试用）。
