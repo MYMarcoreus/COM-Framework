@@ -82,6 +82,24 @@ while (!m_dequeTasks.empty())
 其后的读/写都不会被放行，因此**后来的任务永远不会越过先前的任务**；写也不会插队到
 先前排队的读前面（读先于写在队首，先被放行）。
 
+**准入决策图**（队首任务如何判定能否放行）：
+
+```mermaid
+flowchart TD
+    A["队首任务"] --> B{"类型?"}
+    B -->|"读 kRead"| C{"写者活跃?"}
+    C -->|"是"| X["break：写者独占，等待"]
+    C -->|"否"| D{"读槽位满?<br/>activeReaders >= maxReaders"}
+    D -->|"是"| X
+    D -->|"否"| E["放行该读<br/>出队 + ++activeReaders + 投递"]
+    E --> A
+    B -->|"写 kWrite"| F{"写者活跃?"}
+    F -->|"是"| X
+    F -->|"否"| G{"有活跃读者?<br/>activeReaders > 0"}
+    G -->|"是"| Y["break：等读者排空<br/>其后的读/写一并等待"]
+    G -->|"否"| H["放行该写<br/>出队 + writerActive=true + 投递<br/>break（写独占）"]
+```
+
 ### 2.4 OnTaskExit：归还槽位并继续泵出
 
 子任务在线程池线程执行完（`DispatchToPool` 包装里 `fnTask()` 后）调用：
@@ -116,6 +134,63 @@ if (!pool->Submit(fnWrapped))
 所有准入判定与排队都在 `m_mutex` 保护下完成；**进不了模块就留在队列，线程立即返回线程池**。
 线程池线程永远不会被业务锁阻塞，因此不会因某模块写独占而占住线程导致池子耗尽。
 
+### 2.7 调度时序示例
+
+**① 一次子任务的完整旅程**（提交 → 准入 → 执行 → 归还槽位 → 流程计数）：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant F as 业务流程
+    participant S as CModuleScheduler
+    participant Q as 统一FIFO队列
+    participant P as 线程池
+    participant W as 工作线程
+    participant C as 流程计数 pending
+
+    F->>S: SubmitTask(kind, fn)
+    S->>Q: 入队 push_back
+    S->>S: PumpLocked：队首能否准入？
+    alt 可准入
+        S->>Q: 出队 pop_front（先 move 再 pop）
+        S->>P: Submit(包装：fn + OnTaskExit)
+    else 不可准入（写独占 / 槽位满 / 读者未排空）
+        Note over Q: 留在队列，等槽位释放
+    end
+    P->>W: 分配工作线程
+    W->>W: 执行 fn（读/写业务）
+    W->>S: OnTaskExit(eKind)：归还槽位 + PumpLocked 放行下一个
+    W->>C: EndTask（pending-1）
+    Note over C: 全部排空且已 Complete → RunAll 回放回调栈
+```
+
+**② 读并发 + 写独占示例**（模块 `maxReaders=2`，按 R1、R2、W 顺序提交）：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as 流程A
+    participant B as 流程B
+    participant C as 流程C
+    participant S as 调度器（队列+槽位）
+    participant P as 工作线程
+
+    A->>S: 提交 R1（读）
+    S->>P: 准入 R1（readers=1）
+    B->>S: 提交 R2（读）
+    S->>P: 准入 R2（readers=2，达上限）
+    C->>S: 提交 W（写）
+    Note over S: W 排队（readers=2>0，写等待；新读也被阻止）
+    P->>S: R1 完成 → 退出（readers=1）
+    Note over S: 队首 W 仍等（还有 R2 活跃）
+    P->>S: R2 完成 → 退出（readers=0）
+    S->>P: 放行 W（写独占）
+    P->>S: W 完成 → 退出（队列清空）
+```
+
+**① 里线程被及时归还**：第 4 步不可准入时并不阻塞，`Submit` 直接返回，线程回到线程池；
+槽位释放（`OnTaskExit`）时再由调度器重投递，因此线程池线程永不因业务锁被占用。
+
 ## 3. CBusinessFlow：业务流程（计数 + 完成判定）
 
 ```cpp
@@ -136,6 +211,23 @@ CCallbackStack m_callbacks;
 按值捕获 `shared_ptr`，保证流程跨线程存活到最后一个子任务结束。
 
 **约束**：回调栈回放后不得再提交子任务；每个 `BeginTask` 必须配对 `EndTask`。
+
+**完成判定时序**（子任务计数归零 + `Complete` → 回放回调栈）：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as 流程主体
+    participant F as CBusinessFlow（pending 计数）
+    participant S as 子任务
+    participant K as 回调栈
+
+    B->>F: SubmitTask（BeginTask：pending+1）
+    S->>F: 子任务完成（EndTask：pending-1）
+    B->>F: Complete（标记主体结束）
+    Note over F: pending==0 且 已 Complete → MaybeFinish（m_mutex 判单，防双重回放）
+    F->>K: RunAll：LIFO 逐个出栈触发
+```
 
 ## 4. CCallbackStack：线程安全回调栈
 
