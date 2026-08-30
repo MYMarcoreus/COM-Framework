@@ -1,6 +1,6 @@
 # 异步 / 协程库性能测试报告
 
-- 生成时间：2026-08-30 13:20:34
+- 生成时间：2026-08-30 13:40:21
 - 环境：Intel(R) Core(TM) i7-14700K（14 核在线）
 - 构建：`./build.sh -r Benchmark`（release / -O2）；debug 请用 `-d`
 - 被测：Common::thread::CThreadPool / Common::async::CAsyncExecutor /
@@ -12,46 +12,49 @@
 
 | 实现 | 均值(ns/op) | P50(ns) | P99(ns) | 吞吐(ops/s) | 相对基线 | 说明 |
 |---|---|---|---|---|---|---|
-| direct_call (baseline) | 1.0 | 0.9 | 2.2 | 961.38 M | 1.0× | 直接调用，无调度 |
-| std::thread (per-task) | 37943.5 | 32460.0 | 74152.0 | 26.36 K | 36478.2× | 每任务创建线程，无复用 |
-| CThreadPool (1 thread) | 24190.8 | 22796.0 | 44934.0 | 41.34 K | 23256.7× | mutex+condvar 线程池，提交→执行→唤醒 |
-| CAsyncExecutor (1 thread) | 23747.9 | 23060.3 | 38252.0 | 42.11 K | 22830.9× | 任务链框架（Option 风格），提交→执行→唤醒 |
-| asio::post (1 thread) | 25880.9 | 24485.0 | 36204.0 | 38.64 K | 24881.5× | 行业标准异步库（本项目自带） |
+| direct_call (baseline) | 1.1 | 1.1 | 1.4 | 887.20 M | 1.0× | 直接调用，无调度 |
+| std::thread (per-task) | 55878.0 | 51832.0 | 102670.0 | 17.90 K | 49575.1× | 每任务创建线程，无复用 |
+| CThreadPool (1 thread) | 29338.1 | 27700.0 | 52488.0 | 34.09 K | 26028.8× | mutex+condvar 线程池，提交→执行→唤醒 |
+| CAsyncExecutor (1 thread) | 33480.9 | 32909.3 | 54502.3 | 29.87 K | 29704.3× | 任务链框架（Option 风格），提交→执行→唤醒 |
+| asio::post (1 thread) | 31021.0 | 28513.3 | 87122.7 | 32.24 K | 27521.9× | 行业标准异步库（本项目自带） |
 
 ## 2. 任务链（CAsyncExecutor::Then 开销）
 
 | 实现 | 均值(ns/op) | P50(ns) | P99(ns) | 吞吐(ops/s) | 相对基线 | 说明 |
 |---|---|---|---|---|---|---|
-| direct chain x1 (baseline) | 1.0 | 0.9 | 1.1 | 1.05 G | 1.0× | 循环内联，理论下限 |
-| direct chain x5 (baseline) | 1.0 | 0.9 | 1.6 | 1.04 G | 1.0× | 循环内联，理论下限 |
-| direct chain x20 (baseline) | 1.1 | 0.9 | 2.7 | 936.44 M | 1.1× | 循环内联，理论下限 |
-| CAsyncExecutor chain x1 | 24224.1 | 23804.7 | 31082.3 | 41.28 K | 25476.4× | 构建 n 级 Then + 执行 + 取值 |
-| CAsyncExecutor chain x5 | 31074.9 | 24914.3 | 74187.7 | 32.18 K | 32681.4× | 构建 n 级 Then + 执行 + 取值 |
-| CAsyncExecutor chain x20 | 30689.2 | 26453.7 | 82608.0 | 32.58 K | 32275.8× | 构建 n 级 Then + 执行 + 取值 |
+| direct chain x1 (baseline) | 1.0 | 1.1 | 1.2 | 979.36 M | 1.0× | 循环内联，理论下限 |
+| direct chain x5 (baseline) | 0.9 | 0.9 | 1.1 | 1.08 G | 0.9× | 循环内联，理论下限 |
+| direct chain x20 (baseline) | 1.0 | 0.9 | 1.3 | 1.04 G | 0.9× | 循环内联，理论下限 |
+| direct chain x100 (baseline) | 1.0 | 0.9 | 1.2 | 1.05 G | 0.9× | 循环内联，理论下限 |
+| CAsyncExecutor chain x1 | 30937.4 | 27298.5 | 49896.5 | 32.32 K | 30298.9× | 构建 n 级 Then + 执行 + 取值 |
+| CAsyncExecutor chain x5 | 32112.9 | 28421.5 | 70377.5 | 31.14 K | 31450.1× | 构建 n 级 Then + 执行 + 取值 |
+| CAsyncExecutor chain x20 | 32324.0 | 31829.5 | 42850.0 | 30.94 K | 31656.8× | 构建 n 级 Then + 执行 + 取值 |
+| CAsyncExecutor chain x100 | 71848.7 | 69712.0 | 101215.0 | 13.92 K | 70365.8× | 构建 n 级 Then + 执行 + 取值 |
 
 ## 3. 协程（CCoroutine 无栈协程）
 
 | 实现 | 均值(ns/op) | P50(ns) | P99(ns) | 吞吐(ops/s) | 相对基线 | 说明 |
 |---|---|---|---|---|---|---|
-| direct_call (baseline) | 0.8 | 0.8 | 1.7 | 1.20 G | 1.0× | 直接调用 |
-| CAsyncExecutor single task | 29196.5 | 24867.3 | 106563.7 | 34.25 K | 35074.4× | 提交单个任务并取值 |
-| CCoroutine start+await+done | 27770.9 | 25137.3 | 102081.7 | 36.01 K | 33361.8× | CoStart → 一次 CO_AWAIT → CO_RETURN |
-| direct chain x10 | 0.9 | 0.9 | 1.1 | 1.06 G | 1.1× | 循环 10 次 |
-| CAsyncExecutor chain x10 | 27010.8 | 25524.0 | 49792.7 | 37.02 K | 32448.6× | 10 级 Then 链 |
-| CCoroutine chain x10 (10 await) | 31649.3 | 28276.3 | 75757.7 | 31.60 K | 38021.0× | 10 次 CO_AWAIT_INTO 挂起/恢复 |
+| direct_call (baseline) | 1.0 | 0.9 | 1.5 | 968.15 M | 1.0× | 直接调用 |
+| CAsyncExecutor single task | 29187.2 | 22287.5 | 57678.0 | 34.26 K | 28257.4× | 提交单个任务并取值 |
+| CCoroutine start+await+done | 36989.9 | 32804.0 | 67243.5 | 27.03 K | 35811.6× | CoStart → 一次 CO_AWAIT → CO_RETURN |
+| direct chain x10 | 1.4 | 1.4 | 2.5 | 722.85 M | 1.3× | 循环 10 次 |
+| CAsyncExecutor chain x10 | 49431.2 | 33750.0 | 212950.0 | 20.23 K | 47856.6× | 10 级 Then 链 |
+| CCoroutine chain x10 (10 await) | 33447.8 | 31612.0 | 48021.0 | 29.90 K | 32382.3× | 10 次 CO_AWAIT_INTO 挂起/恢复 |
 
 ## 4. 压力测试（4 线程，窗口式稳定吞吐）
 
 | 实现 | 稳定吞吐(ops/s) | 平均单任务耗时(μs) | 说明 |
 |---|---|---|---|
-| CThreadPool (4 threads) | 90.17 K | 11.09 | mutex+condvar 线程池 |
-| CAsyncExecutor (4 threads) | 84.84 K | 11.79 | 任务链框架 |
-| asio::post (4 threads) | 100.33 K | 9.97 | 行业标准异步库 |
-| CAsyncExecutor (4 threads, win 5000) | 86.67 K | 11.54 | 大窗口，观察背压行为 |
+| CThreadPool (4 threads) | 65.59 K | 15.25 | mutex+condvar 线程池 |
+| CAsyncExecutor (4 threads) | 66.94 K | 14.94 | 任务链框架 |
+| asio::post (4 threads) | 75.02 K | 13.33 | 行业标准异步库 |
+| CAsyncExecutor (4 threads, win 5000) | 67.27 K | 14.87 | 大窗口，观察背压行为 |
+| CAsyncExecutor 10-level chain (4 threads) | 34.46 K | 29.02 | 每条=Submit+10×Then+完成计数 |
 
 ## 5. 停止延迟（队列有未完成任务时 Stop 阻塞耗时）
 
 | 实现 | 阻塞耗时(ms) | 说明 |
 |---|---|---|
-| CThreadPool | 55.408 | 200×1ms 慢任务（等待排空队列） |
-| CAsyncExecutor | 55.003 | 200×1ms 慢任务（等待排空队列） |
+| CThreadPool | 54.240 | 200×1ms 慢任务（等待排空队列） |
+| CAsyncExecutor | 54.276 | 200×1ms 慢任务（等待排空队列） |

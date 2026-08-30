@@ -73,6 +73,27 @@ void RunStressCases()
                      5000, kMs, "大窗口，观察背压行为");
     }
 
+    // CAsyncExecutor：10 级 Then 链吞吐（4 线程，验证链级间内联调度）。
+    // 每条"任务"= Submit 初始 + 10×Then 变换 + 完成计数；与单任务吞吐对比，
+    // 可观察链级间是否发生跨线程投递（内联后应接近单任务 / 11）。
+    {
+        bench::AsyncEngine eng;
+        eng.Start(kThreads);
+        std::atomic<uint64_t> done(0);
+        std::function<void()> wrap = [&]() {
+            common::async::CTask<int> task = eng.exec->Submit([]() { return 0; });
+            for (int k = 0; k < 10; ++k)
+                task = task.Then([](int x) { return x + 1; });
+            task.OnSuccess([&done](const int&) { done.fetch_add(1, std::memory_order_release); });
+            task.OnNone([&done](common::async::detail::CTaskEndReason)
+                        { done.fetch_add(1, std::memory_order_release); });
+        };
+        benchmark::StressWindow(group, "CAsyncExecutor 10-level chain (4 threads)",
+                                100, kMs, wrap, done,
+                                "每条=Submit+10×Then+完成计数");
+        eng.Stop();
+    }
+
     // ---------------- 停止延迟 ----------------
     const std::string stopGroup = "5. 停止延迟（队列有未完成任务时 Stop 阻塞耗时）";
     auto slowFn = []() { std::this_thread::sleep_for(std::chrono::milliseconds(1)); };

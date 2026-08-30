@@ -11,10 +11,10 @@ void RunChainCases()
     common::async::CAsyncExecutor exec(1);
     exec.Start();
 
-    const int lens[] = { 1, 5, 20 };
+    const int lens[] = { 1, 5, 20, 100 };
 
-    // 直接函数链基线（长度 1 / 5 / 20）。
-    for (size_t i = 0; i < 3; ++i)
+    // 直接函数链基线（长度 1 / 5 / 20 / 100）。
+    for (size_t i = 0; i < 4; ++i)
     {
         const int n = lens[i];
         benchmark::BenchOp(group,
@@ -30,8 +30,8 @@ void RunChainCases()
             41, "循环内联，理论下限");
     }
 
-    // CAsyncExecutor Then 链（长度 1 / 5 / 20）。
-    for (size_t i = 0; i < 3; ++i)
+    // CAsyncExecutor Then 链（长度 1 / 5 / 20 / 100）。
+    for (size_t i = 0; i < 4; ++i)
     {
         const int n = lens[i];
         benchmark::BenchOp(group, "CAsyncExecutor chain x" + std::to_string(n),
