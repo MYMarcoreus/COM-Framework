@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <condition_variable>
+#include <new>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -249,6 +250,162 @@ struct CExecutorHandle
     CExecutorHandle() : m_bStopped(false) {}
 };
 
+/// @brief 固定缓冲续接容器（B6）：续接回调不再用 std::function（16B SBO 对捕获
+///        shared_ptr+指针+小状态（~32B）必然堆分配），改用 64B 内联缓冲覆盖
+///        常见续接；超大回调回退堆分配（兼容任意 lambda）。
+///        语义等价 std::function：支持拷贝/移动/调用/空判定。
+///
+/// 存储布局：小对象直接 placement-new 进 m_buffer；大对象堆分配、m_buffer 存
+/// 指针。类型擦除通过 4 个函数指针（invoke/copy/move/destroy）实现。
+template <typename TValue>
+class CFixedContinuation
+{
+public:
+    CFixedContinuation() noexcept
+        : m_pInvoke(nullptr), m_pCopy(nullptr), m_pMove(nullptr), m_pDestroy(nullptr)
+    {
+    }
+
+    /// 从任意可调用对象构造（小对象入缓冲 / 大对象入堆）。
+    template <typename TFn,
+              typename std::enable_if<!std::is_same<
+                  typename std::decay<TFn>::type, CFixedContinuation>::value,
+                  int>::type = 0>
+    CFixedContinuation(TFn fn)
+        : m_pInvoke(nullptr), m_pCopy(nullptr), m_pMove(nullptr), m_pDestroy(nullptr)
+    {
+        Init<TFn>(std::move(fn));
+    }
+
+    CFixedContinuation(const CFixedContinuation& other) { CopyFrom(other); }
+    CFixedContinuation(CFixedContinuation&& other) noexcept { MoveFrom(other); }
+
+    CFixedContinuation& operator=(const CFixedContinuation& other)
+    {
+        if (this != &other) { Destroy(); CopyFrom(other); }
+        return *this;
+    }
+    CFixedContinuation& operator=(CFixedContinuation&& other) noexcept
+    {
+        if (this != &other) { Destroy(); MoveFrom(other); }
+        return *this;
+    }
+
+    ~CFixedContinuation() { Destroy(); }
+
+    void operator()(const CTaskResult<TValue>& result) const
+    {
+        if (m_pInvoke != nullptr)
+            m_pInvoke(const_cast<char*>(m_buffer), result); // invoke 只读存储。
+    }
+
+    explicit operator bool() const noexcept { return m_pInvoke != nullptr; }
+
+private:
+    static const std::size_t kBufferSize = 64;
+
+    using ResultRef = const CTaskResult<TValue>&;
+    using InvokeFn = void (*)(void*, ResultRef);
+    using CopyFn = void (*)(void*, const void*);
+    using MoveFn = void (*)(void*, void*);
+    using DestroyFn = void (*)(void*);
+
+    alignas(std::max_align_t) char m_buffer[kBufferSize]; // 小对象 / 大对象指针槽。
+    InvokeFn m_pInvoke;
+    CopyFn m_pCopy;
+    MoveFn m_pMove;
+    DestroyFn m_pDestroy;
+
+    template <typename TFn>
+    void Init(TFn fn)
+    {
+        static_assert(alignof(TFn) <= alignof(std::max_align_t),
+                      "CFixedContinuation: 回调对齐超过 max_align_t");
+        InitImpl<TFn>(std::move(fn),
+                      std::integral_constant<bool, sizeof(TFn) <= kBufferSize>());
+    }
+
+    // 小对象：存缓冲。
+    template <typename TFn>
+    void InitImpl(TFn fn, std::true_type)
+    {
+        new (static_cast<void*>(m_buffer)) TFn(std::move(fn));
+        m_pInvoke = &InvokeBuf<TFn>;
+        m_pCopy = &CopyBuf<TFn>;
+        m_pMove = &MoveBuf<TFn>;
+        m_pDestroy = &DestroyBuf<TFn>;
+    }
+    // 大对象：存堆，缓冲存指针。
+    template <typename TFn>
+    void InitImpl(TFn fn, std::false_type)
+    {
+        TFn* p = new TFn(std::move(fn));
+        new (static_cast<void*>(m_buffer)) TFn*(p);
+        m_pInvoke = &InvokeHeap<TFn>;
+        m_pCopy = &CopyHeap<TFn>;
+        m_pMove = &MoveHeap<TFn>;
+        m_pDestroy = &DestroyHeap<TFn>;
+    }
+
+    template <typename TFn>
+    static void InvokeBuf(void* p, ResultRef r) { (*static_cast<TFn*>(p))(r); }
+    template <typename TFn>
+    static void CopyBuf(void* dst, const void* src) { new (dst) TFn(*static_cast<const TFn*>(src)); }
+    template <typename TFn>
+    static void MoveBuf(void* dst, void* src) { new (dst) TFn(std::move(*static_cast<TFn*>(src))); }
+    template <typename TFn>
+    static void DestroyBuf(void* p) { static_cast<TFn*>(p)->~TFn(); }
+
+    template <typename TFn>
+    static void InvokeHeap(void* p, ResultRef r) { (**static_cast<TFn**>(p))(r); }
+    template <typename TFn>
+    static void CopyHeap(void* dst, const void* src)
+    {
+        TFn* np = new TFn(**static_cast<TFn* const*>(src));
+        new (dst) TFn*(np);
+    }
+    template <typename TFn>
+    static void MoveHeap(void* dst, void* src)
+    {
+        TFn* p = *static_cast<TFn**>(src);
+        new (dst) TFn*(p);
+        *static_cast<TFn**>(src) = nullptr;
+    }
+    template <typename TFn>
+    static void DestroyHeap(void* p) { delete *static_cast<TFn**>(p); }
+
+    void CopyFrom(const CFixedContinuation& other)
+    {
+        m_pInvoke = other.m_pInvoke;
+        m_pCopy = other.m_pCopy;
+        m_pMove = other.m_pMove;
+        m_pDestroy = other.m_pDestroy;
+        if (other.m_pCopy != nullptr)
+            other.m_pCopy(m_buffer, other.m_buffer);
+    }
+
+    void MoveFrom(CFixedContinuation& other)
+    {
+        if (other.m_pMove != nullptr)
+            other.m_pMove(m_buffer, other.m_buffer); // 移动对象到 this。
+        m_pInvoke = other.m_pInvoke;
+        m_pCopy = other.m_pCopy;
+        m_pMove = other.m_pMove;
+        m_pDestroy = other.m_pDestroy;
+        other.Destroy(); // 析构源对象（buf 对象析构 / heap delete）。
+    }
+
+    void Destroy()
+    {
+        if (m_pDestroy != nullptr)
+            m_pDestroy(m_buffer);
+        m_pInvoke = nullptr;
+        m_pCopy = nullptr;
+        m_pMove = nullptr;
+        m_pDestroy = nullptr;
+    }
+};
+
 /// @brief 任务共享状态（Option 版）：结果 + 续接列表 + 同步等待。
 ///
 /// @tparam TValue 任务结果的值类型。
@@ -256,8 +413,8 @@ template <typename TValue>
 class CTaskState
 {
 public:
-    /// 续接回调：接收最终结果。
-    using Continuation = std::function<void(const CTaskResult<TValue>&)>;
+    /// 续接回调：接收最终结果（B6：固定缓冲容器，避免 std::function 堆分配）。
+    using Continuation = CFixedContinuation<TValue>;
 
     /// 创建状态（初始未就绪）。
     CTaskState() : m_bReady(false)
