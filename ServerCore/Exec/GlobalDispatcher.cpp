@@ -65,13 +65,11 @@ bool CGlobalDispatcher::Dispatch(
         }
         catch (const std::exception& e)
         {
-            common::log::CLogger::Instance().Error(
-                std::string("CGlobalDispatcher::Dispatch 主体异常: ") + e.what());
+            common::log::CLogger::Instance().Error(std::string("CGlobalDispatcher::Dispatch 主体异常: ") + e.what());
         }
         catch (...)
         {
-            common::log::CLogger::Instance().Error(
-                "CGlobalDispatcher::Dispatch 主体未知异常");
+            common::log::CLogger::Instance().Error("CGlobalDispatcher::Dispatch 主体未知异常");
         }
         spFlow->Complete(); // 主体结束；全部子任务排空后回放回调栈
     });
@@ -86,8 +84,7 @@ void CGlobalDispatcher::DrainAll()
     std::vector<CModuleScheduler*> vecSchedulers;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        for (std::unordered_map<std::string, CModuleScheduler*>::iterator it =
-                 m_mapSchedulers.begin(); it != m_mapSchedulers.end(); ++it)
+        for (auto it = m_mapSchedulers.begin(); it != m_mapSchedulers.end(); ++it)
         {
             if (it->second != nullptr)
             {
@@ -95,8 +92,7 @@ void CGlobalDispatcher::DrainAll()
             }
         }
     }
-    for (std::vector<CModuleScheduler*>::iterator it = vecSchedulers.begin();
-         it != vecSchedulers.end(); ++it)
+    for (auto it = vecSchedulers.begin(); it != vecSchedulers.end(); ++it)
     {
         (*it)->Drain();
     }

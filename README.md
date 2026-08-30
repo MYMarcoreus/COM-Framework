@@ -5,7 +5,7 @@
 - 工作区根目录可存放 **多个独立项目**；
 - 每个项目按模块自治组织：`<Project>/<Module>/`（每模块一个目录，头源同目录）、`<Project>/Linux/Makefile`；
 - 通过 **bear** 或 **compiledb** 生成 `compile_commands.json`，供 clangd 提供补全与跳转；
-- 统一使用 **C++11**，构建工具为 **Make**（不引入 CMake）。
+- 统一使用 **C++11**，构建工具为 **Make**。
 
 > 文档索引：[docs/README.md](docs/README.md) ｜ 构建与使用：[docs/usage.md](docs/usage.md) ｜ 总体架构：[docs/architecture.md](docs/architecture.md)
 
