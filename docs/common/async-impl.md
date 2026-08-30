@@ -38,7 +38,7 @@ classDiagram
     CExecutorHandle --> CThreadPool
 ```
 
-## 2. 关键设计：CExecutorHandle（生命周期加固）
+## 2. CExecutorHandle：生命周期加固的核心
 
 ```cpp
 struct CExecutorHandle {
@@ -47,10 +47,13 @@ struct CExecutorHandle {
 };
 ```
 
+**为什么需要它（防悬垂）**：任务链和线程池之间夹一层共享句柄，解决「工厂倒闭了、任务单还在等结果」的悬垂指针问题：
+
 - `Submit` 创建的任务通过 `shared_ptr<CExecutorHandle>` 引用执行器 → **任务链持有时线程池不被销毁**，
   即使执行器对象先析构，已投递/已链式任务仍安全完成；
-- `Stop()` 只置 `m_bStopped=true` + `m_pPool->Stop()`，保留句柄与线程池对象（未启动状态），
-  已创建任务仍绑定本执行器（不再异步投递）。
+- 执行器析构 → 只把执照标记 `m_bStopped=true`，**线程池仍被任务链保住**；已投递任务继续跑完，
+  新投递被拒 → 无值（`kStopped`）；
+- `Stop()` 置 `m_bStopped=true` + `m_pPool->Stop()`，保留句柄与线程池对象（未启动状态）。
 
 ## 3. CTaskState：任务共享状态（核心）
 
@@ -75,7 +78,7 @@ void Complete(const CTaskResult<TValue>& result)
         vecCbs.swap(m_vecContinuations);  // 取出全部续接
     }
     m_cv.notify_all();                // 多线程 Get 同一任务：唤醒所有等待者
-    for (cb : vecCbs) cb(result);     // 锁外按注册顺序调用续接
+    for (cb : vecCbs) cb(result);     // 锁外按注册顺序调用续接（续接内再 Complete/Wait 不死锁）
 }
 ```
 
@@ -92,7 +95,31 @@ void Complete(const CTaskResult<TValue>& result)
 // 支持多线程并发 Get 同一任务（Complete 用 notify_all）
 ```
 
-## 4. Submit：任务投递
+## 4. 一次任务的完整生命周期（时序）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Main as 主线程
+    participant Exec as CAsyncExecutor
+    participant Pool as 工作线程
+    participant State as CTaskState
+
+    Main->>Exec: Submit(f)
+    Exec->>Pool: 投递 fnRun（把 f 包一层）
+    Exec-->>Main: 返回 CTask（不阻塞）
+    Main->>State: Get() → Wait()（挂起等待）
+    Pool->>Pool: 执行 fnRun
+    Pool->>State: Complete(CTaskResult(值))
+    Note over State: ① 锁内：m_bReady=true，存结果 ② 解锁 ③ notify_all 叫醒 Wait
+    State-->>Main: Wait 被唤醒，返回 m_result 拷贝
+    Main->>Main: 检查 r.HasValue() / r.Value()
+```
+
+**要点**：`Submit` 在返回 `CTask` **之前就已投递**（`Submit` 本身就是执行入口）；`Then` 只做
+「算下游类型 + 往上游挂续接」，**不执行任何函数**；接力靠 `Complete` 自动触发（eager 模型）。
+
+## 5. Submit：任务投递
 
 ```cpp
 template <typename TFn>
@@ -114,7 +141,7 @@ auto CAsyncExecutor::Submit(TFn f, const CSourceLoc& loc = CSourceLoc()) -> CTas
 - 任务异常 → 转为 `kException` 无值终止（**Option 风格，无异常外溢**）；
 - 执行器不可用 → 任务立即以 `kNotStarted` 完成（`Get()` 不阻塞）。
 
-## 5. Then：链式续接 + 类型分派
+## 6. Then：链式续接 + 类型分派
 
 ### 类型萃取
 
@@ -149,13 +176,33 @@ CTask<TOut> taskNext; taskNext.m_pExecutor = 上游句柄; taskNext.m_pState->Se
 
 `CTask<void>` 特化走 `RunTransformVoid`（变换无参），逻辑同构。
 
-## 6. 线程模型
+### 值在链中的传递（共享状态信箱 + 拷贝）
+
+以 `Submit(f0) → Then(f1) → Then(f2)` 为例：
+
+| 环节 | 值在哪 | 动作 |
+|---|---|---|
+| `f0()` 返回 | 临时右值 `3` | **移动**存入 `CTaskState#0.m_result` |
+| 续接回调触发 | 参数引用 `m_result` | `upResult.Value()` 读出 `3` |
+| `valueCopied` | 续接回调局部变量 | **拷贝**一份（解耦上游生命周期） |
+| `fnRun` lambda | 捕获 `valueCopied` | 投递到线程池 |
+| `f1(valueCopied)` | 实参 | `const T&` 形参不拷贝；按值形参再拷贝 |
+| `f1()` 返回 | `6` | **移动**存入 `CTaskState#1.m_result` |
+
+**为什么续接里要拷贝 `valueCopied`？** 上游任务可同时挂多个续接（多个 `Then`/`OnSuccess`），
+且续接在别的线程异步执行。若 lambda 捕获 `m_result` 的引用，上游对象析构后即悬垂；拷贝后
+lambda 自己持有值，与上游完全解耦。
+
+**约束**：链式传值要求 `TValue` 可拷贝（每次 `Then` 至少 1 拷贝 + 1 移动）；大对象建议用
+`std::shared_ptr<T>` 作为链中 `TValue`（拷指针不拷内容）。
+
+## 7. 线程模型
 
 - 任务与续接都在**工作线程**执行（`Submit`/`Then` 注册的工作会投递到线程池）；
-- 任务**已完成**时注册回调（`OnSuccess`/`OnNone`/`Then`）→ 投递到执行器**异步触发**（不占用注册线程）；
+- 任务**已完成**时注册回调 → 投递到执行器**异步触发**（不占用注册线程）；
 - 执行器未启动/已停止 → 注册视为失败（回调不执行 / `kStopped` 完成）。
 
-## 7. 其他成员
+## 8. 其他成员
 
 - `Post`：fire-and-forget，直接 `m_pPool->Submit`（`m_bStopped` 时返回 false）；
 - `Stop`：置 `m_bStopped` + `m_pPool->Stop()`（保留句柄，已创建任务仍绑定）；
@@ -164,7 +211,34 @@ CTask<TOut> taskNext; taskNext.m_pExecutor = 上游句柄; taskNext.m_pState->Se
 - `AdoptState(pState)`：用已有任务状态构造 CTask（协程 `AsTask` 用）；
 - `CoStart`：见 [coroutine-impl.md](coroutine-impl.md)。
 
-## 8. 源码位置调试（NOTHROW_LOC）
+## 9. 源码位置调试（NOTHROW_LOC）
 
 调试构建（`-O0`）下 `Submit/Then` 可传 `NOTHROW_LOC`，把注册点 `__PRETTY_FUNCTION__/__FILE__/__LINE__`
 存入 `CTaskState::m_loc`，watch 中定位「当前任务是哪里注册的」；发布构建零开销（空位置）。
+
+## 10. 设计取舍：为什么 eager（即时执行）而非惰性/手动触发
+
+| 模型 | 语义 | 触发点 | 代表 |
+|---|---|---|---|
+| **eager 即时** | 接上即跑，链条是自动流水线 | `Submit` 调用那一刻 | JS Promise、C# `Task.Run`、Boost.Asio、Go goroutine、**本项目** |
+| **lazy 惰性** | 构建与运行分离 | 额外 `subscribe()`/`spawn()` | Rust Future、Python asyncio、Rx 冷 Observable |
+| **手动触发** | 显式 `Execute()`/`Start()` 点燃 | 用户手动调用 | C# `new Task(...).Start()` |
+
+**本项目选 eager 的原因**：
+1. **消灭「忘记启动」这类错误**——手动触发漏调 = 任务永挂起、`Get()` 死等，最难排查；
+2. **与 continuation 模型天然契合**——执行时机内嵌在「完成事件流」里（`Complete` 触发续接）；
+3. **`Submit` 本身就是启动**——`Then` 不触发，因为它只是接上一步，接力由完成事件自动进行。
+
+**关键洞察**：基于「完成回调自动接力」的框架基本都是 eager（Promise、Asio、本项目）。本项目的定位是
+**一次性流水线 + 线程池执行器**，不是可重放的数据流（那是 Rx 的领域），eager 是正确选择。
+如果将来真要惰性：优先在框架外实现（把整条链封装成 `std::function` 工厂，需要时再 `Submit`），
+而不是给核心引擎加惰性模式。
+
+## 附：代码阅读顺序
+
+1. `CTaskResult<T>` → 先懂「结果」长什么样（有值/无值）；
+2. `CAsyncExecutor::Submit` → 懂任务怎么被投递；
+3. `CTaskState::Complete` → **重点**：线程安全核心，锁外调续接；
+4. `CTask<T>::Then` → 懂链式怎么串起来；
+5. `detail::RunTransform` / `RunTransformVoid` → 懂 flatMap 分派与 void 链；
+6. `CExecutorHandle` → 懂生命周期安全。

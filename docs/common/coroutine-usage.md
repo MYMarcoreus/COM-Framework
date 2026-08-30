@@ -108,20 +108,58 @@ CO_AWAIT_INTO(m_nR, m_spChild->AsTask());     // await 子协程结果
 ## 6. 并行 await
 
 ```cpp
-// ① 纯等待并行（忽略返回值，值经共享 shared_ptr 传递）
+// ① 纯等待并行（忽略返回值，值经共享 shared_ptr 传递；任务可为非 void，返回值被忽略）
 std::shared_ptr<Result> m_sp;   // 任务 lambda 捕获写结果
-CO_AWAIT_ALL([this]() { 查询A(m_sp); }, [this]() { 查询B(m_sp); });
+CO_AWAIT_ALL([this]() { 查服务A(*m_sp); },
+             [this]() { 查服务B(*m_sp); },
+             []() { return 无关返回值(); });   // 非 void 任务，返回值忽略
+CO_RETURN(m_sp->load());
 
-// ② 并行落地值（成对：目标, 任务）
+// ② 并行落地值（成对：目标, 任务；目标须为左值）
 int m_a; int m_b;
-CO_AWAIT_ALL_INTO(m_a, []() { return 1; }, m_b, []() { return 2; });
+CO_AWAIT_ALL_INTO(m_nA, []() { return 查服务A(); },
+                  m_nB, []() { return 查服务B(); });
+CO_RETURN(聚合(m_nA, m_nB));
 ```
 
-任一任务无值 → 协程终止（原因透传）。
+- 全部任务完成 → 恢复（纯等待）或各自写入目标后恢复（落地值）；
+- **任一任务无值** → 协程整体终止（原因透传，与顺序 await 一致）；
+- `CO_AWAIT_ALL_INTO` 的 void 任务暂不支持（并行 void 请用 `CO_AWAIT_ALL`）。
 
-## 7. 约束与注意事项
+## 7. 终止语义（Option 风格）
 
-- `CO_BEGIN()` / `CO_END()` 必须保留（switch 骨架），每个宏**独占一行**（`__LINE__` 作恢复点标签，同行两个宏会冲突）；
-- 跨 await 变量必须是派生类成员（帧）；
-- `CoStart` 返回的 `shared_ptr` 需持有到完成以 `Get()` 取结果；框架内部自持强引用，提前释放不悬垂；
-- 执行器须存活于协程生命周期；`Stop` 后已挂起协程安全以 `kStopped` 终止。
+| 场景 | 结果 |
+|---|---|
+| 业务 `return no::None`（变换函数返回 `CTaskResult`） | 无值，`kEndNone` |
+| 任务 / 变换抛异常 | 无值，`kException`（框架捕获） |
+| 执行器未启动 / 已停止 | 无值，`kStopped` / `kNotStarted` |
+| await 到无值（任一） | 协程终止，`Reason()` 透传 |
+
+## 8. 生命周期
+
+- `CoStart` 返回 `shared_ptr<TCoroutine>`，**调用方须持有到完成以 `Get()` 取结果**；
+- 框架内部 `Resume` / 续接回调**捕获自持强引用**：即使调用方提前释放 `shared_ptr`，
+  协程对象仍存活到最后一个 `Resume` 执行完毕（不悬垂）；
+- 执行器须存活于协程生命周期（协程绑定 `CAsyncExecutor*`）；
+- 执行器 `Stop` / 析构后，已挂起协程安全以 `kStopped` 终止。
+
+## 9. 限制
+
+- **跨 await 变量必须存帧**（成员 / shared_ptr 成员 / 子协程），不能用函数内局部变量；
+- `CO_BEGIN()` / `CO_END()` 必须保留（Duff's device 的 `switch` 骨架，无法隐藏）；
+- **每个协程宏独占一行**（`__LINE__` 作恢复点标签，同一行两个宏冲突）；
+- `CO_AWAIT_ALL_INTO` 目标须为左值；并行 void 请用 `CO_AWAIT_ALL`（纯等待）；
+- 无栈协程无法做到「真·局部变量自动保留」——若需要（`int x = await task` 且 x 为纯局部），
+  需切换到**有栈协程**（路线 B）或 **C++20 原生协程**。
+
+## 10. 与 CTask 的关系
+
+`CCoroutine` 复用 `CTask` 生态：
+- 任务（`CTask<U>`）是 await 的载体；`AsTask()` 把协程暴露为 `CTask`（可被外层 await，也可链式）；
+- 结果统一为 `CTaskResult<T>`（`HasValue()` / `Value()` / `ValueOr()` / `Reason()`）；
+- 共享 `CAsyncExecutor`（线程池）调度，语义与 `CTask::Then` 链一致。
+
+## 11. 测试
+
+`Tests/test_coroutine.cpp`：顺序 await、值传递、终止（异常/None）、并行 await、嵌套、生命周期、
+复用（同一对象二次 CoStart）、并发、压力（万级协程 RSS）；`Tests/test_perf.cpp`：性能基准。
