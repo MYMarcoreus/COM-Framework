@@ -50,16 +50,21 @@ bool CThreadPool::Submit(const CTask& fnTask)
     {
         return false;
     }
+    bool bNeedNotify = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (!m_bRunning || m_bStopping)
         {
             return false;
         }
+        bNeedNotify = m_dequeTasks.empty(); // 队列空→非空才需唤醒（工作线程可能在睡）。
         m_dequeTasks.push_back(fnTask);
         m_nPending.fetch_add(1, std::memory_order_relaxed);
     }
-    m_condition.notify_one();
+    if (bNeedNotify)
+    {
+        m_condition.notify_one();
+    }
     return true;
 }
 
@@ -72,16 +77,21 @@ bool CThreadPool::Submit(CTask&& fnTask)
     {
         return false;
     }
+    bool bNeedNotify = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         if (!m_bRunning || m_bStopping)
         {
             return false;
         }
+        bNeedNotify = m_dequeTasks.empty(); // 队列空→非空才需唤醒。
         m_dequeTasks.push_back(std::move(fnTask));
         m_nPending.fetch_add(1, std::memory_order_relaxed);
     }
-    m_condition.notify_one();
+    if (bNeedNotify)
+    {
+        m_condition.notify_one();
+    }
     return true;
 }
 
