@@ -56,6 +56,12 @@ void RunCoroutineCases()
     common::async::CAsyncExecutor exec(1);
     exec.Start();
 
+    // 正确性校验（①）：协程结果（简单协程=42、10-await 链=10）。
+    benchmark::SanityCheck(group, "协程 start+await 结果=42",
+        exec.CoStart<BenchCoroOnce>()->Get().Value() == 42);
+    benchmark::SanityCheck(group, "协程 10-await 链结果=10",
+        exec.CoStart<BenchCoroChain10>()->Get().Value() == 10);
+
     // 基线：直接函数调用。
     benchmark::BenchOp(group, "direct_call (baseline)",
         []() { volatile int s = 42; (void)s; }, 7, "直接调用");

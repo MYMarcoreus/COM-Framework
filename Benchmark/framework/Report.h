@@ -69,6 +69,16 @@ inline std::string FmtDouble(double v, int prec)
     return os.str();
 }
 
+/// 时间格式自适应（③）：自动选 ns / μs / ms。
+inline std::string FmtNs(double v)
+{
+    if (v >= 1e6)
+        return FmtDouble(v / 1e6, 2) + " ms";
+    if (v >= 1e3)
+        return FmtDouble(v / 1e3, 2) + " μs";
+    return FmtDouble(v, 1) + " ns";
+}
+
 /// 吞吐量格式化（K / M / G 单位）。
 inline std::string FmtOps(double ops)
 {
@@ -137,7 +147,7 @@ inline std::string BuildMarkdown()
             }
             else
             {
-                os << "| 实现 | 均值(ns/op) | P50(ns) | P90(ns) | P99(ns) | stddev(ns) | 吞吐(ops/s) | 相对基线 | 说明 |\n";
+                os << "| 实现 | 均值 | P50 | P90 | P99 | MAD | 吞吐(ops/s) | 相对基线 | 说明 |\n";
                 os << "|---|---|---|---|---|---|---|---|---|\n";
             }
         }
@@ -165,11 +175,11 @@ inline std::string BuildMarkdown()
             if (base > 0.0)
                 rel = FmtDouble(r.mean_ns / base, 1) + "×";
             os << "| " << r.name
-               << " | " << FmtDouble(r.mean_ns, 1)
-               << " | " << FmtDouble(r.p50_ns, 1)
-               << " | " << FmtDouble(r.p90_ns, 1)
-               << " | " << FmtDouble(r.p99_ns, 1)
-               << " | " << FmtDouble(r.stddev_ns, 1)
+               << " | " << FmtNs(r.mean_ns)
+               << " | " << FmtNs(r.p50_ns)
+               << " | " << FmtNs(r.p90_ns)
+               << " | " << FmtNs(r.p99_ns)
+               << " | " << FmtNs(r.mad_ns)
                << " | " << FmtOps(r.ops_per_sec)
                << " | " << rel
                << " | " << r.note << " |\n";

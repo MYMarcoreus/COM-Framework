@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <string>
 #include <thread>
@@ -48,7 +49,8 @@ struct Result
     double p50_ns = 0.0;    // P50（中位数）ns——抗环境噪声的主指标。
     double p90_ns = 0.0;    // P90 ns。
     double p99_ns = 0.0;    // P99 ns（长尾）。
-    double stddev_ns = 0.0; // 标准差 ns（稳定性）。
+    double stddev_ns = 0.0; // 标准差 ns（剔除离群后）。
+    double mad_ns = 0.0;    // 中位数绝对偏差（鲁棒稳定性，抗离群）。
     double ops_per_sec = 0.0; // 吞吐（ops/s）。
     std::string note;       // 说明（参数 / 环境）。
     bool is_stress = false; // true：压力结果（表格按压力列渲染）。
@@ -140,12 +142,8 @@ inline void BenchOp(const std::string& group, const std::string& name,
         vec.push_back((b - a) / iterations);
     }
 
-    // 5) 统计：mean / P50 / P90 / P99 / stddev。
+    // 5) 统计：P50/P90/P99（中位数抗离群）+ MAD + 离群值剔除后的均值/stddev。
     std::sort(vec.begin(), vec.end());
-    double sum = 0.0;
-    for (size_t i = 0; i < vec.size(); ++i)
-        sum += vec[i];
-    double mean = sum / vec.size();
     double p50 = vec[vec.size() / 2];
     size_t idx90 = static_cast<size_t>(vec.size() * 0.90);
     if (idx90 >= vec.size())
@@ -155,13 +153,38 @@ inline void BenchOp(const std::string& group, const std::string& name,
         idx99 = vec.size() - 1;
     double p90 = vec[idx90];
     double p99 = vec[idx99];
-    double var = 0.0;
+
+    // MAD（中位数绝对偏差）：鲁棒稳定性指标。
+    std::vector<double> absDev;
+    absDev.reserve(vec.size());
     for (size_t i = 0; i < vec.size(); ++i)
+        absDev.push_back(std::fabs(vec[i] - p50));
+    std::sort(absDev.begin(), absDev.end());
+    double mad = absDev[absDev.size() / 2];
+
+    // 离群值剔除（MAD 法，阈值 3×MAD）：重算均值与标准差。
+    std::vector<double> clean;
+    clean.reserve(vec.size());
+    if (mad > 0.0)
     {
-        double d = vec[i] - mean;
+        const double kThreshold = 3.0 * mad;
+        for (size_t i = 0; i < vec.size(); ++i)
+            if (std::fabs(vec[i] - p50) <= kThreshold)
+                clean.push_back(vec[i]);
+    }
+    if (clean.empty())
+        clean = vec;
+    double sum = 0.0;
+    for (size_t i = 0; i < clean.size(); ++i)
+        sum += clean[i];
+    double mean = sum / clean.size();
+    double var = 0.0;
+    for (size_t i = 0; i < clean.size(); ++i)
+    {
+        double d = clean[i] - mean;
         var += d * d;
     }
-    double stddev = vec.size() > 1 ? std::sqrt(var / (vec.size() - 1)) : 0.0;
+    double stddev = clean.size() > 1 ? std::sqrt(var / (clean.size() - 1)) : 0.0;
 
     Result r;
     r.group = group;
@@ -171,6 +194,7 @@ inline void BenchOp(const std::string& group, const std::string& name,
     r.p90_ns = p90;
     r.p99_ns = p99;
     r.stddev_ns = stddev;
+    r.mad_ns = mad;
     r.ops_per_sec = (mean > 0.0) ? 1e9 / mean : 0.0;
     r.note = note;
     Registry::Instance().Add(r);
@@ -183,6 +207,17 @@ inline void WaitDone(const std::atomic<uint64_t>& done, uint64_t target)
 {
     while (done.load(std::memory_order_acquire) < target)
         std::this_thread::yield();
+}
+
+// ====================================================================
+// 正确性校验（sanity check，①）：在计时前验证操作结果，失败打印 CHECK-FAIL。
+// 用例在 BenchOp 之前调用（校验不计时），防止优化后功能被破坏。
+// ====================================================================
+inline bool SanityCheck(const std::string& group, const std::string& name, bool ok)
+{
+    if (!ok)
+        std::printf("  [CHECK-FAIL] %s / %s\n", group.c_str(), name.c_str());
+    return ok;
 }
 
 // ====================================================================
