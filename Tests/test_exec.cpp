@@ -177,6 +177,51 @@ public:
     }
 };
 
+/// @brief 模拟业务模块：持有调度器 + 本模块读写观测状态。
+///        收到业务请求后，在流程主体线程（单线程）内处理并扇出多个读/写子任务。
+class CSimModule
+{
+public:
+    explicit CSimModule(CThreadPool* pPool, size_t nMaxReaders)
+        : m_scheduler(pPool, nMaxReaders), m_state()
+    {
+    }
+
+    CModuleScheduler* Scheduler() { return &m_scheduler; }
+    SModuleState& ModState() { return m_state; }
+
+    /// @brief 处理一次业务请求（在调用线程 = 流程主体线程内执行）。
+    ///        产生多个读/写子任务：本模块 2 读 + 1 写、依赖模块 1 读、通知模块 1 写。
+    ///
+    /// @param spFlow 所属业务流程（子任务自动计数）。
+    /// @param pReadPeer 依赖模块（读）。
+    /// @param pWritePeer 通知模块（写）。
+    /// @param pGlobal 全局完成计数。
+    void HandleRequest(const std::shared_ptr<CBusinessFlow>& spFlow,
+                       CSimModule* pReadPeer, CSimModule* pWritePeer, STestState* pGlobal)
+    {
+        std::shared_ptr<CBusinessFlow> sp = spFlow;
+        // 本模块：读缓存（并发）
+        sp->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kRead,
+            [this, pGlobal]() { RunReadWork(&m_state, pGlobal); });
+        sp->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kRead,
+            [this, pGlobal]() { RunReadWork(&m_state, pGlobal); });
+        // 本模块：更新数据（写独占）
+        sp->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+            [this, pGlobal]() { RunWriteWork(&m_state, pGlobal); });
+        // 依赖模块：查询（读）
+        sp->SubmitTask(pReadPeer->Scheduler(), CModuleScheduler::ETaskKind::kRead,
+            [pReadPeer, pGlobal]() { RunReadWork(&pReadPeer->ModState(), pGlobal); });
+        // 通知模块：写
+        sp->SubmitTask(pWritePeer->Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+            [pWritePeer, pGlobal]() { RunWriteWork(&pWritePeer->ModState(), pGlobal); });
+    }
+
+private:
+    CModuleScheduler m_scheduler;
+    SModuleState m_state;
+};
+
 /// @brief 轮询等待条件满足（超时返回 false）。
 bool WaitUntil(const std::function<bool()>& fnCond, int nTimeoutMs)
 {
@@ -805,5 +850,83 @@ TEST(Exec_Rw_Order_WriterFifo)
     for (int i = 0; i < kWriters; ++i)
     {
         ASSERT_TRUE(vecOrder[static_cast<size_t>(i)] == i); // 严格按提交顺序
+    }
+}
+
+/// @brief 业务负载模拟：多个模块持续收到业务请求，每次处理在单线程内
+///        扇出多个读/写子任务（本模块读/写 + 依赖读 + 通知写）。
+///        验证：无死锁、全部完成、各模块读写互斥零违例、写唯一、读不超上限、计数精确。
+TEST(Exec_Sim_BusinessLoad)
+{
+    const int kThreads = 16;
+    const int kModules = 4;
+    const int kProducers = 4;             // 模拟 4 个请求来源（客户端/网络）
+    const int kRequestsPerProducer = 400; // 每来源持续派发的业务请求数
+    const long kTotalFlows = static_cast<long>(kProducers) * kRequestsPerProducer;
+
+    CThreadPool pool(kThreads);
+    ASSERT_TRUE(pool.Start());
+    CGlobalDispatcher dispatcher(&pool);
+
+    // 4 个业务模块（读上限 4~5），持续接收请求
+    std::vector<std::unique_ptr<CSimModule>> vecModules;
+    std::vector<int> vecReadCaps;
+    for (int m = 0; m < kModules; ++m)
+    {
+        const int nCap = 4 + (m % 2);
+        std::unique_ptr<CSimModule> spMod(new CSimModule(&pool, nCap));
+        dispatcher.RegisterScheduler("M" + std::to_string(m), spMod->Scheduler());
+        vecReadCaps.push_back(nCap);
+        vecModules.push_back(std::move(spMod));
+    }
+
+    STestState state;
+    std::atomic<long> nDispatchFail(0);
+
+    // 生产者线程：持续向各模块派发业务请求（目标轮转，模拟持续到达）
+    std::vector<std::thread> vecProducers;
+    for (int p = 0; p < kProducers; ++p)
+    {
+        vecProducers.push_back(std::thread([&, p]()
+        {
+            for (int i = 0; i < kRequestsPerProducer; ++i)
+            {
+                const int nTarget = (p + i) % kModules;
+                if (!dispatcher.Dispatch(
+                        [&, nTarget](const std::shared_ptr<CBusinessFlow>& spFlow)
+                        {
+                            CSimModule* pSelf = vecModules[nTarget].get();
+                            CSimModule* pReadPeer = vecModules[(nTarget + 1) % kModules].get();
+                            CSimModule* pWritePeer = vecModules[(nTarget + 2) % kModules].get();
+                            // 一次业务处理：单线程内扇出多个读/写子任务
+                            pSelf->HandleRequest(spFlow, pReadPeer, pWritePeer, &state);
+                            // 处理结束：全部子任务完成后回放
+                            spFlow->Callbacks().Push([&state]() { state.nFlowDone.fetch_add(1); });
+                        }))
+                {
+                    nDispatchFail.fetch_add(1);
+                }
+            }
+        }));
+    }
+    for (std::vector<std::thread>::iterator it = vecProducers.begin();
+         it != vecProducers.end(); ++it)
+    {
+        it->join();
+    }
+
+    const bool bDone = WaitUntil(
+        [&state]() { return state.nFlowDone.load() == kTotalFlows; }, 60000);
+    pool.Stop();
+    ASSERT_TRUE(bDone);
+    ASSERT_TRUE(nDispatchFail.load() == 0); // 全部投递成功
+    // 每流程：3 读 + 2 写
+    ASSERT_TRUE(state.nReadDone.load() == kTotalFlows * 3);
+    ASSERT_TRUE(state.nWriteDone.load() == kTotalFlows * 2);
+    for (int m = 0; m < kModules; ++m)
+    {
+        ASSERT_TRUE(vecModules[m]->ModState().nPeakReaders.load() <= vecReadCaps[m]); // 读不超上限
+        ASSERT_TRUE(vecModules[m]->ModState().nPeakWriters.load() == 1);             // 写唯一
+        ASSERT_TRUE(vecModules[m]->ModState().nViolations.load() == 0);              // 读写互斥
     }
 }
