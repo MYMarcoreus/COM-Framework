@@ -116,9 +116,7 @@ public:
         : m_pState(std::make_shared<detail::CTaskState<TValue> >()),
           m_pExec(nullptr),
           m_wpSelf(),
-          m_nStep(0),
-          m_bTerminated(false),
-          m_reason(detail::kEndNone)
+          m_hot()
     {
     }
 
@@ -176,7 +174,7 @@ protected:
     // ---------------- 宏接口 ----------------
 
     /// @brief 当前恢复点（状态机步号；CO_BEGIN 的 switch 用）。
-    int Step() const { return m_nStep.load(); }
+    int Step() const { return m_hot.nStep.load(); }
 
     /// @brief await 任务并写入目标（落地值：CO_AWAIT_INTO(target, expr)，非 void 专用）。
     ///
@@ -194,7 +192,7 @@ protected:
     template <typename TExpr, typename TDst>
     void AwaitInto(int nLine, TExpr expr, TDst* pTarget)
     {
-        m_nStep.store(nLine, std::memory_order_release);
+        m_hot.nStep.store(nLine, std::memory_order_release);
         RegisterTask(MakeTask(expr), detail::CWriteTarget<TDst>(pTarget));
     }
 
@@ -213,7 +211,7 @@ protected:
     template <typename TExpr>
     void AwaitWait(int nLine, TExpr expr)
     {
-        m_nStep.store(nLine, std::memory_order_release);
+        m_hot.nStep.store(nLine, std::memory_order_release);
         RegisterTask(MakeTask(expr), detail::CIgnoreValue());
     }
 
@@ -229,7 +227,7 @@ protected:
     template <typename... TArgs>
     void AwaitAll(int nLine, TArgs&&... args)
     {
-        m_nStep.store(nLine, std::memory_order_release);
+        m_hot.nStep.store(nLine, std::memory_order_release);
 
         std::shared_ptr<detail::CAwaitAllGroup> pGroup =
             std::make_shared<detail::CAwaitAllGroup>();
@@ -252,7 +250,7 @@ protected:
     {
         static_assert(sizeof...(TArgs) % 2 == 0,
                       "CO_AWAIT_ALL_INTO 参数须成对：(目标, 任务), ...");
-        m_nStep.store(nLine, std::memory_order_release);
+        m_hot.nStep.store(nLine, std::memory_order_release);
 
         std::shared_ptr<detail::CAwaitAllGroup> pGroup =
             std::make_shared<detail::CAwaitAllGroup>();
@@ -263,12 +261,12 @@ protected:
     }
 
     /// @brief 最近一次 await 是否无值终止（None / 异常）。
-    bool IsTerminated() const { return m_bTerminated.load(); }
+    bool IsTerminated() const { return m_hot.bTerminated.load(); }
 
     /// @brief 终止原因（IsTerminated() 为 true 时有效）。
     detail::CTaskEndReason Reason() const
     {
-        return static_cast<detail::CTaskEndReason>(m_reason.load());
+        return static_cast<detail::CTaskEndReason>(m_hot.reason.load());
     }
 
     /// @brief 协程正常结束（有值）。CO_RETURN 用（void 协程不可用）。
@@ -301,9 +299,9 @@ private:
     void Reset()
     {
         m_pState.reset(new detail::CTaskState<TValue>());
-        m_nStep.store(0, std::memory_order_relaxed);
-        m_bTerminated.store(false, std::memory_order_relaxed);
-        m_reason.store(detail::kEndNone, std::memory_order_relaxed);
+        m_hot.nStep.store(0, std::memory_order_relaxed);
+        m_hot.bTerminated.store(false, std::memory_order_relaxed);
+        m_hot.reason.store(detail::kEndNone, std::memory_order_relaxed);
     }
 
     /// @brief 把 Resume 投递到执行器（串行调度；执行器不可用 → kStopped 终止）。
@@ -323,11 +321,11 @@ private:
             Terminate(detail::kStopped); // 无强引用（理论不应发生）。
             return;
         }
-        if (m_pExec->Post([spSelf, this]() { Resume(); }))
+        if (!m_pExec->Post([spSelf, this]() { Resume(); }))
         {
+            Terminate(detail::kStopped); // 执行器已停止/不可用 → 安全终止，不悬垂。
             return;
         }
-        Terminate(detail::kStopped); // 执行器已停止/不可用 → 安全终止，不悬垂。
     }
 
     /// @brief 内联续接（负载感知，C9）：任务完成回调已运行在工作线程上，
@@ -354,7 +352,9 @@ private:
             --s_inlineDepth;
             return;
         }
-        PostResume(); // 队列有积压 / 深度超限：投递，保并行度 / 防爆栈。
+
+        // 队列有积压 / 深度超限：投递，保并行度 / 防爆栈。
+        PostResume();
     }
 
     /// @brief 在当前线程继续执行协程体（状态机从 m_nStep 恢复）。
@@ -369,8 +369,8 @@ private:
     /// @brief 标记终止（OnNone 回调用；终止原因由协程体宏透传）。
     void MarkTerminated(detail::CTaskEndReason reason)
     {
-        m_bTerminated.store(true, std::memory_order_relaxed);
-        m_reason.store(reason, std::memory_order_relaxed);
+        m_hot.bTerminated.store(true, std::memory_order_relaxed);
+        m_hot.reason.store(reason, std::memory_order_relaxed);
     }
 
     /// @brief 标记终止并完成（无值）。
@@ -565,12 +565,21 @@ private:
     }
 
 private:
+    /// 协程热状态：步号 / 终止标志 / 终止原因 打包紧邻（C10），减少协程对象
+    /// 跨线程迁移时需传递的 cache line 数（单实例原子无伪共享，打包减迁移代价）。
+    struct CHotState
+    {
+        std::atomic<int> nStep;        // 状态机步号（恢复点）。
+        std::atomic<bool> bTerminated; // await 到无值 → 终止。
+        std::atomic<int> reason;       // 终止原因。
+        CHotState()
+            : nStep(0), bTerminated(false), reason(detail::kEndNone) {}
+    };
+
     std::shared_ptr<detail::CTaskState<TValue> > m_pState; // 协程最终结果。
     CAsyncExecutor* m_pExec;                               // 执行器指针（自动 Submit / Resume 调度）。
     std::weak_ptr<void> m_wpSelf;                          // 自持弱引用（Resume/回调生命周期加固）。
-    std::atomic<int> m_nStep;                              // 状态机步号（恢复点）。
-    std::atomic<bool> m_bTerminated;                       // await 到无值 → 终止。
-    std::atomic<int> m_reason;                             // 终止原因。
+    CHotState m_hot;                                       // 热状态（step/terminated/reason 打包）。
 };
 
 /// @brief 创建并启动协程（投递首次 Resume；返回 shared_ptr 管理生命周期）。
