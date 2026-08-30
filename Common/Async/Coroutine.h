@@ -328,13 +328,12 @@ private:
         }
     }
 
-    /// @brief 内联续接（负载感知，C9）：任务完成回调已运行在工作线程上，
-    ///        线程池无积压（队列空）时直接在此线程继续执行协程体，省去
-    ///        Post 回线程池的 1 次入队 + futex 唤醒；有积压时投递，保任务
-    ///        级并行度（修正无脑内联破坏并行的教训）。
+    /// @brief 内联续接（负载感知）：任务完成回调已运行在工作线程上，线程池
+    ///        无积压（队列空）时直接在此线程继续执行协程体，省去一次入队 +
+    ///        唤醒；有积压时投递，保任务级并行度。
     ///
     /// 用 thread_local 深度计数限制连续内联层数防爆栈；超限 / 执行器停止 /
-    /// 队列有积压时回退 PostResume（语义不变）。
+    /// 队列有积压时回退投递（语义不变）。
     void ResumeInline()
     {
         static thread_local int s_inlineDepth = 0;
@@ -417,7 +416,7 @@ private:
     RegisterTask(CTask<U> task, TOnSuccess onSuccess)
     {
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        // 合并 OnSuccess/OnNone 为一次 OnResult 注册：省 1 次续接分配 + 1 次锁 + 1 次回调。
+        // 合并 OnSuccess/OnNone 为一次 OnResult 注册。
         bool bOk = task.OnResult([spSelf, onSuccess, this](const CTaskResult<U>& result)
         {
             if (result.HasValue())
@@ -565,8 +564,8 @@ private:
     }
 
 private:
-    /// 协程热状态：步号 / 终止标志 / 终止原因 打包紧邻（C10），减少协程对象
-    /// 跨线程迁移时需传递的 cache line 数（单实例原子无伪共享，打包减迁移代价）。
+    /// 协程热状态：步号 / 终止标志 / 终止原因 打包紧邻，减少跨线程迁移时的
+    /// cache line 数。
     struct CHotState
     {
         std::atomic<int> nStep;        // 状态机步号（恢复点）。

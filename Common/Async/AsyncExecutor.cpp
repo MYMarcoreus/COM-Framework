@@ -82,10 +82,8 @@ bool CAsyncExecutor::Start()
 /// @brief 提交无返回值任务（fire-and-forget，按值接收 + 移动投递避免拷贝）。
 bool CAsyncExecutor::Post(TaskCallback fnTask)
 {
-    // 直接解引用句柄（operator-> 不复制 shared_ptr）：Post 不转移所有权，
-    // 避免每次提交的原子 refcount 拷贝在高并发下的 cache line 竞争。
-    // 生命周期：成员函数内 this 有效，m_pHandle 指向的句柄必然存活；
-    // 任务不捕获句柄，句柄析构不涉及本投递。
+    // 直接解引用句柄（operator-> 不复制 shared_ptr），避免每次提交时
+    // 原子 refcount 拷贝在高并发下的 cache line 竞争。
     if (m_pHandle->m_bStopped)
     {
         return false;
@@ -109,9 +107,7 @@ bool CAsyncExecutor::IsRunning() const
     return !m_pHandle->m_bStopped && m_pHandle->m_pPool->IsRunning();
 }
 
-/// @brief 是否已停止（停止后拒绝新投递）。
-///
-/// 轻量查询（原子读，不加锁）；供协程内联续接判断继续执行是否安全。
+/// @brief 是否已停止（停止后拒绝新投递；轻量原子读，不加锁）。
 bool CAsyncExecutor::IsStopped() const
 {
     return m_pHandle->m_bStopped.load(std::memory_order_relaxed);

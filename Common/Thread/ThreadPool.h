@@ -44,7 +44,7 @@ public:
     // 是否正在运行。
     bool IsRunning() const;
 
-    // 待处理任务数（队列中未取出的；供协程负载感知判断）。
+    // 待处理任务数（队列中未取出的）。
     size_t PendingCount() const;
 
 private:

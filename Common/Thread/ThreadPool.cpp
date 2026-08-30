@@ -134,9 +134,7 @@ bool CThreadPool::IsRunning() const
     return m_bRunning;
 }
 
-/// @brief 返回待处理任务数（队列中未取出的）。
-///
-/// 轻量原子读（不加锁）；供协程负载感知判断（队列空 → 内联续接安全）。
+/// @brief 返回待处理任务数（队列中未取出的；轻量原子读，不加锁）。
 size_t CThreadPool::PendingCount() const
 {
     return static_cast<size_t>(m_nPending.load(std::memory_order_relaxed));
@@ -152,8 +150,8 @@ void CThreadPool::WorkerLoop()
             std::unique_lock<std::mutex> lock(m_mutex);
             if (m_dequeTasks.empty() && !m_bStopping)
             {
-                // A1 混合等待：短暂自旋（读原子 pending，不持锁），任务刚提交时
-                // 线程未睡可直接取，减少「睡→醒」futex 往返（单任务延迟主要成本）。
+                // 混合等待：短暂自旋（读原子 pending，不持锁），任务刚提交时
+                // 线程未睡可直接取，减少「睡→醒」futex 往返。
                 lock.unlock();
                 const auto spinUntil =
                     std::chrono::steady_clock::now() + std::chrono::microseconds(30);
