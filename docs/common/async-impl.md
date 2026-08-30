@@ -143,32 +143,47 @@ sequenceDiagram
 
 ### 为什么不会乱序：f1 必然在 f0 完成后才开始
 
-很多人会误以为 `f0` 和 `f1` 是「同时提交给线程池的两个独立任务」——那样确实无法保证顺序。
-**关键区别：`Then(f1)` 不提交 f1，它只是往上游状态挂一个「f0 完成时才会执行的续接」。**
+很多人误以为 `f0` 和 `f1` 一开始都被丢进线程池赛跑——那样确实无法保证顺序。
+**关键：`Then(f1)` 不提交 f1，它只挂一个「f0 完成时才执行的续接」；f1 是在 f0 的完成路径里才被提交的。**
 
-f1 的投递时机 = f0 完成事件（**因果触发**，不是线程调度决定）：
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Main as 主线程
+    participant W1 as 工作线程 W1
+    participant S0 as S0（f0 状态）
+    participant Q as 线程池队列
+    participant W2 as 工作线程 W2（可与 W1 相同）
 
-| 步骤 | 在哪个线程 | 做了什么 | f1 的状态 |
-|---|---|---|---|
-| ① `task0.Then(f1)` | 调用线程（如主线程） | `S0.AddContinuation(续接1)` 登记 | 未入队 |
-| ② 执行 `fnRun0` | 工作线程 W1 | `f0()` 算出结果 | 未入队 |
-| ③ `S0.Complete(result0)` | W1 | 存结果、解锁、**锁外调用续接1** | 未入队 |
-| ④ 续接1 | W1 | `valueCopied = result0`；`pool->Submit(fnRun1)` | **此刻才入队** |
-| ⑤ 执行 `fnRun1` | 任意工作线程 W2（可 == W1） | 运行 `f1(valueCopied)` | 出队执行 |
+    Note over Main: ① 提交 + 挂续接（f1 未入队）
+    Main->>Main: Submit(f0) → fnRun0 入队，返回 task0
+    Main->>S0: task0.Then(f1) → 仅 AddContinuation 挂续接
 
-**happens-before 链（严格先后）：**
+    Note over W1,S0: ② f0 完成 → 触发续接（此刻才提交 f1）
+    W1->>W1: 执行 fnRun0 → f0() 得到 result0
+    W1->>S0: S0.Complete(result0)
+    Note over S0: 锁内 存值+置就绪 → 解锁 → 锁外 调用续接1
+    S0->>W1: 续接1：valueCopied = result0
+    W1->>Q: Submit(fnRun1)  ← f1 此刻才入队
+
+    Note over Q,W2: ③ f1 出队执行（必然晚于 f0 完成）
+    Q->>W2: 出队 fnRun1
+    W2->>W2: 执行 f1(valueCopied)
+```
+
+**happens-before 链：**
 
 ```text
-f0() 返回  →  S0.Complete（存值 + 置就绪）  →  续接1 读值 + Submit(fnRun1)
-          →  fnRun1 入队  →  W2 出队  →  f1() 开始
+f0() 返回 → S0.Complete（存值+置就绪） → 续接1 读值 + Submit(fnRun1)
+         → fnRun1 入队 → W2 出队 → f1() 开始
 ```
 
 因为 `f1` 的开始 ⟸ `fnRun1` 出队 ⟸ `fnRun1` 入队 ⟸ 续接1 ⟸ `f0()` 返回，
 所以 **f1 连「开始」都必然晚于 f0 的完成，更不可能先完成**。
 
-**锁/原子在这里保护什么？** 保护的是「结果存储与续接列表的并发访问」（如多线程同时 `Complete`、
-注册续接与完成竞争），**不是**「跨整条链持锁」——链条顺序靠的是**因果依赖**（f1 的入队发生在 f0 的
-完成路径里）；线程调度不参与顺序判定，只决定谁执行。
+**锁/原子在这里保护什么？** 保护的是「单个 `CTaskState` 内部的数据一致」（如多线程同时 `Complete`、
+注册续接与完成竞争），**不是**「跨整条链持锁」——链条顺序靠的是**因果依赖**（f1 的入队代码就写在
+f0 的完成回调里）；线程调度不参与顺序判定，只决定谁执行。
 
 ## 5. Submit：任务投递
 
