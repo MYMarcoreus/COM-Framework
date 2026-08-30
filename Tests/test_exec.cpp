@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -666,5 +667,143 @@ TEST(Exec_Rw_ManyModulesStress)
         ASSERT_TRUE(vecModules[m]->ModState().nPeakReaders.load() <= vecReadCaps[m]); // 读不超上限
         ASSERT_TRUE(vecModules[m]->ModState().nPeakWriters.load() == 1);             // 写唯一
         ASSERT_TRUE(vecModules[m]->ModState().nViolations.load() == 0);              // 无违例
+    }
+}
+
+/// @brief 顺序（公平 FIFO）：同流程「先读后写」——写不插队到先前排队的读前面。
+///        用占位读占满唯一读槽位，使流程 F 的读被迫排队，随后提交写；
+///        验证执行顺序仍为 读→写（旧写优先策略会得到 写→读）。
+TEST(Exec_Rw_Order_ReadThenWrite)
+{
+    CThreadPool pool(4);
+    ASSERT_TRUE(pool.Start());
+    CGlobalDispatcher dispatcher(&pool);
+    CRwModule rw(&pool, 1); // 唯一读槽位
+    dispatcher.RegisterScheduler("rw", rw.Scheduler());
+
+    std::mutex mutex;
+    std::vector<int> vecOrder;
+    std::atomic<int> nReady(0);   // 占位读已活跃
+    std::atomic<long> nF1Done(0); // 流程 F 完成
+
+    // 占位读 R0：占据唯一读槽位一段时间
+    ASSERT_TRUE(dispatcher.Dispatch(
+        [&rw, &nReady](const std::shared_ptr<CBusinessFlow>& spFlow)
+        {
+            spFlow->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                [&nReady]()
+                {
+                    nReady.store(1);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                });
+        }));
+
+    // 等占位读活跃后，提交流程 F：先读后写（读会因槽位满而排队）
+    ASSERT_TRUE(WaitUntil([&nReady]() { return nReady.load() == 1; }, 3000));
+    ASSERT_TRUE(dispatcher.Dispatch(
+        [&rw, &mutex, &vecOrder, &nF1Done](const std::shared_ptr<CBusinessFlow>& spFlow)
+        {
+            std::shared_ptr<CBusinessFlow> sp = spFlow;
+            sp->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                [&mutex, &vecOrder]()
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    vecOrder.push_back(1); // 读
+                });
+            sp->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+                [&mutex, &vecOrder]()
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    vecOrder.push_back(2); // 写
+                });
+            sp->Callbacks().Push([&nF1Done]() { nF1Done.fetch_add(1); });
+        }));
+
+    const bool bDone = WaitUntil([&nF1Done]() { return nF1Done.load() == 1; }, 3000);
+    pool.Stop();
+    ASSERT_TRUE(bDone);
+    std::lock_guard<std::mutex> lock(mutex);
+    ASSERT_TRUE(vecOrder.size() == 2);
+    ASSERT_TRUE(vecOrder[0] == 1); // 读在前
+    ASSERT_TRUE(vecOrder[1] == 2); // 写在后（写不插队）
+}
+
+/// @brief 顺序（公平 FIFO）：同流程「先写后读」——读不越过先前提交的写。
+TEST(Exec_Rw_Order_WriteThenRead)
+{
+    CThreadPool pool(4);
+    ASSERT_TRUE(pool.Start());
+    CGlobalDispatcher dispatcher(&pool);
+    CRwModule rw(&pool, 1);
+    dispatcher.RegisterScheduler("rw", rw.Scheduler());
+
+    std::mutex mutex;
+    std::vector<int> vecOrder;
+    std::atomic<long> nDone(0);
+
+    ASSERT_TRUE(dispatcher.Dispatch(
+        [&rw, &mutex, &vecOrder, &nDone](const std::shared_ptr<CBusinessFlow>& spFlow)
+        {
+            spFlow->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+                [&mutex, &vecOrder]()
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    vecOrder.push_back(1); // 写
+                });
+            spFlow->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                [&mutex, &vecOrder]()
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    vecOrder.push_back(2); // 读
+                });
+            spFlow->Callbacks().Push([&nDone]() { nDone.fetch_add(1); });
+        }));
+
+    const bool bDone = WaitUntil([&nDone]() { return nDone.load() == 1; }, 3000);
+    pool.Stop();
+    ASSERT_TRUE(bDone);
+    std::lock_guard<std::mutex> lock(mutex);
+    ASSERT_TRUE(vecOrder.size() == 2);
+    ASSERT_TRUE(vecOrder[0] == 1); // 写在前
+    ASSERT_TRUE(vecOrder[1] == 2); // 读在后（读不越过写）
+}
+
+/// @brief 顺序（公平 FIFO）：写者严格按提交顺序执行（写者 FIFO）。
+TEST(Exec_Rw_Order_WriterFifo)
+{
+    CThreadPool pool(4);
+    ASSERT_TRUE(pool.Start());
+    CGlobalDispatcher dispatcher(&pool);
+    CWriterModule writer(&pool);
+    dispatcher.RegisterScheduler("writer", writer.Scheduler());
+
+    std::mutex mutex;
+    std::vector<int> vecOrder;
+    std::atomic<long> nDone(0);
+    const int kWriters = 8;
+
+    ASSERT_TRUE(dispatcher.Dispatch(
+        [&writer, &mutex, &vecOrder, &nDone](const std::shared_ptr<CBusinessFlow>& spFlow)
+        {
+            for (int i = 0; i < kWriters; ++i)
+            {
+                spFlow->SubmitTask(writer.Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+                    [&mutex, &vecOrder, i]()
+                    {
+                        std::lock_guard<std::mutex> lock(mutex);
+                        vecOrder.push_back(i); // 记录执行顺序
+                    });
+            }
+            spFlow->Callbacks().Push([&nDone]() { nDone.fetch_add(1); });
+        }));
+
+    const bool bDone = WaitUntil([&nDone]() { return nDone.load() == 1; }, 3000);
+    pool.Stop();
+    ASSERT_TRUE(bDone);
+    std::lock_guard<std::mutex> lock(mutex);
+    ASSERT_TRUE(vecOrder.size() == static_cast<size_t>(kWriters));
+    for (int i = 0; i < kWriters; ++i)
+    {
+        ASSERT_TRUE(vecOrder[static_cast<size_t>(i)] == i); // 严格按提交顺序
     }
 }
