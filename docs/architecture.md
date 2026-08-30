@@ -24,8 +24,8 @@ graph TD
 ```
 
 - **业务服务器**：只实现协议（提取器）与业务处理器，通过组合根装配模块。
-- **ServerCore**：提供模块模型、生命周期、依赖注入、网络、消息、事件、指标等基础设施。
-- **Common**：服务器无关的基础库（日志、配置、网络、定时器、线程池、序列化等）。
+- **ServerCore**：提供模块模型、生命周期、依赖注入、网络、消息、事件、指标、并发调度（Exec）等基础设施。
+- **Common**：服务器无关的基础库（日志、配置、网络、定时器、线程池、序列化、异步、协程等）。
 
 ## 生命周期
 
@@ -53,9 +53,9 @@ Application::Shutdown()
 
 ## 依赖注入
 
-`CModuleManager::InitializeAll()` 构造 `CResolveContext` 传给每个模块的
-`Initialize(ctx)`。模块按类型（或显式 iid）解析依赖接口，详见
-[dependency-injection.md](dependency-injection.md)。
+`CModuleManager::InitializeAll()` 构造 `CResolveContext` 传给每个模块的 `Initialize(ctx)`。
+模块按类型（或显式 iid）解析依赖接口，详见
+[servercore/dependency-injection-usage.md](servercore/dependency-injection-usage.md)。
 
 ## 数据流（以 Demo 回显为例）
 
@@ -75,3 +75,7 @@ sequenceDiagram
     S->>N: Send(id, pong)
     N->>C: 返回 PONG
 ```
+
+## 文档索引
+
+详见 [README.md](README.md)。
