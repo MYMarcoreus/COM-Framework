@@ -930,7 +930,7 @@ auto CAsyncExecutor::Submit(TFn f, const CSourceLoc& loc /* = CSourceLoc() */)
     task.m_pExecutor = m_pHandle; // 共享执行器句柄（任务链持有时线程池不释放）。
     task.m_pState->SetLoc(loc);   // 记录任务注册点源码位置（发布构建为空操作）。
     auto pState = task.m_pState;
-    auto pHandle = m_pHandle;
+    auto pHandle = m_pHandle.get(); // 裸指针：仅本次投递检查，避免复制引用计数。
     std::function<void()> fnRun = [pState, f]()
         {
             try

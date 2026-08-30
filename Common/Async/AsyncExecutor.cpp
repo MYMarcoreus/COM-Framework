@@ -76,12 +76,15 @@ bool CAsyncExecutor::Start()
 /// @brief 提交无返回值任务（fire-and-forget，按值接收 + 移动投递避免拷贝）。
 bool CAsyncExecutor::Post(TaskCallback fnTask)
 {
-    std::shared_ptr<detail::CExecutorHandle> pHandle = m_pHandle;
-    if (pHandle->m_bStopped)
+    // 直接解引用句柄（operator-> 不复制 shared_ptr）：Post 不转移所有权，
+    // 避免每次提交的原子 refcount 拷贝在高并发下的 cache line 竞争。
+    // 生命周期：成员函数内 this 有效，m_pHandle 指向的句柄必然存活；
+    // 任务不捕获句柄，句柄析构不涉及本投递。
+    if (m_pHandle->m_bStopped)
     {
         return false;
     }
-    return pHandle->m_pPool->Submit(std::move(fnTask)); // 移动投递；未启动 → false。
+    return m_pHandle->m_pPool->Submit(std::move(fnTask)); // 移动投递；未启动 → false。
 }
 
 /// @brief 停止并等待任务完成（优雅关闭）。
