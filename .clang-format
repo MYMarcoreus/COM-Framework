@@ -31,7 +31,7 @@ NamespaceIndentation: None
 IndentPPDirectives: BeforeHash
 
 # ---- 列宽 ----
-ColumnLimit: 100
+ColumnLimit: 120
 
 # ---- 对齐 ----
 # 续行对齐到开括号（函数签名如 RunTransform(...) 的续行对齐到参数列）。

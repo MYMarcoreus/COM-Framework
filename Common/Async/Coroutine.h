@@ -330,6 +330,35 @@ private:
         Terminate(detail::kStopped); // 执行器已停止/不可用 → 安全终止，不悬垂。
     }
 
+    /// @brief 内联续接（热路径优化）：任务完成回调已运行在工作线程上，
+    ///        直接在此线程继续执行协程体，省去 Post 回线程池的额外一跳
+    ///        （1 次入队 + futex 唤醒 + 可能的线程切换）。
+    ///
+    /// 用 thread_local 深度计数限制连续内联层数，防止深链在单线程栈上无限
+    /// 递归爆栈；超限或执行器已停止时回退到 PostResume（语义不变）。
+    ///
+    /// 注意：Resume() 内协程再 await 时会挂起并返回（深度回退），控制权交还
+    ///       外层回调；新任务完成后由（可能同一）工作线程再次进入本函数。
+    void ResumeInline()
+    {
+        static thread_local int s_inlineDepth = 0;
+        static const int kMaxInlineResume = 64;
+
+        if (m_pExec == nullptr || m_pExec->IsStopped())
+        {
+            Terminate(detail::kStopped);
+            return;
+        }
+        if (s_inlineDepth < kMaxInlineResume)
+        {
+            ++s_inlineDepth;
+            Resume();
+            --s_inlineDepth;
+            return;
+        }
+        PostResume(); // 深度超限：回退到投递，避免爆栈。
+    }
+
     /// @brief 在当前线程继续执行协程体（状态机从 m_nStep 恢复）。
     ///
     /// 终止判定由协程体宏完成（case 处 IsTerminated() → CompleteNone），
@@ -393,12 +422,12 @@ private:
         bool bOk = task.OnSuccess([spSelf, onSuccess, this](const U& v)
         {
             onSuccess(v);
-            PostResume();
+            ResumeInline(); // 热路径：直接内联继续，省一次线程投递。
         });
         task.OnNone([spSelf, this](detail::CTaskEndReason reason)
         {
             MarkTerminated(reason); // await 到无值 → 协程终止（原因透传）。
-            PostResume();
+            ResumeInline();
         });
         if (!bOk)
         {
@@ -414,12 +443,12 @@ private:
         bool bOk = task.OnSuccess([spSelf, onSuccess, this]()
         {
             onSuccess();
-            PostResume();
+            ResumeInline(); // 热路径：直接内联继续，省一次线程投递。
         });
         task.OnNone([spSelf, this](detail::CTaskEndReason reason)
         {
             MarkTerminated(reason); // await 到无值 → 协程终止（原因透传）。
-            PostResume();
+            ResumeInline();
         });
         if (!bOk)
         {
@@ -521,7 +550,7 @@ private:
                 MarkTerminated(static_cast<detail::CTaskEndReason>(
                     pGroup->nReason.load(std::memory_order_relaxed)));
             }
-            PostResume();
+            ResumeInline(); // 热路径：全部完成直接内联继续。
         }
     }
 

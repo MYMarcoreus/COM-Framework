@@ -100,5 +100,13 @@ bool CAsyncExecutor::IsRunning() const
     return !m_pHandle->m_bStopped && m_pHandle->m_pPool->IsRunning();
 }
 
+/// @brief 是否已停止（停止后拒绝新投递）。
+///
+/// 轻量查询（原子读，不加锁）；供协程内联续接判断继续执行是否安全。
+bool CAsyncExecutor::IsStopped() const
+{
+    return m_pHandle->m_bStopped.load(std::memory_order_relaxed);
+}
+
 } // namespace async
 } // namespace common

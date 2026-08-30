@@ -910,6 +910,11 @@ public:
     /// @brief 是否正在运行。
     bool IsRunning() const;
 
+    /// @brief 是否已停止（停止后拒绝新投递）。
+    ///
+    /// 轻量查询（原子读，不加锁）；供协程内联续接判断继续执行是否安全。
+    bool IsStopped() const;
+
 private:
     std::shared_ptr<detail::CExecutorHandle> m_pHandle; // 执行器句柄（任务链共享）。
     size_t m_nThreadCount;                              // 工作线程数。
