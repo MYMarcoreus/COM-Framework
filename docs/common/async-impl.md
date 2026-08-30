@@ -95,29 +95,51 @@ void Complete(const CTaskResult<TValue>& result)
 // 支持多线程并发 Get 同一任务（Complete 用 notify_all）
 ```
 
-## 4. 一次任务的完整生命周期（时序）
+## 4. 一次任务的完整生命周期（含 Then 链）
+
+以 `exec.Submit(f0).Then(f1).Then(f2).Get()` 为例，完整链路：
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Main as 主线程
     participant Exec as CAsyncExecutor
-    participant Pool as 工作线程
-    participant State as CTaskState
+    participant P as 线程池工作线程
+    participant S0 as CTaskState#0
+    participant S1 as CTaskState#1
+    participant S2 as CTaskState#2
 
-    Main->>Exec: Submit(f)
-    Exec->>Pool: 投递 fnRun（把 f 包一层）
-    Exec-->>Main: 返回 CTask（不阻塞）
-    Main->>State: Get() → Wait()（挂起等待）
-    Pool->>Pool: 执行 fnRun
-    Pool->>State: Complete(CTaskResult(值))
-    Note over State: ① 锁内：m_bReady=true，存结果 ② 解锁 ③ notify_all 叫醒 Wait
-    State-->>Main: Wait 被唤醒，返回 m_result 拷贝
-    Main->>Main: 检查 r.HasValue() / r.Value()
+    Note over Main,S2: ① 提交与链式注册（全部非阻塞、不执行任何变换函数）
+    Main->>Exec: Submit(f0)
+    Exec->>P: 投递 fnRun0（f0 包一层）★ 返回前已投递（点火）
+    Exec-->>Main: 返回 task0（绑定 S0）
+    Main->>Exec: task0.Then(f1)
+    Note over S0: S0.AddContinuation(续接1) 登记，不执行
+    Exec-->>Main: 返回 task1（绑定 S1）
+    Main->>Exec: task1.Then(f2)
+    Note over S1: S1.AddContinuation(续接2) 登记，不执行
+    Exec-->>Main: 返回 task2（绑定 S2）
+    Main->>S2: task2.Get() → Wait()（阻塞挂起）
+
+    Note over P,S2: ② 链条由完成事件自动接力（eager）
+    P->>P: 执行 fnRun0 → f0() = 3
+    P->>S0: S0.Complete(result0=3)：锁内就绪+存值 → 解锁 → notify_all + 锁外调续接1
+    P->>P: 续接1：valueCopied=3（拷贝）→ 投递 fnRun1
+    P->>P: 执行 fnRun1 → f1(3) = 6
+    P->>S1: S1.Complete(result1=6) → 触发续接2
+    P->>P: 续接2：valueCopied=6 → 投递 fnRun2
+    P->>P: 执行 fnRun2 → f2(6) = 7
+    P->>S2: S2.Complete(result2=7)
+    S2-->>Main: Wait 被唤醒，返回 result2
+    Main->>Main: r.HasValue() → r.Value() == 7
 ```
 
-**要点**：`Submit` 在返回 `CTask` **之前就已投递**（`Submit` 本身就是执行入口）；`Then` 只做
-「算下游类型 + 往上游挂续接」，**不执行任何函数**；接力靠 `Complete` 自动触发（eager 模型）。
+**要点**：
+- `Submit` 在返回 `CTask` **之前就已投递**（`Submit` 本身就是执行入口，链条在此「点火」）；
+- `Then` 只做两件事：**算下游类型 + 往上游 `AddContinuation` 挂续接**，返回下一个任务（未点火），不执行任何函数；
+- **接力靠 `Complete` 自动触发**：上游任务跑完 → `CTaskState::Complete` → 锁外依次调用所有续接 →
+  `Then` 的续接里再把下一个变换投递进线程池 → 以此类推，直到最后一个任务完成唤醒 `Get`；
+- 每个任务对应一个 `CTaskState`，值在链中「移动存结果 → 续接拷贝 → 变换」逐级传递（见 §6 值传递路径）。
 
 ## 5. Submit：任务投递
 
