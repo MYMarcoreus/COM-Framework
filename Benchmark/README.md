@@ -18,7 +18,10 @@
 1. **任务提交**：单任务「提交 → 执行 → 通知 → 唤醒」端到端往返延迟（ns/op、P50、P99、吞吐）。
 2. **任务链**：`CAsyncExecutor::Then` 链（1/5/20 级）构建 + 执行 + 取值成本。
 3. **协程**：`CCoroutine` 启动 + 挂起/恢复 + 完成，以及 10 级 await 链。
-4. **压力测试**：4 线程窗口式稳定吞吐（ops/s）+ 大窗口背压 + Stop 排空延迟。
+4. **协程创建/切换**（对齐 [librf](https://github.com/tearshark/librf) 的 `resumable_switch` 方法）：
+   CoStart 创建成本与每次 `CO_AWAIT` 挂起/恢复的切换成本**分离计时**，
+   按协程数量梯度（100/1000/10000）扫描扩展性。
+5. **压力测试**：4 线程窗口式稳定吞吐（ops/s）+ 大窗口背压 + Stop 排空延迟。
 
 ## 构建与运行
 
@@ -52,9 +55,10 @@ Benchmark/
 ├── cases/
 │   ├── Engines.h         # CThreadPool / CAsyncExecutor / asio 引擎封装
 │   ├── SubmitCase.*      # 任务提交往返延迟
-│   ├── ChainCase.*       # 任务链开销
+│   ├── ChainCase.*       # 任务链开销（含 100 级深层链）
 │   ├── CoroutineCase.*   # 协程启动 / 挂起 / 链
-│   └── StressCase.*      # 窗口式吞吐 + 停止延迟
+│   ├── ResumableCase.*   # 协程创建 / 切换成本（librf 风格，数量梯度）
+│   └── StressCase.*      # 窗口式吞吐（含多线程协程/链）+ 停止延迟
 └── results/
     └── benchmark-report.md   # 生成的测试报告（运行后出现）
 ```
