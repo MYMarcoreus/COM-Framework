@@ -4,3 +4,7 @@
 [submodule "Common/ThirdParty/inih"]
 	path = Common/ThirdParty/inih
 	url = https://github.com/benhoyt/inih.git
+[submodule "Common/ThirdParty/workflow"]
+	path = Common/ThirdParty/workflow
+	url = https://github.com/sogou/workflow.git
+	branch = nossl
