@@ -86,14 +86,24 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     // 从磁盘加载前端页面文件；成功返回 true。
     bool LoadIndexHtml();
 
+    // 解析前端页面文件路径：
+    //   - 配置指定路径（m_strIndexPath）若可访问则直接使用；
+    //   - 否则基于可执行文件位置（/proc/self/exe）向上定位项目根，
+    //     使用 DataHub/Web/index.html。
+    // 返回解析后的路径（可能为空）。
+    std::string ResolveIndexPath() const;
+
+    // 尝试从指定路径加载文件内容；成功返回 true。
+    bool TryLoadFile(const std::string& strPath, std::string& strOut) const;
+
     // 当前数据存储（Initialize 后可用）。
     static IDataStore* s_pStore;
     // 已加载的前端页面内容（静态指针，供静态回调访问；Initialize 时指向实例成员）。
     static const std::string* s_pIndexHtml;
 
     std::uint16_t m_nPort;
-    std::string m_strIndexPath;   // 前端页面文件路径
-    std::string m_strIndexHtml;   // 已加载的前端页面内容（空表示加载失败）
+    std::string m_strIndexPath;  // 前端页面文件路径
+    std::string m_strIndexHtml;  // 已加载的前端页面内容（空表示加载失败）
     sc::ScopedInterfacePtr<IDataStore> m_pStore;
     WFHttpServer m_server;
     bool m_bStarted;

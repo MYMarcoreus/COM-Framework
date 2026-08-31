@@ -110,3 +110,4 @@ DataHub/
 - 文件大小受 Workflow 请求体内存限制；超大文件建议分批或改流式存储。
 - 服务器需监听 `0.0.0.0`（Workflow 默认），以便局域网设备访问。
 - 前端页面为独立资源文件，路径由 `datahub.ini` 的 `[web] index` 配置（默认 `Web/index.html`）；修改 HTML 后重启服务即可生效，无需重新编译 C++。
+- 页面路径解析不依赖启动工作目录：若配置路径不可访问，会自动基于可执行文件位置（`/proc/self/exe`）定位到 `DataHub/Web/index.html`，从任意目录启动均可加载。

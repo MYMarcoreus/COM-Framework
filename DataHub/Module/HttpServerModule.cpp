@@ -5,7 +5,9 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <limits.h>
 #include <sstream>
+#include <unistd.h>
 
 #include "Log/Logger.h"
 #include "Module/InterfaceMap.h"
@@ -20,8 +22,11 @@ const std::string* CHttpServerModule::s_pIndexHtml = nullptr;
 
 /// @brief 创建 HTTP 服务模块。
 CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strIndex)
-    : sc::CModule("http"), m_nPort(nPort), m_strIndexPath(strIndex),
-      m_server(&CHttpServerModule::ProcessRequest), m_bStarted(false)
+    : sc::CModule("http"),
+      m_nPort(nPort),
+      m_strIndexPath(strIndex),
+      m_server(&CHttpServerModule::ProcessRequest),
+      m_bStarted(false)
 {
     // 依赖 IDataStore 接口模块：生命周期拓扑排序保证其先初始化 / 启动。
     AddDependency(sc::IID_IDataStore());
@@ -51,9 +56,7 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
     // 加载前端页面（独立资源文件）；失败仅告警，不影响服务启动。
     if (!LoadIndexHtml())
     {
-        common::log::CLogger::Instance().Warn(
-            "[DataHub] 前端页面加载失败: " + m_strIndexPath +
-            "（GET / 将返回 503）");
+        common::log::CLogger::Instance().Warn("[DataHub] 前端页面加载失败: " + m_strIndexPath + "（GET / 将返回 503）");
     }
     // 回调为静态方法，通过静态指针访问页面内容。
     s_pIndexHtml = &m_strIndexHtml;
@@ -62,18 +65,93 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
 
 /// @brief 从磁盘加载前端页面文件。
 ///
-/// @return true 加载成功；false 文件不存在或读取失败。
+/// 路径解析顺序：
+///   1. 配置指定路径（m_strIndexPath，相对工作目录或绝对路径）；
+///   2. 基于可执行文件位置推导（/proc/self/exe → 项目根 → DataHub/Web/index.html）。
+/// 任一路径可访问即加载成功，保证从任意工作目录启动都能找到前端页面。
+///
+/// @return true 加载成功；false 所有候选路径均不可访问。
 bool CHttpServerModule::LoadIndexHtml()
 {
-    std::ifstream ifs(m_strIndexPath.c_str(), std::ios::binary);
+    // ① 配置指定路径。
+    if (TryLoadFile(m_strIndexPath, m_strIndexHtml))
+    {
+        return true;
+    }
+
+    // ② 基于可执行文件位置推导。
+    std::string strResolved = ResolveIndexPath();
+    if (!strResolved.empty() && TryLoadFile(strResolved, m_strIndexHtml))
+    {
+        return true;
+    }
+
+    m_strIndexHtml.clear();
+    return false;
+}
+
+/// @brief 解析前端页面文件路径。
+///
+/// 通过 /proc/self/exe 获取可执行文件真实路径，向上定位项目根
+/// （可执行文件位于 build/<mode>/，项目根 = exe 目录上溯两级），
+/// 再拼接 DataHub/Web/index.html。
+///
+/// @return 解析后的路径；失败返回空串。
+std::string CHttpServerModule::ResolveIndexPath() const
+{
+    char szExe[PATH_MAX] = {0};
+    ssize_t nLen = ::readlink("/proc/self/exe", szExe, sizeof(szExe) - 1);
+    if (nLen <= 0)
+    {
+        return std::string();
+    }
+    szExe[nLen] = '\0';
+
+    // 取可执行文件所在目录（去掉文件名部分）。
+    std::string strExeDir = szExe;
+    std::string::size_type nSlash = strExeDir.find_last_of('/');
+    if (nSlash == std::string::npos)
+    {
+        return std::string();
+    }
+    strExeDir = strExeDir.substr(0, nSlash); // build/debug
+
+    // 上溯两级到项目根（build/debug → build → 项目根）。
+    std::string strRoot = strExeDir;
+    for (int i = 0; i < 2; ++i)
+    {
+        nSlash = strRoot.find_last_of('/');
+        if (nSlash == std::string::npos)
+        {
+            return std::string();
+        }
+        strRoot = strRoot.substr(0, nSlash);
+    }
+
+    return strRoot + "/DataHub/Web/index.html";
+}
+
+/// @brief 尝试从指定路径加载文件内容。
+///
+/// @param strPath 文件路径。
+/// @param strOut  输出内容。
+///
+/// @return true 文件存在且读取成功。
+bool CHttpServerModule::TryLoadFile(const std::string& strPath, std::string& strOut) const
+{
+    if (strPath.empty())
+    {
+        return false;
+    }
+    std::ifstream ifs(strPath.c_str(), std::ios::binary);
     if (!ifs.is_open())
     {
         return false;
     }
     std::stringstream ss;
     ss << ifs.rdbuf();
-    m_strIndexHtml = ss.str();
-    return !m_strIndexHtml.empty();
+    strOut = ss.str();
+    return !strOut.empty();
 }
 
 /// @brief 启动 HTTP 服务。
