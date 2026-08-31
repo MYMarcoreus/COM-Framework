@@ -11,6 +11,30 @@
             "cwd": "${workspaceFolder}",
             "env": {},
             "preLaunchTask": "build debug (examples)"
+        },
+        {
+            "name": "Debug (select executable)",
+            "type": "lldb",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug/${input:debugProgram}",
+            "args": [],
+            "stopOnEntry": false,
+            "cwd": "${workspaceFolder}",
+            "env": {},
+            "preLaunchTask": "generate compile_commands"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "debugProgram",
+            "type": "command",
+            "command": "shellCommand.execute",
+            "args": {
+                "command": "find build/debug -maxdepth 1 -type f -executable -printf '%f\\n' | sort",
+                "cwd": "${workspaceFolder}",
+                "description": "选择要调试的可执行文件（build/debug/ 下，可手动输入）",
+                "allowCustomValues": true
+            }
         }
     ]
 }

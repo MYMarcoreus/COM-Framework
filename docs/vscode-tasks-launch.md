@@ -170,7 +170,44 @@ graph LR
 > **关键点**：`preLaunchTask` 填的是**任务名**，不是命令。因此所有"启动前构建"
 > 必须先在 `tasks.json` 定义任务，再在这里引用其 `label`。
 
-### 4.3 F5 完整时序
+### 4.3 自选可执行文件调试（`Debug (select executable)`）
+
+`launch.json` 也支持 `${input:xxx}` 下拉输入（与 `tasks.json` 相同机制，配合
+**Tasks Shell Input** 扩展）。本项目提供第二个配置 `Debug (select executable)`，
+在 F5 前**弹出下拉选择 `build/debug/` 下的可执行文件**，`program` 动态指向所选文件：
+
+```jsonc
+{
+    "name": "Debug (select executable)",
+    "type": "lldb",
+    "request": "launch",
+    "program": "${workspaceFolder}/build/debug/${input:debugProgram}",
+    "preLaunchTask": "generate compile_commands"
+}
+```
+
+配套 `inputs` 定义：
+
+```jsonc
+"inputs": [{
+    "id": "debugProgram",
+    "type": "command",
+    "command": "shellCommand.execute",
+    "args": {
+        "command": "find build/debug -maxdepth 1 -type f -executable -printf '%f\\n' | sort",
+        "cwd": "${workspaceFolder}",
+        "description": "选择要调试的可执行文件（build/debug/ 下，可手动输入）",
+        "allowCustomValues": true
+    }
+}]
+```
+
+- 下拉列出 `build/debug/` 下全部可执行文件（如 `demo`、`logserver`、`servera`、`examples`、
+  `demo_server`、`demo_client`、`demo_parallel`、`tests` 等），覆盖所有可执行项目。
+- 选择后直接调试该文件；`allowCustomValues: true` 允许手动输入任意文件名。
+- 使用前提：对应可执行文件已构建（可先 `Tasks: Run Task` → `build (select project)` 选 debug + 项目）。
+
+### 4.4 F5 完整时序
 
 ```mermaid
 sequenceDiagram
@@ -196,7 +233,8 @@ sequenceDiagram
 | --- | --- | --- |
 | 构建某个项目（含 debug/release） | `Tasks: Run Task` → `build (select project)` → 选模式 + 项目 | `./build.sh <模式> <项目>` |
 | 运行某个可执行项目 | `Tasks: Run Task` → `run (select project)` → 选模式 + 项目 | `.tools/run_project.sh <项目> <模式>` |
-| 调试 examples | 按 **F5**（用 launch 配置） | 先构建依赖链，再启动 lldb |
+| 调试 examples | 按 **F5**（launch 配置 `Debug examples (debug build)`） | 先构建依赖链，再启动 lldb |
+| 调试任意可执行文件 | 按 **F5**（launch 配置 `Debug (select executable)`）→ 下拉选文件 | 启动 lldb 加载所选文件 |
 | 只生成编译数据库 | `Tasks: Run Task` → `generate compile_commands` | `./build.sh --compiledb` |
 | 预编译 Common+ServerCore | `Tasks: Run Task` → `build debug (Common + ServerCore)` | `./build.sh --debug Common ServerCore` |
 
@@ -214,6 +252,8 @@ sequenceDiagram
 - 原因：`program` 指向的产物未构建。
 - 处理：`preLaunchTask` 必须（直接或通过依赖链）构建出 `program` 所指产物；或先手动
   `Tasks: Run Task` → `build debug (examples)`。
+- 若用 `Debug (select executable)` 下拉：确保所选文件已存在于 `build/debug/`，
+  未列出说明尚未构建（先 `Tasks: Run Task` → `build (select project)` 选 debug + 项目）。
 
 ### 6.3 问题面板看不到错误
 
