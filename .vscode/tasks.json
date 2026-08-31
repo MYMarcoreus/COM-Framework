@@ -42,9 +42,9 @@
             }
         },
         {
-            "label": "build debug (Common + ServerCore)",
+            "label": "build debug (Common + ServerCore + examples)",
             "type": "shell",
-            "command": "./build.sh --debug Common ServerCore",
+            "command": "./build.sh --debug Common ServerCore examples",
             "dependsOn": [
                 "generate compile_commands"
             ],

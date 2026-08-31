@@ -10,7 +10,7 @@
             "stopOnEntry": false,
             "cwd": "${workspaceFolder}",
             "env": {},
-            "preLaunchTask": "build debug (Common + ServerCore)"
+            "preLaunchTask": "build debug (Common + ServerCore + examples)"
         }
     ]
 }
