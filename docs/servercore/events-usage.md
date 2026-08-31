@@ -57,7 +57,7 @@ m_moduleManager.RegisterModule(sc::IID_IEventDispatcher(), new sc::CEventDispatc
 ## 4. 内置事件
 
 `sc::events` 命名空间（`Event/EventTypes.h`）：`kNetworkStarted`（端口）、`kNetworkStopped`、`kConfigReloaded`。
-自定义事件直接使用字符串类型，如 `"demo.hello"`（进程内唯一）。
+自定义事件直接使用字符串类型，如 `"example.hello"`（进程内唯一）。
 
 ## 5. 线程安全
 
@@ -65,5 +65,5 @@ m_moduleManager.RegisterModule(sc::IID_IEventDispatcher(), new sc::CEventDispatc
 
 ## 6. 参考实现
 
-- `Demo/Application/DemoApplication.cpp`：订阅 network 事件 + `PublishAsync("demo.hello")` 示范
+- `ServerExample/Application/ExampleApplication.cpp`：订阅 network 事件 + `PublishAsync("example.hello")` 示范
 - `LogServer/Application/LogServerApplication.cpp`：订阅 network + config.reloaded 事件

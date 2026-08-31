@@ -12,7 +12,7 @@ description: 本项目命名规范：以 MFC（Microsoft Foundation Classes）�
 - **基准**：MFC 命名风格（Microsoft Foundation Classes）
 - **补充**：MFC 未明确规定处，采用 Google C++ Style Guide
 
-> 说明：现有 Common / ServerCore / Demo / ServerA 中的历史代码风格（如类无 `C` 前缀、成员变量尾下划线 `running_`）不在本轮统一重命名。本文档作为**新代码与后续开发**的命名依据，历史代码是否迁移由项目决策（见 §12）。
+> 说明：现有 Common / ServerCore / ServerExample / ServerTemplate 中的历史代码风格（如类无 `C` 前缀、成员变量尾下划线 `running_`）不在本轮统一重命名。本文档作为**新代码与后续开发**的命名依据，历史代码是否迁移由项目决策（见 §12）。
 
 ---
 
@@ -21,8 +21,10 @@ description: 本项目命名规范：以 MFC（Microsoft Foundation Classes）�
 - 全小写（Google，MFC 未规定命名空间命名）：
   - `sc`：ServerCore
   - `common`：Common 基础库
-  - `demo`：Demo 项目
-  - `servera`：ServerA 项目
+  - `demo`：~~Demo 项目~~（已改名 ServerExample）
+  - `serverexample`：ServerExample 项目
+  - `servera`：~~ServerA 项目~~（已改名 ServerTemplate）
+  - `servertemplate`：ServerTemplate 项目
 - 命名空间内标识符不得依赖外部命名空间的未限定符号（用 `using` 或显式限定）。
 
 ---
@@ -66,9 +68,9 @@ description: 本项目命名规范：以 MFC（Microsoft Foundation Classes）�
 - 组件实现：`C` 前缀 + `<能力>Component`：
   - `CNetworkComponent`、`CLoggerComponent`、`CConfigComponent`、`CTimerComponent`
 - 模块：`C` 前缀 + `<名称>Module`：
-  - `CDemoNetworkModule`、`CDemoTimerModule`、`CServerLoggerModule`
+  - `CExampleNetworkModule`、`CExampleTimerModule`、`CTemplateLoggerModule`
 - 服务：`C` 前缀 + `<名称>Service`：
-  - `CDemoService`、`CEchoService`
+  - `CExampleService`、`CEchoService`
 
 ---
 
@@ -175,7 +177,7 @@ void* QueryInterface(const InterfaceId& iid);
 | 常量 | `k` 前缀 | `k` 前缀（一致） |
 | 参数 | 匈牙利前缀（`nPort`） | 小写无前缀（`port`） |
 
-- 历史代码（Common / ServerCore / Demo / ServerA）保持现状，不在本轮统一重命名；
+- 历史代码（Common / ServerCore / ServerExample / ServerTemplate）保持现状，不在本轮统一重命名；
 - **新代码**（新项目、新组件、新模块）遵循本文档；
 - 如需迁移历史代码，应在独立提交中进行，且不影响接口行为。
 

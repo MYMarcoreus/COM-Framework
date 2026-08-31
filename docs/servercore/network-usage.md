@@ -45,12 +45,12 @@ void CMyService::OnClose(sc::ConnectionId id)
 }
 ```
 
-参考实现：`Demo/Service/DemoService.cpp`（`ConnContext`）。
+参考实现：`ServerExample/Service/ExampleService.cpp`（`ConnContext`）。
 
 ## 4. 回调线程
 
 - `OnAccept / OnData / OnClose` 在 asio 事件循环线程执行；
-- **回调应尽快返回**：重活应通过 `IAsyncExecutor` 投递到工作线程（参考 `CDemoService::HandlePing`），避免阻塞网络线程；
+- **回调应尽快返回**：重活应通过 `IAsyncExecutor` 投递到工作线程（参考 `CExampleService::HandlePing`），避免阻塞网络线程；
 - 异步任务必须捕获模块自持引用（`Self()`）保证回调期间模块存活。
 
 ## 5. 统计与限制

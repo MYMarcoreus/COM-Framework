@@ -105,7 +105,7 @@ esac
 
 ./build.sh "$MODE_FLAG" "$PROJ"
 
-# 可执行名约定 = 项目名小写（Demo→demo、examples→examples）
+# 可执行名约定 = 项目名小写（ServerExample→example、ServerTemplate→servertemplate、examples→examples）
 EXE="$(echo "$PROJ" | tr '[:upper:]' '[:lower:]')"
 EXE_PATH="build/$MODE_NAME/$EXE"
 if [[ ! -x "$EXE_PATH" ]]; then

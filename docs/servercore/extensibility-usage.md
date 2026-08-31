@@ -19,7 +19,7 @@ MyModule/
 
 ## 2. 新增一个服务器
 
-1. 复制骨架项目（参考 ServerA / LogServer）；
+1. 复制骨架项目（参考 ServerTemplate / LogServer）；
 2. `Application/` 下写 `C*Application : sc::CMyApplication`；
 3. `RegisterModules()`：默认装配 → 注册网络 / 事件 / 消息路由 → 业务模块；
 4. `main.cpp`：`Initialize → Start → Run → Shutdown`；

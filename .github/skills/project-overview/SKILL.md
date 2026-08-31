@@ -84,7 +84,7 @@ Workspace/
 │   └── Linux/
 │       └── Makefile
 │
-├── ServerA/
+├── ServerTemplate/
 │   ├── Application/
 │   ├── Module/
 │   ├── Service/
@@ -141,8 +141,8 @@ Common / Infrastructure
 例如禁止：
 
 ```text
-ServerCore → ServerA
-ServerA → ServerCore
+ServerCore → ServerTemplate
+ServerTemplate → ServerCore
 ```
 
 `ServerCore` 不允许依赖具体业务服务器。

@@ -11,7 +11,7 @@
 
 ```bash
 ./build.sh --compiledb       # 生成所有项目的 compile_commands.json（供 clangd）
-./build.sh                   # 构建 Common → ServerCore → LogServer → Demo → ServerA → Tests
+./build.sh                   # 构建 Common → ServerCore → LogServer → ServerExample → ServerTemplate → Tests
 ```
 
 > 容器内 clangd 直接使用容器路径（`/workspace/...`）的 `compile_commands.json`，无需路径改写。
@@ -36,7 +36,7 @@
 **构建产物按模式分目录**（debug 与 release 隔离，可同时存在、互不干扰）：
 
 ```text
-build/debug/       —— 调试产物（默认；demo、demo_client、logserver、servera、tests、lib*.a、examples/）
+build/debug/       —— 调试产物（默认；example、example_client、logserver、servertemplate、tests、lib*.a、examples/）
 build/release/     —— 发布产物（-O2，用 -r/--release 构建）
 ```
 
@@ -57,7 +57,7 @@ build/release/     —— 发布产物（-O2，用 -r/--release 构建）
 
 仅 debug 构建，在调试器中运行，支持断点 / 变量 / 调用栈：`launch.json` 提供配置 `Debug examples (debug build)`（`build/debug/examples`）。启动方式：按 **F5** 或 **Run and Debug** 面板选择该配置（`tasks.json` 不提供调试任务，调试统一由 `launch.json` 驱动）。启动时会自动先执行 `preLaunchTask`（`build debug (examples)`，其依赖 `build debug (Common + ServerCore)`）完成调试构建。
 
-运行 Demo 服务器与客户端：`./build/debug/demo 9000`、`./build/debug/demo_client 9000`（发布版用 `./build/release/...`）。
+运行 ServerExample 服务器与客户端：`./build/debug/example 9000`、`./build/debug/example_client 9000`（发布版用 `./build/release/...`）。
 
 ## 3. 宿主机（无 sudo）生成 compile_commands.json
 
@@ -155,9 +155,9 @@ git commit -m "升级 asio 到 <新标签>"
 
 | 命令 | 说明 |
 | --- | --- |
-| `./build/debug/demo 9000` | 运行 Demo 服务器（debug） |
-| `./build/debug/demo_client 9000` | 运行 Demo 客户端（debug） |
-| `./build/release/demo 9000` | 运行 Demo 服务器（release） |
+| `./build/debug/example 9000` | 运行 ServerExample 服务器（debug） |
+| `./build/debug/example_client 9000` | 运行 ServerExample 客户端（debug） |
+| `./build/release/example 9000` | 运行 ServerExample 服务器（release） |
 | `./build/debug/demo_server 8888` | 运行 WorkflowDemo HTTP echo 服务器 |
 | `./build/debug/demo_client http://127.0.0.1:8888/x` | 运行 WorkflowDemo HTTP 客户端 |
 | `./build/debug/demo_parallel <url1> <url2>` | 运行 WorkflowDemo 并行请求示例 |

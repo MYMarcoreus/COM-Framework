@@ -288,19 +288,19 @@ TEST(Metrics_IncGaugeAndSnapshot)
     // 计数器自增
     pMetrics->Inc("network.accepted");
     pMetrics->Inc("network.accepted");
-    pMetrics->Inc("demo.msgs", 3);
+    pMetrics->Inc("example.msgs", 3);
     // 仪表设置
     pMetrics->SetGauge("network.conns", 5);
 
     ASSERT_TRUE(pMetrics->Get("network.accepted") == 2);
-    ASSERT_TRUE(pMetrics->Get("demo.msgs") == 3);
+    ASSERT_TRUE(pMetrics->Get("example.msgs") == 3);
     ASSERT_TRUE(pMetrics->Get("network.conns") == 5);
     ASSERT_TRUE(pMetrics->Get("missing") == 0);
 
     // 快照按名称排序
     std::vector<sc::MetricSnapshot> vecSnapshot = pMetrics->Snapshot();
     ASSERT_TRUE(vecSnapshot.size() == 3);
-    ASSERT_TRUE(vecSnapshot[0].strName == "demo.msgs");
+    ASSERT_TRUE(vecSnapshot[0].strName == "example.msgs");
     ASSERT_TRUE(vecSnapshot[1].strName == "network.accepted");
     ASSERT_TRUE(vecSnapshot[2].kind == sc::MetricKind::kGauge);
     manager.Clear();

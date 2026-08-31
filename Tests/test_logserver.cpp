@@ -59,7 +59,7 @@ logserver::LogRecord MakeRecord(const std::string& strLevel, const std::string& 
 /// @brief 协议：完整报文解析与往返编解码。
 TEST(LogProtocol_ParseComplete)
 {
-    logserver::LogRecord record = MakeRecord("info", "demo", "hello");
+    logserver::LogRecord record = MakeRecord("info", "example", "hello");
 
     std::string strPacket = logserver::CLogProtocol::BuildSubmit(record);
     logserver::Packet packet = logserver::CLogProtocol::ParsePacket(strPacket);
@@ -71,14 +71,14 @@ TEST(LogProtocol_ParseComplete)
     ASSERT_TRUE(logserver::CLogProtocol::DecodeRecord(packet.payload, &decoded));
     ASSERT_EQ(decoded.nTimestamp, record.nTimestamp);
     ASSERT_EQ(decoded.strLevel, std::string("info"));
-    ASSERT_EQ(decoded.strSource, std::string("demo"));
+    ASSERT_EQ(decoded.strSource, std::string("example"));
     ASSERT_EQ(decoded.strContent, std::string("hello"));
 }
 
 /// @brief 协议：半包与粘包处理。
 TEST(LogProtocol_HalfAndSticky)
 {
-    logserver::LogRecord record = MakeRecord("warn", "demo", "sticky");
+    logserver::LogRecord record = MakeRecord("warn", "example", "sticky");
     std::string strPacket = logserver::CLogProtocol::BuildSubmit(record);
 
     // 半包：只给头部的一部分，应返回 kNeedMore
@@ -150,19 +150,19 @@ TEST(LogStorage_WriteBySource)
     logserver::CLogStorage storage;
     ASSERT_TRUE(storage.SetDirectory(strDir));
 
-    ASSERT_TRUE(storage.Write(MakeRecord("info", "demo", "hello storage")));
-    ASSERT_TRUE(storage.Write(MakeRecord("info", "servera", "hello servera")));
+    ASSERT_TRUE(storage.Write(MakeRecord("info", "example", "hello storage")));
+    ASSERT_TRUE(storage.Write(MakeRecord("info", "servertemplate", "hello servertemplate")));
     ASSERT_EQ(storage.FileCount(), static_cast<size_t>(2));
 
-    std::string strDemo = ReadFile(strDir + "/demo.log");
-    ASSERT_TRUE(strDemo.find("[INFO]") != std::string::npos);
-    ASSERT_TRUE(strDemo.find("hello storage") != std::string::npos);
+    std::string strExample = ReadFile(strDir + "/example.log");
+    ASSERT_TRUE(strExample.find("[INFO]") != std::string::npos);
+    ASSERT_TRUE(strExample.find("hello storage") != std::string::npos);
 
-    std::string strServera = ReadFile(strDir + "/servera.log");
-    ASSERT_TRUE(strServera.find("hello servera") != std::string::npos);
+    std::string strServerTemplate = ReadFile(strDir + "/servertemplate.log");
+    ASSERT_TRUE(strServerTemplate.find("hello servertemplate") != std::string::npos);
 
-    std::remove((strDir + "/demo.log").c_str());
-    std::remove((strDir + "/servera.log").c_str());
+    std::remove((strDir + "/example.log").c_str());
+    std::remove((strDir + "/servertemplate.log").c_str());
     std::remove(strDir.c_str());
 }
 

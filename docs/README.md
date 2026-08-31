@@ -44,7 +44,7 @@
 
 ## 阅读建议
 
-- **新成员上手**：`architecture.md` → 模块系统 → 依赖注入 → 网络 / 消息 / 事件 → 用 Demo 跑通
+- **新成员上手**：`architecture.md` → 模块系统 → 依赖注入 → 网络 / 消息 / 事件 → 用 ServerExample 跑通
 - **写业务模块**：`extensibility-usage.md`（新增模块/协议/服务器）+ `dependency-injection-usage.md`
 - **并发控制**：`servercore/exec-usage.md`（模块读写调度 + 业务流程回调栈）
 - **异步/协程**：`common/async-usage.md`、`common/coroutine-usage.md`

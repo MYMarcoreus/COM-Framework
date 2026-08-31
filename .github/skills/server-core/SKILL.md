@@ -1,7 +1,7 @@
 ---
 
 name: server-core
-description: ServerCore 服务器基础框架开发规范。创建、修改、扩展 ServerCore、MyApplication、基础组件、组件模型、模块接口、通信基础设施或 Demo Server 时使用。ServerCore 必须提供可直接被其他服务器项目复用的基础组件，并且初始版本必须包含一个可以运行的最小 Demo。
+description: ServerCore 服务器基础框架开发规范。创建、修改、扩展 ServerCore、MyApplication、基础组件、组件模型、模块接口、通信基础设施或 ServerExample 时使用。ServerCore 必须提供可直接被其他服务器项目复用的基础组件，并且初始版本必须包含一个可以运行的最小 ServerExample。
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 # ServerCore 服务器基础框架规范
@@ -155,7 +155,7 @@ ServerCore 初始版本必须能够支撑一个最小可运行服务器。
 
 ### 4.6 可验证
 
-必须提供 Demo 项目验证 ServerCore 的实际使用方式。
+必须提供 ServerExample 项目验证 ServerCore 的实际使用方式。
 
 ---
 
@@ -181,7 +181,7 @@ ServerCore
     +
 MyApplication
     +
-Demo Server
+ServerExample
 ```
 
 最终必须能够：
@@ -189,7 +189,7 @@ Demo Server
 ```text
 编译
   ↓
-启动 Demo
+启动 ServerExample
   ↓
 创建 MyApplication
   ↓
@@ -206,9 +206,9 @@ Demo Server
 正常退出
 ```
 
-Demo 不需要实现真实业务。
+ServerExample 不需要实现真实业务。
 
-Demo 的目的只是证明：
+ServerExample 的目的只是证明：
 
 > ServerCore 提供的基础组件确实能够组合成一个可运行的服务器。
 
@@ -311,7 +311,7 @@ MyApplication
 例如：
 
 ```text
-DemoServer
+ServerExample
     │
     └── MyApplication
           │
@@ -692,7 +692,7 @@ ServerCore
 具体服务器：
 
 ```text
-DemoServer
+ServerExample
 ├── Protocol
 │   ├── Message
 │   └── Packet
@@ -703,16 +703,16 @@ DemoServer
 
 ---
 
-# 18. Demo 项目
+# 18. ServerExample 项目
 
-ServerCore 必须提供一个 Demo 项目。
+ServerCore 必须提供一个 ServerExample 项目。
 
 推荐：
 
 ```text
-Demo/
-├── Application/    # DemoApplication
-├── Module/         # DemoLoggerModule 等
+ServerExample/
+├── Application/    # ExampleApplication
+├── Module/         # ExampleLoggerModule 等
 ├── Protocol/       # 通信协议
 ├── Service/        # 业务服务
 ├── main.cpp        # 服务器入口
@@ -720,15 +720,15 @@ Demo/
     └── Makefile
 ```
 
-Demo 不属于 ServerCore 本身的核心组件。
+ServerExample 不属于 ServerCore 本身的核心组件。
 
-Demo 是 ServerCore 的**验证项目**。
+ServerExample 是 ServerCore 的**验证项目**。
 
 ---
 
-# 19. Demo 的职责
+# 19. ServerExample 的职责
 
-Demo 必须证明以下能力：
+ServerExample 必须证明以下能力：
 
 ### 19.1 可以创建 MyApplication
 
@@ -764,18 +764,18 @@ Accept
 
 ---
 
-# 20. Demo 通信
+# 20. ServerExample 通信
 
-Demo 应提供一个极简通信协议。
+ServerExample 应提供一个极简通信协议。
 
 但是：
 
 > **该协议不能放入 ServerCore。**
 
-协议应该属于 Demo：
+协议应该属于 ServerExample：
 
 ```text
-Demo/
+ServerExample/
 ├── Protocol/
 ├── Service/
 ├── Application/
@@ -791,18 +791,18 @@ ServerCore Network
         ↓
 接收数据
         ↓
-Demo Protocol
+Example Protocol
         ↓
 解析
         ↓
-Demo Service
+Example Service
 ```
 
 ---
 
-# 21. Demo 协议
+# 21. Example 协议
 
-Demo 协议应保持极简。
+Example 协议应保持极简。
 
 例如：
 
@@ -842,7 +842,7 @@ ECHO
 
 ---
 
-# 22. ServerCore 与 Demo 的关系
+# 22. ServerCore 与 ServerExample 的关系
 
 正确关系：
 
@@ -857,16 +857,16 @@ ECHO
           └─────────────┼─────────────┘
                         │
                         ▼
-                      Demo
+                      ServerExample
                         │
               ┌─────────┼─────────┐
               ▼         ▼         ▼
            Protocol   Service    main
 ```
 
-Demo 可以依赖 ServerCore。
+ServerExample 可以依赖 ServerCore。
 
-ServerCore 不允许依赖 Demo。
+ServerCore 不允许依赖 ServerExample。
 
 ---
 
@@ -881,7 +881,7 @@ libServerCore.a
 其他服务器：
 
 ```text
-ServerA
+ServerTemplate
     ↓
 libServerCore.a
 ```
@@ -893,7 +893,7 @@ libServerCore.a
 ```
 
 ```text
-Demo
+ServerExample
     ↓
 libServerCore.a
 ```
@@ -905,7 +905,7 @@ libServerCore.a
 严格遵循：
 
 ```text
-Demo / Server
+ServerExample / Server
        ↓
  ServerCore
        ↓
@@ -919,7 +919,7 @@ Third-party / POSIX
 ```text
 ServerCore
     ↓
-Demo
+ServerExample
 ```
 
 禁止：
@@ -979,7 +979,7 @@ ServerCore
     ├── TcpConnection
     └── Buffer
 
-Demo
+ServerExample
 │
 ├── Protocol
 ├── Service
@@ -989,7 +989,7 @@ Demo
 最终实现：
 
 ```text
-启动 Demo
+启动 ServerExample
     ↓
 MyApplication
     ↓
@@ -1003,7 +1003,7 @@ Accept
     ↓
 TcpConnection
     ↓
-接收 Demo Protocol
+接收 Example Protocol
     ↓
 解析
     ↓
@@ -1106,7 +1106,7 @@ COM 思想用于解决：
 11. 是否能够被其他服务器复用？
 12. 是否需要第三方库？
 13. 是否能够独立测试？
-14. 是否需要加入 Demo 验证？
+14. 是否需要加入 ServerExample 验证？
 
 如果无法明确回答上述问题，不要直接实现组件。
 
@@ -1137,7 +1137,7 @@ COM 思想用于解决：
    ↓
 编译 libServerCore.a
    ↓
-Demo 验证
+ServerExample 验证
    ↓
 再提供给其他服务器使用
 ```
@@ -1146,14 +1146,14 @@ Demo 验证
 
 # 32. 验证原则
 
-ServerCore 的任何核心能力都应该优先通过 Demo 验证。
+ServerCore 的任何核心能力都应该优先通过 ServerExample 验证。
 
 例如增加 Timer：
 
 ```text
 Timer
  ↓
-Demo
+ServerExample
  ↓
 创建 Timer
  ↓
@@ -1167,7 +1167,7 @@ Demo
 ```text
 Network
  ↓
-Demo
+ServerExample
  ↓
 启动服务器
  ↓
@@ -1183,7 +1183,7 @@ Demo
 ```text
 Component
  ↓
-Demo
+ServerExample
  ↓
 注册
  ↓
@@ -1221,7 +1221,7 @@ Release
                              │
               ┌──────────────┼──────────────┐
               ▼              ▼              ▼
-           DemoServer     SecurityServer   OtherServer
+           ServerExample     SecurityServer   OtherServer
               │              │              │
               ▼              ▼              ▼
           Protocol         Protocol        Protocol
@@ -1236,10 +1236,10 @@ ServerCore 应该是基础设施，而不是业务项目。
 
 ServerCore 应该可以独立编译成 `libServerCore.a`。
 
-ServerCore 初始版本必须提供可运行的 `MyApplication` 和 Demo。
+ServerCore 初始版本必须提供可运行的 `MyApplication` 和 ServerExample。
 
-Demo 必须证明 ServerCore 的组件模型和基础通信能力能够实际工作。
+ServerExample 必须证明 ServerCore 的组件模型和基础通信能力能够实际工作。
 
-具体通信协议属于 Demo 或其他服务器项目，不属于 ServerCore。
+具体通信协议属于 ServerExample 或其他服务器项目，不属于 ServerCore。
 
 模块之间通过接口和组件模型进行组合，组件模型借鉴 COM 的接口、查询、引用计数和生命周期管理思想，但不直接依赖 Windows COM。

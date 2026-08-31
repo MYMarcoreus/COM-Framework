@@ -93,7 +93,7 @@ sc::MessageExtractor MyProtocol::MakeMessageExtractor()
 }
 ```
 
-参考实现：`Demo/Protocol/DemoProtocol.cpp`、`LogServer/Protocol/LogProtocol.cpp`。
+参考实现：`ServerExample/Protocol/ExampleProtocol.cpp`、`LogServer/Protocol/LogProtocol.cpp`。
 
 ## 6. 线程安全
 

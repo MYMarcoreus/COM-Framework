@@ -58,18 +58,18 @@ manager.ShutdownAll();
 
 ## 4. 端到端验证（e2e）
 
-以 Demo ↔ LogServer 为例：
+以 ServerExample ↔ LogServer 为例：
 
 ```bash
 # 终端 1：LogServer（日志收集）
 cd LogServer && ../build/logserver
-# 终端 2：Demo（日志生产者 + 回显服务器）
-cd Demo && ../build/demo
+# 终端 2：ServerExample（日志生产者 + 回显服务器）
+cd ServerExample && ../build/example
 # 终端 3：客户端验证回显
-./build/demo_client 9000     # 期望：PING→PONG，ECHO→"Hello ServerCore"
+./build/example_client 9000     # 期望：PING→PONG，ECHO→"Hello ServerCore"
 # 状态报告（含指标聚合）
-kill -USR1 $(pgrep -f build/demo)
-tail -25 Demo/demo.log
+kill -USR1 $(pgrep -f build/example)
+tail -25 ServerExample/example.log
 ```
 
 ### 验证要点

@@ -104,12 +104,12 @@ TEST(Config_LoadAndGet)
 {
     const char* strPath = "/tmp/test_config_common.ini";
     std::ofstream ofs(strPath);
-    ofs << "name = ServerA\n" << "port = 9500\n";
+    ofs << "name = ServerTemplate\n" << "port = 9500\n";
     ofs.close();
 
     common::config::CConfig config;
     ASSERT_TRUE(config.LoadFile(strPath));
-    ASSERT_EQ(config.GetString("name", ""), std::string("ServerA"));
+    ASSERT_EQ(config.GetString("name", ""), std::string("ServerTemplate"));
     ASSERT_EQ(config.GetString("missing", "def"), std::string("def"));
     ASSERT_EQ(config.GetInt("port", 0), 9500);
     ASSERT_EQ(config.GetInt("missing", -1), -1);

@@ -52,4 +52,4 @@ void CMyModule::OnData(...)
 
 ## 5. 命名约定
 
-指标名使用点分层次：`<模块>.<量名>`（如 `network.conns`、`demo.echo`）；计数器只增；仪表表示当前值（可增可减）。
+指标名使用点分层次：`<模块>.<量名>`（如 `network.conns`、`example.echo`）；计数器只增；仪表表示当前值（可增可减）。

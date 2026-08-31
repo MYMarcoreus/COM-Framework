@@ -58,24 +58,24 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 │   └── Linux/
 │       └── Makefile             # 生成 build/libServerCore.a
 │
-├── Demo/                        # ServerCore 验证项目（模块自治）
-│   ├── demo.ini                 # 示例配置（Config 模块）
-│   ├── Application/             # DemoApplication
-│   ├── Protocol/                # Demo 极简协议（Length + Command + Payload）
-│   ├── Service/                 # DemoService（实现 INetworkHandler）
-│   ├── Module/                  # DemoLoggerModule / DemoTimerModule / DemoLogReporterModule
+├── ServerExample/                # ServerCore 全功能验证（模块自治）
+│   ├── example.ini              # 示例配置（Config 模块）
+│   ├── Application/             # ExampleApplication
+│   ├── Protocol/                # Example 极简协议（Length + Command + Payload）
+│   ├── Service/                 # ExampleService（实现 INetworkHandler）
+│   ├── Module/                  # ExampleLoggerModule / ExampleTimerModule / ExampleLogReporterModule
 │   ├── Client/                  # 测试客户端入口（client_main）
 │   ├── main.cpp                 # 服务器入口
 │   └── Linux/
-│       └── Makefile             # 生成 build/demo 与 build/demo_client
+│       └── Makefile             # 生成 build/example 与 build/example_client
 │
-├── ServerA/                     # 第一个业务服务器骨架（复用 ServerCore，模块自治）
-│   ├── Application/             # ServerApplication
+├── ServerTemplate/              # 最小业务服务器骨架（复用 ServerCore，模块自治）
+│   ├── Application/             # TemplateApplication
 │   ├── Service/                 # EchoService（实现 INetworkHandler）
-│   ├── Module/                  # ServerLoggerModule
+│   ├── Module/                  # TemplateLoggerModule
 │   ├── main.cpp                 # 服务器入口
 │   └── Linux/
-│       └── Makefile             # 生成 build/servera
+│       └── Makefile             # 生成 build/servertemplate
 │
 ├── LogServer/                   # 集中式日志服务器（复用 ServerCore，模块自治）
 │   ├── logserver.ini            # 示例配置（监听端口 / 日志目录）
@@ -124,12 +124,12 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 - **Module**：模块模型（IUnknown / 引用计数 / 接口查询）+ `CModuleManager`（拓扑排序 / 失败回滚）+ 依赖注入
 - **Event / Message / Network / Infra / Observability / Process / Exec**：事件分发、消息流水线、网络层、适配层、指标、进程工具、并发调度
 
-依赖方向：`Demo / Server → ServerCore → Common → 第三方库 / POSIX`。
+依赖方向：`ServerExample / ServerTemplate / LogServer → ServerCore → Common → 第三方库 / POSIX`。
 
 ### 业务服务器
 
-- **Demo**：ServerCore 验证项目（极简协议 + 回显 + 事件解耦 + 模块化装配）
-- **ServerA**：第一个业务服务器骨架（`EchoService` 验证网络收发链路）
+- **ServerExample**：ServerCore 全功能验证（极简协议 + 回显 + 事件解耦 + 模块化装配 + 日志上报）
+- **ServerTemplate**：最小业务服务器骨架（`EchoService` 验证网络收发链路），可作为新服务器模板
 - **LogServer**：集中式日志服务器（按来源分文件 + 滚动 + 配置热加载）
 
 ### Tests / examples
@@ -151,8 +151,8 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 git submodule update --init --recursive   # 首次克隆后初始化第三方库（asio / inih / workflow）
 ./build.sh --compiledb                    # 生成 compile_commands.json（供 clangd）
 ./build.sh                                # 构建全部项目
-./build/debug/demo 9000                   # 运行 Demo 服务器（默认 debug 构建）
-./build/debug/demo_client 9000            # 运行测试客户端（PING→PONG）
+./build/debug/example 9000                 # 运行 ServerExample 服务器（默认 debug 构建）
+./build/debug/example_client 9000          # 运行测试客户端（PING→PONG）
 ```
 
 详细操作（VS Code 任务 / 调试 / 宿主机 compiledb 等）见 [docs/usage.md](docs/usage.md)。

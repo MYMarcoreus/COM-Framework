@@ -202,8 +202,8 @@ graph LR
 }]
 ```
 
-- 下拉列出 `build/debug/` 下全部可执行文件（如 `demo`、`logserver`、`servera`、`examples`、
-  `demo_server`、`demo_client`、`demo_parallel`、`tests` 等），覆盖所有可执行项目。
+- 下拉列出 `build/debug/` 下全部可执行文件（如 `example`、`example_client`、`logserver`、
+  `servertemplate`、`examples`、`demo_server`、`demo_client`、`demo_parallel`、`tests` 等），覆盖所有可执行项目。
 - 选择后直接调试该文件；`allowCustomValues: true` 允许手动输入任意文件名。
 - 使用前提：对应可执行文件已构建（可先 `Tasks: Run Task` → `build (select project)` 选 debug + 项目）。
 

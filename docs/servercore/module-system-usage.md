@@ -102,7 +102,7 @@ sc::ScopedInterfacePtr<sc::IConnection> sp = pConn->Self<sc::IConnection>();
 回调 / 异步任务中必须保证模块存活，使用 `Self()`。推荐**具体类型**自持引用：
 
 ```cpp
-sc::ScopedInterfacePtr<CDemoService> spSelf = Self<CDemoService>();
+sc::ScopedInterfacePtr<CExampleService> spSelf = Self<CExampleService>();
 m_pTimer->AddPeriodicTimer(interval, [spSelf]()
 {
     if (spSelf) { spSelf->DoSomething(); /* 模块必然存活 */ }
@@ -134,7 +134,7 @@ m_pExecutor->Post([spWeak]()
 
 ```cpp
 m_tTimerId = sc::AddGuardedPeriodicTimer(m_pTimer.Get(), m_nIntervalMs,
-    WeakSelf<CDemoXxx>(), [](const sc::ScopedInterfacePtr<CDemoXxx>& sp) {
+    WeakSelf<CExampleXxx>(), [](const sc::ScopedInterfacePtr<CExampleXxx>& sp) {
         sp->DoSomething();
     });
 ```

@@ -5,7 +5,7 @@
 ```mermaid
 graph TD
     subgraph 业务服务器
-        B[Demo / ServerA / LogServer]
+        B[ServerExample / ServerTemplate / LogServer]
         B -->|协议+业务逻辑| S[Service / Module]
     end
     subgraph ServerCore
@@ -57,14 +57,14 @@ Application::Shutdown()
 模块按类型（或显式 iid）解析依赖接口，详见
 [servercore/dependency-injection-usage.md](servercore/dependency-injection-usage.md)。
 
-## 数据流（以 Demo 回显为例）
+## 数据流（以 ServerExample 回显为例）
 
 ```mermaid
 sequenceDiagram
-    participant C as demo_client
+    participant C as example_client
     participant N as CNetworkModule
     participant R as CMessageRouter
-    participant S as CDemoService
+    participant S as CExampleService
     participant X as CAsyncExecutor
     C->>N: 发送 PING 字节流
     N->>R: OnData(id, data, len)

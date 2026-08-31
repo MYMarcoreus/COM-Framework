@@ -143,7 +143,8 @@ protected:                                                              \
 /// 用法：
 /// @code
 ///   // 单接口
-///   SC_DEFINE_INTERFACE_MAP(CDemoService, sc::CModule, sc::INetworkHandler)
+///   SC_DEFINE_INTERFACE_MAP(CExampleService,
+///       sc::CModule, sc::INetworkHandler)
 ///   // 多接口（最多 8 个）
 ///   SC_DEFINE_INTERFACE_MAP(CService, sc::CModule, sc::INetworkHandler, sc::IMetrics)
 /// @endcode

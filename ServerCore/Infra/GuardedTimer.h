@@ -16,8 +16,8 @@ namespace sc {
 /// 用法：
 /// @code
 ///   m_tTimerId = sc::AddGuardedPeriodicTimer(m_pTimer.Get(), m_nIntervalMs,
-///       WeakSelf<CDemoXxx>(),              // 弱引用目标类型（决定回调参数类型）
-///       [](const sc::ScopedInterfacePtr<CDemoXxx>& sp)
+///       WeakSelf<CExampleXxx>(),              // 弱引用目标类型（决定回调参数类型）
+///       [](const sc::ScopedInterfacePtr<CExampleXxx>& sp)
 ///       {
 ///           sp->DoSomething();              // 具体类型直接调用，无需转换
 ///       });

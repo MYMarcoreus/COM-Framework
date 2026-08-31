@@ -62,7 +62,7 @@ ThirdParty/
 禁止：
 
 ```text
-ServerA/ThirdParty/LibraryA
+ServerTemplate/ThirdParty/LibraryA
 ServerB/ThirdParty/LibraryA
 ServerC/ThirdParty/LibraryA
 ```

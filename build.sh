@@ -26,7 +26,7 @@ WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # ====================================================================
 
 # 已知构建依赖顺序（Common 最先；新项目按依赖追加到数组末尾，或自动发现后追加）
-KNOWN_ORDER=(Common ServerCore LogServer Demo ServerA Tests examples)
+KNOWN_ORDER=(Common ServerCore LogServer ServerExample ServerTemplate Tests examples)
 
 RELEASE_FLAGS="-std=c++11 -Wall -Wextra -O2 -g -pthread"
 DEBUG_FLAGS="-std=c++11 -Wall -Wextra -O0 -g -pthread"
