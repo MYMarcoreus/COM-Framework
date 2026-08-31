@@ -13,13 +13,16 @@ namespace datahub {
 /// 通过静态指针访问数据存储与前端页面（由 HttpServerModule 在 Initialize 时设置）。
 class HttpHandlers
 {
-public:
+   public:
     // 设置数据存储与前端页面（HttpServerModule::Initialize 调用）。
     static void SetStore(sc::IDataStore* pStore);
     static void SetIndexHtml(const std::string* pIndexHtml);
 
     // 首页：返回前端页面。
     static bool HandleIndex(WFHttpTask* pServerTask);
+
+    // 静态资源：GET /style.css、/app.js（前端页面引用的独立资源）。
+    static bool HandleStatic(WFHttpTask* pServerTask, const std::string& strName);
 
     // 消息列表：GET /api/list。
     static bool HandleList(WFHttpTask* pServerTask);
@@ -42,9 +45,9 @@ public:
     // 删除：DELETE /api/item/<id>。
     static bool HandleDelete(WFHttpTask* pServerTask, const std::string& strId);
 
-private:
+   private:
     static sc::IDataStore* s_pStore;
     static const std::string* s_pIndexHtml;
 };
 
-} // namespace datahub
+}  // namespace datahub

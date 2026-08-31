@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <sstream>
 #include <vector>
 
@@ -43,6 +44,49 @@ bool HttpHandlers::HandleIndex(WFHttpTask* pServerTask)
     pResp->set_status_code("200");
     pResp->add_header_pair("Content-Type", "text/html; charset=utf-8");
     pResp->append_output_body(s_pIndexHtml->data(), s_pIndexHtml->size());
+    return true;
+}
+
+// ----------------------------------------------------------------------------
+// 静态资源：style.css / app.js（与 index.html 同目录部署）
+// ----------------------------------------------------------------------------
+bool HttpHandlers::HandleStatic(WFHttpTask* pServerTask, const std::string& strName)
+{
+    // 路径解析：默认用户目录 $HOME/.datahub/<name>（与 index.html 同目录）。
+    const char* szHome = ::getenv("HOME");
+    if (szHome == nullptr)
+    {
+        HttpUtil::WriteText(pServerTask, "static unavailable", "503", "text/plain");
+        return true;
+    }
+    std::string strPath = std::string(szHome) + "/.datahub/" + strName;
+
+    std::ifstream ifs(strPath.c_str(), std::ios::binary);
+    if (!ifs.is_open())
+    {
+        HttpUtil::WriteText(pServerTask, "not found", "404", "text/plain");
+        return true;
+    }
+    std::stringstream ss;
+    ss << ifs.rdbuf();
+    const std::string& strBody = ss.str();
+
+    protocol::HttpResponse* pResp = pServerTask->get_resp();
+    pResp->set_status_code("200");
+    // 依据扩展名设置 Content-Type（前端引用，字符集 utf-8）。
+    if (strName.size() >= 4 && strName.compare(strName.size() - 4, 4, ".css") == 0)
+    {
+        pResp->add_header_pair("Content-Type", "text/css; charset=utf-8");
+    }
+    else if (strName.size() >= 3 && strName.compare(strName.size() - 3, 3, ".js") == 0)
+    {
+        pResp->add_header_pair("Content-Type", "text/javascript; charset=utf-8");
+    }
+    else
+    {
+        pResp->add_header_pair("Content-Type", "application/octet-stream");
+    }
+    pResp->append_output_body(strBody.data(), strBody.size());
     return true;
 }
 

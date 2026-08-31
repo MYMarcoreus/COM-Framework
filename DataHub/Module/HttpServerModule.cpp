@@ -19,8 +19,11 @@ const std::string* CHttpServerModule::s_pIndexHtml = nullptr;
 
 /// @brief 创建 HTTP 服务模块。
 CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strIndex)
-    : sc::CModule("http"), m_nPort(nPort), m_strIndexPath(strIndex),
-      m_server(&CHttpServerModule::ProcessRequest), m_bStarted(false)
+    : sc::CModule("http"),
+      m_nPort(nPort),
+      m_strIndexPath(strIndex),
+      m_server(&CHttpServerModule::ProcessRequest),
+      m_bStarted(false)
 {
     // 依赖 IDataStore 接口模块：生命周期拓扑排序保证其先初始化 / 启动。
     AddDependency(sc::IID_IDataStore());
@@ -178,6 +181,11 @@ bool CHttpServerModule::Dispatch(WFHttpTask* pServerTask, const std::string& str
     if (strMethod == "GET" && strPath == "/")
     {
         return HttpHandlers::HandleIndex(pServerTask);
+    }
+    // 前端静态资源：style.css / app.js（index.html 引用的独立文件）
+    if (strMethod == "GET" && (strPath == "/style.css" || strPath == "/app.js"))
+    {
+        return HttpHandlers::HandleStatic(pServerTask, strPath.substr(1));
     }
     // 列表（GET /api/list）
     if (strMethod == "GET" && strPath == "/api/list")

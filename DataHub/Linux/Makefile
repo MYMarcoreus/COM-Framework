@@ -44,18 +44,21 @@ DEPS := $(SERVER_OBJS:.o=.d)
 LDLIBS ?= $(WORKFLOW_LIB) -lcrypto -lpthread
 
 # 前端页面部署目录（用户目录固定位置，代码运行时从此处读取，与工作目录无关）
-WEB_SRC   := $(ROOT)/Web/index.html
-WEB_DEST  := $(HOME)/.datahub/index.html
+# index.html 引用 style.css / app.js，故整个 Web 目录一起拷贝。
+WEB_SRC_DIR := $(ROOT)/Web
+WEB_DEST_DIR := $(HOME)/.datahub
 
 # 默认目标：构建可执行文件 + 部署前端页面到用户目录
 all: $(TARGET) deploy-web
 
-# 部署前端页面：拷贝到用户目录 ~/.datahub/index.html
+# 部署前端页面：将整个 Web 目录拷贝到 ~/.datahub/
 .PHONY: deploy-web
 deploy-web:
-	@mkdir -p $(dir $(WEB_DEST))
-	@cp -f $(WEB_SRC) $(WEB_DEST)
-	@echo "已部署前端页面: $(WEB_DEST)"
+	@mkdir -p $(WEB_DEST_DIR)
+	@cp -f $(WEB_SRC_DIR)/index.html $(WEB_DEST_DIR)/
+	@cp -f $(WEB_SRC_DIR)/style.css $(WEB_DEST_DIR)/
+	@cp -f $(WEB_SRC_DIR)/app.js $(WEB_DEST_DIR)/
+	@echo "已部署前端页面: $(WEB_DEST_DIR)"
 
 # 链接：本项目对象 + ServerCore + Common + workflow
 $(TARGET): $(SERVER_OBJS) $(LIB) $(COMMON_LIB) $(WORKFLOW_LIB)
