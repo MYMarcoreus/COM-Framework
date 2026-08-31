@@ -45,6 +45,15 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 │
 ├── WorkflowDemo/                # Sogou Workflow 使用示例（server / client / parallel / graph）
 │
+├── DataHub/                     # 设备间 HTTP 数据传输服务（ServerCore 骨架 + Workflow HTTP）
+│   ├── datahub.ini              # 示例配置（监听端口）
+│   ├── Application/             # DataHubApplication
+│   ├── Module/                  # DataStoreModule（内存存储）/ HttpServerModule（WFHttpServer 封装）
+│   ├── Web/                     # 内置网页（IndexHtml：移动端友好的传输 UI）
+│   ├── main.cpp                 # 服务器入口
+│   └── Linux/
+│       └── Makefile             # 生成 build/datahub
+│
 ├── ServerCore/                  # 服务器基础框架（静态库 libServerCore.a，模块自治）
 │   ├── Application/             # MyApplication（生命周期 + 配置注入 + 运行状态 + 默认装配）
 │   ├── Module/                  # 模块模型：IUnknown/InterfaceId/ScopedInterfacePtr + IModule/Module/ModuleManager + CResolveContext（依赖注入）

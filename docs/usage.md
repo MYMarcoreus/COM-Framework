@@ -36,7 +36,7 @@
 **构建产物按模式分目录**（debug 与 release 隔离，可同时存在、互不干扰）：
 
 ```text
-build/debug/       —— 调试产物（默认；example、example_client、logserver、servertemplate、tests、lib*.a、examples/）
+build/debug/       —— 调试产物（默认；datahub、example、example_client、logserver、servertemplate、tests、lib*.a、examples/）
 build/release/     —— 发布产物（-O2，用 -r/--release 构建）
 ```
 
@@ -158,6 +158,7 @@ git commit -m "升级 asio 到 <新标签>"
 | `./build/debug/example 9000` | 运行 ServerExample 服务器（debug） |
 | `./build/debug/example_client 9000` | 运行 ServerExample 客户端（debug） |
 | `./build/release/example 9000` | 运行 ServerExample 服务器（release） |
+| `./build/debug/datahub 8888` | 运行 DataHub 数据传输服务（浏览器访问 http://<IP>:8888/） |
 | `./build/debug/demo_server 8888` | 运行 WorkflowDemo HTTP echo 服务器 |
 | `./build/debug/demo_client http://127.0.0.1:8888/x` | 运行 WorkflowDemo HTTP 客户端 |
 | `./build/debug/demo_parallel <url1> <url2>` | 运行 WorkflowDemo 并行请求示例 |
