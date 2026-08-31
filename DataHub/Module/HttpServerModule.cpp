@@ -318,6 +318,9 @@ bool CHttpServerModule::HandleUploadFile(WFHttpTask* pServerTask)
         return true;
     }
     std::string strFileName = GetHeader(pServerTask, "X-File-Name");
+    // 前端上传时对文件名做 encodeURIComponent 编码（%XX），此处解码还原；
+    // 对纯 ASCII 文件名解码是幂等的，直接解码安全。
+    strFileName = UrlDecode(strFileName);
     std::string strBody;
     size_t nSize = ReadBody(pServerTask, strBody);
     if (nSize == 0)
@@ -357,8 +360,19 @@ bool CHttpServerModule::HandleGetFile(WFHttpTask* pServerTask, const std::string
     protocol::HttpResponse* pResp = pServerTask->get_resp();
     pResp->set_status_code("200");
     pResp->add_header_pair("Content-Type", "application/octet-stream");
-    // 指定下载文件名（浏览器自动保存）。
-    std::string strDisposition = "attachment; filename=\"" + strName + "\"";
+    // 指定下载文件名（浏览器自动保存）。HTTP 头不允许非 ASCII 字节：
+    //   - ASCII 文件名直接用 filename="...";
+    //   - 含非 ASCII（如中文）时用 RFC 5987 filename*=UTF-8''<urlencoded>，
+    //     并提供 ASCII 回退名（RFC 6266），保证浏览器正确识别中文文件名。
+    std::string strDisposition;
+    if (HasNonAscii(strName))
+    {
+        strDisposition = "attachment; filename=\"download.bin\"; filename*=UTF-8''" + UrlEncode(strName);
+    }
+    else
+    {
+        strDisposition = "attachment; filename=\"" + strName + "\"";
+    }
     pResp->add_header_pair("Content-Disposition", strDisposition.c_str());
     pResp->append_output_body(vecData.data(), vecData.size());
     return true;
@@ -486,6 +500,47 @@ std::string CHttpServerModule::UrlDecode(const std::string& strEncoded)
         }
     }
     return strOut;
+}
+
+// ----------------------------------------------------------------------------
+// URL 编码（RFC 3986 unreserved 保留，其余 %XX）
+// ----------------------------------------------------------------------------
+std::string CHttpServerModule::UrlEncode(const std::string& strRaw)
+{
+    static const char* const kHex = "0123456789ABCDEF";
+    std::string strOut;
+    strOut.reserve(strRaw.size() * 3);
+    for (unsigned char c : strRaw)
+    {
+        // unreserved: A-Z a-z 0-9 - _ . ~
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~')
+        {
+            strOut.push_back(static_cast<char>(c));
+        }
+        else
+        {
+            strOut.push_back('%');
+            strOut.push_back(kHex[(c >> 4) & 0x0F]);
+            strOut.push_back(kHex[c & 0x0F]);
+        }
+    }
+    return strOut;
+}
+
+// ----------------------------------------------------------------------------
+// 判断是否含非 ASCII 字符
+// ----------------------------------------------------------------------------
+bool CHttpServerModule::HasNonAscii(const std::string& strValue)
+{
+    for (unsigned char c : strValue)
+    {
+        if (c >= 0x80)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 // ----------------------------------------------------------------------------

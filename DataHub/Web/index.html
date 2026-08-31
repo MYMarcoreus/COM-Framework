@@ -60,6 +60,25 @@
               color:var(--text); }
   .item .ops a:hover { background:var(--pri); color:#fff; }
   .item .ops button.del:hover { background:var(--err); color:#fff; }
+  /* 最近发送列表 */
+  .sent-card { margin-top:8px; }
+  .sent-item { display:flex; align-items:flex-start; gap:10px; padding:10px 0;
+               border-bottom:1px solid var(--border); font-size:14px; }
+  .sent-item:last-child { border-bottom:none; }
+  .sent-item .icon { font-size:18px; line-height:1.4; }
+  .sent-item .meta { flex:1; min-width:0; }
+  .sent-item .meta .name { font-weight:600; word-break:break-all; }
+  .sent-item .meta .preview { color:var(--muted); font-size:12px; margin-top:3px;
+               overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sent-item .meta .sub { color:var(--muted); font-size:12px; margin-top:3px; }
+  .sent-item .id { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px;
+               color:var(--pri); cursor:pointer; padding:4px 8px; background:#eff6ff;
+               border-radius:6px; user-select:all; white-space:nowrap; }
+  .sent-item .ops { display:flex; flex-direction:column; gap:6px; }
+  .sent-item .ops a, .sent-item .ops button { text-decoration:none; border:none; cursor:pointer;
+               font-size:12px; padding:6px 10px; border-radius:6px; background:#f3f4f6;
+               color:var(--text); text-align:center; }
+  .sent-item .ops a:hover { background:var(--pri); color:#fff; }
   .empty { text-align:center; color:var(--muted); padding:24px 0; font-size:14px; }
   .hint { font-size:12px; color:var(--muted); margin-top:8px; line-height:1.6; }
   .row { display:flex; gap:10px; }
@@ -92,6 +111,10 @@
       <input type="file" id="fileInput">
       <button class="btn" onclick="sendFile()">上传并生成提取码</button>
       <div class="result" id="resFile"></div>
+    </div>
+    <div class="card sent-card">
+      <h2>📤 最近发送</h2>
+      <div id="sentList"><div class="empty">暂无发送记录</div></div>
     </div>
   </div>
 
@@ -153,9 +176,13 @@ function sendText() {
   fetch('/api/text', { method:'POST', body:content })
     .then(function(r){ return r.json(); })
     .then(function(j){
-      if (j.id) showResult('resText', true,
-        '提取码：<div class="code" onclick="copyCode(\'' + j.id + '\')">' + j.id + '</div>' +
-        '<div style="text-align:center;">点击提取码可复制</div>', true);
+      if (j.id) {
+        showResult('resText', true,
+          '提取码：<div class="code" onclick="copyCode(\'' + j.id + '\')">' + j.id + '</div>' +
+          '<div style="text-align:center;">点击提取码可复制</div>', true);
+        addSentItem('text', j.id, '文本消息', content);
+        document.getElementById('txtContent').value = '';
+      }
       else showResult('resText', false, j.error || '发送失败');
     })
     .catch(function(){ showResult('resText', false, '网络错误'); });
@@ -174,12 +201,44 @@ function sendFile() {
   })
   .then(function(r){ return r.json(); })
   .then(function(j){
-    if (j.id) showResult('resFile', true,
-      '上传成功！提取码：<div class="code" onclick="copyCode(\'' + j.id + '\')">' + j.id + '</div>' +
-      '<div style="text-align:center;">点击提取码可复制</div>', true);
+    if (j.id) {
+      showResult('resFile', true,
+        '上传成功！提取码：<div class="code" onclick="copyCode(\'' + j.id + '\')">' + j.id + '</div>' +
+        '<div style="text-align:center;">点击提取码可复制</div>', true);
+      addSentItem('file', j.id, file.name, '');
+      input.value = '';
+    }
     else showResult('resFile', false, j.error || '上传失败');
   })
   .catch(function(){ showResult('resFile', false, '网络错误'); });
+}
+
+// 把已发送项实时追加到「最近发送」列表（新的在上）。
+function addSentItem(type, id, name, content) {
+  var wrap = document.getElementById('sentList');
+  if (!wrap) return;
+  var empty = wrap.querySelector('.empty');
+  if (empty) empty.remove();
+  var icon = type === 'file' ? '📎' : '✏️';
+  var preview = type === 'file'
+    ? '文件 · ' + (name || '未命名')
+    : (content || '');
+  if (preview.length > 60) preview = preview.slice(0, 60) + '…';
+  var ops = type === 'file'
+    ? '<a href="/api/file/' + id + '">下载</a>'
+    : '<a href="/api/text/' + id + '" target="_blank">查看</a>';
+  var div = document.createElement('div');
+  div.className = 'sent-item';
+  div.innerHTML =
+    '<div class="icon">' + icon + '</div>' +
+    '<div class="meta">' +
+      '<div class="name">' + escapeHtml(name || '文本消息') + '</div>' +
+      '<div class="preview">' + escapeHtml(preview) + '</div>' +
+      '<div class="sub">' + new Date().toLocaleTimeString() + '</div>' +
+    '</div>' +
+    '<div class="id" onclick="copyCode(\'' + id + '\')" title="点击复制">' + id + '</div>' +
+    '<div class="ops">' + ops + '</div>';
+  wrap.insertBefore(div, wrap.firstChild);
 }
 
 function getText() {

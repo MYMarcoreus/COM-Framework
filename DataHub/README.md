@@ -18,13 +18,16 @@ main.cpp
   ↓
 CDataHubApplication (ServerCore CMyApplication)
   ├── CConfigModule / CLoggerModule / CMetricsModule   # 基类默认装配
-  ├── CDataStoreModule        # IDataStore：内存存储（文本 / 文件）
+  ├── CDataStoreModule        # IDataStore：委托 common::storage::CFileStore（通用文件存储组件）
   └── CHttpServerModule       # IHttpService：封装 Workflow WFHttpServer
 ```
 
 - `CDataStoreModule` 按接口注册（`IID_IDataStore`），供 HTTP 模块按接口解析（依赖注入）。
 - `CHttpServerModule` 声明依赖 `IDataStore`，由 `CModuleManager` 拓扑排序保证先就绪。
 - HTTP 回调为 Workflow 线程池执行，通过接口访问数据存储（存储内部加锁，线程安全）。
+- **文件存储抽象**：数据存储能力由 Common 的通用组件 `common::storage::CFileStore`
+  （`Common/Storage/`）提供——纯内存、线程安全、短码生成，可被任意服务器项目复用；
+  `CDataStoreModule` 仅做接口适配（委托）。
 
 ## 一键脚本（推荐）
 

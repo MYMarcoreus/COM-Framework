@@ -81,6 +81,13 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     // URL 解码（%XX → 字符；+ → 空格）。
     static std::string UrlDecode(const std::string& strEncoded);
 
+    // URL 编码（字符 → %XX；保留 unreserved 字符）。用于 Content-Disposition
+    // 的 RFC 5987 filename* 编码，避免 HTTP 头出现非 ASCII 字节。
+    static std::string UrlEncode(const std::string& strRaw);
+
+    // 判断字符串是否含非 ASCII 字符。
+    static bool HasNonAscii(const std::string& strValue);
+
     // HTML 转义（防 XSS）。
     static std::string HtmlEscape(const std::string& strRaw);
 
