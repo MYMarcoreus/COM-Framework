@@ -1,22 +1,20 @@
 // ============================================================================
-// WorkflowDemo demo_graph —— 复杂任务流（图 DAG + 串并联 + 条件分支）示例
+// WorkflowDemo demo_graph —— 复杂任务流（图 DAG + 串并联）示例
 //
 // 用法:
-//   ./build/WorkflowDemo/demo_graph <url1> <url2> <url3> ...
+//   ./build/WorkflowDemo/demo_graph
 //
 // 演示 workflow 复杂任务编排能力：
 //   - WFGraphTask 图任务：用 a-->b 表达任意 DAG 依赖
 //   - 混合节点：HTTP 请求 / 定时器 / go 计算任务
-//   - 条件分支：根据前序结果决定后续路径（成功→汇总，失败→兜底）
 //   - 串并联混合：节点间并行 + 依赖串联
 //
 // 流程（DAG）:
-//   timer(1s) ─┬─> http(url1) ─┬─> go(合并统计) ─> [成功?] ─┬─ 是 ─> 打印汇总
-//              ├─> http(url2) ─┤                            └─ 否 ─> 打印失败
+//   timer(1s) ─┬─> http(url1) ─┐
+//              ├─> http(url2) ─┼─> go(合并统计) ─> 打印汇总
 //              └─> http(url3) ─┘
 // ============================================================================
 #include <stdio.h>
-#include <string.h>
 #include <string>
 #include <vector>
 
@@ -27,6 +25,14 @@
 #include "workflow/WFFacilities.h"
 
 static WFFacilities::WaitGroup wait_group(1);
+
+// 待抓取的 URL（固定写死，便于演示）
+static const char* kUrls[] = {
+    "http://127.0.0.1:8888/a",
+    "http://127.0.0.1:8888/b",
+    "http://127.0.0.1:8888/c",
+};
+static const int kUrlCount = sizeof(kUrls) / sizeof(kUrls[0]);
 
 // 各节点共享的数据
 struct GraphData
@@ -81,19 +87,11 @@ void Aggregate(GraphData* data)
 // ----------------------------------------------------------------------------
 // 主函数：构建并启动复杂任务流
 // ----------------------------------------------------------------------------
-int main(int argc, char* argv[])
+int main()
 {
-    if (argc < 3)
-    {
-        fprintf(stderr, "Usage: %s <url1> <url2> <url3> ...\n", argv[0]);
-        return 1;
-    }
-
     GraphData* data = new GraphData;
-    for (int i = 1; i < argc && i <= 8; ++i)
-        data->urls.push_back(argv[i]);
-
-    int n = (int)data->urls.size();
+    for (int i = 0; i < kUrlCount; ++i)
+        data->urls.push_back(kUrls[i]);
 
     // ---- 节点 0：定时器（先等 1 秒）----
     WFTimerTask* timer = WFTaskFactory::create_timer_task(
@@ -101,8 +99,7 @@ int main(int argc, char* argv[])
             printf("[timer] 1s elapsed\n");
         });
 
-    // ---- 节点 1..n：HTTP 请求（每个 URL 一个）----
-    // ---- 节点 n+1：汇总计算 ----
+    // ---- 汇总计算节点 ----
     WFGoTask* go = WFTaskFactory::create_go_task(
         "aggregate", Aggregate, data);
 
@@ -116,7 +113,7 @@ int main(int argc, char* argv[])
 
     WFGraphNode& t = graph->create_graph_node(timer);
     std::vector<WFGraphNode*> http_nodes;
-    for (int i = 0; i < n; ++i)
+    for (int i = 0; i < kUrlCount; ++i)
     {
         // 每个 http 节点：lambda 里捕获索引与 data，转发到 FetchHttp
         size_t idx = (size_t)i;

@@ -33,8 +33,8 @@ git submodule update --init --recursive
 # ③ 并行请求（同时抓取多个 URL）
 ./build/release/demo_parallel http://127.0.0.1:8888/a http://127.0.0.1:8888/b http://127.0.0.1:8888/c
 
-# ④ 复杂任务流（图 DAG：timer → 并行 http → go 汇总）
-./build/release/demo_graph http://127.0.0.1:8888/a http://127.0.0.1:8888/b http://127.0.0.1:8888/c
+# ④ 复杂任务流（图 DAG：timer → 并行 http → go 汇总；URL 固定写在代码里）
+./build/release/demo_graph
 ```
 
 ## 示例内容
