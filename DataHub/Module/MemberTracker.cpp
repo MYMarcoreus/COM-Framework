@@ -34,6 +34,14 @@ std::string MemberTracker::ClientId(WFHttpTask* pServerTask)
 /// @brief 记录成员活跃（每次请求调用）；返回客户端标识。
 std::string MemberTracker::Touch(WFHttpTask* pServerTask)
 {
+    // 仅当请求携带有效 X-Client-Id 头时记录成员；无头请求（curl、静态资源、
+    // 探测等）不计入，避免产生 "IP:port" 假成员。
+    std::string strHeader = HttpUtil::GetHeader(pServerTask, "X-Client-Id");
+    if (strHeader.empty())
+    {
+        return std::string();
+    }
+
     std::string strClientId = ClientId(pServerTask);
     if (strClientId.empty() || strClientId == "unknown:0")
     {
