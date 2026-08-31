@@ -1,8 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <map>
-#include <mutex>
 #include <string>
 
 #include "Module/IDataStore.h"
@@ -14,17 +12,20 @@
 
 namespace datahub {
 
-using sc::DataItemInfo;
-using sc::DataKind;
 using sc::IDataStore;
 using sc::IHttpService;
 
 /// @brief HTTP 数据传输服务模块（基于 Sogou Workflow）。
 ///
-/// 封装 WFHttpServer，作为 ServerCore 模块注册：
-///   - Initialize：从上下文解析 IDataStore 数据存储接口，并加载前端页面；
-///   - Start：启动 HTTP 服务（路由见 IHttpService 注释）；
-///   - Stop：停止 HTTP 服务。
+/// 封装 WFHttpServer 作为 ServerCore 模块注册，作为 HTTP 服务外观：
+///   - 生命周期：Initialize（解析 IDataStore + 加载前端页面）/ Start / Stop / Shutdown；
+///   - 路由分发：ProcessRequest / Dispatch 分派到 HttpHandlers 各业务处理器。
+///
+/// 职责分层：
+///   - HttpServerModule：生命周期 + 路由（本文件）
+///   - HttpHandlers：各 API 业务处理（列表 / 文本 / 文件 / 成员 / 删除 / 首页）
+///   - HttpUtil：HTTP 工具（响应写入 / 请求读取 / 编码转义）
+///   - MemberTracker：在线成员跟踪
 ///
 /// 前端页面为独立资源文件，构建时由 Makefile 部署到用户目录
 /// `~/.datahub/index.html`，运行时从磁盘加载（路径确定，与工作目录无关）。
@@ -58,72 +59,13 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     // 路由分发：返回是否已写响应。
     static bool Dispatch(WFHttpTask* pServerTask, const std::string& strMethod, const std::string& strPath);
 
-    // 各路由处理（失败返回 false，由调用方写 4xx）。
-    static bool HandleIndex(WFHttpTask* pServerTask);
-    static bool HandleList(WFHttpTask* pServerTask);
-    static bool HandleMembers(WFHttpTask* pServerTask);
-    static bool HandleUploadText(WFHttpTask* pServerTask);
-    static bool HandleGetText(WFHttpTask* pServerTask, const std::string& strId);
-    static bool HandleUploadFile(WFHttpTask* pServerTask);
-    static bool HandleGetFile(WFHttpTask* pServerTask, const std::string& strId);
-    static bool HandleDelete(WFHttpTask* pServerTask, const std::string& strId);
-
-    // 便捷：写 JSON 响应。
-    static void WriteJson(WFHttpTask* pServerTask, const std::string& strJson, const char* szStatus = "200");
-
-    // 便捷：写纯文本响应。
-    static void WriteText(WFHttpTask* pServerTask, const std::string& strBody, const char* szStatus = "200",
-                          const char* szType = "text/plain; charset=utf-8");
-
-    // 便捷：读取请求体（返回字节数，0 表示无 body）。
-    static size_t ReadBody(WFHttpTask* pServerTask, std::string& strBody);
-
-    // 便捷：读取请求头值。
-    static std::string GetHeader(WFHttpTask* pServerTask, const char* szName);
-
-    // URL 解码（%XX → 字符；+ → 空格）。
-    static std::string UrlDecode(const std::string& strEncoded);
-
-    // URL 编码（字符 → %XX；保留 unreserved 字符）。用于 Content-Disposition
-    // 的 RFC 5987 filename* 编码，避免 HTTP 头出现非 ASCII 字节。
-    static std::string UrlEncode(const std::string& strRaw);
-
-    // 判断字符串是否含非 ASCII 字符。
-    static bool HasNonAscii(const std::string& strValue);
-
-    // HTML 转义（防 XSS）。
-    static std::string HtmlEscape(const std::string& strRaw);
-
     // 从磁盘加载前端页面文件（路径 m_strIndexPath 由配置 [web] index 指定）；成功返回 true。
     bool LoadIndexHtml();
-
-    // 获取请求来源地址（IP:port 字符串）；失败返回空串。
-    static std::string PeerAddress(WFHttpTask* pServerTask);
-
-    // 获取客户端标识：优先取 X-Client-Id 请求头，否则退回 "IP:port"。
-    static std::string ClientId(WFHttpTask* pServerTask);
-
-    // 记录成员活跃（每次请求调用）；返回客户端标识。
-    static std::string TouchMember(WFHttpTask* pServerTask);
-
-    // 清理超过超时时间未活跃的成员（返回清理数量）。
-    static size_t PruneMembers();
 
     // 当前数据存储（Initialize 后可用）。
     static IDataStore* s_pStore;
     // 已加载的前端页面内容（静态指针，供静态回调访问；Initialize 时指向实例成员）。
     static const std::string* s_pIndexHtml;
-
-    // 在线成员信息。
-    struct MemberInfo
-    {
-        std::string strIp;      // 来源 IP
-        std::int64_t nFirstMs;  // 首次活跃时间（毫秒）
-        std::int64_t nLastMs;   // 最后活跃时间（毫秒）
-    };
-    // 在线成员：客户端标识 → 成员信息（X-Client-Id 请求头，浏览器持久化）。
-    static std::map<std::string, MemberInfo> s_mapMembers;
-    static std::mutex s_membersMutex;
 
     std::uint16_t m_nPort;
     std::string m_strIndexPath;  // 前端页面文件路径

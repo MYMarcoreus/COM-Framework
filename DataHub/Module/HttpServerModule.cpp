@@ -1,38 +1,26 @@
 #include "Module/HttpServerModule.h"
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-
-#include <algorithm>
-#include <cctype>
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
 #include <fstream>
 #include <sstream>
+#include <string>
 
 #include "Log/Logger.h"
+#include "Module/HttpHandlers.h"
+#include "Module/HttpUtil.h"
 #include "Module/InterfaceMap.h"
+#include "Module/MemberTracker.h"
 #include "Module/ResolveContext.h"
 #include "workflow/HttpMessage.h"
-#include "workflow/HttpUtil.h"
 
 namespace datahub {
 
 IDataStore* CHttpServerModule::s_pStore = nullptr;
 const std::string* CHttpServerModule::s_pIndexHtml = nullptr;
-std::map<std::string, CHttpServerModule::MemberInfo> CHttpServerModule::s_mapMembers;
-std::mutex CHttpServerModule::s_membersMutex;
 
 /// @brief 创建 HTTP 服务模块。
 CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strIndex)
-    : sc::CModule("http"),
-      m_nPort(nPort),
-      m_strIndexPath(strIndex),
-      m_server(&CHttpServerModule::ProcessRequest),
-      m_bStarted(false)
+    : sc::CModule("http"), m_nPort(nPort), m_strIndexPath(strIndex),
+      m_server(&CHttpServerModule::ProcessRequest), m_bStarted(false)
 {
     // 依赖 IDataStore 接口模块：生命周期拓扑排序保证其先初始化 / 启动。
     AddDependency(sc::IID_IDataStore());
@@ -56,16 +44,17 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
     {
         return false;
     }
-    // 回调为静态方法，通过静态指针访问数据存储。
+    // 回调为静态方法，通过静态指针访问数据存储与前端页面。
     s_pStore = m_pStore.Get();
+    HttpHandlers::SetStore(s_pStore);
 
     // 加载前端页面（独立资源文件）；失败仅告警，不影响服务启动。
     if (!LoadIndexHtml())
     {
         common::log::CLogger::Instance().Warn("[DataHub] 前端页面加载失败: " + m_strIndexPath + "（GET / 将返回 503）");
     }
-    // 回调为静态方法，通过静态指针访问页面内容。
     s_pIndexHtml = &m_strIndexHtml;
+    HttpHandlers::SetIndexHtml(s_pIndexHtml);
     return true;
 }
 
@@ -136,6 +125,9 @@ void CHttpServerModule::Shutdown()
     m_pStore.Reset();
     s_pStore = nullptr;
     s_pIndexHtml = nullptr;
+    HttpHandlers::SetStore(nullptr);
+    HttpHandlers::SetIndexHtml(nullptr);
+    MemberTracker::Clear();
 }
 
 std::uint16_t CHttpServerModule::Port() const
@@ -156,8 +148,8 @@ void CHttpServerModule::ProcessRequest(WFHttpTask* pServerTask)
     protocol::HttpRequest* pReq = pServerTask->get_req();
     protocol::HttpResponse* pResp = pServerTask->get_resp();
 
-    // 记录成员活跃（IP:port），供在线成员列表展示。
-    TouchMember(pServerTask);
+    // 记录成员活跃（客户端标识），供在线成员列表展示。
+    MemberTracker::Touch(pServerTask);
 
     std::string strMethod = pReq->get_method();
     std::string strPath = pReq->get_request_uri();
@@ -170,7 +162,7 @@ void CHttpServerModule::ProcessRequest(WFHttpTask* pServerTask)
 
     if (!Dispatch(pServerTask, strMethod, strPath))
     {
-        WriteText(pServerTask, "Not Found", "404", "text/plain");
+        HttpUtil::WriteText(pServerTask, "Not Found", "404", "text/plain");
     }
 
     // 统一响应头。
@@ -185,543 +177,43 @@ bool CHttpServerModule::Dispatch(WFHttpTask* pServerTask, const std::string& str
     // 首页（GET /）
     if (strMethod == "GET" && strPath == "/")
     {
-        return HandleIndex(pServerTask);
+        return HttpHandlers::HandleIndex(pServerTask);
     }
     // 列表（GET /api/list）
     if (strMethod == "GET" && strPath == "/api/list")
     {
-        return HandleList(pServerTask);
+        return HttpHandlers::HandleList(pServerTask);
     }
     // 在线成员（GET /api/members）
     if (strMethod == "GET" && strPath == "/api/members")
     {
-        return HandleMembers(pServerTask);
+        return HttpHandlers::HandleMembers(pServerTask);
     }
     // 上传文本（POST /api/text）
     if (strMethod == "POST" && strPath == "/api/text")
     {
-        return HandleUploadText(pServerTask);
+        return HttpHandlers::HandleUploadText(pServerTask);
     }
     // 上传文件（POST /api/file）
     if (strMethod == "POST" && strPath == "/api/file")
     {
-        return HandleUploadFile(pServerTask);
+        return HttpHandlers::HandleUploadFile(pServerTask);
     }
     // GET /api/text/<id>、GET /api/file/<id>、DELETE /api/item/<id>
     // 注意前缀 "/api/text/" 长度为 10（/api/ 5 + text/ 5）。
     if (strMethod == "GET" && strPath.compare(0, 10, "/api/text/") == 0)
     {
-        return HandleGetText(pServerTask, UrlDecode(strPath.substr(10)));
+        return HttpHandlers::HandleGetText(pServerTask, HttpUtil::UrlDecode(strPath.substr(10)));
     }
     if (strMethod == "GET" && strPath.compare(0, 10, "/api/file/") == 0)
     {
-        return HandleGetFile(pServerTask, UrlDecode(strPath.substr(10)));
+        return HttpHandlers::HandleGetFile(pServerTask, HttpUtil::UrlDecode(strPath.substr(10)));
     }
     if (strMethod == "DELETE" && strPath.compare(0, 10, "/api/item/") == 0)
     {
-        return HandleDelete(pServerTask, UrlDecode(strPath.substr(10)));
+        return HttpHandlers::HandleDelete(pServerTask, HttpUtil::UrlDecode(strPath.substr(10)));
     }
     return false;
-}
-
-// ----------------------------------------------------------------------------
-// 首页：返回前端页面（独立资源文件 Web/index.html，Initialize 时加载）
-// ----------------------------------------------------------------------------
-bool CHttpServerModule::HandleIndex(WFHttpTask* pServerTask)
-{
-    protocol::HttpResponse* pResp = pServerTask->get_resp();
-    if (s_pIndexHtml == nullptr || s_pIndexHtml->empty())
-    {
-        pResp->set_status_code("503");
-        pResp->add_header_pair("Content-Type", "text/plain; charset=utf-8");
-        pResp->append_output_body("前端页面未加载");
-        return true;
-    }
-    pResp->set_status_code("200");
-    pResp->add_header_pair("Content-Type", "text/html; charset=utf-8");
-    pResp->append_output_body(s_pIndexHtml->data(), s_pIndexHtml->size());
-    return true;
-}
-
-// ----------------------------------------------------------------------------
-// 列表：GET /api/list —— 返回 JSON 数组
-// ----------------------------------------------------------------------------
-bool CHttpServerModule::HandleList(WFHttpTask* pServerTask)
-{
-    if (s_pStore == nullptr)
-    {
-        WriteJson(pServerTask, "{\"error\":\"store unavailable\"}", "500");
-        return true;
-    }
-    std::vector<DataItemInfo> vecItems = s_pStore->List();
-    std::ostringstream oss;
-    oss << "{\"items\":[";
-    bool bFirst = true;
-    for (const DataItemInfo& info : vecItems)
-    {
-        if (!bFirst)
-        {
-            oss << ",";
-        }
-        bFirst = false;
-        oss << "{\"id\":\"" << info.strId << "\"" << ",\"type\":\"" << (info.kind == DataKind::kText ? "text" : "file")
-            << "\"" << ",\"name\":\"" << HtmlEscape(info.strName) << "\"" << ",\"from\":\"" << HtmlEscape(info.strFrom)
-            << "\"" << ",\"size\":" << info.nSize << ",\"time\":" << info.nCreateMs << "}";
-    }
-    oss << "]}";
-    WriteJson(pServerTask, oss.str());
-    return true;
-}
-
-// ----------------------------------------------------------------------------
-// 在线成员：GET /api/members —— 返回成员列表（按最后活跃倒序）
-// ----------------------------------------------------------------------------
-bool CHttpServerModule::HandleMembers(WFHttpTask* pServerTask)
-{
-    PruneMembers();
-    std::lock_guard<std::mutex> lock(s_membersMutex);
-    std::ostringstream oss;
-    oss << "{\"members\":[";
-    bool bFirst = true;
-    // 按最后活跃时间倒序（最近活跃在前）。
-    std::vector<std::pair<std::string, MemberInfo> > vecSorted(s_mapMembers.begin(), s_mapMembers.end());
-    std::sort(vecSorted.begin(), vecSorted.end(),
-              [](const std::pair<std::string, MemberInfo>& a, const std::pair<std::string, MemberInfo>& b)
-    { return a.second.nLastMs > b.second.nLastMs; });
-    for (const auto& pair : vecSorted)
-    {
-        if (!bFirst)
-        {
-            oss << ",";
-        }
-        bFirst = false;
-        oss << "{\"id\":\"" << HtmlEscape(pair.first) << "\"" << ",\"ip\":\"" << HtmlEscape(pair.second.strIp)
-            << "\"" << ",\"first\":" << pair.second.nFirstMs << ",\"last\":" << pair.second.nLastMs << "}";
-    }
-    oss << "]}";
-    WriteJson(pServerTask, oss.str());
-    return true;
-}
-
-// ----------------------------------------------------------------------------
-// 上传文本：POST /api/text —— body 为文本内容
-// ----------------------------------------------------------------------------
-bool CHttpServerModule::HandleUploadText(WFHttpTask* pServerTask)
-{
-    if (s_pStore == nullptr)
-    {
-        WriteJson(pServerTask, "{\"error\":\"store unavailable\"}", "500");
-        return true;
-    }
-    std::string strBody;
-    ReadBody(pServerTask, strBody);
-    if (strBody.empty())
-    {
-        WriteJson(pServerTask, "{\"error\":\"empty body\"}", "400");
-        return true;
-    }
-    std::string strFrom = ClientId(pServerTask);
-    std::string strId = s_pStore->SaveText(strBody, strFrom);
-    if (strId.empty())
-    {
-        WriteJson(pServerTask, "{\"error\":\"save failed\"}", "500");
-        return true;
-    }
-    std::ostringstream oss;
-    oss << "{\"id\":\"" << strId << "\"}";
-    WriteJson(pServerTask, oss.str());
-    return true;
-}
-
-// ----------------------------------------------------------------------------
-// 获取文本：GET /api/text/<id>
-// ----------------------------------------------------------------------------
-bool CHttpServerModule::HandleGetText(WFHttpTask* pServerTask, const std::string& strId)
-{
-    if (s_pStore == nullptr)
-    {
-        WriteJson(pServerTask, "{\"error\":\"store unavailable\"}", "500");
-        return true;
-    }
-    std::string strText;
-    if (!s_pStore->GetText(strId, strText))
-    {
-        WriteJson(pServerTask, "{\"error\":\"not found\"}", "404");
-        return true;
-    }
-    WriteText(pServerTask, strText);
-    return true;
-}
-
-// ----------------------------------------------------------------------------
-// 上传文件：POST /api/file —— header X-File-Name 指定文件名，body 为内容
-// ----------------------------------------------------------------------------
-bool CHttpServerModule::HandleUploadFile(WFHttpTask* pServerTask)
-{
-    if (s_pStore == nullptr)
-    {
-        WriteJson(pServerTask, "{\"error\":\"store unavailable\"}", "500");
-        return true;
-    }
-    std::string strFileName = GetHeader(pServerTask, "X-File-Name");
-    // 前端上传时对文件名做 encodeURIComponent 编码（%XX），此处解码还原；
-    // 对纯 ASCII 文件名解码是幂等的，直接解码安全。
-    strFileName = UrlDecode(strFileName);
-    std::string strBody;
-    size_t nSize = ReadBody(pServerTask, strBody);
-    if (nSize == 0)
-    {
-        WriteJson(pServerTask, "{\"error\":\"empty body\"}", "400");
-        return true;
-    }
-    std::string strFrom = ClientId(pServerTask);
-    std::string strId = s_pStore->SaveFile(strFileName, strBody.data(), strBody.size(), strFrom);
-    if (strId.empty())
-    {
-        WriteJson(pServerTask, "{\"error\":\"save failed\"}", "500");
-        return true;
-    }
-    std::ostringstream oss;
-    oss << "{\"id\":\"" << strId << "\"}";
-    WriteJson(pServerTask, oss.str());
-    return true;
-}
-
-// ----------------------------------------------------------------------------
-// 下载文件：GET /api/file/<id>
-// ----------------------------------------------------------------------------
-bool CHttpServerModule::HandleGetFile(WFHttpTask* pServerTask, const std::string& strId)
-{
-    if (s_pStore == nullptr)
-    {
-        WriteJson(pServerTask, "{\"error\":\"store unavailable\"}", "500");
-        return true;
-    }
-    std::string strName;
-    std::vector<char> vecData;
-    if (!s_pStore->GetFile(strId, strName, vecData))
-    {
-        WriteJson(pServerTask, "{\"error\":\"not found\"}", "404");
-        return true;
-    }
-    protocol::HttpResponse* pResp = pServerTask->get_resp();
-    pResp->set_status_code("200");
-    pResp->add_header_pair("Content-Type", "application/octet-stream");
-    // 指定下载文件名（浏览器自动保存）。HTTP 头不允许非 ASCII 字节：
-    //   - ASCII 文件名直接用 filename="...";
-    //   - 含非 ASCII（如中文）时用 RFC 5987 filename*=UTF-8''<urlencoded>，
-    //     并提供 ASCII 回退名（RFC 6266），保证浏览器正确识别中文文件名。
-    std::string strDisposition;
-    if (HasNonAscii(strName))
-    {
-        strDisposition = "attachment; filename=\"download.bin\"; filename*=UTF-8''" + UrlEncode(strName);
-    }
-    else
-    {
-        strDisposition = "attachment; filename=\"" + strName + "\"";
-    }
-    pResp->add_header_pair("Content-Disposition", strDisposition.c_str());
-    pResp->append_output_body(vecData.data(), vecData.size());
-    return true;
-}
-
-// ----------------------------------------------------------------------------
-// 删除：DELETE /api/item/<id>
-// ----------------------------------------------------------------------------
-bool CHttpServerModule::HandleDelete(WFHttpTask* pServerTask, const std::string& strId)
-{
-    if (s_pStore == nullptr)
-    {
-        WriteJson(pServerTask, "{\"error\":\"store unavailable\"}", "500");
-        return true;
-    }
-    if (!s_pStore->Remove(strId))
-    {
-        WriteJson(pServerTask, "{\"error\":\"not found\"}", "404");
-        return true;
-    }
-    WriteJson(pServerTask, "{\"ok\":true}");
-    return true;
-}
-
-// ----------------------------------------------------------------------------
-// 成员跟踪
-// ----------------------------------------------------------------------------
-
-/// @brief 获取请求来源地址（IP:port 字符串）。
-std::string CHttpServerModule::PeerAddress(WFHttpTask* pServerTask)
-{
-    struct sockaddr_storage addr;
-    socklen_t nLen = sizeof(addr);
-    char szAddr[64] = "unknown";
-    unsigned short nPort = 0;
-
-    if (pServerTask->get_peer_addr((struct sockaddr*)&addr, &nLen) == 0)
-    {
-        if (addr.ss_family == AF_INET)
-        {
-            struct sockaddr_in* pSin = (struct sockaddr_in*)&addr;
-            inet_ntop(AF_INET, &pSin->sin_addr, szAddr, sizeof(szAddr));
-            nPort = ntohs(pSin->sin_port);
-        }
-        else if (addr.ss_family == AF_INET6)
-        {
-            struct sockaddr_in6* pSin6 = (struct sockaddr_in6*)&addr;
-            inet_ntop(AF_INET6, &pSin6->sin6_addr, szAddr, sizeof(szAddr));
-            nPort = ntohs(pSin6->sin6_port);
-        }
-    }
-    return std::string(szAddr) + ":" + std::to_string(nPort);
-}
-
-/// @brief 获取客户端标识。
-///
-/// 优先取 X-Client-Id 请求头（前端生成并持久化的 UUID，用于跨请求标识同一浏览器）；
-/// 无该头时退回 "IP:port"（如 curl 等命令行访问）。
-std::string CHttpServerModule::ClientId(WFHttpTask* pServerTask)
-{
-    std::string strId = GetHeader(pServerTask, "X-Client-Id");
-    if (strId.empty())
-    {
-        strId = PeerAddress(pServerTask);
-    }
-    return strId;
-}
-
-/// @brief 记录成员活跃（每次请求调用）；返回客户端标识。
-///
-/// 以客户端标识（X-Client-Id）为 key，同一浏览器（持久化 UUID）的多次轮询
-/// 只计为 1 个成员，避免按 IP:port 记录时因每次请求端口变化导致成员膨胀。
-std::string CHttpServerModule::TouchMember(WFHttpTask* pServerTask)
-{
-    std::string strClientId = ClientId(pServerTask);
-    if (strClientId.empty() || strClientId == "unknown:0")
-    {
-        return strClientId;
-    }
-    // 提取来源 IP（不含端口），供成员展示。
-    std::string strIp = PeerAddress(pServerTask);
-    std::string::size_type nColon = strIp.find_last_of(':');
-    if (nColon != std::string::npos)
-    {
-        strIp = strIp.substr(0, nColon);
-    }
-    std::int64_t nNowMs = static_cast<std::int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count());
-    std::lock_guard<std::mutex> lock(s_membersMutex);
-    MemberInfo& info = s_mapMembers[strClientId];
-    info.strIp = strIp;
-    if (info.nFirstMs == 0)
-    {
-        info.nFirstMs = nNowMs;
-    }
-    info.nLastMs = nNowMs;
-    return strClientId;
-}
-
-/// @brief 清理超过 30 秒未活跃的成员（返回清理数量）。
-size_t CHttpServerModule::PruneMembers()
-{
-    std::int64_t nNowMs = static_cast<std::int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
-            .count());
-    const std::int64_t nTimeoutMs = 30000;  // 30 秒
-    std::lock_guard<std::mutex> lock(s_membersMutex);
-    size_t nRemoved = 0;
-    for (auto it = s_mapMembers.begin(); it != s_mapMembers.end();)
-    {
-        if (nNowMs - it->second.nLastMs > nTimeoutMs)
-        {
-            it = s_mapMembers.erase(it);
-            ++nRemoved;
-        }
-        else
-        {
-            ++it;
-        }
-    }
-    return nRemoved;
-}
-
-// ----------------------------------------------------------------------------
-// 响应辅助
-// ----------------------------------------------------------------------------
-void CHttpServerModule::WriteJson(WFHttpTask* pServerTask, const std::string& strJson, const char* szStatus)
-{
-    WriteText(pServerTask, strJson, szStatus, "application/json; charset=utf-8");
-}
-
-void CHttpServerModule::WriteText(WFHttpTask* pServerTask, const std::string& strBody, const char* szStatus,
-                                  const char* szType)
-{
-    protocol::HttpResponse* pResp = pServerTask->get_resp();
-    pResp->set_status_code(szStatus);
-    pResp->add_header_pair("Content-Type", szType);
-    pResp->append_output_body(strBody.data(), strBody.size());
-}
-
-size_t CHttpServerModule::ReadBody(WFHttpTask* pServerTask, std::string& strBody)
-{
-    protocol::HttpRequest* pReq = pServerTask->get_req();
-    const void* pBody = nullptr;
-    size_t nLen = 0;
-    if (pReq->get_parsed_body(&pBody, &nLen) && nLen > 0)
-    {
-        strBody.assign(static_cast<const char*>(pBody), nLen);
-        return nLen;
-    }
-    strBody.clear();
-    return 0;
-}
-
-std::string CHttpServerModule::GetHeader(WFHttpTask* pServerTask, const char* szName)
-{
-    protocol::HttpRequest* pReq = pServerTask->get_req();
-    protocol::HttpHeaderCursor cursor(pReq);
-    std::string strName;
-    std::string strValue;
-    while (cursor.next(strName, strValue))
-    {
-        // header 名大小写不敏感。
-        std::string strLower = strName;
-        std::transform(strLower.begin(), strLower.end(), strLower.begin(),
-                       [](unsigned char c) { return static_cast<char>(::tolower(c)); });
-        std::string strNeed = szName;
-        std::transform(strNeed.begin(), strNeed.end(), strNeed.begin(),
-                       [](unsigned char c) { return static_cast<char>(::tolower(c)); });
-        if (strLower == strNeed)
-        {
-            return strValue;
-        }
-    }
-    return std::string();
-}
-
-// ----------------------------------------------------------------------------
-// URL 解码
-// ----------------------------------------------------------------------------
-std::string CHttpServerModule::UrlDecode(const std::string& strEncoded)
-{
-    std::string strOut;
-    strOut.reserve(strEncoded.size());
-    for (size_t i = 0; i < strEncoded.size(); ++i)
-    {
-        if (strEncoded[i] == '%' && i + 2 < strEncoded.size())
-        {
-            int nHigh = 0, nLow = 0;
-            char c1 = strEncoded[i + 1];
-            char c2 = strEncoded[i + 2];
-            if (c1 >= '0' && c1 <= '9')
-                nHigh = c1 - '0';
-            else if (c1 >= 'a' && c1 <= 'f')
-                nHigh = c1 - 'a' + 10;
-            else if (c1 >= 'A' && c1 <= 'F')
-                nHigh = c1 - 'A' + 10;
-            else
-            {
-                strOut.push_back(strEncoded[i]);
-                continue;
-            }
-            if (c2 >= '0' && c2 <= '9')
-                nLow = c2 - '0';
-            else if (c2 >= 'a' && c2 <= 'f')
-                nLow = c2 - 'a' + 10;
-            else if (c2 >= 'A' && c2 <= 'F')
-                nLow = c2 - 'A' + 10;
-            else
-            {
-                strOut.push_back(strEncoded[i]);
-                continue;
-            }
-            strOut.push_back(static_cast<char>((nHigh << 4) | nLow));
-            i += 2;
-        }
-        else if (strEncoded[i] == '+')
-        {
-            strOut.push_back(' ');
-        }
-        else
-        {
-            strOut.push_back(strEncoded[i]);
-        }
-    }
-    return strOut;
-}
-
-// ----------------------------------------------------------------------------
-// URL 编码（RFC 3986 unreserved 保留，其余 %XX）
-// ----------------------------------------------------------------------------
-std::string CHttpServerModule::UrlEncode(const std::string& strRaw)
-{
-    static const char* const kHex = "0123456789ABCDEF";
-    std::string strOut;
-    strOut.reserve(strRaw.size() * 3);
-    for (unsigned char c : strRaw)
-    {
-        // unreserved: A-Z a-z 0-9 - _ . ~
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' ||
-            c == '.' || c == '~')
-        {
-            strOut.push_back(static_cast<char>(c));
-        }
-        else
-        {
-            strOut.push_back('%');
-            strOut.push_back(kHex[(c >> 4) & 0x0F]);
-            strOut.push_back(kHex[c & 0x0F]);
-        }
-    }
-    return strOut;
-}
-
-// ----------------------------------------------------------------------------
-// 判断是否含非 ASCII 字符
-// ----------------------------------------------------------------------------
-bool CHttpServerModule::HasNonAscii(const std::string& strValue)
-{
-    for (unsigned char c : strValue)
-    {
-        if (c >= 0x80)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-// ----------------------------------------------------------------------------
-// HTML 转义（防 XSS）
-// ----------------------------------------------------------------------------
-std::string CHttpServerModule::HtmlEscape(const std::string& strRaw)
-{
-    std::string strOut;
-    strOut.reserve(strRaw.size());
-    for (char c : strRaw)
-    {
-        switch (c)
-        {
-            case '&':
-                strOut += "&amp;";
-                break;
-            case '<':
-                strOut += "&lt;";
-                break;
-            case '>':
-                strOut += "&gt;";
-                break;
-            case '"':
-                strOut += "&quot;";
-                break;
-            case '\'':
-                strOut += "&#39;";
-                break;
-            default:
-                strOut.push_back(c);
-                break;
-        }
-    }
-    return strOut;
 }
 
 SC_BEGIN_INTERFACE_MAP(CHttpServerModule, sc::CModule)
