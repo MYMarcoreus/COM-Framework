@@ -1,11 +1,18 @@
-# C++ 多项目工作区（Makefile + clangd）
+# COM-Framework —— C++ 模块化服务器框架
 
-一个 C++ 多项目工作区：
+基于 **COM 风格模块模型** 的通用 C++ 多服务器后端框架（C++11 / Make / clangd）。
 
-- 工作区根目录可存放 **多个独立项目**；
-- 每个项目按模块自治组织：`<Project>/<Module>/`（每模块一个目录，头源同目录）、`<Project>/Linux/Makefile`；
-- 通过 **bear** 或 **compiledb** 生成 `compile_commands.json`，供 clangd 提供补全与跳转；
-- 统一使用 **C++11**，构建工具为 **Make**。
+这是一个**多服务器、多项目**的通用框架：多个业务服务器共享同一套基础组件与
+`ServerCore` 基础设施，各自负责不同的业务功能，通过模块化方式组织与装配。
+
+## 核心特性
+
+- **COM 风格模块模型**：`IUnknown` / `InterfaceId` / 引用计数 + `CModuleManager`（依赖拓扑排序 / 失败回滚）+ 依赖注入
+- **统一生命周期**：`MyApplication` 提供 `Initialize → Start → Run → Stop → Shutdown` 标准流程
+- **可复用 ServerCore**：模块 / 事件 / 消息流水线 / 网络 / 指标 / 并发调度等基础设施，业务服务器只写协议与业务
+- **并发调度（Exec）**：模块级读写并发控制 + 业务流程回调栈
+- **公共基础库（Common）**：日志 / 配置 / 网络 / 定时器 / 线程池 / 异步 / 序列化
+- **C++11 统一约束**，Make 构建，第三方库以 git 子模块管理（`ThirdParty/`）
 
 > 文档索引：[docs/README.md](docs/README.md) ｜ 构建与使用：[docs/usage.md](docs/usage.md) ｜ 总体架构：[docs/architecture.md](docs/architecture.md)
 
