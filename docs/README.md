@@ -40,6 +40,7 @@
 |---|---|
 | [perf-optimization.md](perf-optimization.md) | 性能优化记录 |
 | [vscode-select-dropdown.md](vscode-select-dropdown.md) | VS Code 选择下拉（开发环境备忘） |
+| [vscode-tasks-launch.md](vscode-tasks-launch.md) | VS Code tasks/launch 运行逻辑与字段详解 |
 
 ## 阅读建议
 
