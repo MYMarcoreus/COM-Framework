@@ -17,21 +17,6 @@
             }
         },
         {
-            "label": "debug (select project)",
-            "type": "shell",
-            "command": "./build.sh --debug ${input:projectExec}",
-            "dependsOn": [
-                "generate compile_commands"
-            ],
-            "problemMatcher": [
-                "$gcc"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared"
-            }
-        },
-        {
             "label": "run (select project)",
             "type": "shell",
             "command": "bash .tools/run_project.sh ${input:projectExec} ${input:mode}",

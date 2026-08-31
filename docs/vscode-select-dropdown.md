@@ -134,14 +134,6 @@ fi
             "presentation": { "reveal": "always", "panel": "shared" }
         },
         {
-            "label": "debug (select project)",
-            "type": "shell",
-            "command": "./build.sh --debug ${input:projectExec}",
-            "dependsOn": ["generate compile_commands"],
-            "problemMatcher": ["$gcc"],
-            "presentation": { "reveal": "always", "panel": "shared" }
-        },
-        {
             "label": "run (select project)",
             "type": "shell",
             "command": "bash .tools/run_project.sh ${input:projectExec} ${input:mode}",
@@ -248,7 +240,6 @@ fi
 - [ ] `Tasks: Run Task` → `build (select project)` 先弹「模式」下拉（debug 默认）
 - [ ] 选定模式后弹「项目」下拉（可构建列表）
 - [ ] 选定后命令执行成功
-- [ ] `debug (select project)` 的下拉只列可执行项目
 - [ ] `run (select project)` 能构建并运行可执行文件
 
 ## 8. 常见问题

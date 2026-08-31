@@ -91,10 +91,6 @@ Tasks: Run Task
  │    command: ./build.sh ${input:mode} ${input:project}
  │    dependsOn: [generate compile_commands]
  │
- ├─ debug (select project)
- │    command: ./build.sh --debug ${input:projectExec}
- │    dependsOn: [generate compile_commands]
- │
  ├─ run (select project)
  │    command: bash .tools/run_project.sh ${input:projectExec} ${input:mode}
  │    dependsOn: (无)
@@ -198,8 +194,7 @@ sequenceDiagram
 
 | 场景 | 操作 | 实际执行 |
 | --- | --- | --- |
-| 构建某个项目 | `Tasks: Run Task` → `build (select project)` → 选模式 + 项目 | `./build.sh <模式> <项目>` |
-| 调试某个可执行项目 | `Tasks: Run Task` → `debug (select project)` → 选项目 | `./build.sh --debug <项目>`（随后 F5） |
+| 构建某个项目（含 debug/release） | `Tasks: Run Task` → `build (select project)` → 选模式 + 项目 | `./build.sh <模式> <项目>` |
 | 运行某个可执行项目 | `Tasks: Run Task` → `run (select project)` → 选模式 + 项目 | `.tools/run_project.sh <项目> <模式>` |
 | 调试 examples | 按 **F5**（用 launch 配置） | 先构建依赖链，再启动 lldb |
 | 只生成编译数据库 | `Tasks: Run Task` → `generate compile_commands` | `./build.sh --compiledb` |

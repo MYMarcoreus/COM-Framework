@@ -47,7 +47,7 @@ build/release/     —— 发布产物（-O2，用 -r/--release 构建）
 在 VS Code 中可通过任务（`Tasks: Run Task`）执行（select 由原生下拉驱动；完整的接入与跨机器复刻指南见 [vscode-select-dropdown.md](vscode-select-dropdown.md)）：
 
 - **build (select project)** —— 先选构建模式（debug 默认 / release）再选项目（全部可构建项目，选项来自 `./build.sh --list`）
-- **debug (select project)** / **run (select project)** —— 项目下拉只列出**可执行项目**（选项来自 `./build.sh --executables`：可构建 + 项目根有 `main.cpp`），分别执行 debug 构建（随后 F5 调试）/ 构建并运行（见 `.tools/run_project.sh`）
+- **run (select project)** —— 项目下拉只列出**可执行项目**（选项来自 `./build.sh --executables`：可构建 + 项目根有 `main.cpp`），构建并运行（见 `.tools/run_project.sh`）
 - **build debug (Common + ServerCore)** —— 调试前构建 Common + ServerCore；**build debug (examples)** 依赖它并构建 examples（`launch.json` 的 `preLaunchTask`）
 - **generate compile_commands** —— 生成 compile_commands.json（供 clangd）
 
