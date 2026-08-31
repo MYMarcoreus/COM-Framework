@@ -26,6 +26,25 @@ CDataHubApplication (ServerCore CMyApplication)
 - `CHttpServerModule` 声明依赖 `IDataStore`，由 `CModuleManager` 拓扑排序保证先就绪。
 - HTTP 回调为 Workflow 线程池执行，通过接口访问数据存储（存储内部加锁，线程安全）。
 
+## 一键脚本（推荐）
+
+```bash
+cd DataHub
+./run.sh                # 编译(debug) + 配置外部访问 + 启动
+./run.sh --release      # 编译(release) + 配置外部访问 + 启动
+./run.sh --no-forward   # 跳过端口转发（纯本机运行）
+./run.sh --stop         # 停止服务器并清理端口转发
+./run.sh -p 9000        # 指定端口（默认从 datahub.ini 读取）
+```
+
+脚本会自动完成：
+1. **编译**：调用根目录 `./build.sh` 构建 DataHub，并部署前端页面到 `~/.datahub/`
+2. **配置外部访问**：检测到 WSL2 环境时，自动调用 Windows `netsh` 添加端口转发（Windows 端口 → WSL IP 端口），并放行防火墙
+3. **启动**：后台启动 datahub 并输出访问地址（本机 + 局域网，供手机访问）
+4. **自检**：确认进程存活，日志写入 `/tmp/datahub_<端口>.log`
+
+> WSL2 环境（NAT 模式）下，手机等局域网设备无法直接访问 WSL 内部 IP，需经 Windows 宿主机端口转发——`run.sh` 自动处理，无需手动执行 netsh 命令。
+
 ## 构建
 
 ```bash
@@ -38,7 +57,7 @@ git submodule update --init --recursive
 ./build.sh --release DataHub  # release
 ```
 
-## 运行
+## 运行（手动）
 
 ```bash
 # 从任意目录运行均可（前端页面从用户目录 ~/.datahub/index.html 读取）
@@ -55,6 +74,7 @@ http://<服务器IP>:8888/
 ```
 
 > 手机与电脑需在同一局域网（或服务器有公网地址）。手机访问时输入服务器的局域网 IP 即可。
+> 在 WSL2（NAT 模式）下手动启动时，需先在 Windows 配置端口转发（见 `run.sh` 内部实现）。
 
 ## HTTP API
 
@@ -90,6 +110,7 @@ curl -OJ http://127.0.0.1:8888/api/file/<提取码>
 ```text
 DataHub/
 ├── main.cpp                    # 入口（解析端口、忽略 SIGPIPE）
+├── run.sh                      # 一键脚本：编译 + 配置外部访问(WSL 端口转发) + 启动
 ├── datahub.ini                 # 配置（端口 / 日志）
 ├── Application/
 │   └── DataHubApplication.*    # CDataHubApplication（基于 CMyApplication）
