@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <string>
 
-#include "Module/InterfaceDecl.h"
 #include "Module/IUnknown.h"
+#include "Module/InterfaceDecl.h"
 
 namespace sc {
 
@@ -21,7 +21,7 @@ namespace sc {
 ///   - DELETE /api/item/<id> —— 删除数据项
 SC_INTERFACE(IHttpService, "datahub::IHttpService", "21d79b83-abe3-4d5f-9363-ba306305ce9d")
 {
-public:
+   public:
     virtual ~IHttpService() {}
 
     // 当前监听端口。
@@ -31,4 +31,4 @@ public:
     virtual std::string Status() const = 0;
 };
 
-} // namespace sc
+}  // namespace sc

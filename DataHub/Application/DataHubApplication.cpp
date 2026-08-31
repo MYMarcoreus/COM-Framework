@@ -9,8 +9,7 @@ namespace datahub {
 /// @brief 创建 DataHub 应用程序。
 ///
 /// @param port 监听端口；0 表示从配置文件读取。
-CDataHubApplication::CDataHubApplication(std::uint16_t port)
-    : m_nPort(port)
+CDataHubApplication::CDataHubApplication(std::uint16_t port) : m_nPort(port)
 {
     // 加载配置文件（可选，best-effort）。
     m_config.LoadFile("datahub.ini");
@@ -29,9 +28,7 @@ CDataHubApplication::CDataHubApplication(std::uint16_t port)
 }
 
 /// @brief 销毁 DataHub 应用程序。
-CDataHubApplication::~CDataHubApplication()
-{
-}
+CDataHubApplication::~CDataHubApplication() {}
 
 /// @brief 注册模块。
 ///
@@ -55,7 +52,9 @@ bool CDataHubApplication::RegisterModules()
     }
 
     // ③ HTTP 数据传输服务模块（基于 Sogou Workflow）
-    if (!m_moduleManager.RegisterModule(new CHttpServerModule(m_nPort)))
+    //    前端页面为独立资源文件，路径由配置 [web] index 指定（默认 Web/index.html）。
+    std::string strIndex = m_config.GetString("web.index", "Web/index.html");
+    if (!m_moduleManager.RegisterModule(new CHttpServerModule(m_nPort, strIndex)))
     {
         return false;
     }
@@ -75,14 +74,11 @@ bool CDataHubApplication::OnInitialize()
 /// @return true。
 bool CDataHubApplication::OnStart()
 {
-    common::log::CLogger::Instance().Info(
-        "[DataHub] 数据传输服务已就绪（ServerCore 骨架 + Workflow HTTP）");
+    common::log::CLogger::Instance().Info("[DataHub] 数据传输服务已就绪（ServerCore 骨架 + Workflow HTTP）");
     return true;
 }
 
 /// @brief 关闭钩子。
-void CDataHubApplication::OnShutdown()
-{
-}
+void CDataHubApplication::OnShutdown() {}
 
-} // namespace datahub
+}  // namespace datahub

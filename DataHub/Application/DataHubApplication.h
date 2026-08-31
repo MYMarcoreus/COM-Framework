@@ -16,21 +16,21 @@ namespace datahub {
 ///   - HTTP 由 Workflow（WFHttpServer）提供，封装为 ServerCore 模块。
 class CDataHubApplication : public sc::CMyApplication
 {
-public:
+   public:
     // @param port 监听端口；0 表示从配置文件读取。
     explicit CDataHubApplication(std::uint16_t port);
 
     virtual ~CDataHubApplication();
 
-protected:
+   protected:
     bool RegisterModules() override;
     bool OnInitialize() override;
     bool OnStart() override;
     void OnShutdown() override;
 
-private:
+   private:
     std::uint16_t m_nPort;
     common::config::CConfig m_config;
 };
 
-} // namespace datahub
+}  // namespace datahub

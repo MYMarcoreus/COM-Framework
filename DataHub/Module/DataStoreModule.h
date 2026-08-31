@@ -13,8 +13,8 @@
 
 namespace datahub {
 
-using sc::DataKind;
 using sc::DataItemInfo;
+using sc::DataKind;
 using sc::IDataStore;
 
 /// @brief 数据存储模块。
@@ -24,7 +24,7 @@ using sc::IDataStore;
 /// 如需持久化可扩展）。
 class CDataStoreModule : public sc::CModule, public IDataStore
 {
-public:
+   public:
     CDataStoreModule();
 
     virtual ~CDataStoreModule();
@@ -35,25 +35,23 @@ public:
     void Shutdown() override;
 
     std::string SaveText(const std::string& strContent) override;
-    std::string SaveFile(const std::string& strName,
-                         const void* pData, std::size_t nSize) override;
+    std::string SaveFile(const std::string& strName, const void* pData, std::size_t nSize) override;
     bool GetInfo(const std::string& strId, DataItemInfo& info) const override;
     bool GetText(const std::string& strId, std::string& strOut) const override;
-    bool GetFile(const std::string& strId,
-                 std::string& strName, std::vector<char>& vecData) const override;
+    bool GetFile(const std::string& strId, std::string& strName, std::vector<char>& vecData) const override;
     std::vector<DataItemInfo> List() const override;
     bool Remove(const std::string& strId) override;
 
     SC_DECLARE_INTERFACE_MAP();
 
-private:
+   private:
     // 数据项（内部表示）。
     struct Item
     {
-        DataKind    kind;
+        DataKind kind;
         std::string strName;
-        std::string strText;      // 文本内容
-        std::vector<char> vecData; // 文件内容
+        std::string strText;        // 文本内容
+        std::vector<char> vecData;  // 文件内容
         std::int64_t nCreateMs;
     };
 
@@ -67,4 +65,4 @@ private:
     std::map<std::string, Item> m_mapItems;
 };
 
-} // namespace datahub
+}  // namespace datahub

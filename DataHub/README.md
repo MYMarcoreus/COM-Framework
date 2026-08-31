@@ -8,7 +8,7 @@
 - **ServerCore 骨架**：复用 `CMyApplication` 生命周期 + 模块模型（`CModuleManager`）+ 配置/日志/指标
 - **Workflow HTTP**：`WFHttpServer` 高性能异步服务，封装为 ServerCore 模块（`CHttpServerModule`）
 - **纯内存存储**：数据项存内存，提取码为 6 位随机码（去掉易混淆字符）
-- **内置网页**：移动端友好的单页 UI，无需安装任何客户端
+- **独立前端资源**：`Web/index.html` 与 C++ 代码分离，运行时从磁盘加载，便于独立维护与部署
 - **精简 API**：上传 / 下载 / 列表 / 删除
 
 ## 架构
@@ -60,7 +60,7 @@ http://<服务器IP>:8888/
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/` | 内置网页（手机 / 电脑浏览器） |
+| GET | `/` | 前端页面（手机 / 电脑浏览器；`Web/index.html`） |
 | POST | `/api/text` | 上传文本；body 为内容 → `{"id":"XXXXXX"}` |
 | GET | `/api/text/<id>` | 按提取码获取文本 |
 | POST | `/api/file` | 上传文件；header `X-File-Name` 指定文件名，body 为内容 → `{"id":"XXXXXX"}` |
@@ -99,7 +99,7 @@ DataHub/
 │   ├── DataStoreModule.*       # 内存存储模块
 │   └── HttpServerModule.*      # Workflow HTTP 服务模块 + 路由
 ├── Web/
-│   └── IndexHtml.cpp           # 内置网页（HTML5 单页）
+│   └── index.html             # 前端页面（独立资源文件，运行时从磁盘加载）
 └── Linux/
     └── Makefile                # 生成 build/datahub
 ```
@@ -109,3 +109,4 @@ DataHub/
 - 数据仅存内存，进程退出即清空（精简版；如需持久化可在 `CDataStoreModule` 扩展落盘）。
 - 文件大小受 Workflow 请求体内存限制；超大文件建议分批或改流式存储。
 - 服务器需监听 `0.0.0.0`（Workflow 默认），以便局域网设备访问。
+- 前端页面为独立资源文件，路径由 `datahub.ini` 的 `[web] index` 配置（默认 `Web/index.html`）；修改 HTML 后重启服务即可生效，无需重新编译 C++。

@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <sstream>
 
 #include "Log/Logger.h"
@@ -15,11 +16,12 @@
 namespace datahub {
 
 IDataStore* CHttpServerModule::s_pStore = nullptr;
+const std::string* CHttpServerModule::s_pIndexHtml = nullptr;
 
 /// @brief 创建 HTTP 服务模块。
-CHttpServerModule::CHttpServerModule(std::uint16_t nPort)
-    : sc::CModule("http"), m_nPort(nPort), m_server(&CHttpServerModule::ProcessRequest),
-      m_bStarted(false)
+CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strIndex)
+    : sc::CModule("http"), m_nPort(nPort), m_strIndexPath(strIndex),
+      m_server(&CHttpServerModule::ProcessRequest), m_bStarted(false)
 {
     // 依赖 IDataStore 接口模块：生命周期拓扑排序保证其先初始化 / 启动。
     AddDependency(sc::IID_IDataStore());
@@ -31,7 +33,7 @@ CHttpServerModule::~CHttpServerModule()
     Stop();
 }
 
-/// @brief 从初始化上下文解析数据存储接口。
+/// @brief 从初始化上下文解析数据存储接口，并加载前端页面。
 ///
 /// @param ctx 初始化上下文（依赖注入）。
 ///
@@ -45,7 +47,33 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
     }
     // 回调为静态方法，通过静态指针访问数据存储。
     s_pStore = m_pStore.Get();
+
+    // 加载前端页面（独立资源文件）；失败仅告警，不影响服务启动。
+    if (!LoadIndexHtml())
+    {
+        common::log::CLogger::Instance().Warn(
+            "[DataHub] 前端页面加载失败: " + m_strIndexPath +
+            "（GET / 将返回 503）");
+    }
+    // 回调为静态方法，通过静态指针访问页面内容。
+    s_pIndexHtml = &m_strIndexHtml;
     return true;
+}
+
+/// @brief 从磁盘加载前端页面文件。
+///
+/// @return true 加载成功；false 文件不存在或读取失败。
+bool CHttpServerModule::LoadIndexHtml()
+{
+    std::ifstream ifs(m_strIndexPath.c_str(), std::ios::binary);
+    if (!ifs.is_open())
+    {
+        return false;
+    }
+    std::stringstream ss;
+    ss << ifs.rdbuf();
+    m_strIndexHtml = ss.str();
+    return !m_strIndexHtml.empty();
 }
 
 /// @brief 启动 HTTP 服务。
@@ -60,8 +88,7 @@ bool CHttpServerModule::Start()
     if (m_server.start(m_nPort) == 0)
     {
         m_bStarted = true;
-        common::log::CLogger::Instance().Info(
-            "[DataHub] HTTP 服务已启动，监听端口 " + std::to_string(m_nPort));
+        common::log::CLogger::Instance().Info("[DataHub] HTTP 服务已启动，监听端口 " + std::to_string(m_nPort));
         return true;
     }
     return false;
@@ -83,6 +110,7 @@ void CHttpServerModule::Shutdown()
     Stop();
     m_pStore.Reset();
     s_pStore = nullptr;
+    s_pIndexHtml = nullptr;
 }
 
 std::uint16_t CHttpServerModule::Port() const
@@ -92,8 +120,7 @@ std::uint16_t CHttpServerModule::Port() const
 
 std::string CHttpServerModule::Status() const
 {
-    return "http:port=" + std::to_string(m_nPort) +
-           " started=" + (m_bStarted ? "1" : "0");
+    return "http:port=" + std::to_string(m_nPort) + " started=" + (m_bStarted ? "1" : "0");
 }
 
 // ----------------------------------------------------------------------------
@@ -125,8 +152,7 @@ void CHttpServerModule::ProcessRequest(WFHttpTask* pServerTask)
 // ----------------------------------------------------------------------------
 // 路由分发
 // ----------------------------------------------------------------------------
-bool CHttpServerModule::Dispatch(WFHttpTask* pServerTask, const std::string& strMethod,
-                                 const std::string& strPath)
+bool CHttpServerModule::Dispatch(WFHttpTask* pServerTask, const std::string& strMethod, const std::string& strPath)
 {
     // 首页（GET /）
     if (strMethod == "GET" && strPath == "/")
@@ -166,14 +192,21 @@ bool CHttpServerModule::Dispatch(WFHttpTask* pServerTask, const std::string& str
 }
 
 // ----------------------------------------------------------------------------
-// 首页：返回内置网页
+// 首页：返回前端页面（独立资源文件 Web/index.html，Initialize 时加载）
 // ----------------------------------------------------------------------------
 bool CHttpServerModule::HandleIndex(WFHttpTask* pServerTask)
 {
     protocol::HttpResponse* pResp = pServerTask->get_resp();
+    if (s_pIndexHtml == nullptr || s_pIndexHtml->empty())
+    {
+        pResp->set_status_code("503");
+        pResp->add_header_pair("Content-Type", "text/plain; charset=utf-8");
+        pResp->append_output_body("前端页面未加载");
+        return true;
+    }
     pResp->set_status_code("200");
     pResp->add_header_pair("Content-Type", "text/html; charset=utf-8");
-    pResp->append_output_body(IndexHtml());
+    pResp->append_output_body(s_pIndexHtml->data(), s_pIndexHtml->size());
     return true;
 }
 
@@ -198,12 +231,9 @@ bool CHttpServerModule::HandleList(WFHttpTask* pServerTask)
             oss << ",";
         }
         bFirst = false;
-        oss << "{\"id\":\"" << info.strId << "\""
-            << ",\"type\":\"" << (info.kind == DataKind::kText ? "text" : "file") << "\""
-            << ",\"name\":\"" << HtmlEscape(info.strName) << "\""
-            << ",\"size\":" << info.nSize
-            << ",\"time\":" << info.nCreateMs
-            << "}";
+        oss << "{\"id\":\"" << info.strId << "\"" << ",\"type\":\"" << (info.kind == DataKind::kText ? "text" : "file")
+            << "\"" << ",\"name\":\"" << HtmlEscape(info.strName) << "\"" << ",\"size\":" << info.nSize
+            << ",\"time\":" << info.nCreateMs << "}";
     }
     oss << "]}";
     WriteJson(pServerTask, oss.str());
@@ -338,14 +368,13 @@ bool CHttpServerModule::HandleDelete(WFHttpTask* pServerTask, const std::string&
 // ----------------------------------------------------------------------------
 // 响应辅助
 // ----------------------------------------------------------------------------
-void CHttpServerModule::WriteJson(WFHttpTask* pServerTask, const std::string& strJson,
-                                  const char* szStatus)
+void CHttpServerModule::WriteJson(WFHttpTask* pServerTask, const std::string& strJson, const char* szStatus)
 {
     WriteText(pServerTask, strJson, szStatus, "application/json; charset=utf-8");
 }
 
-void CHttpServerModule::WriteText(WFHttpTask* pServerTask, const std::string& strBody,
-                                  const char* szStatus, const char* szType)
+void CHttpServerModule::WriteText(WFHttpTask* pServerTask, const std::string& strBody, const char* szStatus,
+                                  const char* szType)
 {
     protocol::HttpResponse* pResp = pServerTask->get_resp();
     pResp->set_status_code(szStatus);
@@ -404,14 +433,28 @@ std::string CHttpServerModule::UrlDecode(const std::string& strEncoded)
             int nHigh = 0, nLow = 0;
             char c1 = strEncoded[i + 1];
             char c2 = strEncoded[i + 2];
-            if (c1 >= '0' && c1 <= '9') nHigh = c1 - '0';
-            else if (c1 >= 'a' && c1 <= 'f') nHigh = c1 - 'a' + 10;
-            else if (c1 >= 'A' && c1 <= 'F') nHigh = c1 - 'A' + 10;
-            else { strOut.push_back(strEncoded[i]); continue; }
-            if (c2 >= '0' && c2 <= '9') nLow = c2 - '0';
-            else if (c2 >= 'a' && c2 <= 'f') nLow = c2 - 'a' + 10;
-            else if (c2 >= 'A' && c2 <= 'F') nLow = c2 - 'A' + 10;
-            else { strOut.push_back(strEncoded[i]); continue; }
+            if (c1 >= '0' && c1 <= '9')
+                nHigh = c1 - '0';
+            else if (c1 >= 'a' && c1 <= 'f')
+                nHigh = c1 - 'a' + 10;
+            else if (c1 >= 'A' && c1 <= 'F')
+                nHigh = c1 - 'A' + 10;
+            else
+            {
+                strOut.push_back(strEncoded[i]);
+                continue;
+            }
+            if (c2 >= '0' && c2 <= '9')
+                nLow = c2 - '0';
+            else if (c2 >= 'a' && c2 <= 'f')
+                nLow = c2 - 'a' + 10;
+            else if (c2 >= 'A' && c2 <= 'F')
+                nLow = c2 - 'A' + 10;
+            else
+            {
+                strOut.push_back(strEncoded[i]);
+                continue;
+            }
             strOut.push_back(static_cast<char>((nHigh << 4) | nLow));
             i += 2;
         }
@@ -438,19 +481,31 @@ std::string CHttpServerModule::HtmlEscape(const std::string& strRaw)
     {
         switch (c)
         {
-        case '&': strOut += "&amp;"; break;
-        case '<': strOut += "&lt;"; break;
-        case '>': strOut += "&gt;"; break;
-        case '"': strOut += "&quot;"; break;
-        case '\'': strOut += "&#39;"; break;
-        default: strOut.push_back(c); break;
+            case '&':
+                strOut += "&amp;";
+                break;
+            case '<':
+                strOut += "&lt;";
+                break;
+            case '>':
+                strOut += "&gt;";
+                break;
+            case '"':
+                strOut += "&quot;";
+                break;
+            case '\'':
+                strOut += "&#39;";
+                break;
+            default:
+                strOut.push_back(c);
+                break;
         }
     }
     return strOut;
 }
 
 SC_BEGIN_INTERFACE_MAP(CHttpServerModule, sc::CModule)
-    SC_INTERFACE_ENTRY(IHttpService)
+SC_INTERFACE_ENTRY(IHttpService)
 SC_END_INTERFACE_MAP(CHttpServerModule, sc::CModule)
 
-} // namespace datahub
+}  // namespace datahub

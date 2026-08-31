@@ -1,19 +1,4 @@
-// ============================================================================
-// IndexHtml.cpp —— DataHub 内置网页（精简单页，手机 / 电脑浏览器直接使用）
-//
-// 功能：
-//   - 粘贴文本 → 生成提取码；输入提取码 → 获取文本
-//   - 上传文件 → 生成提取码；输入提取码 → 下载文件
-//   - 列表展示全部数据项，可一键复制提取码 / 下载 / 删除
-// ============================================================================
-#include "Module/HttpServerModule.h"
-
-namespace datahub {
-
-/// @brief 内置网页内容（HTML5 单页）。
-const char* CHttpServerModule::IndexHtml()
-{
-    return R"html(<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -286,7 +271,3 @@ function toast(msg) {
 </script>
 </body>
 </html>
-)html";
-}
-
-} // namespace datahub

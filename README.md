@@ -49,7 +49,7 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 │   ├── datahub.ini              # 示例配置（监听端口）
 │   ├── Application/             # DataHubApplication
 │   ├── Module/                  # DataStoreModule（内存存储）/ HttpServerModule（WFHttpServer 封装）
-│   ├── Web/                     # 内置网页（IndexHtml：移动端友好的传输 UI）
+│   ├── Web/                     # 前端页面（独立资源 index.html，运行时从磁盘加载）
 │   ├── main.cpp                 # 服务器入口
 │   └── Linux/
 │       └── Makefile             # 生成 build/datahub
