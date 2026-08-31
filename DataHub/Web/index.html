@@ -2,331 +2,287 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>DataHub · 设备间数据传输</title>
 <style>
-  :root { --bg:#f5f6f8; --card:#fff; --pri:#3b82f6; --pri-d:#2563eb; --text:#1f2937;
-          --muted:#6b7280; --border:#e5e7eb; --ok:#16a34a; --err:#dc2626; }
+  :root {
+    --header:#2c3e50; --chat-bg:#f0f2f5; --mine:#95ec69; --other:#ffffff;
+    --text:#1f2937; --muted:#9ca3af; --accent:#10b981; --danger:#ef4444;
+    --border:#e5e7eb;
+  }
   * { box-sizing:border-box; margin:0; padding:0; }
-  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,
-         "PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text);
-         padding:16px; min-height:100vh; }
-  .wrap { max-width:640px; margin:0 auto; }
-  header { text-align:center; padding:8px 0 18px; }
-  header h1 { font-size:24px; font-weight:700; letter-spacing:.5px; }
-  header p { color:var(--muted); font-size:13px; margin-top:6px; }
-  .card { background:var(--card); border:1px solid var(--border); border-radius:12px;
-          padding:16px; margin-bottom:16px; box-shadow:0 1px 3px rgba(0,0,0,.05); }
-  .card h2 { font-size:16px; margin-bottom:12px; display:flex; align-items:center; gap:8px; }
-  .tabs { display:flex; gap:8px; margin-bottom:16px; }
-  .tab { flex:1; text-align:center; padding:10px; border-radius:8px; cursor:pointer;
-         background:var(--card); border:1px solid var(--border); color:var(--muted);
-         font-size:14px; font-weight:600; transition:.15s; }
-  .tab.active { background:var(--pri); border-color:var(--pri); color:#fff; }
-  .panel { display:none; }
-  .panel.active { display:block; }
-  label { display:block; font-size:13px; color:var(--muted); margin-bottom:6px; }
-  textarea, input[type=text], input[type=file] { width:100%; padding:10px 12px;
-         border:1px solid var(--border); border-radius:8px; font-size:14px; outline:none;
-         font-family:inherit; background:#fff; color:var(--text); }
-  textarea { min-height:110px; resize:vertical; }
-  textarea:focus, input[type=text]:focus { border-color:var(--pri); }
-  .btn { display:inline-block; width:100%; padding:11px; border:none; border-radius:8px;
-         background:var(--pri); color:#fff; font-size:15px; font-weight:600; cursor:pointer;
-         margin-top:12px; transition:.15s; }
-  .btn:hover { background:var(--pri-d); }
-  .btn:disabled { opacity:.6; cursor:not-allowed; }
-  .btn.ok { background:var(--ok); }
-  .btn.ok:hover { background:#15803d; }
-  .result { margin-top:12px; padding:10px 12px; border-radius:8px; font-size:13px;
-            word-break:break-all; display:none; }
-  .result.show { display:block; }
-  .result.success { background:#ecfdf5; color:var(--ok); border:1px solid #a7f3d0; }
-  .result.error { background:#fef2f2; color:var(--err); border:1px solid #fecaca; }
-  .result .code { font-size:26px; font-weight:800; letter-spacing:6px; text-align:center;
-                  padding:8px 0; user-select:all; }
-  .item { display:flex; align-items:center; gap:10px; padding:10px 0;
-          border-bottom:1px solid var(--border); font-size:14px; }
-  .item:last-child { border-bottom:none; }
-  .item .meta { flex:1; min-width:0; }
-  .item .meta .name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .item .meta .sub { color:var(--muted); font-size:12px; margin-top:2px; }
-  .item .id { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px;
-              color:var(--pri); cursor:pointer; padding:4px 8px; background:#eff6ff;
-              border-radius:6px; user-select:all; }
-  .item .ops { display:flex; gap:6px; }
-  .item .ops a, .item .ops button { text-decoration:none; border:none; cursor:pointer;
-              font-size:12px; padding:6px 10px; border-radius:6px; background:#f3f4f6;
-              color:var(--text); }
-  .item .ops a:hover { background:var(--pri); color:#fff; }
-  .item .ops button.del:hover { background:var(--err); color:#fff; }
-  /* 最近发送列表 */
-  .sent-card { margin-top:8px; }
-  .sent-item { display:flex; align-items:flex-start; gap:10px; padding:10px 0;
-               border-bottom:1px solid var(--border); font-size:14px; }
-  .sent-item:last-child { border-bottom:none; }
-  .sent-item .icon { font-size:18px; line-height:1.4; }
-  .sent-item .meta { flex:1; min-width:0; }
-  .sent-item .meta .name { font-weight:600; word-break:break-all; }
-  .sent-item .meta .preview { color:var(--muted); font-size:12px; margin-top:3px;
-               overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .sent-item .meta .sub { color:var(--muted); font-size:12px; margin-top:3px; }
-  .sent-item .id { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px;
-               color:var(--pri); cursor:pointer; padding:4px 8px; background:#eff6ff;
-               border-radius:6px; user-select:all; white-space:nowrap; }
-  .sent-item .ops { display:flex; flex-direction:column; gap:6px; }
-  .sent-item .ops a, .sent-item .ops button { text-decoration:none; border:none; cursor:pointer;
-               font-size:12px; padding:6px 10px; border-radius:6px; background:#f3f4f6;
-               color:var(--text); text-align:center; }
-  .sent-item .ops a:hover { background:var(--pri); color:#fff; }
-  .empty { text-align:center; color:var(--muted); padding:24px 0; font-size:14px; }
-  .hint { font-size:12px; color:var(--muted); margin-top:8px; line-height:1.6; }
-  .row { display:flex; gap:10px; }
-  .row > * { flex:1; }
+  html, body { height:100%; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,
+      "PingFang SC","Microsoft YaHei",sans-serif;
+    background:var(--chat-bg); color:var(--text); display:flex; flex-direction:column;
+    height:100vh; overflow:hidden;
+  }
+  /* ===== 顶栏 ===== */
+  .topbar {
+    background:var(--header); color:#fff; padding:12px 16px; flex-shrink:0;
+    display:flex; align-items:center; gap:10px; box-shadow:0 1px 4px rgba(0,0,0,.2);
+    z-index:10;
+  }
+  .topbar .title { font-size:17px; font-weight:700; letter-spacing:.3px; }
+  .topbar .subtitle { font-size:12px; opacity:.75; }
+  .topbar .spacer { flex:1; }
+  .topbar .status { font-size:12px; background:rgba(255,255,255,.15); padding:4px 10px;
+    border-radius:12px; display:flex; align-items:center; gap:5px; }
+  .status .dot { width:7px; height:7px; border-radius:50%; background:#22c55e; display:inline-block; }
+
+  /* ===== 消息区 ===== */
+  .chat { flex:1; overflow-y:auto; padding:14px 12px; -webkit-overflow-scrolling:touch; }
+  .msg { display:flex; margin-bottom:16px; align-items:flex-end; }
+  .msg.mine { justify-content:flex-end; }
+  .msg.other { justify-content:flex-start; }
+  .avatar { width:36px; height:36px; border-radius:8px; flex-shrink:0; display:flex;
+    align-items:center; justify-content:center; font-size:18px; }
+  .msg.mine .avatar { order:2; margin-left:8px; background:#d1fae5; }
+  .msg.other .avatar { order:0; margin-right:8px; background:#dbeafe; }
+  .bubble { max-width:72%; padding:9px 12px; border-radius:10px; font-size:15px;
+    line-height:1.55; word-break:break-word; position:relative; }
+  .msg.mine .bubble { order:1; background:var(--mine); border-top-right-radius:3px; }
+  .msg.other .bubble { order:1; background:var(--other); border-top-left-radius:3px;
+    box-shadow:0 1px 2px rgba(0,0,0,.06); }
+  .bubble .code-row { margin-top:6px; display:flex; align-items:center; gap:6px;
+    font-size:11px; color:#6b7280; }
+  .bubble .code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-weight:700;
+    letter-spacing:1px; color:var(--accent); background:rgba(16,185,129,.1);
+    padding:1px 6px; border-radius:4px; cursor:pointer; user-select:all; }
+  .bubble .time { font-size:11px; color:#9ca3af; margin-left:auto; }
+  /* 文件气泡 */
+  .file-card { min-width:200px; max-width:72%; background:var(--other); border-radius:10px;
+    padding:10px 12px; display:flex; align-items:center; gap:10px; cursor:pointer;
+    box-shadow:0 1px 2px rgba(0,0,0,.06); }
+  .msg.mine .file-card { background:#e8f7df; }
+  .file-card .ficon { font-size:26px; flex-shrink:0; }
+  .file-card .fmeta { flex:1; min-width:0; }
+  .file-card .fname { font-size:14px; font-weight:600; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap; }
+  .file-card .finfo { font-size:11px; color:var(--muted); margin-top:2px; }
+  .file-card .fdown { flex-shrink:0; background:var(--accent); color:#fff; font-size:12px;
+    padding:6px 12px; border-radius:6px; }
+  /* 系统提示 / 时间分隔 */
+  .sys { text-align:center; color:var(--muted); font-size:12px; margin:10px 0; }
+  .sys span { background:rgba(0,0,0,.05); padding:3px 10px; border-radius:10px; }
+
+  /* ===== 底部输入栏 ===== */
+  .inputbar { background:#fff; border-top:1px solid var(--border); padding:8px 10px;
+    flex-shrink:0; display:flex; align-items:flex-end; gap:8px; }
+  .inputbar .plus { width:38px; height:38px; border:none; border-radius:50%; background:#f3f4f6;
+    font-size:20px; cursor:pointer; color:#374151; flex-shrink:0; }
+  .inputbar textarea { flex:1; border:none; outline:none; background:#f3f4f6; border-radius:8px;
+    padding:10px 12px; font-size:15px; resize:none; max-height:100px; font-family:inherit;
+    line-height:1.4; }
+  .inputbar .send { width:64px; height:38px; border:none; border-radius:8px; background:var(--accent);
+    color:#fff; font-size:15px; font-weight:600; cursor:pointer; flex-shrink:0; }
+  .inputbar .send:active { opacity:.8; }
+
+  /* 底部浮层提示 */
+  .toast { position:fixed; bottom:90px; left:50%; transform:translateX(-50%);
+    background:rgba(17,24,39,.88); color:#fff; padding:9px 16px; border-radius:8px;
+    font-size:13px; z-index:99; display:none; box-shadow:0 4px 12px rgba(0,0,0,.2); }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <h1>📦 DataHub</h1>
-    <p>在不同设备之间传输文本与文件 · 同局域网内浏览器直接访问</p>
-  </header>
-
-  <div class="tabs">
-    <div class="tab active" data-tab="share" onclick="switchTab('share')">📤 发送</div>
-    <div class="tab" data-tab="get" onclick="switchTab('get')">📥 获取</div>
-    <div class="tab" data-tab="list" onclick="switchTab('list'); loadList()">📋 列表</div>
+  <!-- 顶栏 -->
+  <div class="topbar">
+    <div>
+      <div class="title">📦 DataHub</div>
+      <div class="subtitle">设备间数据传输</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="status"><span class="dot"></span><span id="statusText">连接中…</span></div>
   </div>
 
-  <!-- 发送 -->
-  <div class="panel active" id="panel-share">
-    <div class="card">
-      <h2>✏️ 粘贴文本</h2>
-      <textarea id="txtContent" placeholder="在这里粘贴要发送的文本内容…"></textarea>
-      <button class="btn" onclick="sendText()">生成提取码</button>
-      <div class="result" id="resText"></div>
-    </div>
-    <div class="card">
-      <h2>📎 上传文件</h2>
-      <input type="file" id="fileInput">
-      <button class="btn" onclick="sendFile()">上传并生成提取码</button>
-      <div class="result" id="resFile"></div>
-    </div>
-    <div class="card sent-card">
-      <h2>📤 最近发送</h2>
-      <div id="sentList"><div class="empty">暂无发送记录</div></div>
-    </div>
+  <!-- 消息区 -->
+  <div class="chat" id="chat">
+    <div class="sys"><span>📡 扫码/访问同一地址，即可互传消息与文件</span></div>
   </div>
 
-  <!-- 获取 -->
-  <div class="panel" id="panel-get">
-    <div class="card">
-      <h2>🔑 输入提取码</h2>
-      <input type="text" id="getCode" placeholder="6 位提取码" maxlength="6"
-             autocomplete="off" autocapitalize="characters">
-      <div class="row" style="margin-top:12px;">
-        <button class="btn" onclick="getText()">获取文本</button>
-        <button class="btn ok" onclick="getFile()">下载文件</button>
-      </div>
-      <div class="result" id="resGet"></div>
-      <p class="hint">提示：点击右侧「📋 列表」可查看所有数据项的提取码。</p>
-    </div>
+  <!-- 输入栏 -->
+  <div class="inputbar">
+    <button class="plus" id="plusBtn" title="发送文件">＋</button>
+    <textarea id="input" placeholder="输入消息，回车发送" rows="1"></textarea>
+    <button class="send" id="sendBtn">发送</button>
   </div>
 
-  <!-- 列表 -->
-  <div class="panel" id="panel-list">
-    <div class="card">
-      <h2>📋 全部数据</h2>
-      <div id="listWrap"><div class="empty">加载中…</div></div>
-    </div>
-  </div>
-</div>
+  <input type="file" id="fileInput" style="display:none">
+  <div class="toast" id="toast"></div>
 
 <script>
-function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(function(t){
-    t.classList.toggle('active', t.dataset.tab === name);
-  });
-  document.querySelectorAll('.panel').forEach(function(p){ p.classList.remove('active'); });
-  document.getElementById('panel-' + name).classList.add('active');
-}
+(function () {
+  'use strict';
 
-function showResult(id, ok, msg, big) {
-  var el = document.getElementById(id);
-  el.className = 'result show ' + (ok ? 'success' : 'error');
-  el.innerHTML = msg;
-  if (big) el.scrollIntoView({behavior:'smooth', block:'center'});
-}
+  // ============ 状态 ============
+  var seen = {};      // 已渲染的消息 id → true
+  var mine = {};      // 本端发送的消息 id → true
+  var POLL_MS = 2000; // 轮询间隔
 
-function escapeHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-                  .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
-}
-
-async function postJson(url, body, headers) {
-  var resp = await fetch(url, { method:'POST', body:body, headers:headers || {} });
-  return await resp.json();
-}
-
-function sendText() {
-  var content = document.getElementById('txtContent').value;
-  if (!content.trim()) { showResult('resText', false, '内容不能为空'); return; }
-  document.getElementById('resText').className = 'result show';
-  document.getElementById('resText').textContent = '正在生成提取码…';
-  fetch('/api/text', { method:'POST', body:content })
-    .then(function(r){ return r.json(); })
-    .then(function(j){
-      if (j.id) {
-        showResult('resText', true,
-          '提取码：<div class="code" onclick="copyCode(\'' + j.id + '\')">' + j.id + '</div>' +
-          '<div style="text-align:center;">点击提取码可复制</div>', true);
-        addSentItem('text', j.id, '文本消息', content);
-        document.getElementById('txtContent').value = '';
-      }
-      else showResult('resText', false, j.error || '发送失败');
-    })
-    .catch(function(){ showResult('resText', false, '网络错误'); });
-}
-
-function sendFile() {
-  var input = document.getElementById('fileInput');
-  if (!input.files || !input.files.length) { showResult('resFile', false, '请先选择文件'); return; }
-  var file = input.files[0];
-  document.getElementById('resFile').className = 'result show';
-  document.getElementById('resFile').textContent = '正在上传 ' + file.name + ' …';
-  fetch('/api/file', {
-    method:'POST',
-    headers:{ 'X-File-Name': encodeURIComponent(file.name) },
-    body:file
-  })
-  .then(function(r){ return r.json(); })
-  .then(function(j){
-    if (j.id) {
-      showResult('resFile', true,
-        '上传成功！提取码：<div class="code" onclick="copyCode(\'' + j.id + '\')">' + j.id + '</div>' +
-        '<div style="text-align:center;">点击提取码可复制</div>', true);
-      addSentItem('file', j.id, file.name, '');
-      input.value = '';
-    }
-    else showResult('resFile', false, j.error || '上传失败');
-  })
-  .catch(function(){ showResult('resFile', false, '网络错误'); });
-}
-
-// 把已发送项实时追加到「最近发送」列表（新的在上）。
-function addSentItem(type, id, name, content) {
-  var wrap = document.getElementById('sentList');
-  if (!wrap) return;
-  var empty = wrap.querySelector('.empty');
-  if (empty) empty.remove();
-  var icon = type === 'file' ? '📎' : '✏️';
-  var preview = type === 'file'
-    ? '文件 · ' + (name || '未命名')
-    : (content || '');
-  if (preview.length > 60) preview = preview.slice(0, 60) + '…';
-  var ops = type === 'file'
-    ? '<a href="/api/file/' + id + '">下载</a>'
-    : '<a href="/api/text/' + id + '" target="_blank">查看</a>';
-  var div = document.createElement('div');
-  div.className = 'sent-item';
-  div.innerHTML =
-    '<div class="icon">' + icon + '</div>' +
-    '<div class="meta">' +
-      '<div class="name">' + escapeHtml(name || '文本消息') + '</div>' +
-      '<div class="preview">' + escapeHtml(preview) + '</div>' +
-      '<div class="sub">' + new Date().toLocaleTimeString() + '</div>' +
-    '</div>' +
-    '<div class="id" onclick="copyCode(\'' + id + '\')" title="点击复制">' + id + '</div>' +
-    '<div class="ops">' + ops + '</div>';
-  wrap.insertBefore(div, wrap.firstChild);
-}
-
-function getText() {
-  var code = document.getElementById('getCode').value.trim();
-  if (!code) { showResult('resGet', false, '请输入提取码'); return; }
-  fetch('/api/text/' + encodeURIComponent(code))
-    .then(function(r){
-      if (!r.ok) return r.json().then(function(j){ throw new Error(j.error || '获取失败'); });
-      return r.text();
-    })
-    .then(function(text){
-      showResult('resGet', true, '获取成功，内容如下：<br><pre style="white-space:pre-wrap;background:#f9fafb;padding:8px;border-radius:6px;margin-top:6px;font-size:13px;">' + escapeHtml(text) + '</pre>', true);
-    })
-    .catch(function(e){ showResult('resGet', false, e.message || '网络错误'); });
-}
-
-function getFile() {
-  var code = document.getElementById('getCode').value.trim();
-  if (!code) { showResult('resGet', false, '请输入提取码'); return; }
-  window.location.href = '/api/file/' + encodeURIComponent(code);
-}
-
-function loadList() {
-  var wrap = document.getElementById('listWrap');
-  fetch('/api/list')
-    .then(function(r){ return r.json(); })
-    .then(function(j){
-      var items = j.items || [];
-      if (!items.length) { wrap.innerHTML = '<div class="empty">暂无数据</div>'; return; }
-      var html = '';
-      items.forEach(function(it){
-        var name = it.type === 'text' ? '📝 ' + (it.name || '文本') : '📎 ' + (it.name || '文件');
-        var size = formatSize(it.size);
-        html += '<div class="item">' +
-                '<div class="meta"><div class="name">' + escapeHtml(name) + '</div>' +
-                '<div class="sub">' + size + ' · ' + new Date(it.time).toLocaleString() + '</div></div>' +
-                '<div class="id" onclick="copyCode(\'' + it.id + '\')" title="点击复制">' + it.id + '</div>' +
-                '<div class="ops">' +
-                (it.type === 'file' ? '<a href="/api/file/' + it.id + '">下载</a>' :
-                 '<button onclick="previewText(\'' + it.id + '\')">查看</button>') +
-                '<button class="del" onclick="delItem(\'' + it.id + '\')">删除</button>' +
-                '</div></div>';
-      });
-      wrap.innerHTML = html;
-    })
-    .catch(function(){ wrap.innerHTML = '<div class="empty">加载失败</div>'; });
-}
-
-function formatSize(n) {
-  if (n < 1024) return n + ' B';
-  if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
-  return (n/1048576).toFixed(1) + ' MB';
-}
-
-function previewText(id) {
-  fetch('/api/text/' + id).then(function(r){ return r.text(); }).then(function(t){
-    alert(t.length > 500 ? t.slice(0,500) + '\n…(内容过长已截断)' : t);
-  });
-}
-
-function delItem(id) {
-  if (!confirm('确定删除 ' + id + ' 吗？')) return;
-  fetch('/api/item/' + id, { method:'DELETE' })
-    .then(function(r){ return r.json(); })
-    .then(function(j){ if (j.ok) loadList(); else alert(j.error || '删除失败'); })
-    .catch(function(){ alert('网络错误'); });
-}
-
-function copyCode(code) {
-  if (navigator.clipboard) {
-    navigator.clipboard.writeText(code).then(function(){ toast('已复制: ' + code); });
-  } else {
-    var ta = document.createElement('textarea');
-    ta.value = code; document.body.appendChild(ta); ta.select();
-    document.execCommand('copy'); document.body.removeChild(ta);
-    toast('已复制: ' + code);
+  // ============ DOM 工具 ============
+  function $(id) { return document.getElementById(id); }
+  function escapeHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
-}
+  function fmtSize(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n/1024).toFixed(1) + ' KB';
+    return (n/1048576).toFixed(1) + ' MB';
+  }
+  function fmtTime(ms) {
+    var d = new Date(ms);
+    function p(x){ return (x<10?'0':'')+x; }
+    return p(d.getHours()) + ':' + p(d.getMinutes());
+  }
+  var chatEl = $('chat');
+  function scrollBottom() { chatEl.scrollTop = chatEl.scrollHeight; }
+  function toast(msg) {
+    var t = $('toast');
+    t.textContent = msg; t.style.display = 'block';
+    clearTimeout(t._tm);
+    t._tm = setTimeout(function(){ t.style.display = 'none'; }, 1800);
+  }
+  function copyCode(code) {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(code).then(function(){ toast('已复制: ' + code); });
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = code; document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); toast('已复制: ' + code); } catch(e){}
+      document.body.removeChild(ta);
+    }
+  }
 
-function toast(msg) {
-  var el = document.createElement('div');
-  el.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);' +
-    'background:#111827;color:#fff;padding:10px 18px;border-radius:8px;font-size:14px;' +
-    'z-index:99;box-shadow:0 4px 12px rgba(0,0,0,.2);';
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(function(){ el.remove(); }, 1500);
-}
+  // ============ 渲染一条消息 ============
+  // type: 'text' | 'file'；mine: 是否本端发送
+  function renderMsg(id, type, name, content, mineFlag, size, timeMs) {
+    if (seen[id]) return;
+    seen[id] = true;
+
+    var row = document.createElement('div');
+    row.className = 'msg ' + (mineFlag ? 'mine' : 'other');
+
+    var avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = mineFlag ? '🙂' : '📱';
+
+    var body = document.createElement('div');
+    if (type === 'file') {
+      body.className = 'file-card';
+      body.onclick = function(){ window.location.href = '/api/file/' + encodeURIComponent(id); };
+      body.innerHTML =
+        '<div class="ficon">📎</div>' +
+        '<div class="fmeta">' +
+          '<div class="fname">' + escapeHtml(name || 'file.bin') + '</div>' +
+          '<div class="finfo">' + fmtSize(size) + ' · 点击下载</div>' +
+        '</div>' +
+        '<div class="fdown">下载</div>';
+    } else {
+      body.className = 'bubble';
+      body.innerHTML =
+        '<div class="content">' + escapeHtml(content) + '</div>' +
+        '<div class="code-row">' +
+          '<span class="code" onclick="event.stopPropagation();window.__copy(\'' + id + '\')">' + id + '</span>' +
+          '<span class="time">' + fmtTime(timeMs || Date.now()) + '</span>' +
+        '</div>';
+    }
+
+    row.appendChild(avatar);
+    row.appendChild(body);
+    chatEl.appendChild(row);
+    scrollBottom();
+  }
+  // 暴露给内联 onclick 的复制函数
+  window.__copy = copyCode;
+
+  // ============ 发送文本 ============
+  function sendText() {
+    var input = $('input');
+    var text = input.value.trim();
+    if (!text) return;
+    input.value = ''; input.style.height = 'auto';
+    fetch('/api/text', { method:'POST', body:text })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (j.id) {
+          mine[j.id] = true;
+          renderMsg(j.id, 'text', '', text, true, 0, Date.now());
+          toast('已发送，提取码 ' + j.id);
+        } else toast(j.error || '发送失败');
+      })
+      .catch(function(){ toast('网络错误'); });
+  }
+
+  // ============ 发送文件 ============
+  function sendFile(file) {
+    toast('上传中 ' + file.name + ' …');
+    fetch('/api/file', {
+      method:'POST',
+      headers:{ 'X-File-Name': encodeURIComponent(file.name) },
+      body:file
+    })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (j.id) {
+          mine[j.id] = true;
+          renderMsg(j.id, 'file', file.name, '', true, file.size, Date.now());
+          toast('文件已上传，提取码 ' + j.id);
+        } else toast(j.error || '上传失败');
+      })
+      .catch(function(){ toast('网络错误'); });
+  }
+
+  // ============ 轮询拉取（对方消息） ============
+  function poll() {
+    fetch('/api/list')
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        var items = j.items || [];
+        $('statusText').textContent = '在线 · ' + items.length + ' 条';
+        // 按时间倒序返回，反转后从旧到新渲染
+        var arr = items.slice().reverse();
+        arr.forEach(function(it){
+          var mineFlag = !!mine[it.id];
+          if (it.type === 'file') {
+            renderMsg(it.id, 'file', it.name, '', mineFlag, it.size, it.time);
+          } else {
+            // 文本内容需单独拉取
+            if (!seen[it.id]) {
+              fetch('/api/text/' + encodeURIComponent(it.id))
+                .then(function(r){ return r.text(); })
+                .then(function(text){
+                  renderMsg(it.id, 'text', '', text, !!mine[it.id], 0, it.time);
+                })
+                .catch(function(){});
+            }
+          }
+        });
+        scrollBottom();
+      })
+      .catch(function(){ $('statusText').textContent = '离线'; });
+  }
+
+  // ============ 事件绑定 ============
+  $('sendBtn').addEventListener('click', sendText);
+  $('input').addEventListener('keydown', function(e){
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); }
+  });
+  $('input').addEventListener('input', function(){
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 100) + 'px';
+  });
+  $('plusBtn').addEventListener('click', function(){ $('fileInput').click(); });
+  $('fileInput').addEventListener('change', function(){
+    if (this.files && this.files.length) sendFile(this.files[0]);
+    this.value = '';
+  });
+
+  // ============ 启动 ============
+  poll();
+  setInterval(poll, POLL_MS);
+})();
 </script>
 </body>
 </html>
