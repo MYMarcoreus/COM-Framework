@@ -7,7 +7,7 @@ description: 本项目命名规范：以 MFC（Microsoft Foundation Classes）�
 
 ## 1. 适用范围
 
-本文档规定本项目（内网安全服务控制台后端）所有 **C++11 代码**的命名规范：
+本文档规定本项目（通用 COM 模块化服务器框架）所有 **C++11 代码**的命名规范：
 
 - **基准**：MFC 命名风格（Microsoft Foundation Classes）
 - **补充**：MFC 未明确规定处，采用 Google C++ Style Guide

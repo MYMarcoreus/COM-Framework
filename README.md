@@ -145,7 +145,7 @@ Demo 还验证**事件解耦通信**：`DemoNetworkModule` 启动/停止时发�
 - `build/servera`：服务器（默认端口 9100，可用命令行参数覆盖）
 - 复用 ServerCore：`MyApplication` 生命周期 + `ModuleManager` 统一装配（接口注册 / 名字注册）+ `EventDispatcher` 事件通信 + `NetworkModule` 网络
 - 业务层：`EchoService`（实现 `INetworkHandler`，收到数据原样返回，验证网络收发链路）
-- 不含具体业务（规范：第一阶段不做业务认证 / 权限 / 数据库等），作为后续内网安全服务控制台后端的起点
+- 不含具体业务（规范：第一阶段不做业务认证 / 权限 / 数据库等），作为后续业务服务器扩展的起点
 
 ## 使用方式
 
