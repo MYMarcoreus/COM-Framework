@@ -21,9 +21,10 @@
 统一构建入口 `./build.sh`（自动发现所有含 `Linux/Makefile` 的项目，新项目只需新建 `<名称>/Linux/Makefile` 即可自动纳入）：
 
 ```bash
-./build.sh                    # 发布构建：所有项目 + examples（一键）
-./build.sh --debug            # 调试构建（-O0，含 examples，供 VS Code 调试）
-./build.sh --compiledb        # 生成所有项目 + examples 的 compile_commands.json（clangd）
+./build.sh                    # 调试构建（默认，-O0）：所有项目 + examples（一键）
+./build.sh --release          # 发布构建（-O2）
+./build.sh --debug            # 显式调试构建（-O0，含 examples，供 VS Code 调试）
+./build.sh --compiledb        # 生成所有项目 + examples + workflow 的 compile_commands.json（clangd）
 ./build.sh --tests            # 构建并运行单元测试
 ./build.sh --clean            # 清理所有构建产物
 ./build.sh --list             # 列出自动发现的项目（全部可构建）
@@ -32,11 +33,11 @@
 ./build.sh examples           # 只构建 examples（examples 与服务器项目同为普通项目，统一自动发现）
 ```
 
-**构建产物按模式分目录**（release 与 debug 隔离，可同时存在、互不干扰）：
+**构建产物按模式分目录**（debug 与 release 隔离，可同时存在、互不干扰）：
 
 ```text
-build/release/     —— 发布产物（demo、demo_client、logserver、servera、tests、lib*.a、examples/）
-build/debug/       —— 调试产物（-O0）
+build/debug/       —— 调试产物（默认；demo、demo_client、logserver、servera、tests、lib*.a、examples/）
+build/release/     —— 发布产物（-O2，用 -r/--release 构建）
 ```
 
 > `build.sh` 是唯一构建入口（整合了原 `build-all.sh` / `build-debug.sh` / `generate-compiledb.sh` 与根 `Makefile`）。项目级构建用各项目 `Linux/Makefile`（由 `build.sh` 调用）。
@@ -56,7 +57,7 @@ build/debug/       —— 调试产物（-O0）
 
 仅 debug 构建，在调试器中运行，支持断点 / 变量 / 调用栈：`launch.json` 提供配置 `Debug examples (debug build)`（`build/debug/examples`）。启动方式：按 **F5** 或 **Run and Debug** 面板选择该配置（`tasks.json` 不提供调试任务，调试统一由 `launch.json` 驱动）。启动时会自动先执行 `preLaunchTask`（`build debug (Common + examples)`）完成调试构建。
 
-运行 Demo 服务器与客户端：`./build/release/demo 9000`、`./build/release/demo_client 9000`（调试版用 `./build/debug/...`）。
+运行 Demo 服务器与客户端：`./build/debug/demo 9000`、`./build/debug/demo_client 9000`（发布版用 `./build/release/...`）。
 
 ## 3. 宿主机（无 sudo）生成 compile_commands.json
 
@@ -82,12 +83,27 @@ git submodule update --init --recursive
 第三方库**不纳入主构建**（`build.sh`），需要先编译其静态库，链接时直接使用：
 
 ```bash
-./ThirdParty/build.sh            # 编译全部第三方库（release）
-./ThirdParty/build.sh --debug    # 调试构建
+./ThirdParty/build.sh            # 编译全部第三方库（默认 debug + release 双模式）
+./ThirdParty/build.sh --debug    # 仅调试构建
+./ThirdParty/build.sh --release  # 仅发布构建
 ./ThirdParty/build.sh workflow   # 只编译 workflow
 ```
 
-产物位于 `build/<模式>/lib<名称>.a`（如 `libworkflow.a`）。
+产物位于 `build/<模式>/lib<名称>.a`（如 `build/debug/libworkflow.a`、`build/release/libworkflow.a`）。
+
+生成第三方库源码的编译数据库（供 clangd 解析）：
+
+```bash
+./ThirdParty/build.sh --compiledb     # 生成 ThirdParty/workflow/compile_commands.json
+# 或在统一入口中一并生成（9 个项目 + workflow）：
+./build.sh -c
+```
+
+> 注意：`compile_commands.json` 为本地生成产物。项目级已由根 `.gitignore` 的
+> `**/compile_commands.json` 忽略；workflow **子模块内部**的该文件使用子模块
+> 本地的 `.git/info/exclude` 忽略（`compile_commands.json`），该配置是本机私有、
+> 不进版本库，重新 clone 后需在 `ThirdParty/workflow/.git` 对应的
+> `.git/modules/ThirdParty/workflow/info/exclude` 中重新添加一次。
 
 上游库更新后拉取新版本（并更新父仓库记录的 commit）：
 
@@ -101,12 +117,47 @@ git commit -m "升级 asio 到 <新标签>"
 
 ## 常用命令
 
+### 主构建 `build.sh`
+
 | 命令 | 说明 |
 | --- | --- |
-| `./build.sh` | 构建所有项目 |
-| `./build.sh --compiledb` | 生成所有项目的 compile_commands.json |
+| `./build.sh` | 构建所有项目（**默认 debug**，产物在 `build/debug/`） |
+| `./build.sh -r` / `--release` | 发布构建（-O2，产物在 `build/release/`） |
+| `./build.sh -d` / `--debug` | 显式 debug 构建（-O0，默认模式） |
+| `./build.sh --compiledb` | 生成所有项目 + workflow 的 compile_commands.json |
+| `./build.sh --tests` | 构建并运行单元测试（`./build/debug/tests`） |
+| `./build.sh --clean` | 清理所有构建产物 |
+| `./build.sh --list` | 列出自动发现的项目 |
+| `./build.sh --executables` | 列出可执行项目（含 main.cpp） |
+| `./build.sh Common ServerCore` | 只构建指定项目 |
+
+### 第三方库 `ThirdParty/build.sh`
+
+| 命令 | 说明 |
+| --- | --- |
+| `./ThirdParty/build.sh` | 编译全部第三方库（**默认 debug + release 双模式**） |
+| `./ThirdParty/build.sh --debug` | 仅调试构建（-O0） |
+| `./ThirdParty/build.sh --release` | 仅发布构建（-O2） |
+| `./ThirdParty/build.sh workflow` | 只编译 workflow（`libworkflow.a`） |
+| `./ThirdParty/build.sh --compiledb` | 生成 workflow 源码 compile_commands.json |
+| `./ThirdParty/build.sh --clean` | 清理第三方库构建产物 |
+
+### 项目级 Makefile（由 `build.sh` 调用）
+
+| 命令 | 说明 |
+| --- | --- |
 | `make -C <项目>/Linux all` | 构建单个项目 |
 | `make -C <项目>/Linux debug` | 调试构建（-O0） |
 | `make -C <项目>/Linux compiledb` | 用 compiledb 生成编译数据库 |
 | `make -C <项目>/Linux clean` | 清理构建产物与编译数据库 |
-| `./build/demo <port>` | 运行 Demo 服务器 |
+
+### 运行示例
+
+| 命令 | 说明 |
+| --- | --- |
+| `./build/debug/demo 9000` | 运行 Demo 服务器（debug） |
+| `./build/debug/demo_client 9000` | 运行 Demo 客户端（debug） |
+| `./build/release/demo 9000` | 运行 Demo 服务器（release） |
+| `./build/debug/demo_server 8888` | 运行 WorkflowDemo HTTP echo 服务器 |
+| `./build/debug/demo_client http://127.0.0.1:8888/x` | 运行 WorkflowDemo HTTP 客户端 |
+| `./build/debug/demo_parallel <url1> <url2>` | 运行 WorkflowDemo 并行请求示例 |

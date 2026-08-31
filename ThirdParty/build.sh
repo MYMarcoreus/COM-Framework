@@ -6,8 +6,9 @@
 #       产出到 build/<模式>/lib<名称>.a，供各项目 Makefile 链接时直接使用。
 #
 # 用法：
-#   ./ThirdParty/build.sh            —— 编译全部第三方库（release）
-#   ./ThirdParty/build.sh --debug    —— 调试构建（-O0）
+#   ./ThirdParty/build.sh            —— 编译全部第三方库（默认 debug + release 双模式）
+#   ./ThirdParty/build.sh --debug    —— 仅调试构建（-O0）
+#   ./ThirdParty/build.sh --release  —— 仅发布构建（-O2）
 #   ./ThirdParty/build.sh workflow   —— 只编译指定库（asio/inih/workflow）
 #   ./ThirdParty/build.sh --compiledb —— 生成 workflow 源码 compile_commands.json（clangd）
 #   ./ThirdParty/build.sh --clean    —— 清理构建产物
@@ -22,7 +23,7 @@ set -euo pipefail
 WS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-MODE="release"
+MODE=""       # 空 = 双模式（debug+release）；--debug/--release 指定单一模式
 DO_CLEAN=0
 DO_COMPILEDB=0
 TARGETS=()
@@ -43,7 +44,8 @@ ThirdParty 第三方库独立编译脚本
 用法: ./ThirdParty/build.sh [选项] [库...]
 
 选项:
-  --debug     调试构建（-O0，默认 release）
+  --debug     仅调试构建（-O0）
+  --release   仅发布构建（-O2，默认与 debug 同时构建）
   --compiledb 生成 workflow 源码的 compile_commands.json（供 clangd）
   --clean     清理构建产物
   -h, --help  显示帮助
@@ -53,11 +55,14 @@ EOF
 }
 
 # 编译 workflow（nossl）——纯 Make，不引入 CMake
+# 参数: <mode> <cxxflags> <cflags>
 build_workflow() {
-    local build_dir="$WS_ROOT/build/$MODE"
+    local mode="$1"
+    local cxxflags="$2" cflags="$3"
+    local build_dir="$WS_ROOT/build/$mode"
     local src_dir="$TP_ROOT/workflow/src"
     local out="$build_dir/libworkflow.a"
-    echo "==> Compiling workflow -> $out"
+    echo "==> [$mode] Compiling workflow -> $out"
 
     # 源码未拉取时提示
     if [[ ! -d "$src_dir" ]]; then
@@ -65,7 +70,6 @@ build_workflow() {
         return 1
     fi
 
-    local cxxflags="$1" cflags="$2"
     # 收集源码（排除 Kafka：需外部库 snappy/zstd/lz4，默认不启用）
     local objs=()
     local src obj
@@ -87,17 +91,20 @@ build_workflow() {
 }
 
 # 编译 inih
+# 参数: <mode> <cxxflags>
 build_inih() {
-    local build_dir="$WS_ROOT/build/$MODE"
+    local mode="$1"
+    local cxxflags="$2"
+    local build_dir="$WS_ROOT/build/$mode"
     local src="$TP_ROOT/inih/ini.c"
     local obj="$build_dir/inih_ini.o"
     local out="$build_dir/libinih.a"
-    echo "==> Compiling inih -> $out"
+    echo "==> [$mode] Compiling inih -> $out"
     if [[ ! -f "$src" ]]; then
         echo "!! inih 子模块未拉取"
         return 1
     fi
-    gcc -std=c11 -Wall -O2 -g -c "$src" -o "$obj"
+    gcc $cxxflags -c "$src" -o "$obj"
     ar rcs "$out" "$obj"
 }
 
@@ -152,7 +159,8 @@ EOF
 main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --debug) MODE="debug"; shift ;;
+            --debug)   MODE="debug"; shift ;;
+            --release) MODE="release"; shift ;;
             --clean) DO_CLEAN=1; shift ;;
             --compiledb) DO_COMPILEDB=1; shift ;;
             -h|--help) usage; exit 0 ;;
@@ -177,20 +185,29 @@ main() {
         TARGETS=(asio inih workflow)
     fi
 
-    local cxxflags="$RELEASE_CXXFLAGS" cflags="$RELEASE_CFLAGS"
-    [[ $MODE == "debug" ]] && { cxxflags="$DEBUG_CXXFLAGS"; cflags="$DEBUG_CFLAGS"; }
+    # 默认双模式（debug + release）；--debug/--release 指定单一模式
+    local modes=()
+    if [[ -n "$MODE" ]]; then
+        modes=("$MODE")
+    else
+        modes=(release debug)
+    fi
 
-    mkdir -p "$WS_ROOT/build/$MODE"
-    for t in "${TARGETS[@]}"; do
-        case "$t" in
-            asio)     build_asio ;;
-            inih)     build_inih "$cxxflags" "$cflags" ;;
-            workflow) build_workflow "$cxxflags" "$cflags" ;;
-            *) echo "!! 未知库: $t"; exit 1 ;;
-        esac
+    for mode in "${modes[@]}"; do
+        local cxxflags="$RELEASE_CXXFLAGS" cflags="$RELEASE_CFLAGS"
+        [[ $mode == "debug" ]] && { cxxflags="$DEBUG_CXXFLAGS"; cflags="$DEBUG_CFLAGS"; }
+        mkdir -p "$WS_ROOT/build/$mode"
+        for t in "${TARGETS[@]}"; do
+            case "$t" in
+                asio)     build_asio ;;
+                inih)     build_inih "$mode" "$cxxflags" ;;
+                workflow) build_workflow "$mode" "$cxxflags" "$cflags" ;;
+                *) echo "!! 未知库: $t"; exit 1 ;;
+            esac
+        done
     done
 
-    echo "==================== ThirdParty Build finished ($MODE) ===================="
+    echo "==================== ThirdParty Build finished (${modes[*]}) ===================="
 }
 
 main "$@"
