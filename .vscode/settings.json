@@ -1,12 +1,20 @@
-// {
-//     // C++ 文件统一使用 clangd 作为格式化器（读取项目根 .clang-format）。
-//     // 没有此配置时，VS Code 可能不调用 clangd 的格式化，导致 .clang-format 不生效。
-//     "[cpp]": {
-//         "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
-//         "editor.formatOnSave": true
-//     },
-//     "[c]": {
-//         "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
-//         "editor.formatOnSave": true
-//     }
-// }
+{
+    // C++ 文件统一使用 clangd 作为格式化器（读取项目根 .clang-format）。
+    // 没有此配置时，VS Code 可能不调用 clangd 的格式化，导致 .clang-format 不生效。
+    "[cpp]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+        "editor.formatOnSave": true
+    },
+    "[c]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+        "editor.formatOnSave": true
+    },
+    // 忽略第三方子模块的 git 仓库：VS Code 的源代码管理面板不再显示
+    // 这些子模块内部的任何更改（我们不修改第三方源码；本地产物
+    // 如 .cache/、compile_commands.json 也不会再显示为子模块 dirty）。
+    "git.ignoredRepositories": [
+        "ThirdParty/asio",
+        "ThirdParty/inih",
+        "ThirdParty/workflow"
+    ]
+}
