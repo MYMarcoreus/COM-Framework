@@ -93,13 +93,27 @@ int main()
     for (int i = 0; i < kUrlCount; ++i)
         data->urls.push_back(kUrls[i]);
 
-    // ---- 节点 0：定时器（先等 1 秒）----
+    // ---- 节点：定时器（先等 1 秒）----
     WFTimerTask* timer = WFTaskFactory::create_timer_task(
         1000000, [](WFTimerTask*) {
             printf("[timer] 1s elapsed\n");
         });
 
-    // ---- 汇总计算节点 ----
+    // ---- 节点：三个 HTTP 请求 ----
+    WFHttpTask* http1 = WFTaskFactory::create_http_task(
+        data->urls[0], 3, 1, [data](WFHttpTask* task) {
+            FetchHttp(task, 0, data);
+        });
+    WFHttpTask* http2 = WFTaskFactory::create_http_task(
+        data->urls[1], 3, 1, [data](WFHttpTask* task) {
+            FetchHttp(task, 1, data);
+        });
+    WFHttpTask* http3 = WFTaskFactory::create_http_task(
+        data->urls[2], 3, 1, [data](WFHttpTask* task) {
+            FetchHttp(task, 2, data);
+        });
+
+    // ---- 节点：汇总计算（go task，独立线程执行）----
     WFGoTask* go = WFTaskFactory::create_go_task(
         "aggregate", Aggregate, data);
 
@@ -111,26 +125,20 @@ int main()
             wait_group.done();
         });
 
+    // ---- 图节点（node）----
     WFGraphNode& t = graph->create_graph_node(timer);
-    std::vector<WFGraphNode*> http_nodes;
-    for (int i = 0; i < kUrlCount; ++i)
-    {
-        // 每个 http 节点：lambda 里捕获索引与 data，转发到 FetchHttp
-        size_t idx = (size_t)i;
-        WFHttpTask* ht = WFTaskFactory::create_http_task(
-            data->urls[i], 3, 1, [idx, data](WFHttpTask* task) {
-                FetchHttp(task, idx, data);
-            });
-        http_nodes.push_back(&graph->create_graph_node(ht));
-    }
+    WFGraphNode& a = graph->create_graph_node(http1);
+    WFGraphNode& b = graph->create_graph_node(http2);
+    WFGraphNode& c = graph->create_graph_node(http3);
     WFGraphNode& g = graph->create_graph_node(go);
 
-    // ---- 建边（DAG 依赖）：timer 先，然后各 http 并行，最后 go ----
-    for (WFGraphNode* hn : http_nodes)
-    {
-        t --> *hn;   // timer 完成 → 各 http 开始（并行）
-        *hn --> g;   // 各 http 完成 → go 汇总
-    }
+    // ---- 建边（DAG 依赖）：timer 先，三个 http 并行，最后 go 汇总 ----
+    t --> a;   // timer 完成 → http1
+    t --> b;   // timer 完成 → http2
+    t --> c;   // timer 完成 → http3
+    a --> g;   // http1 完成 → go
+    b --> g;   // http2 完成 → go
+    c --> g;   // http3 完成 → go
 
     graph->start();
     wait_group.wait();
