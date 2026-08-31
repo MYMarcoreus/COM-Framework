@@ -10,8 +10,8 @@ WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 #   ./build.sh [选项] [项目...]
 #
 # 选项：
-#   -d, --debug      调试构建（-O0，含 examples；供 VS Code 调试）
-#   -r, --release    发布构建（-O2，默认）
+#   -d, --debug      调试构建（-O0；默认模式）
+#   -r, --release    发布构建（-O2）
 #   -c, --compiledb  生成所有项目 + examples 的 compile_commands.json（clangd）
 #   -t, --tests      构建并运行单元测试（./build/tests）
 #   -C, --clean      清理所有构建产物
@@ -31,8 +31,9 @@ KNOWN_ORDER=(Common ServerCore LogServer Demo ServerA Tests examples)
 RELEASE_FLAGS="-std=c++11 -Wall -Wextra -O2 -g -pthread"
 DEBUG_FLAGS="-std=c++11 -Wall -Wextra -O0 -g -pthread"
 
-MODE="release"
-FLAGS="$RELEASE_FLAGS"
+# 默认构建模式：debug（-O0，便于调试；需 release 用 -r/--release）
+MODE="debug"
+FLAGS="$DEBUG_FLAGS"
 DO_COMPILEDB=0
 DO_TESTS=0
 DO_CLEAN=0
@@ -47,8 +48,8 @@ COM-Framework 统一构建脚本
 用法: ./build.sh [选项] [项目...]
 
 选项:
-  -d, --debug      调试构建（-O0，含 examples；供 VS Code 调试）
-  -r, --release    发布构建（-O2，默认）
+  -d, --debug      调试构建（-O0；默认模式）
+  -r, --release    发布构建（-O2）
   -c, --compiledb  生成所有项目 + examples 的 compile_commands.json（clangd）
   -t, --tests      构建并运行单元测试（./build/tests）
   -C, --clean      清理所有构建产物
