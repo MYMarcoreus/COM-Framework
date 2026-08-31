@@ -174,6 +174,59 @@
     return fetch(url, options);
   }
 
+  // ============ 分段拉取文件 ============
+  // workflow 对单次超大响应体在部分网络环境下会截断（约 110KB），故大文件
+  // 采用 HTTP Range 分段拉取再拼接，每次请求都小于阈值，保证可靠传输。
+  var CHUNK_SIZE = 64 * 1024;   // 64KB/段，远小于 110KB 阈值
+  function fetchFile(id, onProgress) {
+    var url = '/api/file/' + encodeURIComponent(id);
+    return apiFetch(url, { headers: { 'Range': 'bytes=0-0' } })
+      .then(function(r){
+        if (!r.ok) throw new Error('文件不存在 (' + r.status + ')');
+        // 读取 Content-Range: bytes 0-0/total
+        var cr = r.headers.get('Content-Range') || '';
+        var m = /\/\s*(\d+)/.exec(cr);
+        if (!m) {
+          // 服务器未支持 Range（小文件完整返回）——直接读完整 body
+          return apiFetch(url).then(function(r2){
+            if (!r2.ok) throw new Error('加载失败 (' + r2.status + ')');
+            return r2.blob();
+          });
+        }
+        var total = parseInt(m[1], 10);
+        if (total <= 0) return new Blob([]);
+        // 分段拉取
+        var parts = [];
+        var done = 0;
+        var fetchOne = function(start) {
+          var end = Math.min(start + CHUNK_SIZE - 1, total - 1);
+          return apiFetch(url, { headers: { 'Range': 'bytes=' + start + '-' + end } })
+            .then(function(r){
+              if (!r.ok) throw new Error('分段拉取失败 (' + r.status + ')');
+              return r.arrayBuffer();
+            })
+            .then(function(buf){
+              parts.push(new Uint8Array(buf));
+              done += buf.byteLength;
+              if (onProgress) onProgress(done, total);
+            });
+        };
+        var chain = Promise.resolve();
+        for (var s = 0; s < total; s += CHUNK_SIZE) {
+          (function(start){ chain = chain.then(function(){ return fetchOne(start); }); })(s);
+        }
+        return chain.then(function(){
+          var merged = new Uint8Array(total);
+          var off = 0;
+          for (var i = 0; i < parts.length; i++) {
+            merged.set(parts[i], off);
+            off += parts[i].length;
+          }
+          return new Blob([merged.buffer]);
+        });
+      });
+  }
+
   // ============ DOM 工具 ============
   function $(id) { return document.getElementById(id); }
   function escapeHtml(s) {
@@ -254,15 +307,22 @@
     var body;
     if (type === 'file') {
       if (isImageName(name)) {
-        // 图片文件：内联预览（点击放大查看原图）
+        // 图片文件：内联预览（点击放大查看原图）。用分段拉取避免大图失败。
         body = document.createElement('div');
         body.className = 'img-bubble';
         body.onclick = function(){ viewImage(id, name); };
         var img = document.createElement('img');
-        img.src = '/api/file/' + encodeURIComponent(id);
         img.alt = name;
         img.onclick = function(ev){ ev.stopPropagation(); viewImage(id, name); };
         body.appendChild(img);
+        img.classList.add('loading');
+        fetchFile(id).then(function(blob){
+          if (!img._released) {
+            img.src = URL.createObjectURL(blob);
+            img._url = URL.createObjectURL(blob);
+          }
+          img.classList.remove('loading');
+        }).catch(function(){ img.classList.remove('loading'); });
       } else {
         body = document.createElement('div');
         body.className = 'file-card';
@@ -396,14 +456,13 @@
   }
 
   // ============ 文件下载 / 图片预览 ============
-  // 用 fetch + Blob 下载，避免 location.href 导航在移动端/WebView 不可靠的问题。
+  // 分段拉取后再下载，避免大文件在部分网络环境被截断。
   function downloadFile(id, name) {
     toast('正在下载 ' + (name || '文件') + ' …');
-    apiFetch('/api/file/' + encodeURIComponent(id))
-      .then(function(r){
-        if (!r.ok) throw new Error('下载失败 (' + r.status + ')');
-        return r.blob();
-      })
+    fetchFile(id, function(done, total){
+      var pct = Math.round(done / total * 100);
+      if (pct % 25 === 0) toast('下载 ' + pct + '%');
+    })
       .then(function(blob){
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
@@ -420,11 +479,8 @@
 
   // 图片点击：先预览原图，也可长按/点击下载。
   function viewImage(id, name) {
-    apiFetch('/api/file/' + encodeURIComponent(id))
-      .then(function(r){
-        if (!r.ok) throw new Error('加载失败');
-        return r.blob();
-      })
+    toast('加载原图 …');
+    fetchFile(id)
       .then(function(blob){
         var url = URL.createObjectURL(blob);
         $('overlayImg').src = url;

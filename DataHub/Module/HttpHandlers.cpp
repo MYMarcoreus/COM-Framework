@@ -1,6 +1,7 @@
 #include "Module/HttpHandlers.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <sstream>
 #include <vector>
 
@@ -68,8 +69,8 @@ bool HttpHandlers::HandleList(WFHttpTask* pServerTask)
         bFirst = false;
         oss << "{\"id\":\"" << info.strId << "\"" << ",\"type\":\"" << (info.kind == DataKind::kText ? "text" : "file")
             << "\"" << ",\"name\":\"" << HttpUtil::HtmlEscape(info.strName) << "\"" << ",\"from\":\""
-            << HttpUtil::HtmlEscape(info.strFrom) << "\"" << ",\"size\":" << info.nSize << ",\"time\":"
-            << info.nCreateMs << "}";
+            << HttpUtil::HtmlEscape(info.strFrom) << "\"" << ",\"size\":" << info.nSize
+            << ",\"time\":" << info.nCreateMs << "}";
     }
     oss << "]}";
     HttpUtil::WriteJson(pServerTask, oss.str());
@@ -100,8 +101,8 @@ bool HttpHandlers::HandleMembers(WFHttpTask* pServerTask)
         }
         bFirst = false;
         oss << "{\"id\":\"" << HttpUtil::HtmlEscape(pair.first) << "\"" << ",\"ip\":\""
-            << HttpUtil::HtmlEscape(pair.second.strIp) << "\"" << ",\"first\":" << pair.second.nFirstMs << ",\"last\":"
-            << pair.second.nLastMs << "}";
+            << HttpUtil::HtmlEscape(pair.second.strIp) << "\"" << ",\"first\":" << pair.second.nFirstMs
+            << ",\"last\":" << pair.second.nLastMs << "}";
     }
     oss << "]}";
     HttpUtil::WriteJson(pServerTask, oss.str());
@@ -264,6 +265,53 @@ bool HttpHandlers::HandleGetFile(WFHttpTask* pServerTask, const std::string& str
         }
         pResp->add_header_pair("Content-Disposition", strDisposition.c_str());
     }
+
+    // HTTP Range 分段支持：workflow 对单次超大响应体的发送在部分网络环境下会截断
+    // （约 110KB 上限），故大文件采用分段传输：前端以 Range 分多段拉取再拼接。
+    // 每次响应的 body 都小于阈值，绕开该问题且不修改 workflow 本身。
+    std::string strRange = HttpUtil::GetHeader(pServerTask, "Range");
+    size_t nTotal = vecData.size();
+    size_t nStart = 0;
+    size_t nEnd = nTotal > 0 ? nTotal - 1 : 0;
+
+    // 解析 "bytes=start-end" 或 "bytes=start-"
+    if (!strRange.empty() && strRange.compare(0, 6, "bytes=") == 0 && nTotal > 0)
+    {
+        std::string strSpec = strRange.substr(6);
+        std::string::size_type nDash = strSpec.find('-');
+        if (nDash != std::string::npos)
+        {
+            std::string strStart = strSpec.substr(0, nDash);
+            std::string strEnd = strSpec.substr(nDash + 1);
+            if (!strStart.empty())
+            {
+                size_t nReqStart = static_cast<size_t>(std::atoll(strStart.c_str()));
+                if (nReqStart < nTotal)
+                {
+                    nStart = nReqStart;
+                    if (!strEnd.empty())
+                    {
+                        size_t nReqEnd = static_cast<size_t>(std::atoll(strEnd.c_str()));
+                        nEnd = nReqEnd < nTotal ? nReqEnd : nTotal - 1;
+                    }
+                    else
+                    {
+                        nEnd = nTotal - 1;
+                    }
+
+                    // 分段响应（206 Partial Content）
+                    pResp->set_status_code("206");
+                    std::ostringstream oss;
+                    oss << "bytes " << nStart << "-" << nEnd << "/" << nTotal;
+                    pResp->add_header_pair("Content-Range", oss.str().c_str());
+                    pResp->append_output_body(vecData.data() + nStart, nEnd - nStart + 1);
+                    return true;
+                }
+            }
+        }
+    }
+
+    // 无 Range / 越界：返回完整文件。
     pResp->append_output_body(vecData.data(), vecData.size());
     return true;
 }
@@ -287,4 +335,4 @@ bool HttpHandlers::HandleDelete(WFHttpTask* pServerTask, const std::string& strI
     return true;
 }
 
-} // namespace datahub
+}  // namespace datahub
