@@ -13,8 +13,8 @@ std::mutex MemberTracker::s_mutex;
 static std::int64_t NowMs()
 {
     return static_cast<std::int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count());
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count());
 }
 
 /// @brief 获取客户端标识。
@@ -61,7 +61,7 @@ std::string MemberTracker::Touch(WFHttpTask* pServerTask)
 /// @brief 清理超过 30 秒未活跃的成员（返回清理数量）。
 size_t MemberTracker::Prune()
 {
-    const std::int64_t nTimeoutMs = 30000; // 30 秒
+    const std::int64_t nTimeoutMs = 30000;  // 30 秒
     std::int64_t nNowMs = NowMs();
     std::lock_guard<std::mutex> lock(s_mutex);
     size_t nRemoved = 0;
@@ -99,4 +99,4 @@ void MemberTracker::Clear()
     s_mapMembers.clear();
 }
 
-} // namespace datahub
+}  // namespace datahub

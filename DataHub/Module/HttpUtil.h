@@ -12,14 +12,12 @@ namespace datahub {
 /// 供 HTTP 服务与各业务处理器复用，静态函数，无状态。
 class HttpUtil
 {
-public:
+   public:
     // 写 JSON 响应。
-    static void WriteJson(WFHttpTask* pServerTask, const std::string& strJson,
-                          const char* szStatus = "200");
+    static void WriteJson(WFHttpTask* pServerTask, const std::string& strJson, const char* szStatus = "200");
 
     // 写纯文本响应。
-    static void WriteText(WFHttpTask* pServerTask, const std::string& strBody,
-                          const char* szStatus = "200",
+    static void WriteText(WFHttpTask* pServerTask, const std::string& strBody, const char* szStatus = "200",
                           const char* szType = "text/plain; charset=utf-8");
 
     // 读取请求体（返回字节数，0 表示无 body）。
@@ -45,4 +43,4 @@ public:
     static std::string HtmlEscape(const std::string& strRaw);
 };
 
-} // namespace datahub
+}  // namespace datahub

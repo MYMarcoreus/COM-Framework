@@ -18,8 +18,7 @@ void HttpUtil::WriteJson(WFHttpTask* pServerTask, const std::string& strJson, co
     WriteText(pServerTask, strJson, szStatus, "application/json; charset=utf-8");
 }
 
-void HttpUtil::WriteText(WFHttpTask* pServerTask, const std::string& strBody, const char* szStatus,
-                         const char* szType)
+void HttpUtil::WriteText(WFHttpTask* pServerTask, const std::string& strBody, const char* szStatus, const char* szType)
 {
     protocol::HttpResponse* pResp = pServerTask->get_resp();
     pResp->set_status_code(szStatus);
@@ -145,8 +144,8 @@ std::string HttpUtil::UrlEncode(const std::string& strRaw)
     for (unsigned char c : strRaw)
     {
         // unreserved: A-Z a-z 0-9 - _ . ~
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-            c == '-' || c == '_' || c == '.' || c == '~')
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+            c == '.' || c == '~')
         {
             strOut.push_back(static_cast<char>(c));
         }
@@ -203,4 +202,4 @@ std::string HttpUtil::HtmlEscape(const std::string& strRaw)
     return strOut;
 }
 
-} // namespace datahub
+}  // namespace datahub

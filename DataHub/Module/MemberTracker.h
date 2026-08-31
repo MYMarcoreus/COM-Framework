@@ -16,7 +16,7 @@ namespace datahub {
 /// 每次请求端口变化导致成员膨胀）。30 秒无活跃自动移除。
 class MemberTracker
 {
-public:
+   public:
     // 在线成员信息。
     struct MemberInfo
     {
@@ -43,9 +43,9 @@ public:
     // 清空全部成员。
     static void Clear();
 
-private:
+   private:
     static std::map<std::string, MemberInfo> s_mapMembers;
     static std::mutex s_mutex;
 };
 
-} // namespace datahub
+}  // namespace datahub
