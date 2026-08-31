@@ -1,6 +1,6 @@
-# C++ 多项目工作区（Dev Container + Makefile + clangd）
+# C++ 多项目工作区（Makefile + clangd）
 
-一个基于 **Dev Container（仅 Dockerfile，无 compose）** 的 C++ 多项目工作区：
+一个 C++ 多项目工作区：
 
 - 工作区根目录可存放 **多个独立项目**；
 - 每个项目按模块自治组织：`<Project>/<Module>/`（每模块一个目录，头源同目录）、`<Project>/Linux/Makefile`；
@@ -15,13 +15,16 @@
 COM-Framework/                  # 工作区根目录（可存放多个项目）
 ├── build.sh                     # 工作区统一构建脚本（构建 / 编译数据库 / 测试 / 清理）
 ├── docs/                        # 文档总览（按组件拆分 使用/实现，见 docs/README.md）
-├── .devcontainer/
-│   ├── devcontainer.json        # VS Code 开发容器配置
-│   └── Dockerfile               # 工具链：g++ / make / bear / compiledb / clangd
 ├── .clangd                      # clangd 配置
 ├── .gitignore
 ├── .tools/
 │   └── setup_tools.sh           # 宿主机（无 sudo）安装 compiledb 的脚本
+│
+├── ThirdParty/                  # 第三方库（git 子模块，独立编译，链接时使用）
+│   ├── build.sh                 # 第三方库独立编译脚本（asio / inih / workflow）
+│   ├── asio/                    # Standalone Asio（asio-1-38-2）：网络 + 定时器
+│   ├── inih/                    # inih（r62）：INI 解析
+│   └── workflow/                # Sogou Workflow（nossl 分支）：HTTP/Redis/MySQL + 任务流
 │
 ├── Common/                      # 公共基础库（静态库 libCommon.a，模块自治：头源同目录）
 │   ├── Network/                 # TcpServer / TcpClient / TcpConnection / UdpSocket / Buffer（基于 asio）
@@ -31,10 +34,9 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 │   ├── Thread/                  # ThreadPool（自实现：多线程任务队列）
 │   ├── Async/                   # AsyncExecutor（Task 链式调用：Then / Get）
 │   ├── Serialization/           # 二进制序列化（CBinaryWriter / CBinaryReader，小端 + 边界检查）
-│   ├── Linux/Makefile           # 生成 build/libCommon.a
-│   └── ThirdParty/              # git 子模块
-│       ├── asio/                # Standalone Asio（asio-1-38-2）：网络 + 定时器
-│       └── inih/                # inih（r62）：INI 解析
+│   └── Linux/Makefile           # 生成 build/libCommon.a
+│
+├── WorkflowDemo/                # Sogou Workflow 使用示例（server / client / parallel / graph）
 │
 ├── ServerCore/                  # 服务器基础框架（静态库 libServerCore.a，模块自治）
 │   ├── Application/             # MyApplication（生命周期 + 配置注入 + 运行状态 + 默认装配）
@@ -134,16 +136,16 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 |---|---|
 | [docs/README.md](docs/README.md) | 完整文档索引（按组件拆分 使用 / 实现） |
 | [docs/architecture.md](docs/architecture.md) | 总体架构与分层设计 |
-| [docs/usage.md](docs/usage.md) | 构建与使用指南（Dev Container / 构建 / 运行 / 调试 / 子模块） |
+| [docs/usage.md](docs/usage.md) | 构建与使用指南（构建 / 运行 / 调试 / 子模块） |
 
 ## 快速开始
 
 ```bash
-git submodule update --init --recursive   # 首次克隆后初始化第三方库（asio / inih）
+git submodule update --init --recursive   # 首次克隆后初始化第三方库（asio / inih / workflow）
 ./build.sh --compiledb                    # 生成 compile_commands.json（供 clangd）
 ./build.sh                                # 构建全部项目
-./build/release/demo 9000                 # 运行 Demo 服务器
-./build/release/demo_client 9000          # 运行测试客户端（PING→PONG）
+./build/debug/demo 9000                   # 运行 Demo 服务器（默认 debug 构建）
+./build/debug/demo_client 9000            # 运行测试客户端（PING→PONG）
 ```
 
 详细操作（VS Code 任务 / 调试 / 宿主机 compiledb 等）见 [docs/usage.md](docs/usage.md)。
