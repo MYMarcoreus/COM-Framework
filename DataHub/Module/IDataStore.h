@@ -19,9 +19,10 @@ enum class DataKind : int
 /// @brief 数据项元信息（列出 / 展示用）。
 struct DataItemInfo
 {
-    std::string strId;       // 提取码
+    std::string strId;       // 数据项标识
     DataKind kind;           // 类型
     std::string strName;     // 文件名（文本时可为空）
+    std::string strFrom;     // 来源标识（如 "IP:port"）
     std::uint64_t nSize;     // 字节数
     std::int64_t nCreateMs;  // 创建时间（毫秒）
 };
@@ -29,35 +30,38 @@ struct DataItemInfo
 /// @brief 数据存储接口。
 ///
 /// 供 HTTP 服务模块在请求处理时存取数据项。
-/// 提取码由实现生成（短码，便于手机输入）。
+/// 数据项标识由实现生成（短码，便于内部引用）。
 SC_INTERFACE(IDataStore, "datahub::IDataStore", "63821b50-55e9-44df-a88a-8f899df1defb")
 {
    public:
     virtual ~IDataStore() {}
 
-    // 保存文本内容，返回生成的提取码；失败返回空串。
-    virtual std::string SaveText(const std::string& strContent) = 0;
+    // 保存文本内容，返回生成的数据项标识；失败返回空串。
+    // @param strFrom 来源标识（如 "IP:port"）。
+    virtual std::string SaveText(const std::string& strContent, const std::string& strFrom = "") = 0;
 
-    // 保存二进制文件，返回生成的提取码；失败返回空串。
+    // 保存二进制文件，返回生成的数据项标识；失败返回空串。
     // @param strName 文件名（展示用）
     // @param pData   数据指针
     // @param nSize   数据字节数
-    virtual std::string SaveFile(const std::string& strName, const void* pData, std::size_t nSize) = 0;
+    // @param strFrom 来源标识（如 "IP:port"）。
+    virtual std::string SaveFile(const std::string& strName, const void* pData, std::size_t nSize,
+                                 const std::string& strFrom = "") = 0;
 
-    // 按提取码获取数据项元信息；不存在返回 false。
+    // 按数据项标识获取元信息；不存在返回 false。
     virtual bool GetInfo(const std::string& strId, DataItemInfo& info) const = 0;
 
-    // 按提取码读取文本内容；成功返回 true。
+    // 按数据项标识读取文本内容；成功返回 true。
     virtual bool GetText(const std::string& strId, std::string& strOut) const = 0;
 
-    // 按提取码读取文件内容；成功返回 true。
+    // 按数据项标识读取文件内容；成功返回 true。
     // @param strName 输出文件名
     virtual bool GetFile(const std::string& strId, std::string& strName, std::vector<char>& vecData) const = 0;
 
     // 列出全部数据项（按创建时间倒序）。
     virtual std::vector<DataItemInfo> List() const = 0;
 
-    // 按提取码删除数据项；成功返回 true。
+    // 按数据项标识删除；成功返回 true。
     virtual bool Remove(const std::string& strId) = 0;
 };
 

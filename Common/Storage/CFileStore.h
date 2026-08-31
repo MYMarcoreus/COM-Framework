@@ -23,6 +23,7 @@ struct StoreItemInfo
     std::string strId;       // 数据项标识（短码）
     StoreItemKind kind;      // 类型
     std::string strName;     // 文件名（文本时可为空）
+    std::string strFrom;     // 来源标识（如 "IP:port"；可为空）
     std::uint64_t nSize;     // 字节数
     std::int64_t nCreateMs;  // 创建时间（毫秒）
 };
@@ -54,13 +55,16 @@ class CFileStore
     explicit CFileStore(std::size_t nIdLen);
 
     // 保存文本内容，返回生成的短码；失败返回空串。
-    std::string SaveText(const std::string& strContent);
+    // @param strFrom 来源标识（如 "IP:port"；可选，默认空）。
+    std::string SaveText(const std::string& strContent, const std::string& strFrom = "");
 
     // 保存二进制文件，返回生成的短码；失败返回空串。
     // @param strName 文件名（展示用；为空时自动填 "file.bin"）
     // @param pData   数据指针
     // @param nSize   数据字节数
-    std::string SaveFile(const std::string& strName, const void* pData, std::size_t nSize);
+    // @param strFrom 来源标识（如 "IP:port"；可选，默认空）。
+    std::string SaveFile(const std::string& strName, const void* pData, std::size_t nSize,
+                         const std::string& strFrom = "");
 
     // 按短码获取数据项元信息；不存在返回 false。
     bool GetInfo(const std::string& strId, StoreItemInfo& info) const;
@@ -91,6 +95,7 @@ class CFileStore
     {
         StoreItemKind kind;
         std::string strName;
+        std::string strFrom;        // 来源标识（如 "IP:port"）
         std::string strText;        // 文本内容
         std::vector<char> vecData;  // 文件内容
         std::int64_t nCreateMs;

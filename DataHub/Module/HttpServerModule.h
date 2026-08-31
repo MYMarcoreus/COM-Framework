@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
+#include <mutex>
 #include <string>
 
 #include "Module/IDataStore.h"
@@ -59,6 +61,7 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     // 各路由处理（失败返回 false，由调用方写 4xx）。
     static bool HandleIndex(WFHttpTask* pServerTask);
     static bool HandleList(WFHttpTask* pServerTask);
+    static bool HandleMembers(WFHttpTask* pServerTask);
     static bool HandleUploadText(WFHttpTask* pServerTask);
     static bool HandleGetText(WFHttpTask* pServerTask, const std::string& strId);
     static bool HandleUploadFile(WFHttpTask* pServerTask);
@@ -94,10 +97,22 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     // 从磁盘加载前端页面文件（路径 m_strIndexPath 由配置 [web] index 指定）；成功返回 true。
     bool LoadIndexHtml();
 
+    // 获取请求来源地址（IP:port 字符串）；失败返回空串。
+    static std::string PeerAddress(WFHttpTask* pServerTask);
+
+    // 记录成员活跃（每次请求调用）；返回来源标识（IP:port）。
+    static std::string TouchMember(WFHttpTask* pServerTask);
+
+    // 清理超过超时时间未活跃的成员（返回清理数量）。
+    static size_t PruneMembers();
+
     // 当前数据存储（Initialize 后可用）。
     static IDataStore* s_pStore;
     // 已加载的前端页面内容（静态指针，供静态回调访问；Initialize 时指向实例成员）。
     static const std::string* s_pIndexHtml;
+    // 在线成员：来源标识（IP:port）→ 最后活跃时间（毫秒）。
+    static std::map<std::string, std::int64_t> s_mapMembers;
+    static std::mutex s_membersMutex;
 
     std::uint16_t m_nPort;
     std::string m_strIndexPath;  // 前端页面文件路径

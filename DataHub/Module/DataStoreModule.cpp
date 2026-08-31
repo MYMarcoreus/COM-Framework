@@ -27,14 +27,15 @@ void CDataStoreModule::Stop() {}
 
 void CDataStoreModule::Shutdown() {}
 
-std::string CDataStoreModule::SaveText(const std::string& strContent)
+std::string CDataStoreModule::SaveText(const std::string& strContent, const std::string& strFrom)
 {
-    return m_pStore->SaveText(strContent);
+    return m_pStore->SaveText(strContent, strFrom);
 }
 
-std::string CDataStoreModule::SaveFile(const std::string& strName, const void* pData, std::size_t nSize)
+std::string CDataStoreModule::SaveFile(const std::string& strName, const void* pData, std::size_t nSize,
+                                       const std::string& strFrom)
 {
-    return m_pStore->SaveFile(strName, pData, nSize);
+    return m_pStore->SaveFile(strName, pData, nSize, strFrom);
 }
 
 bool CDataStoreModule::GetInfo(const std::string& strId, DataItemInfo& info) const
@@ -47,6 +48,7 @@ bool CDataStoreModule::GetInfo(const std::string& strId, DataItemInfo& info) con
     info.strId = storeInfo.strId;
     info.kind = storeInfo.kind == common::storage::StoreItemKind::kText ? DataKind::kText : DataKind::kFile;
     info.strName = storeInfo.strName;
+    info.strFrom = storeInfo.strFrom;
     info.nSize = storeInfo.nSize;
     info.nCreateMs = storeInfo.nCreateMs;
     return true;
@@ -73,6 +75,7 @@ std::vector<DataItemInfo> CDataStoreModule::List() const
         info.strId = storeInfo.strId;
         info.kind = storeInfo.kind == common::storage::StoreItemKind::kText ? DataKind::kText : DataKind::kFile;
         info.strName = storeInfo.strName;
+        info.strFrom = storeInfo.strFrom;
         info.nSize = storeInfo.nSize;
         info.nCreateMs = storeInfo.nCreateMs;
         vecResult.push_back(info);

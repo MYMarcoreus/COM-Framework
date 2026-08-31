@@ -34,8 +34,9 @@ class CDataStoreModule : public sc::CModule, public IDataStore
     void Stop() override;
     void Shutdown() override;
 
-    std::string SaveText(const std::string& strContent) override;
-    std::string SaveFile(const std::string& strName, const void* pData, std::size_t nSize) override;
+    std::string SaveText(const std::string& strContent, const std::string& strFrom = "") override;
+    std::string SaveFile(const std::string& strName, const void* pData, std::size_t nSize,
+                         const std::string& strFrom = "") override;
     bool GetInfo(const std::string& strId, DataItemInfo& info) const override;
     bool GetText(const std::string& strId, std::string& strOut) const override;
     bool GetFile(const std::string& strId, std::string& strName, std::vector<char>& vecData) const override;

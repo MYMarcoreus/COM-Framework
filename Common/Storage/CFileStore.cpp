@@ -52,7 +52,7 @@ static std::int64_t NowMs()
             .count());
 }
 
-std::string CFileStore::SaveText(const std::string& strContent)
+std::string CFileStore::SaveText(const std::string& strContent, const std::string& strFrom)
 {
     if (strContent.empty())
     {
@@ -61,6 +61,7 @@ std::string CFileStore::SaveText(const std::string& strContent)
     std::lock_guard<std::mutex> lock(m_mutex);
     Item item;
     item.kind = StoreItemKind::kText;
+    item.strFrom = strFrom;
     item.strText = strContent;
     item.nCreateMs = NowMs();
     std::string strId = GenerateId();
@@ -68,7 +69,8 @@ std::string CFileStore::SaveText(const std::string& strContent)
     return strId;
 }
 
-std::string CFileStore::SaveFile(const std::string& strName, const void* pData, std::size_t nSize)
+std::string CFileStore::SaveFile(const std::string& strName, const void* pData, std::size_t nSize,
+                                 const std::string& strFrom)
 {
     if (pData == nullptr || nSize == 0)
     {
@@ -78,6 +80,7 @@ std::string CFileStore::SaveFile(const std::string& strName, const void* pData, 
     Item item;
     item.kind = StoreItemKind::kFile;
     item.strName = strName.empty() ? "file.bin" : strName;
+    item.strFrom = strFrom;
     const char* pBytes = static_cast<const char*>(pData);
     item.vecData.assign(pBytes, pBytes + nSize);
     item.nCreateMs = NowMs();
@@ -98,6 +101,7 @@ bool CFileStore::GetInfo(const std::string& strId, StoreItemInfo& info) const
     info.strId = strId;
     info.kind = item.kind;
     info.strName = item.strName;
+    info.strFrom = item.strFrom;
     info.nSize = item.kind == StoreItemKind::kText ? static_cast<std::uint64_t>(item.strText.size())
                                                    : static_cast<std::uint64_t>(item.vecData.size());
     info.nCreateMs = item.nCreateMs;
@@ -141,6 +145,7 @@ std::vector<StoreItemInfo> CFileStore::List() const
         info.strId = pair.first;
         info.kind = item.kind;
         info.strName = item.strName;
+        info.strFrom = item.strFrom;
         info.nSize = item.kind == StoreItemKind::kText ? static_cast<std::uint64_t>(item.strText.size())
                                                        : static_cast<std::uint64_t>(item.vecData.size());
         info.nCreateMs = item.nCreateMs;

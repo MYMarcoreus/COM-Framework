@@ -1,15 +1,18 @@
-# DataHub —— 设备间 HTTP 数据传输服务
+# DataHub —— 设备间即时通讯（聊天室）服务
 
-基于 **ServerCore 骨架 + Sogou Workflow** 的精简 HTTP 数据传输服务。
-手机、电脑等设备接入同一网络后，通过浏览器即可互传文本与文件。
+基于 **ServerCore 骨架 + Sogou Workflow** 的局域网聊天室服务。
+手机、电脑等设备接入同一网络后，通过浏览器即可像聊天一样实时互传文本与文件。
 
 ## 特性
 
 - **ServerCore 骨架**：复用 `CMyApplication` 生命周期 + 模块模型（`CModuleManager`）+ 配置/日志/指标
 - **Workflow HTTP**：`WFHttpServer` 高性能异步服务，封装为 ServerCore 模块（`CHttpServerModule`）
-- **纯内存存储**：数据项存内存，提取码为 6 位随机码（去掉易混淆字符）
+- **纯内存存储**：通用组件 `common::storage::CFileStore`（文本 / 文件）
+- **聊天室界面**：IM 风格（自己右侧绿气泡、对方左侧白气泡、实时轮询同步）
+- **在线成员**：显示聊天室成员（IP:端口 + 最后活跃时间），点击顶栏展开
+- **文件与图片**：文件气泡可下载；图片文件内联预览（点击放大）
+- **移动端友好**：动态视口（`100dvh`）+ 键盘适配，输入框始终可见
 - **独立前端资源**：`Web/index.html` 与 C++ 代码分离，运行时从磁盘加载，便于独立维护与部署
-- **精简 API**：上传 / 下载 / 列表 / 删除
 
 ## 架构
 
@@ -84,28 +87,32 @@ http://<服务器IP>:8888/
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/` | 前端页面（手机 / 电脑浏览器；默认 `~/.datahub/index.html`） |
-| POST | `/api/text` | 上传文本；body 为内容 → `{"id":"XXXXXX"}` |
-| GET | `/api/text/<id>` | 按提取码获取文本 |
-| POST | `/api/file` | 上传文件；header `X-File-Name` 指定文件名，body 为内容 → `{"id":"XXXXXX"}` |
-| GET | `/api/file/<id>` | 按提取码下载文件（响应头含 `Content-Disposition`） |
-| GET | `/api/list` | 列出全部数据项（JSON 数组） |
+| POST | `/api/text` | 发送文本；body 为内容 → `{"id":"..."}`（记录发送者 IP:端口） |
+| GET | `/api/text/<id>` | 获取文本内容 |
+| POST | `/api/file` | 上传文件；header `X-File-Name` 指定文件名，body 为内容 → `{"id":"..."}` |
+| GET | `/api/file/<id>` | 下载文件（响应头含 `Content-Disposition`，中文名用 RFC 5987 编码） |
+| GET | `/api/list` | 列出全部消息（含发送者 `from` 字段） |
+| GET | `/api/members` | 在线成员列表（IP:端口 + 最后活跃时间；30 秒无活跃自动移除） |
 | DELETE | `/api/item/<id>` | 删除数据项 |
 
 ### 命令行示例
 
 ```bash
-# 上传文本
+# 发送文本（curl 模拟，from 记录为请求来源 IP:端口）
 curl -X POST -d '你好，这是要传输的内容' http://127.0.0.1:8888/api/text
 
-# 获取文本
-curl http://127.0.0.1:8888/api/text/<提取码>
+# 获取文本（id 来自发送返回，或用 /api/list 查看）
+curl http://127.0.0.1:8888/api/text/<id>
 
 # 上传文件
 curl -X POST -H 'X-File-Name: photo.jpg' --data-binary @photo.jpg \
      http://127.0.0.1:8888/api/file
 
 # 下载文件
-curl -OJ http://127.0.0.1:8888/api/file/<提取码>
+curl -OJ http://127.0.0.1:8888/api/file/<id>
+
+# 查看在线成员
+curl http://127.0.0.1:8888/api/members
 ```
 
 ## 目录结构

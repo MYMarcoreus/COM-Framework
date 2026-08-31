@@ -1,7 +1,12 @@
 #include "Module/HttpServerModule.h"
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,6 +23,8 @@ namespace datahub {
 
 IDataStore* CHttpServerModule::s_pStore = nullptr;
 const std::string* CHttpServerModule::s_pIndexHtml = nullptr;
+std::map<std::string, std::int64_t> CHttpServerModule::s_mapMembers;
+std::mutex CHttpServerModule::s_membersMutex;
 
 /// @brief 创建 HTTP 服务模块。
 CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strIndex)
@@ -149,6 +156,9 @@ void CHttpServerModule::ProcessRequest(WFHttpTask* pServerTask)
     protocol::HttpRequest* pReq = pServerTask->get_req();
     protocol::HttpResponse* pResp = pServerTask->get_resp();
 
+    // 记录成员活跃（IP:port），供在线成员列表展示。
+    TouchMember(pServerTask);
+
     std::string strMethod = pReq->get_method();
     std::string strPath = pReq->get_request_uri();
     // 去掉 query 部分（? 之后）。
@@ -181,6 +191,11 @@ bool CHttpServerModule::Dispatch(WFHttpTask* pServerTask, const std::string& str
     if (strMethod == "GET" && strPath == "/api/list")
     {
         return HandleList(pServerTask);
+    }
+    // 在线成员（GET /api/members）
+    if (strMethod == "GET" && strPath == "/api/members")
+    {
+        return HandleMembers(pServerTask);
     }
     // 上传文本（POST /api/text）
     if (strMethod == "POST" && strPath == "/api/text")
@@ -250,8 +265,37 @@ bool CHttpServerModule::HandleList(WFHttpTask* pServerTask)
         }
         bFirst = false;
         oss << "{\"id\":\"" << info.strId << "\"" << ",\"type\":\"" << (info.kind == DataKind::kText ? "text" : "file")
-            << "\"" << ",\"name\":\"" << HtmlEscape(info.strName) << "\"" << ",\"size\":" << info.nSize
-            << ",\"time\":" << info.nCreateMs << "}";
+            << "\"" << ",\"name\":\"" << HtmlEscape(info.strName) << "\"" << ",\"from\":\"" << HtmlEscape(info.strFrom)
+            << "\"" << ",\"size\":" << info.nSize << ",\"time\":" << info.nCreateMs << "}";
+    }
+    oss << "]}";
+    WriteJson(pServerTask, oss.str());
+    return true;
+}
+
+// ----------------------------------------------------------------------------
+// 在线成员：GET /api/members —— 返回 IP:port 成员列表（按活跃时间倒序）
+// ----------------------------------------------------------------------------
+bool CHttpServerModule::HandleMembers(WFHttpTask* pServerTask)
+{
+    PruneMembers();
+    std::lock_guard<std::mutex> lock(s_membersMutex);
+    std::ostringstream oss;
+    oss << "{\"members\":[";
+    bool bFirst = true;
+    // 按最后活跃时间倒序（最近活跃在前）。
+    std::vector<std::pair<std::string, std::int64_t>> vecSorted(s_mapMembers.begin(), s_mapMembers.end());
+    std::sort(vecSorted.begin(), vecSorted.end(),
+              [](const std::pair<std::string, std::int64_t>& a, const std::pair<std::string, std::int64_t>& b)
+              { return a.second > b.second; });
+    for (const auto& pair : vecSorted)
+    {
+        if (!bFirst)
+        {
+            oss << ",";
+        }
+        bFirst = false;
+        oss << "{\"addr\":\"" << HtmlEscape(pair.first) << "\",\"last\":" << pair.second << "}";
     }
     oss << "]}";
     WriteJson(pServerTask, oss.str());
@@ -275,7 +319,8 @@ bool CHttpServerModule::HandleUploadText(WFHttpTask* pServerTask)
         WriteJson(pServerTask, "{\"error\":\"empty body\"}", "400");
         return true;
     }
-    std::string strId = s_pStore->SaveText(strBody);
+    std::string strFrom = PeerAddress(pServerTask);
+    std::string strId = s_pStore->SaveText(strBody, strFrom);
     if (strId.empty())
     {
         WriteJson(pServerTask, "{\"error\":\"save failed\"}", "500");
@@ -328,7 +373,8 @@ bool CHttpServerModule::HandleUploadFile(WFHttpTask* pServerTask)
         WriteJson(pServerTask, "{\"error\":\"empty body\"}", "400");
         return true;
     }
-    std::string strId = s_pStore->SaveFile(strFileName, strBody.data(), strBody.size());
+    std::string strFrom = PeerAddress(pServerTask);
+    std::string strId = s_pStore->SaveFile(strFileName, strBody.data(), strBody.size(), strFrom);
     if (strId.empty())
     {
         WriteJson(pServerTask, "{\"error\":\"save failed\"}", "500");
@@ -395,6 +441,76 @@ bool CHttpServerModule::HandleDelete(WFHttpTask* pServerTask, const std::string&
     }
     WriteJson(pServerTask, "{\"ok\":true}");
     return true;
+}
+
+// ----------------------------------------------------------------------------
+// 成员跟踪
+// ----------------------------------------------------------------------------
+
+/// @brief 获取请求来源地址（IP:port 字符串）。
+std::string CHttpServerModule::PeerAddress(WFHttpTask* pServerTask)
+{
+    struct sockaddr_storage addr;
+    socklen_t nLen = sizeof(addr);
+    char szAddr[64] = "unknown";
+    unsigned short nPort = 0;
+
+    if (pServerTask->get_peer_addr((struct sockaddr*)&addr, &nLen) == 0)
+    {
+        if (addr.ss_family == AF_INET)
+        {
+            struct sockaddr_in* pSin = (struct sockaddr_in*)&addr;
+            inet_ntop(AF_INET, &pSin->sin_addr, szAddr, sizeof(szAddr));
+            nPort = ntohs(pSin->sin_port);
+        }
+        else if (addr.ss_family == AF_INET6)
+        {
+            struct sockaddr_in6* pSin6 = (struct sockaddr_in6*)&addr;
+            inet_ntop(AF_INET6, &pSin6->sin6_addr, szAddr, sizeof(szAddr));
+            nPort = ntohs(pSin6->sin6_port);
+        }
+    }
+    return std::string(szAddr) + ":" + std::to_string(nPort);
+}
+
+/// @brief 记录成员活跃（每次请求调用）；返回来源标识（IP:port）。
+std::string CHttpServerModule::TouchMember(WFHttpTask* pServerTask)
+{
+    std::string strAddr = PeerAddress(pServerTask);
+    if (strAddr.empty() || strAddr == "unknown:0")
+    {
+        return strAddr;
+    }
+    std::int64_t nNowMs = static_cast<std::int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count());
+    std::lock_guard<std::mutex> lock(s_membersMutex);
+    s_mapMembers[strAddr] = nNowMs;
+    return strAddr;
+}
+
+/// @brief 清理超过 30 秒未活跃的成员（返回清理数量）。
+size_t CHttpServerModule::PruneMembers()
+{
+    std::int64_t nNowMs = static_cast<std::int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count());
+    const std::int64_t nTimeoutMs = 30000; // 30 秒
+    std::lock_guard<std::mutex> lock(s_membersMutex);
+    size_t nRemoved = 0;
+    for (auto it = s_mapMembers.begin(); it != s_mapMembers.end();)
+    {
+        if (nNowMs - it->second > nTimeoutMs)
+        {
+            it = s_mapMembers.erase(it);
+            ++nRemoved;
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    return nRemoved;
 }
 
 // ----------------------------------------------------------------------------
