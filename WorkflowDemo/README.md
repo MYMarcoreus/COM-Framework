@@ -32,15 +32,20 @@ git submodule update --init --recursive
 
 # ③ 并行请求（同时抓取多个 URL）
 ./build/release/demo_parallel http://127.0.0.1:8888/a http://127.0.0.1:8888/b http://127.0.0.1:8888/c
+
+# ④ 复杂任务流（图 DAG：timer → 并行 http → go 汇总）
+./build/release/demo_graph http://127.0.0.1:8888/a http://127.0.0.1:8888/b http://127.0.0.1:8888/c
 ```
 
 ## 示例内容
 
 | 文件 | 演示能力 |
 | --- | --- |
-| `main.cpp` | `WFHttpServer` HTTP 服务端（echo 请求行/头/体） |
+| `main.cpp` | 程序入口（解析端口、启动服务器） |
+| `HttpEchoServer.h/.cpp` | `CHttpEchoServer`：封装 `WFHttpServer`，echo 请求行/头/体 |
 | `demo_client.cpp` | `WFTaskFactory::create_http_task` 客户端（wget 风格） |
 | `demo_parallel.cpp` | `Workflow::create_parallel_work` 并行任务流 |
+| `demo_graph.cpp` | `WFGraphTask` 图 DAG：定时器 + 并行 HTTP + go 计算 + 依赖边（`a-->b`） |
 
 ## 关键头文件
 

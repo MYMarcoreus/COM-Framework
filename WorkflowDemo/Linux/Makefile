@@ -37,18 +37,21 @@ LDLIBS   ?= $(WORKFLOW_LIB) -lcrypto -lpthread
 TARGET_SERVER    := $(BUILD_DIR)/demo_server
 TARGET_CLIENT    := $(BUILD_DIR)/demo_client
 TARGET_PARALLEL  := $(BUILD_DIR)/demo_parallel
+TARGET_GRAPH     := $(BUILD_DIR)/demo_graph
 
-SERVER_SRC   := $(SRC_DIR)/main.cpp
+SERVER_SRC   := $(SRC_DIR)/main.cpp $(SRC_DIR)/HttpEchoServer.cpp
 CLIENT_SRC   := $(SRC_DIR)/demo_client.cpp
 PARALLEL_SRC := $(SRC_DIR)/demo_parallel.cpp
+GRAPH_SRC    := $(SRC_DIR)/demo_graph.cpp
 
-SERVER_OBJ   := $(BUILD_DIR)/WorkflowDemo_main.o
+SERVER_OBJ   := $(BUILD_DIR)/WorkflowDemo_main.o $(BUILD_DIR)/WorkflowDemo_HttpEchoServer.o
 CLIENT_OBJ   := $(BUILD_DIR)/WorkflowDemo_demo_client.o
 PARALLEL_OBJ := $(BUILD_DIR)/WorkflowDemo_demo_parallel.o
-DEPS := $(SERVER_OBJ:.o=.d) $(CLIENT_OBJ:.o=.d) $(PARALLEL_OBJ:.o=.d)
+GRAPH_OBJ    := $(BUILD_DIR)/WorkflowDemo_demo_graph.o
+DEPS := $(SERVER_OBJ:.o=.d) $(CLIENT_OBJ:.o=.d) $(PARALLEL_OBJ:.o=.d) $(GRAPH_OBJ:.o=.d)
 
 # 默认目标
-all: $(TARGET_SERVER) $(TARGET_CLIENT) $(TARGET_PARALLEL)
+all: $(TARGET_SERVER) $(TARGET_CLIENT) $(TARGET_PARALLEL) $(TARGET_GRAPH)
 
 $(TARGET_SERVER): $(SERVER_OBJ) $(WORKFLOW_LIB)
 	$(CXX) $(LDFLAGS) $(SERVER_OBJ) $(LDLIBS) -o $@
@@ -59,8 +62,15 @@ $(TARGET_CLIENT): $(CLIENT_OBJ) $(WORKFLOW_LIB)
 $(TARGET_PARALLEL): $(PARALLEL_OBJ) $(WORKFLOW_LIB)
 	$(CXX) $(LDFLAGS) $(PARALLEL_OBJ) $(LDLIBS) -o $@
 
+$(TARGET_GRAPH): $(GRAPH_OBJ) $(WORKFLOW_LIB)
+	$(CXX) $(LDFLAGS) $(GRAPH_OBJ) $(LDLIBS) -o $@
+
 # 对象文件编译规则
-$(SERVER_OBJ): $(SERVER_SRC)
+$(BUILD_DIR)/WorkflowDemo_main.o: $(SRC_DIR)/main.cpp
+	@mkdir -p $(BUILD_DIR)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR)/WorkflowDemo_HttpEchoServer.o: $(SRC_DIR)/HttpEchoServer.cpp
 	@mkdir -p $(BUILD_DIR)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
@@ -72,6 +82,10 @@ $(PARALLEL_OBJ): $(PARALLEL_SRC)
 	@mkdir -p $(BUILD_DIR)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
+$(GRAPH_OBJ): $(GRAPH_SRC)
+	@mkdir -p $(BUILD_DIR)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
+
 -include $(DEPS)
 
 # workflow 静态库：缺失时用独立脚本构建
@@ -80,7 +94,7 @@ $(WORKFLOW_LIB):
 
 # 仅编译对象文件（不生成可执行），供编译数据库生成使用
 .PHONY: objects
-objects: $(SERVER_OBJ) $(CLIENT_OBJ) $(PARALLEL_OBJ)
+objects: $(SERVER_OBJ) $(CLIENT_OBJ) $(PARALLEL_OBJ) $(GRAPH_OBJ)
 
 # 生成编译数据库（供 clangd）
 .PHONY: compiledb
@@ -107,9 +121,14 @@ run-client: $(TARGET_CLIENT)
 run-parallel: $(TARGET_PARALLEL)
 	$(TARGET_PARALLEL) $(URLS)
 
+# 运行复杂任务流示例
+.PHONY: run-graph
+run-graph: $(TARGET_GRAPH)
+	$(TARGET_GRAPH) $(URLS)
+
 clean:
-	rm -rf $(SERVER_OBJ) $(CLIENT_OBJ) $(PARALLEL_OBJ) $(DEPS) \
-	       $(TARGET_SERVER) $(TARGET_CLIENT) $(TARGET_PARALLEL) \
+	rm -rf $(SERVER_OBJ) $(CLIENT_OBJ) $(PARALLEL_OBJ) $(GRAPH_OBJ) $(DEPS) \
+	       $(TARGET_SERVER) $(TARGET_CLIENT) $(TARGET_PARALLEL) $(TARGET_GRAPH) \
 	       $(ROOT)/compile_commands.json
 
-.PHONY: all debug objects compiledb run-server run-client run-parallel clean
+.PHONY: all debug objects compiledb run-server run-client run-parallel run-graph clean
