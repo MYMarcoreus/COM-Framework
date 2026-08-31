@@ -149,7 +149,7 @@ fi
             "presentation": { "reveal": "always", "panel": "dedicated" }
         },
         {
-            "label": "build debug (Common + ServerCore + examples)",
+            "label": "build debug (Common + ServerCore)",
             "type": "shell",
             "command": "./build.sh --debug Common examples",
             "dependsOn": ["generate compile_commands"],
@@ -205,7 +205,7 @@ fi
 
 - `mode`：`pickString`，`options` 的 `value` 直接取 `--debug`/`--release`（与 `build.sh` 参数一致），`default` 必须是其中一个 `value`。
 - `project` / `projectExec`：`"type": "command"` + `"command": "shellCommand.execute"`；`args.command` 是**纯输出列表**的命令；`args.cwd` 设 `${workspaceFolder}` 保证相对路径正确；`allowCustomValues: true` 允许手动输入（不受列表限制）。
-- `build debug (Common + ServerCore + examples)`：若被 `launch.json` 的 `preLaunchTask` 引用则**必须保留**，否则 F5 调试报错。
+- `build debug (examples)`：若被 `launch.json` 的 `preLaunchTask` 引用则**必须保留**，否则 F5 调试报错。其依赖 `build debug (Common + ServerCore)`，依赖链：compile_commands → Common+ServerCore → examples。
 - `generate compile_commands`：各 select 任务的 `dependsOn`（生成 clangd 编译数据库）；不需要可移除，并去掉各任务的 `dependsOn`。
 
 ### 5.4 `launch.json`（可选，F5 调试用）
@@ -220,7 +220,7 @@ fi
             "request": "launch",
             "program": "${workspaceFolder}/build/debug/examples",
             "cwd": "${workspaceFolder}",
-            "preLaunchTask": "build debug (Common + ServerCore + examples)"   // 启动前自动构建
+            "preLaunchTask": "build debug (examples)"   // 启动前自动构建（依赖链：compile_commands → Common+ServerCore → examples）
         }
     ]
 }

@@ -42,11 +42,26 @@
             }
         },
         {
-            "label": "build debug (Common + ServerCore + examples)",
+            "label": "build debug (Common + ServerCore)",
             "type": "shell",
-            "command": "./build.sh --debug Common ServerCore examples",
+            "command": "./build.sh --debug Common ServerCore",
             "dependsOn": [
                 "generate compile_commands"
+            ],
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "build debug (examples)",
+            "type": "shell",
+            "command": "./build.sh --debug examples",
+            "dependsOn": [
+                "build debug (Common + ServerCore)"
             ],
             "problemMatcher": [
                 "$gcc"

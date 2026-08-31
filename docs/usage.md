@@ -48,14 +48,14 @@ build/release/     —— 发布产物（-O2，用 -r/--release 构建）
 
 - **build (select project)** —— 先选构建模式（debug 默认 / release）再选项目（全部可构建项目，选项来自 `./build.sh --list`）
 - **debug (select project)** / **run (select project)** —— 项目下拉只列出**可执行项目**（选项来自 `./build.sh --executables`：可构建 + 项目根有 `main.cpp`），分别执行 debug 构建（随后 F5 调试）/ 构建并运行（见 `.tools/run_project.sh`）
-- **build debug (Common + ServerCore + examples)** —— VS Code 调试前的构建（`launch.json` 的 `preLaunchTask`）
+- **build debug (Common + ServerCore)** —— 调试前构建 Common + ServerCore；**build debug (examples)** 依赖它并构建 examples（`launch.json` 的 `preLaunchTask`）
 - **generate compile_commands** —— 生成 compile_commands.json（供 clangd）
 
 > 全量构建 / 清理等批量操作不再提供任务，直接使用 `./build.sh`（全量）与 `./build.sh --clean`（清理）。
 
 ### VS Code 调试
 
-仅 debug 构建，在调试器中运行，支持断点 / 变量 / 调用栈：`launch.json` 提供配置 `Debug examples (debug build)`（`build/debug/examples`）。启动方式：按 **F5** 或 **Run and Debug** 面板选择该配置（`tasks.json` 不提供调试任务，调试统一由 `launch.json` 驱动）。启动时会自动先执行 `preLaunchTask`（`build debug (Common + ServerCore + examples)`）完成调试构建。
+仅 debug 构建，在调试器中运行，支持断点 / 变量 / 调用栈：`launch.json` 提供配置 `Debug examples (debug build)`（`build/debug/examples`）。启动方式：按 **F5** 或 **Run and Debug** 面板选择该配置（`tasks.json` 不提供调试任务，调试统一由 `launch.json` 驱动）。启动时会自动先执行 `preLaunchTask`（`build debug (examples)`，其依赖 `build debug (Common + ServerCore)`）完成调试构建。
 
 运行 Demo 服务器与客户端：`./build/debug/demo 9000`、`./build/debug/demo_client 9000`（发布版用 `./build/release/...`）。
 
