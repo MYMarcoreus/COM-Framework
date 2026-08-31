@@ -231,18 +231,19 @@
     var body;
     if (type === 'file') {
       if (isImageName(name)) {
-        // 图片文件：内联预览
+        // 图片文件：内联预览（点击放大查看原图）
         body = document.createElement('div');
         body.className = 'img-bubble';
+        body.onclick = function(){ viewImage(id, name); };
         var img = document.createElement('img');
         img.src = '/api/file/' + encodeURIComponent(id);
         img.alt = name;
-        img.onclick = function(){ showOverlay(img.src); };
+        img.onclick = function(ev){ ev.stopPropagation(); viewImage(id, name); };
         body.appendChild(img);
       } else {
         body = document.createElement('div');
         body.className = 'file-card';
-        body.onclick = function(){ window.location.href = '/api/file/' + encodeURIComponent(id); };
+        body.onclick = function(){ downloadFile(id, name); };
         body.innerHTML =
           '<div class="ficon">📎</div>' +
           '<div class="fmeta">' +
@@ -380,12 +381,48 @@
       .catch(function(){});
   }
 
-  // ============ 图片预览浮层 ============
-  function showOverlay(src) {
-    $('overlayImg').src = src;
-    $('overlay').classList.add('show');
+  // ============ 文件下载 / 图片预览 ============
+  // 用 fetch + Blob 下载，避免 location.href 导航在移动端/WebView 不可靠的问题。
+  function downloadFile(id, name) {
+    toast('正在下载 ' + (name || '文件') + ' …');
+    fetch('/api/file/' + encodeURIComponent(id))
+      .then(function(r){
+        if (!r.ok) throw new Error('下载失败 (' + r.status + ')');
+        return r.blob();
+      })
+      .then(function(blob){
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = name || 'download.bin';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
+        toast('下载完成');
+      })
+      .catch(function(e){ toast(e.message || '下载失败'); });
   }
-  $('overlay').addEventListener('click', function(){ this.classList.remove('show'); });
+
+  // 图片点击：先预览原图，也可长按/点击下载。
+  function viewImage(id, name) {
+    fetch('/api/file/' + encodeURIComponent(id))
+      .then(function(r){
+        if (!r.ok) throw new Error('加载失败');
+        return r.blob();
+      })
+      .then(function(blob){
+        var url = URL.createObjectURL(blob);
+        $('overlayImg').src = url;
+        $('overlay').classList.add('show');
+        $('overlay')._url = url;
+      })
+      .catch(function(){ toast('图片加载失败'); });
+  }
+  $('overlay').addEventListener('click', function(){
+    this.classList.remove('show');
+    if (this._url) { URL.revokeObjectURL(this._url); this._url = null; }
+  });
 
   // ============ 事件绑定 ============
   $('sendBtn').addEventListener('click', sendText);

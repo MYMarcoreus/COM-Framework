@@ -284,10 +284,10 @@ bool CHttpServerModule::HandleMembers(WFHttpTask* pServerTask)
     oss << "{\"members\":[";
     bool bFirst = true;
     // 按最后活跃时间倒序（最近活跃在前）。
-    std::vector<std::pair<std::string, std::int64_t>> vecSorted(s_mapMembers.begin(), s_mapMembers.end());
+    std::vector<std::pair<std::string, std::int64_t> > vecSorted(s_mapMembers.begin(), s_mapMembers.end());
     std::sort(vecSorted.begin(), vecSorted.end(),
               [](const std::pair<std::string, std::int64_t>& a, const std::pair<std::string, std::int64_t>& b)
-              { return a.second > b.second; });
+    { return a.second > b.second; });
     for (const auto& pair : vecSorted)
     {
         if (!bFirst)
@@ -495,7 +495,7 @@ size_t CHttpServerModule::PruneMembers()
     std::int64_t nNowMs = static_cast<std::int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
             .count());
-    const std::int64_t nTimeoutMs = 30000; // 30 秒
+    const std::int64_t nTimeoutMs = 30000;  // 30 秒
     std::lock_guard<std::mutex> lock(s_membersMutex);
     size_t nRemoved = 0;
     for (auto it = s_mapMembers.begin(); it != s_mapMembers.end();)
