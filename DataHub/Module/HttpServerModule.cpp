@@ -513,8 +513,8 @@ std::string CHttpServerModule::UrlEncode(const std::string& strRaw)
     for (unsigned char c : strRaw)
     {
         // unreserved: A-Z a-z 0-9 - _ . ~
-        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
-            c == '-' || c == '_' || c == '.' || c == '~')
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+            c == '.' || c == '~')
         {
             strOut.push_back(static_cast<char>(c));
         }

@@ -13,18 +13,18 @@ namespace storage {
 /// @brief 数据项类型。
 enum class StoreItemKind : int
 {
-    kText = 0, // 文本
-    kFile = 1, // 文件（二进制）
+    kText = 0,  // 文本
+    kFile = 1,  // 文件（二进制）
 };
 
 /// @brief 数据项元信息（列出 / 展示用）。
 struct StoreItemInfo
 {
-    std::string strId;        // 数据项标识（短码）
-    StoreItemKind kind;       // 类型
-    std::string strName;      // 文件名（文本时可为空）
-    std::uint64_t nSize;      // 字节数
-    std::int64_t nCreateMs;   // 创建时间（毫秒）
+    std::string strId;       // 数据项标识（短码）
+    StoreItemKind kind;      // 类型
+    std::string strName;     // 文件名（文本时可为空）
+    std::uint64_t nSize;     // 字节数
+    std::int64_t nCreateMs;  // 创建时间（毫秒）
 };
 
 /// @brief 通用文件存储组件（纯内存、线程安全）。
@@ -47,7 +47,7 @@ struct StoreItemInfo
 /// @endcode
 class CFileStore
 {
-public:
+   public:
     CFileStore();
 
     // 设置短码长度（默认 6；构造函数调用）。
@@ -85,7 +85,7 @@ public:
     // 清空全部数据项。
     void Clear();
 
-private:
+   private:
     // 数据项（内部表示）。
     struct Item
     {
@@ -107,5 +107,5 @@ private:
     std::map<std::string, Item> m_mapItems;
 };
 
-} // namespace storage
-} // namespace common
+}  // namespace storage
+}  // namespace common

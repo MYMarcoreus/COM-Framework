@@ -21,8 +21,7 @@ CFileStore::CFileStore(std::size_t nIdLen) : m_nIdLen(nIdLen > 0 ? nIdLen : 6) {
 /// @brief 生成随机字符。
 char CFileStore::RandomChar() const
 {
-    static std::mt19937 rng(static_cast<unsigned int>(
-        std::chrono::steady_clock::now().time_since_epoch().count()));
+    static std::mt19937 rng(static_cast<unsigned int>(std::chrono::steady_clock::now().time_since_epoch().count()));
     static std::uniform_int_distribution<size_t> dist(0, strlen(kIdChars) - 1);
     return kIdChars[dist(rng)];
 }
@@ -49,8 +48,8 @@ std::string CFileStore::GenerateId() const
 static std::int64_t NowMs()
 {
     return static_cast<std::int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count());
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count());
 }
 
 std::string CFileStore::SaveText(const std::string& strContent)
@@ -99,9 +98,8 @@ bool CFileStore::GetInfo(const std::string& strId, StoreItemInfo& info) const
     info.strId = strId;
     info.kind = item.kind;
     info.strName = item.strName;
-    info.nSize = item.kind == StoreItemKind::kText
-                     ? static_cast<std::uint64_t>(item.strText.size())
-                     : static_cast<std::uint64_t>(item.vecData.size());
+    info.nSize = item.kind == StoreItemKind::kText ? static_cast<std::uint64_t>(item.strText.size())
+                                                   : static_cast<std::uint64_t>(item.vecData.size());
     info.nCreateMs = item.nCreateMs;
     return true;
 }
@@ -143,16 +141,14 @@ std::vector<StoreItemInfo> CFileStore::List() const
         info.strId = pair.first;
         info.kind = item.kind;
         info.strName = item.strName;
-        info.nSize = item.kind == StoreItemKind::kText
-                         ? static_cast<std::uint64_t>(item.strText.size())
-                         : static_cast<std::uint64_t>(item.vecData.size());
+        info.nSize = item.kind == StoreItemKind::kText ? static_cast<std::uint64_t>(item.strText.size())
+                                                       : static_cast<std::uint64_t>(item.vecData.size());
         info.nCreateMs = item.nCreateMs;
         vecResult.push_back(info);
     }
     // 按创建时间倒序（新的在前）。
     std::sort(vecResult.begin(), vecResult.end(),
-              [](const StoreItemInfo& a, const StoreItemInfo& b)
-              { return a.nCreateMs > b.nCreateMs; });
+              [](const StoreItemInfo& a, const StoreItemInfo& b) { return a.nCreateMs > b.nCreateMs; });
     return vecResult;
 }
 
@@ -174,5 +170,5 @@ void CFileStore::Clear()
     m_mapItems.clear();
 }
 
-} // namespace storage
-} // namespace common
+}  // namespace storage
+}  // namespace common
