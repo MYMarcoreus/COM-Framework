@@ -43,8 +43,19 @@ DEPS := $(SERVER_OBJS:.o=.d)
 # OpenSSL crypto 做 base64 编码，故仍需 -lcrypto）
 LDLIBS ?= $(WORKFLOW_LIB) -lcrypto -lpthread
 
-# 默认目标
-all: $(TARGET)
+# 前端页面部署目录（用户目录固定位置，代码运行时从此处读取，与工作目录无关）
+WEB_SRC   := $(ROOT)/Web/index.html
+WEB_DEST  := $(HOME)/.datahub/index.html
+
+# 默认目标：构建可执行文件 + 部署前端页面到用户目录
+all: $(TARGET) deploy-web
+
+# 部署前端页面：拷贝到用户目录 ~/.datahub/index.html
+.PHONY: deploy-web
+deploy-web:
+	@mkdir -p $(dir $(WEB_DEST))
+	@cp -f $(WEB_SRC) $(WEB_DEST)
+	@echo "已部署前端页面: $(WEB_DEST)"
 
 # 链接：本项目对象 + ServerCore + Common + workflow
 $(TARGET): $(SERVER_OBJS) $(LIB) $(COMMON_LIB) $(WORKFLOW_LIB)

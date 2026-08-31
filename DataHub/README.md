@@ -33,7 +33,7 @@ CDataHubApplication (ServerCore CMyApplication)
 git submodule update --init --recursive
 ./ThirdParty/build.sh workflow
 
-# 2. 构建
+# 2. 构建（构建时自动把前端页面部署到用户目录 ~/.datahub/index.html）
 ./build.sh DataHub            # debug（默认）
 ./build.sh --release DataHub  # release
 ```
@@ -41,11 +41,11 @@ git submodule update --init --recursive
 ## 运行
 
 ```bash
-# 从项目目录运行（读取 datahub.ini，默认端口 8888）
-cd DataHub && ../build/debug/datahub
+# 从任意目录运行均可（前端页面从用户目录 ~/.datahub/index.html 读取）
+./build/debug/datahub
 
 # 或指定端口
-cd DataHub && ../build/debug/datahub 9000
+./build/debug/datahub 9000
 ```
 
 启动后，同网络内任何设备的浏览器访问：
@@ -60,7 +60,7 @@ http://<服务器IP>:8888/
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/` | 前端页面（手机 / 电脑浏览器；`Web/index.html`） |
+| GET | `/` | 前端页面（手机 / 电脑浏览器；默认 `~/.datahub/index.html`） |
 | POST | `/api/text` | 上传文本；body 为内容 → `{"id":"XXXXXX"}` |
 | GET | `/api/text/<id>` | 按提取码获取文本 |
 | POST | `/api/file` | 上传文件；header `X-File-Name` 指定文件名，body 为内容 → `{"id":"XXXXXX"}` |
@@ -99,9 +99,9 @@ DataHub/
 │   ├── DataStoreModule.*       # 内存存储模块
 │   └── HttpServerModule.*      # Workflow HTTP 服务模块 + 路由
 ├── Web/
-│   └── index.html             # 前端页面（独立资源文件，运行时从磁盘加载）
+│   └── index.html             # 前端页面源文件（构建时部署到用户目录 ~/.datahub/）
 └── Linux/
-    └── Makefile                # 生成 build/datahub
+    └── Makefile                # 生成 build/datahub + 部署前端页面
 ```
 
 ## 说明
@@ -109,5 +109,5 @@ DataHub/
 - 数据仅存内存，进程退出即清空（精简版；如需持久化可在 `CDataStoreModule` 扩展落盘）。
 - 文件大小受 Workflow 请求体内存限制；超大文件建议分批或改流式存储。
 - 服务器需监听 `0.0.0.0`（Workflow 默认），以便局域网设备访问。
-- 前端页面为独立资源文件，路径由 `datahub.ini` 的 `[web] index` 配置（默认 `Web/index.html`）；修改 HTML 后重启服务即可生效，无需重新编译 C++。
-- 页面路径解析不依赖启动工作目录：若配置路径不可访问，会自动基于可执行文件位置（`/proc/self/exe`）定位到 `DataHub/Web/index.html`，从任意目录启动均可加载。
+- **前端页面部署**：构建 DataHub 时，Makefile 自动把 `Web/index.html` 拷贝到用户目录 `~/.datahub/index.html`（固定路径，与工作目录无关）。
+- **页面路径**：运行时从 `~/.datahub/index.html` 读取；如需自定义，可在 `datahub.ini` 的 `[web] index` 填绝对路径。修改 HTML 后重启服务即可生效，无需重新编译 C++。

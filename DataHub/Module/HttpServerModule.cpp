@@ -3,11 +3,10 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <limits.h>
 #include <sstream>
-#include <unistd.h>
 
 #include "Log/Logger.h"
 #include "Module/InterfaceMap.h"
@@ -65,84 +64,25 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
 
 /// @brief 从磁盘加载前端页面文件。
 ///
-/// 路径解析顺序：
-///   1. 配置指定路径（m_strIndexPath，相对工作目录或绝对路径）；
-///   2. 基于可执行文件位置推导（/proc/self/exe → 项目根 → DataHub/Web/index.html）。
-/// 任一路径可访问即加载成功，保证从任意工作目录启动都能找到前端页面。
+/// 路径解析：
+///   - 配置 [web] index 指定（m_strIndexPath，绝对路径）；否则
+///   - 默认用户目录 `$HOME/.datahub/index.html`（构建时由 Makefile 部署）。
+/// 直接读取，无自动推导，与进程工作目录无关。
 ///
-/// @return true 加载成功；false 所有候选路径均不可访问。
+/// @return true 加载成功；false 文件不存在或读取失败。
 bool CHttpServerModule::LoadIndexHtml()
 {
-    // ① 配置指定路径。
-    if (TryLoadFile(m_strIndexPath, m_strIndexHtml))
-    {
-        return true;
-    }
-
-    // ② 基于可执行文件位置推导。
-    std::string strResolved = ResolveIndexPath();
-    if (!strResolved.empty() && TryLoadFile(strResolved, m_strIndexHtml))
-    {
-        return true;
-    }
-
-    m_strIndexHtml.clear();
-    return false;
-}
-
-/// @brief 解析前端页面文件路径。
-///
-/// 通过 /proc/self/exe 获取可执行文件真实路径，向上定位项目根
-/// （可执行文件位于 build/<mode>/，项目根 = exe 目录上溯两级），
-/// 再拼接 DataHub/Web/index.html。
-///
-/// @return 解析后的路径；失败返回空串。
-std::string CHttpServerModule::ResolveIndexPath() const
-{
-    char szExe[PATH_MAX] = {0};
-    ssize_t nLen = ::readlink("/proc/self/exe", szExe, sizeof(szExe) - 1);
-    if (nLen <= 0)
-    {
-        return std::string();
-    }
-    szExe[nLen] = '\0';
-
-    // 取可执行文件所在目录（去掉文件名部分）。
-    std::string strExeDir = szExe;
-    std::string::size_type nSlash = strExeDir.find_last_of('/');
-    if (nSlash == std::string::npos)
-    {
-        return std::string();
-    }
-    strExeDir = strExeDir.substr(0, nSlash); // build/debug
-
-    // 上溯两级到项目根（build/debug → build → 项目根）。
-    std::string strRoot = strExeDir;
-    for (int i = 0; i < 2; ++i)
-    {
-        nSlash = strRoot.find_last_of('/');
-        if (nSlash == std::string::npos)
-        {
-            return std::string();
-        }
-        strRoot = strRoot.substr(0, nSlash);
-    }
-
-    return strRoot + "/DataHub/Web/index.html";
-}
-
-/// @brief 尝试从指定路径加载文件内容。
-///
-/// @param strPath 文件路径。
-/// @param strOut  输出内容。
-///
-/// @return true 文件存在且读取成功。
-bool CHttpServerModule::TryLoadFile(const std::string& strPath, std::string& strOut) const
-{
+    std::string strPath = m_strIndexPath;
     if (strPath.empty())
     {
-        return false;
+        const char* szHome = ::getenv("HOME");
+        if (szHome == nullptr)
+        {
+            return false;
+        }
+        strPath = std::string(szHome) + "/.datahub/index.html";
     }
+
     std::ifstream ifs(strPath.c_str(), std::ios::binary);
     if (!ifs.is_open())
     {
@@ -150,8 +90,8 @@ bool CHttpServerModule::TryLoadFile(const std::string& strPath, std::string& str
     }
     std::stringstream ss;
     ss << ifs.rdbuf();
-    strOut = ss.str();
-    return !strOut.empty();
+    m_strIndexHtml = ss.str();
+    return !m_strIndexHtml.empty();
 }
 
 /// @brief 启动 HTTP 服务。

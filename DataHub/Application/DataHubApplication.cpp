@@ -52,8 +52,9 @@ bool CDataHubApplication::RegisterModules()
     }
 
     // ③ HTTP 数据传输服务模块（基于 Sogou Workflow）
-    //    前端页面为独立资源文件，路径由配置 [web] index 指定（默认 Web/index.html）。
-    std::string strIndex = m_config.GetString("web.index", "Web/index.html");
+    //    前端页面为独立资源文件：构建时部署到用户目录 ~/.datahub/index.html。
+    //    配置 [web] index 留空则使用默认用户目录路径，无需在配置中写路径。
+    std::string strIndex = m_config.GetString("web.index", "");
     if (!m_moduleManager.RegisterModule(new CHttpServerModule(m_nPort, strIndex)))
     {
         return false;

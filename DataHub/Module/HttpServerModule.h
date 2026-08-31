@@ -24,8 +24,8 @@ using sc::IHttpService;
 ///   - Start：启动 HTTP 服务（路由见 IHttpService 注释）；
 ///   - Stop：停止 HTTP 服务。
 ///
-/// 前端页面为独立资源文件（Web/index.html），运行时从磁盘加载，
-/// 与 C++ 代码分离，便于独立维护与部署。
+/// 前端页面为独立资源文件，构建时由 Makefile 部署到用户目录
+/// `~/.datahub/index.html`，运行时从磁盘加载（路径确定，与工作目录无关）。
 ///
 /// 模块名 "http"。
 class CHttpServerModule : public sc::CModule, public IHttpService
@@ -33,8 +33,9 @@ class CHttpServerModule : public sc::CModule, public IHttpService
    public:
     // 创建 HTTP 服务模块。
     // @param nPort     监听端口。
-    // @param strIndex 前端页面文件路径（相对进程工作目录；默认 "Web/index.html"）。
-    explicit CHttpServerModule(std::uint16_t nPort, const std::string& strIndex = "Web/index.html");
+    // @param strIndex 前端页面文件绝对路径；空串表示使用默认用户目录
+    //                `$HOME/.datahub/index.html`（由 Makefile 构建时部署）。
+    explicit CHttpServerModule(std::uint16_t nPort, const std::string& strIndex = "");
 
     virtual ~CHttpServerModule();
 
@@ -83,18 +84,8 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     // HTML 转义（防 XSS）。
     static std::string HtmlEscape(const std::string& strRaw);
 
-    // 从磁盘加载前端页面文件；成功返回 true。
+    // 从磁盘加载前端页面文件（路径 m_strIndexPath 由配置 [web] index 指定）；成功返回 true。
     bool LoadIndexHtml();
-
-    // 解析前端页面文件路径：
-    //   - 配置指定路径（m_strIndexPath）若可访问则直接使用；
-    //   - 否则基于可执行文件位置（/proc/self/exe）向上定位项目根，
-    //     使用 DataHub/Web/index.html。
-    // 返回解析后的路径（可能为空）。
-    std::string ResolveIndexPath() const;
-
-    // 尝试从指定路径加载文件内容；成功返回 true。
-    bool TryLoadFile(const std::string& strPath, std::string& strOut) const;
 
     // 当前数据存储（Initialize 后可用）。
     static IDataStore* s_pStore;
