@@ -64,6 +64,7 @@ EOF
 }
 
 # 自动发现项目：含 Linux/Makefile 的顶层目录，按 KNOWN_ORDER 排序 + 追加未知
+# 说明：ThirdParty 第三方库不纳入主构建，静态库由 ThirdParty/build.sh 单独编译，链接时直接使用
 discover_projects() {
     local all
     all=$(find "$WORKSPACE_ROOT" -maxdepth 3 -type f -path "$WORKSPACE_ROOT/*/Linux/Makefile" 2>/dev/null \

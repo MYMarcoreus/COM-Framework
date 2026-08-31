@@ -22,8 +22,8 @@ CPPFLAGS ?= -I$(ROOT) \
             -I$(WS_ROOT)/Common \
             -I$(WS_ROOT)/ServerCore \
             -I$(WS_ROOT)/LogServer \
-            -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE \
-            -I$(WS_ROOT)/Common/ThirdParty/inih
+            -I$(WS_ROOT)/ThirdParty/asio/asio/include -DASIO_STANDALONE \
+            -I$(WS_ROOT)/ThirdParty/inih
 
 SRC_DIR   := $(ROOT)
 BUILD_DIR := $(WS_ROOT)/build/$(BUILD_MODE)

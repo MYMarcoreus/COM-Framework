@@ -48,16 +48,15 @@ C++11 兼容
 
 ## 3. 源码统一存放
 
-第三方源码应该统一放在公共目录。
+第三方源码应该统一放在项目根部的公共目录。
 
 推荐：
 
 ```text
-Common/
-└── ThirdParty/
-    ├── LibraryA/
-    ├── LibraryB/
-    └── LibraryC/
+ThirdParty/
+├── LibraryA/
+├── LibraryB/
+└── LibraryC/
 ```
 
 禁止：
@@ -69,6 +68,9 @@ ServerC/ThirdParty/LibraryA
 ```
 
 重复保存同一个第三方库。
+
+第三方库以 git submodule 引入，且**不纳入主构建**（build.sh）；
+通过 `ThirdParty/build.sh` 独立编译静态库，链接时直接使用。
 
 ---
 

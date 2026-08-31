@@ -9,7 +9,7 @@
 | `common::thread::CThreadPool` | `Common/Thread/` | mutex + condition_variable 线程池 |
 | `common::async::CAsyncExecutor` | `Common/Async/` | 无异常任务链框架（Option 风格） |
 | `common::async::CCoroutine` | `Common/Async/Coroutine.h` | 基于任务链的无栈协程 |
-| `asio::post` | `Common/ThirdParty/asio` | 行业标准第三方异步库（对比基线） |
+| `asio::post` | `ThirdParty/asio` | 行业标准第三方异步库（对比基线） |
 | `direct_call` | — | 直接函数调用（理论下限） |
 | `std::thread` | 标准库 | 每任务新建线程（最重基线） |
 

@@ -22,8 +22,8 @@ CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -pthread
 BUILD_MODE ?= release
 # 本项目各模块目录 + 第三方子模块（asio / inih）
 CPPFLAGS ?= -I$(ROOT) \
-            -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE \
-            -I$(WS_ROOT)/Common/ThirdParty/inih
+            -I$(WS_ROOT)/ThirdParty/asio/asio/include -DASIO_STANDALONE \
+            -I$(WS_ROOT)/ThirdParty/inih
 LDFLAGS  ?=
 LDLIBS   ?=
 
@@ -39,7 +39,7 @@ DEPS := $(OBJS:.o=.d)
 all: $(TARGET)
 
 # inih（第三方 C 源码，编译进 libCommon.a）
-INIH_SRC := $(WS_ROOT)/Common/ThirdParty/inih/ini.c
+INIH_SRC := $(WS_ROOT)/ThirdParty/inih/ini.c
 INIH_OBJ := $(BUILD_DIR)/Common_ini.o
 
 $(TARGET): $(OBJS) $(INIH_OBJ)

@@ -22,7 +22,7 @@ BUILD_MODE ?= release
 # 本项目 + 被测库 Common + 第三方子模块（asio）
 CPPFLAGS ?= -I$(ROOT) \
             -I$(WS_ROOT)/Common \
-            -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE \
+            -I$(WS_ROOT)/ThirdParty/asio/asio/include -DASIO_STANDALONE \
             -DBENCHMARK_RESULT_DIR='"$(WS_ROOT)/Benchmark/results"'
 
 SRC_DIR   := $(ROOT)

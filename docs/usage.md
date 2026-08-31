@@ -71,7 +71,7 @@ bash .tools/setup_tools.sh   # 在工作区 .tools/venv 中安装 compiledb
 
 ## 4. git 子模块（第三方库）
 
-本项目使用 **git 管理**，第三方库以 **submodule** 引入：`Common/ThirdParty/asio`、`Common/ThirdParty/inih`。
+本项目使用 **git 管理**，第三方库以 **submodule** 引入，统一存放于项目根部 `ThirdParty/` 目录：`ThirdParty/asio`、`ThirdParty/inih`、`ThirdParty/workflow`。
 
 首次克隆后需要初始化子模块：
 
@@ -79,13 +79,23 @@ bash .tools/setup_tools.sh   # 在工作区 .tools/venv 中安装 compiledb
 git submodule update --init --recursive
 ```
 
+第三方库**不纳入主构建**（`build.sh`），需要先编译其静态库，链接时直接使用：
+
+```bash
+./ThirdParty/build.sh            # 编译全部第三方库（release）
+./ThirdParty/build.sh --debug    # 调试构建
+./ThirdParty/build.sh workflow   # 只编译 workflow
+```
+
+产物位于 `build/<模式>/lib<名称>.a`（如 `libworkflow.a`）。
+
 上游库更新后拉取新版本（并更新父仓库记录的 commit）：
 
 ```bash
-git -C Common/ThirdParty/asio fetch
-# 或其它子模块：inih
-git -C Common/ThirdParty/asio checkout <新标签>
-git add Common/ThirdParty/asio
+git -C ThirdParty/asio fetch
+# 或其它子模块：inih / workflow
+git -C ThirdParty/asio checkout <新标签>
+git add ThirdParty/asio
 git commit -m "升级 asio 到 <新标签>"
 ```
 

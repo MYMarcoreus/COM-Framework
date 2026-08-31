@@ -29,7 +29,7 @@ BUILD_MODE ?= release
 # 项目根 + Common + asio 子模块
 CPPFLAGS ?= -I$(ROOT) \
             -I$(WS_ROOT)/Common \
-            -I$(WS_ROOT)/Common/ThirdParty/asio/asio/include -DASIO_STANDALONE
+            -I$(WS_ROOT)/ThirdParty/asio/asio/include -DASIO_STANDALONE
 
 SRC_DIR   := $(ROOT)
 BUILD_DIR := $(WS_ROOT)/build/$(BUILD_MODE)

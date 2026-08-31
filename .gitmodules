@@ -1,10 +1,10 @@
-[submodule "Common/ThirdParty/asio"]
-	path = Common/ThirdParty/asio
+[submodule "ThirdParty/asio"]
+	path = ThirdParty/asio
 	url = https://github.com/chriskohlhoff/asio.git
-[submodule "Common/ThirdParty/inih"]
-	path = Common/ThirdParty/inih
+[submodule "ThirdParty/inih"]
+	path = ThirdParty/inih
 	url = https://github.com/benhoyt/inih.git
-[submodule "Common/ThirdParty/workflow"]
-	path = Common/ThirdParty/workflow
+[submodule "ThirdParty/workflow"]
+	path = ThirdParty/workflow
 	url = https://github.com/sogou/workflow.git
 	branch = nossl
