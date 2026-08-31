@@ -161,6 +161,8 @@ main() {
 
     if [[ $DO_COMPILEDB -eq 1 ]]; then
         for p in "${projects[@]}"; do compiledb_project "$p"; done
+        # 第三方库（workflow 源码）编译数据库：供 clangd 解析第三方源码
+        "$WORKSPACE_ROOT/ThirdParty/build.sh" --compiledb
         echo "==================== compile_commands.json 生成完毕 ===================="
         exit 0
     fi
