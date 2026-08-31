@@ -23,7 +23,7 @@ namespace datahub {
 
 IDataStore* CHttpServerModule::s_pStore = nullptr;
 const std::string* CHttpServerModule::s_pIndexHtml = nullptr;
-std::map<std::string, std::int64_t> CHttpServerModule::s_mapMembers;
+std::map<std::string, CHttpServerModule::MemberInfo> CHttpServerModule::s_mapMembers;
 std::mutex CHttpServerModule::s_membersMutex;
 
 /// @brief 创建 HTTP 服务模块。
@@ -274,7 +274,7 @@ bool CHttpServerModule::HandleList(WFHttpTask* pServerTask)
 }
 
 // ----------------------------------------------------------------------------
-// 在线成员：GET /api/members —— 返回 IP:port 成员列表（按活跃时间倒序）
+// 在线成员：GET /api/members —— 返回成员列表（按最后活跃倒序）
 // ----------------------------------------------------------------------------
 bool CHttpServerModule::HandleMembers(WFHttpTask* pServerTask)
 {
@@ -284,10 +284,10 @@ bool CHttpServerModule::HandleMembers(WFHttpTask* pServerTask)
     oss << "{\"members\":[";
     bool bFirst = true;
     // 按最后活跃时间倒序（最近活跃在前）。
-    std::vector<std::pair<std::string, std::int64_t> > vecSorted(s_mapMembers.begin(), s_mapMembers.end());
+    std::vector<std::pair<std::string, MemberInfo> > vecSorted(s_mapMembers.begin(), s_mapMembers.end());
     std::sort(vecSorted.begin(), vecSorted.end(),
-              [](const std::pair<std::string, std::int64_t>& a, const std::pair<std::string, std::int64_t>& b)
-    { return a.second > b.second; });
+              [](const std::pair<std::string, MemberInfo>& a, const std::pair<std::string, MemberInfo>& b)
+    { return a.second.nLastMs > b.second.nLastMs; });
     for (const auto& pair : vecSorted)
     {
         if (!bFirst)
@@ -295,7 +295,8 @@ bool CHttpServerModule::HandleMembers(WFHttpTask* pServerTask)
             oss << ",";
         }
         bFirst = false;
-        oss << "{\"addr\":\"" << HtmlEscape(pair.first) << "\",\"last\":" << pair.second << "}";
+        oss << "{\"id\":\"" << HtmlEscape(pair.first) << "\"" << ",\"ip\":\"" << HtmlEscape(pair.second.strIp)
+            << "\"" << ",\"first\":" << pair.second.nFirstMs << ",\"last\":" << pair.second.nLastMs << "}";
     }
     oss << "]}";
     WriteJson(pServerTask, oss.str());
@@ -319,7 +320,7 @@ bool CHttpServerModule::HandleUploadText(WFHttpTask* pServerTask)
         WriteJson(pServerTask, "{\"error\":\"empty body\"}", "400");
         return true;
     }
-    std::string strFrom = PeerAddress(pServerTask);
+    std::string strFrom = ClientId(pServerTask);
     std::string strId = s_pStore->SaveText(strBody, strFrom);
     if (strId.empty())
     {
@@ -373,7 +374,7 @@ bool CHttpServerModule::HandleUploadFile(WFHttpTask* pServerTask)
         WriteJson(pServerTask, "{\"error\":\"empty body\"}", "400");
         return true;
     }
-    std::string strFrom = PeerAddress(pServerTask);
+    std::string strFrom = ClientId(pServerTask);
     std::string strId = s_pStore->SaveFile(strFileName, strBody.data(), strBody.size(), strFrom);
     if (strId.empty())
     {
@@ -473,20 +474,50 @@ std::string CHttpServerModule::PeerAddress(WFHttpTask* pServerTask)
     return std::string(szAddr) + ":" + std::to_string(nPort);
 }
 
-/// @brief 记录成员活跃（每次请求调用）；返回来源标识（IP:port）。
+/// @brief 获取客户端标识。
+///
+/// 优先取 X-Client-Id 请求头（前端生成并持久化的 UUID，用于跨请求标识同一浏览器）；
+/// 无该头时退回 "IP:port"（如 curl 等命令行访问）。
+std::string CHttpServerModule::ClientId(WFHttpTask* pServerTask)
+{
+    std::string strId = GetHeader(pServerTask, "X-Client-Id");
+    if (strId.empty())
+    {
+        strId = PeerAddress(pServerTask);
+    }
+    return strId;
+}
+
+/// @brief 记录成员活跃（每次请求调用）；返回客户端标识。
+///
+/// 以客户端标识（X-Client-Id）为 key，同一浏览器（持久化 UUID）的多次轮询
+/// 只计为 1 个成员，避免按 IP:port 记录时因每次请求端口变化导致成员膨胀。
 std::string CHttpServerModule::TouchMember(WFHttpTask* pServerTask)
 {
-    std::string strAddr = PeerAddress(pServerTask);
-    if (strAddr.empty() || strAddr == "unknown:0")
+    std::string strClientId = ClientId(pServerTask);
+    if (strClientId.empty() || strClientId == "unknown:0")
     {
-        return strAddr;
+        return strClientId;
+    }
+    // 提取来源 IP（不含端口），供成员展示。
+    std::string strIp = PeerAddress(pServerTask);
+    std::string::size_type nColon = strIp.find_last_of(':');
+    if (nColon != std::string::npos)
+    {
+        strIp = strIp.substr(0, nColon);
     }
     std::int64_t nNowMs = static_cast<std::int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
             .count());
     std::lock_guard<std::mutex> lock(s_membersMutex);
-    s_mapMembers[strAddr] = nNowMs;
-    return strAddr;
+    MemberInfo& info = s_mapMembers[strClientId];
+    info.strIp = strIp;
+    if (info.nFirstMs == 0)
+    {
+        info.nFirstMs = nNowMs;
+    }
+    info.nLastMs = nNowMs;
+    return strClientId;
 }
 
 /// @brief 清理超过 30 秒未活跃的成员（返回清理数量）。
@@ -500,7 +531,7 @@ size_t CHttpServerModule::PruneMembers()
     size_t nRemoved = 0;
     for (auto it = s_mapMembers.begin(); it != s_mapMembers.end();)
     {
-        if (nNowMs - it->second > nTimeoutMs)
+        if (nNowMs - it->second.nLastMs > nTimeoutMs)
         {
             it = s_mapMembers.erase(it);
             ++nRemoved;

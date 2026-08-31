@@ -146,10 +146,33 @@
 
   // ============ 状态 ============
   var seen = {};      // 已渲染的消息 id → true
-  var mine = {};      // 本端发送的消息 id → true
-  var selfAddr = '';  // 本端地址（IP:port，从成员接口推断）
   var POLL_MS = 2000; // 轮询间隔
   var membersShown = false;
+
+  // ============ 客户端标识（跨请求标识同一浏览器，避免成员按端口膨胀） ============
+  function getClientId() {
+    var KEY = 'datahub_client_id';
+    var id = '';
+    try { id = localStorage.getItem(KEY) || ''; } catch(e){}
+    if (!id) {
+      // 生成 UUID v4
+      id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c){
+        var r = Math.random()*16|0, v = c==='x' ? r : (r&0x3|0x8);
+        return v.toString(16);
+      });
+      try { localStorage.setItem(KEY, id); } catch(e){}
+    }
+    return id;
+  }
+  var CLIENT_ID = getClientId();
+
+  // 统一 fetch：自动附加 X-Client-Id 请求头（成员标识）。
+  function apiFetch(url, options) {
+    options = options || {};
+    options.headers = options.headers || {};
+    options.headers['X-Client-Id'] = CLIENT_ID;
+    return fetch(url, options);
+  }
 
   // ============ DOM 工具 ============
   function $(id) { return document.getElementById(id); }
@@ -176,19 +199,19 @@
     if (diffDays === 1) return '昨天';
     return (d.getMonth()+1) + '月' + d.getDate() + '日';
   }
-  function shortAddr(addr) {
-    // 提取 IP 后两段，或完整显示（简短展示用）
-    if (!addr) return '未知';
-    var parts = addr.split(':');
-    var ip = parts[0] || addr;
-    var segs = ip.split('.');
-    if (segs.length === 4) return segs[2] + '.' + segs[3] + (parts[1] ? ':' + parts[1] : '');
-    return addr;
+  // 客户端标识短名：UUID 前 8 位（成员展示用）。
+  function shortAddr(id) {
+    if (!id) return '未知';
+    if (id.indexOf(':') >= 0) return id; // 兼容 IP:port 形式
+    return id.slice(0, 8);
   }
-  function avatarText(addr) {
-    if (!addr) return '?';
-    var segs = (addr.split(':')[0] || addr).split('.');
-    return segs.length === 4 ? segs[3] : '?';
+  function avatarText(id) {
+    if (!id) return '?';
+    if (id.indexOf(':') >= 0) {
+      var segs = (id.split(':')[0] || id).split('.');
+      return segs.length === 4 ? segs[3] : '?';
+    }
+    return id.slice(0, 2).toUpperCase();
   }
   function toast(msg) {
     var t = $('toast');
@@ -279,7 +302,7 @@
   window.toggleMembers = toggleMembers;
 
   function loadMembers() {
-    fetch('/api/members')
+    apiFetch('/api/members')
       .then(function(r){ return r.json(); })
       .then(function(j){
         var list = $('memberList');
@@ -287,10 +310,11 @@
         if (!arr.length) { list.innerHTML = '<div style="color:var(--muted);font-size:13px;">暂无成员</div>'; return; }
         var html = '';
         arr.forEach(function(m){
-          var cls = (m.addr === selfAddr) ? ' style="color:#6366f1;font-weight:600;"' : '';
+          var isMe = (m.id === CLIENT_ID);
+          var cls = isMe ? ' style="color:#6366f1;font-weight:600;"' : '';
           html += '<div class="mrow">' +
             '<span class="mdot"></span>' +
-            '<span class="maddr"' + cls + '>' + escapeHtml(m.addr) + (m.addr === selfAddr ? '（我）' : '') + '</span>' +
+            '<span class="maddr"' + cls + '>' + escapeHtml(m.ip || '未知') + (isMe ? '（我）' : '') + '</span>' +
             '<span class="mlast">' + fmtTime(m.last) + '</span>' +
           '</div>';
         });
@@ -299,24 +323,17 @@
       .catch(function(){ $('memberList').innerHTML = '<div style="color:var(--muted);font-size:13px;">加载失败</div>'; });
   }
 
-  // 判断自己地址：从 messages 里最后一条 from 出现次数最多的？不精确。
-  // 简化：用 localStorage 记住上次上传的 from 不可行。改为：本端发送时记录 from 到 selfAddr。
-  function markSelfAddr(from) {
-    if (from && from !== 'unknown:0') selfAddr = from;
-  }
-
   // ============ 发送文本 ============
   function sendText() {
     var input = $('input');
     var text = input.value.trim();
     if (!text) return;
     input.value = ''; input.style.height = 'auto';
-    fetch('/api/text', { method:'POST', body:text })
+    apiFetch('/api/text', { method:'POST', body:text })
       .then(function(r){ return r.json(); })
       .then(function(j){
         if (j.id) {
-          mine[j.id] = true;
-          renderMsg(j.id, 'text', '', text, true, selfAddr || '我', 0, Date.now());
+          renderMsg(j.id, 'text', '', text, true, CLIENT_ID, 0, Date.now());
         } else toast(j.error || '发送失败');
       })
       .catch(function(){ toast('网络错误'); });
@@ -325,7 +342,7 @@
   // ============ 发送文件 ============
   function sendFile(file) {
     toast('上传中 ' + file.name + ' …');
-    fetch('/api/file', {
+    apiFetch('/api/file', {
       method:'POST',
       headers:{ 'X-File-Name': encodeURIComponent(file.name) },
       body:file
@@ -333,8 +350,7 @@
       .then(function(r){ return r.json(); })
       .then(function(j){
         if (j.id) {
-          mine[j.id] = true;
-          renderMsg(j.id, 'file', file.name, '', true, selfAddr || '我', file.size, Date.now());
+          renderMsg(j.id, 'file', file.name, '', true, CLIENT_ID, file.size, Date.now());
         } else toast(j.error || '上传失败');
       })
       .catch(function(){ toast('网络错误'); });
@@ -342,25 +358,23 @@
 
   // ============ 轮询（同步消息 + 成员） ============
   function poll() {
-    fetch('/api/list')
+    apiFetch('/api/list')
       .then(function(r){ return r.json(); })
       .then(function(j){
         var items = j.items || [];
         $('statusText').textContent = '在线 · ' + items.length + ' 条';
         var arr = items.slice().reverse(); // 从旧到新
         arr.forEach(function(it){
-          var mineFlag = !!mine[it.id];
-          if (it.from && it.from !== 'unknown:0' && !mineFlag) {
-            // 记住第一个"对方"地址作为参考；本端地址用首次上传时记录
-          }
+          // 通过 from（客户端标识）判断是否自己发送：刷新后仍正确。
+          var mineFlag = (it.from === CLIENT_ID);
           if (it.type === 'file') {
             renderMsg(it.id, 'file', it.name, '', mineFlag, it.from, it.size, it.time);
           } else {
             if (!seen[it.id]) {
-              fetch('/api/text/' + encodeURIComponent(it.id))
+              apiFetch('/api/text/' + encodeURIComponent(it.id))
                 .then(function(r){ return r.text(); })
                 .then(function(text){
-                  renderMsg(it.id, 'text', '', text, !!mine[it.id], it.from, 0, it.time);
+                  renderMsg(it.id, 'text', '', text, it.from === CLIENT_ID, it.from, 0, it.time);
                 })
                 .catch(function(){});
             }
@@ -371,7 +385,7 @@
       .catch(function(){ $('statusText').textContent = '离线'; });
 
     // 成员（非展开时也更新计数）
-    fetch('/api/members')
+    apiFetch('/api/members')
       .then(function(r){ return r.json(); })
       .then(function(j){
         var n = (j.members || []).length;
@@ -385,7 +399,7 @@
   // 用 fetch + Blob 下载，避免 location.href 导航在移动端/WebView 不可靠的问题。
   function downloadFile(id, name) {
     toast('正在下载 ' + (name || '文件') + ' …');
-    fetch('/api/file/' + encodeURIComponent(id))
+    apiFetch('/api/file/' + encodeURIComponent(id))
       .then(function(r){
         if (!r.ok) throw new Error('下载失败 (' + r.status + ')');
         return r.blob();
@@ -406,7 +420,7 @@
 
   // 图片点击：先预览原图，也可长按/点击下载。
   function viewImage(id, name) {
-    fetch('/api/file/' + encodeURIComponent(id))
+    apiFetch('/api/file/' + encodeURIComponent(id))
       .then(function(r){
         if (!r.ok) throw new Error('加载失败');
         return r.blob();
