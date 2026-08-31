@@ -11,24 +11,24 @@ namespace serverexample {
 /// @brief Example 协议命令。
 enum ExampleCommand : std::uint8_t
 {
-    kCmdPing = 1, // 心跳
-    kCmdEcho = 2, // 回显
-    kCmdPong = 3, // 心跳响应
+    kCmdPing = 1,  // 心跳
+    kCmdEcho = 2,  // 回显
+    kCmdPong = 3,  // 心跳响应
 };
 
 /// @brief Example 协议报文。
 struct Packet
 {
-    std::uint8_t command; // 命令
-    std::string payload;  // 负载
+    std::uint8_t command;  // 命令
+    std::string payload;   // 负载
 };
 
 /// @brief 报文解析结果。
 enum class ParseResult : int
 {
-    kNeedMore = 0, // 数据不足，等待更多数据
-    kOk = 1,       // 解析成功
-    kInvalid = 2,  // 协议格式非法
+    kNeedMore = 0,  // 数据不足，等待更多数据
+    kOk = 1,        // 解析成功
+    kInvalid = 2,   // 协议格式非法
 };
 
 /// @brief Example 极简通信协议。
@@ -42,7 +42,7 @@ enum class ParseResult : int
 /// 协议只用于验证 ServerCore 网络能力，不属于 ServerCore。
 class CExampleProtocol
 {
-public:
+   public:
     // 头部长度。
     static const size_t kHeaderSize = 4;
 
@@ -66,4 +66,4 @@ public:
     static sc::MessageExtractor MakeMessageExtractor();
 };
 
-} // namespace serverexample
+}  // namespace serverexample

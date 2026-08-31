@@ -10,11 +10,10 @@
 #include <thread>
 #include <vector>
 
-#include "TestFramework.h"
-
 #include "Async/AsyncExecutor.h"
 #include "Config/Config.h"
 #include "Network/Buffer.h"
+#include "TestFramework.h"
 #include "Thread/ThreadPool.h"
 #include "Timer/TimerManager.h"
 
@@ -47,7 +46,7 @@ TEST(ThreadPool_SubmitTasks)
     {
         ASSERT_TRUE(pool.Submit([&nCounter]() { nCounter.fetch_add(1); }));
     }
-    pool.Stop(); // 等待所有已提交任务执行完毕
+    pool.Stop();  // 等待所有已提交任务执行完毕
     ASSERT_EQ(nCounter.load(), 20);
 }
 
@@ -80,9 +79,9 @@ TEST(ThreadPool_BurstParallelism)
             nDone.fetch_add(1);
         }));
     }
-    pool.Stop(); // 等待全部完成
+    pool.Stop();  // 等待全部完成
     ASSERT_EQ(nDone.load(), kTasks);
-    ASSERT_TRUE(nPeak.load() >= 4); // 8 线程下突发应显著并行（修复前可能退化为 1）
+    ASSERT_TRUE(nPeak.load() >= 4);  // 8 线程下突发应显著并行（修复前可能退化为 1）
 }
 
 /// @brief 定时器一次性触发。
@@ -104,7 +103,8 @@ TEST(Config_LoadAndGet)
 {
     const char* strPath = "/tmp/test_config_common.ini";
     std::ofstream ofs(strPath);
-    ofs << "name = ServerTemplate\n" << "port = 9500\n";
+    ofs << "name = ServerTemplate\n"
+        << "port = 9500\n";
     ofs.close();
 
     common::config::CConfig config;
@@ -136,13 +136,10 @@ TEST(NothrowAsync_ChainGet)
     ASSERT_TRUE(exec.Start());
 
     common::async::CTaskResult<int> r =
-        exec.Submit([]() { return 3; })
-            .Then([](int n) { return n * 2; })
-            .Then([](int n) { return n + 1; })
-            .Get();
+        exec.Submit([]() { return 3; }).Then([](int n) { return n * 2; }).Then([](int n) { return n + 1; }).Get();
     ASSERT_TRUE(r.HasValue());
     ASSERT_EQ(r.Value(), 7);
-    ASSERT_TRUE(static_cast<bool>(r)); // operator bool
+    ASSERT_TRUE(static_cast<bool>(r));  // operator bool
     exec.Stop();
 }
 
@@ -152,12 +149,11 @@ TEST(NothrowAsync_NonePropagate)
     common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
 
-    common::async::CTaskResult<int> r =
-        exec.Submit([]() -> int { throw std::runtime_error("boom"); }) // 上游无值
-            .Then([](int n) { return n + 1; })                          // 此步被跳过
-            .Get();
+    common::async::CTaskResult<int> r = exec.Submit([]() -> int { throw std::runtime_error("boom"); })  // 上游无值
+                                            .Then([](int n) { return n + 1; })  // 此步被跳过
+                                            .Get();
     ASSERT_TRUE(!r.HasValue());
-    ASSERT_EQ(r.Reason(), common::async::detail::kException); // 终止原因透传
+    ASSERT_EQ(r.Reason(), common::async::detail::kException);  // 终止原因透传
     exec.Stop();
 }
 
@@ -167,8 +163,7 @@ TEST(NothrowAsync_ExceptionToNone)
     common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
 
-    common::async::CTaskResult<int> r =
-        exec.Submit([]() -> int { throw std::runtime_error("boom"); }).Get();
+    common::async::CTaskResult<int> r = exec.Submit([]() -> int { throw std::runtime_error("boom"); }).Get();
     ASSERT_TRUE(!r.HasValue());
     ASSERT_EQ(r.Reason(), common::async::detail::kException);
     exec.Stop();
@@ -189,13 +184,10 @@ TEST(NothrowAsync_FlatMap)
     common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
 
-    common::async::CTaskResult<int> r =
-        exec.Submit([]() { return 3; })
-            .Then([&exec](int n) {
-                return exec.Submit([n]() { return n * 10; });
-            })
-            .Then([](int n) { return n + 5; })
-            .Get();
+    common::async::CTaskResult<int> r = exec.Submit([]()
+    { return 3; }).Then([&exec](int n) {
+        return exec.Submit([n]() { return n * 10; });
+    }).Then([](int n) { return n + 5; }).Get();
     ASSERT_TRUE(r.HasValue());
     ASSERT_EQ(r.Value(), 35);
     exec.Stop();
@@ -207,12 +199,11 @@ TEST(NothrowAsync_FlatMapNonePropagate)
     common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
 
-    common::async::CTaskResult<int> r =
-        exec.Submit([]() { return 1; })
-            .Then([&exec](int) {
-                return exec.Submit([]() -> int { throw std::runtime_error("inner"); }); // 内部任务无值
-            })
-            .Get();
+    common::async::CTaskResult<int> r = exec.Submit([]() { return 1; })
+                                            .Then([&exec](int)
+    {
+        return exec.Submit([]() -> int { throw std::runtime_error("inner"); });  // 内部任务无值
+    }).Get();
     ASSERT_TRUE(!r.HasValue());
     ASSERT_EQ(r.Reason(), common::async::detail::kException);
     exec.Stop();
@@ -225,32 +216,28 @@ TEST(NothrowAsync_ThenReturnsResult)
     ASSERT_TRUE(exec.Start());
 
     // 变换返回 CTaskResult：有值继续接龙
-    common::async::CTaskResult<int> r =
-        exec.Submit([]() { return 3; })
-            .Then([](int n) -> common::async::CTaskResult<int> {
-                if (n < 0)
-                {
-                    return common::async::None; // 无值 → 终止
-                }
-                return n * 10; // 有值（隐式）
-            })
-            .Then([](int n) { return n + 5; })
-            .Get();
+    common::async::CTaskResult<int> r = exec.Submit([]() { return 3; })
+                                            .Then([](int n) -> common::async::CTaskResult<int>
+    {
+        if (n < 0)
+        {
+            return common::async::None;  // 无值 → 终止
+        }
+        return n * 10;  // 有值（隐式）
+    }).Then([](int n) { return n + 5; }).Get();
     ASSERT_TRUE(r.HasValue());
     ASSERT_EQ(r.Value(), 35);
 
     // 变换返回 None → 中途终止，后续 Then 不执行
-    common::async::CTaskResult<int> r2 =
-        exec.Submit([]() { return -3; })
-            .Then([](int n) -> common::async::CTaskResult<int> {
-                if (n < 0)
-                {
-                    return common::async::None;
-                }
-                return n * 10;
-            })
-            .Then([](int n) { return n + 5; })
-            .Get();
+    common::async::CTaskResult<int> r2 = exec.Submit([]() { return -3; })
+                                             .Then([](int n) -> common::async::CTaskResult<int>
+    {
+        if (n < 0)
+        {
+            return common::async::None;
+        }
+        return n * 10;
+    }).Then([](int n) { return n + 5; }).Get();
     ASSERT_TRUE(!r2.HasValue());
     ASSERT_EQ(r2.Reason(), common::async::detail::kEndNone);
     exec.Stop();
@@ -263,9 +250,8 @@ TEST(NothrowAsync_VoidTask)
     ASSERT_TRUE(exec.Start());
 
     std::atomic<int> nDone(0);
-    common::async::CTaskResult<void> r =
-        exec.Submit([&nDone]() { nDone.fetch_add(1); }).Get();
-    ASSERT_TRUE(r.HasValue()); // void 完成
+    common::async::CTaskResult<void> r = exec.Submit([&nDone]() { nDone.fetch_add(1); }).Get();
+    ASSERT_TRUE(r.HasValue());  // void 完成
     ASSERT_EQ(nDone.load(), 1);
     exec.Stop();
 }
@@ -276,11 +262,10 @@ TEST(NothrowAsync_VoidThenChain)
     common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
 
-    common::async::CTaskResult<int> r =
-        exec.Submit([]() { /* void 任务 */ })
-            .Then([]() { return 42; }) // void → int（无参数传入）
-            .Then([](int n) { return n + 1; })
-            .Get();
+    common::async::CTaskResult<int> r = exec.Submit([]() { /* void 任务 */ })
+                                            .Then([]() { return 42; })  // void → int（无参数传入）
+                                            .Then([](int n)
+    { return n + 1; }).Get();
     ASSERT_TRUE(r.HasValue());
     ASSERT_EQ(r.Value(), 43);
     exec.Stop();
@@ -293,11 +278,10 @@ TEST(NothrowAsync_VoidToVoid)
     ASSERT_TRUE(exec.Start());
 
     std::atomic<int> nSteps(0);
-    common::async::CTaskResult<void> r =
-        exec.Submit([&nSteps]() { nSteps.fetch_add(1); })      // void
-            .Then([&nSteps]() { nSteps.fetch_add(1); })        // void → void
-            .Get();
-    ASSERT_TRUE(r.HasValue()); // void→void 链正常完成
+    common::async::CTaskResult<void> r = exec.Submit([&nSteps]() { nSteps.fetch_add(1); })  // void
+                                             .Then([&nSteps]() { nSteps.fetch_add(1); })    // void → void
+                                             .Get();
+    ASSERT_TRUE(r.HasValue());  // void→void 链正常完成
     ASSERT_EQ(nSteps.load(), 2);
     exec.Stop();
 }
@@ -309,11 +293,10 @@ TEST(NothrowAsync_ValueToVoid)
     ASSERT_TRUE(exec.Start());
 
     std::atomic<int> nConsumed(0);
-    common::async::CTaskResult<void> r =
-        exec.Submit([]() { return 7; })                               // int
-            .Then([&nConsumed](int n) { nConsumed.fetch_add(n); })   // int → void
-            .Get();
-    ASSERT_TRUE(r.HasValue()); // 非 void → void 链正常完成
+    common::async::CTaskResult<void> r = exec.Submit([]() { return 7; })                             // int
+                                             .Then([&nConsumed](int n) { nConsumed.fetch_add(n); })  // int → void
+                                             .Get();
+    ASSERT_TRUE(r.HasValue());  // 非 void → void 链正常完成
     ASSERT_EQ(nConsumed.load(), 7);
     exec.Stop();
 }
@@ -333,7 +316,8 @@ TEST(NothrowAsync_ConcurrentGet)
     std::vector<std::thread> threads;
     for (int i = 0; i < 8; ++i)
     {
-        threads.push_back(std::thread([&tasks, i, &nOk]() {
+        threads.push_back(std::thread([&tasks, i, &nOk]()
+        {
             common::async::CTaskResult<int> r = tasks[i].Get();
             if (r.HasValue() && r.Value() == i * i)
             {
@@ -359,7 +343,7 @@ TEST(NothrowAsync_LifetimeAfterDestroy)
         common::async::CAsyncExecutor exec(1);
         ASSERT_TRUE(exec.Start());
         task = exec.Submit([]() { return 7; });
-    } // exec 析构：Stop 等待任务完成，句柄仍被 task 持有
+    }  // exec 析构：Stop 等待任务完成，句柄仍被 task 持有
     common::async::CTaskResult<int> r = task.Get();
     ASSERT_TRUE(r.HasValue());
     ASSERT_EQ(r.Value(), 7);
@@ -368,12 +352,12 @@ TEST(NothrowAsync_LifetimeAfterDestroy)
 /// @brief 默认构造为无值（None）；ValueOr 便捷取值。
 TEST(NothrowAsync_DefaultAndValueOr)
 {
-    common::async::CTaskResult<int> def; // 默认无值（None）
+    common::async::CTaskResult<int> def;  // 默认无值（None）
     ASSERT_TRUE(!def.HasValue());
     ASSERT_EQ(def.Reason(), common::async::detail::kEndNone);
     ASSERT_EQ(def.ValueOr(-1), -1);
 
-    common::async::CTaskResult<int> ok(5); // 有值（隐式）
+    common::async::CTaskResult<int> ok(5);  // 有值（隐式）
     ASSERT_TRUE(ok.HasValue());
     ASSERT_EQ(ok.ValueOr(-1), 5);
 }
@@ -388,15 +372,17 @@ TEST(NothrowAsync_OnSuccessOnNone)
     ASSERT_TRUE(exec.Start());
 
     common::async::CTask<int> t = exec.Submit([]() { return 9; });
-    t.OnSuccess([&nOk](const int& v) { if (v == 9) nOk.fetch_add(1); });
+    t.OnSuccess([&nOk](const int& v)
+    {
+        if (v == 9) nOk.fetch_add(1);
+    });
     t.OnNone([&nNone](common::async::detail::CTaskEndReason) { nNone.fetch_add(1); });
 
-    common::async::CTask<int> f =
-        exec.Submit([]() -> int { throw std::runtime_error("boom"); }); // 无值
+    common::async::CTask<int> f = exec.Submit([]() -> int { throw std::runtime_error("boom"); });  // 无值
     f.OnSuccess([&nOk](const int&) { nOk.fetch_add(1); });
     f.OnNone([&nNone](common::async::detail::CTaskEndReason) { nNone.fetch_add(1); });
 
-    exec.Stop(); // 等待异步回调（投递到线程池）执行完成
+    exec.Stop();  // 等待异步回调（投递到线程池）执行完成
     ASSERT_EQ(nOk.load(), 1);
     ASSERT_EQ(nNone.load(), 1);
 }
@@ -413,8 +399,8 @@ TEST(NothrowAsync_CallbackReturnBool)
     exec.Stop();
 
     // 执行器未启动：任务立即无值完成，注册回调 → 投递失败（false）
-    common::async::CAsyncExecutor execIdle(1); // 未 Start
-    common::async::CTask<int> t2 = execIdle.Submit([]() { return 1; }); // kNotStarted 已完成
+    common::async::CAsyncExecutor execIdle(1);                           // 未 Start
+    common::async::CTask<int> t2 = execIdle.Submit([]() { return 1; });  // kNotStarted 已完成
     ASSERT_TRUE(!t2.OnSuccess([](const int&) {}));
     ASSERT_TRUE(!t2.OnNone([](common::async::detail::CTaskEndReason) {}));
 }
@@ -426,9 +412,15 @@ TEST(NothrowAsync_MultipleCallbacks)
     ASSERT_TRUE(exec.Start());
     std::atomic<int> nA(0), nB(0);
     common::async::CTask<int> t = exec.Submit([]() { return 7; });
-    t.OnSuccess([&nA](const int& v) { if (v == 7) nA.fetch_add(1); });
-    t.OnSuccess([&nB](const int& v) { if (v == 7) nB.fetch_add(1); });
-    exec.Stop(); // 等待回调执行
+    t.OnSuccess([&nA](const int& v)
+    {
+        if (v == 7) nA.fetch_add(1);
+    });
+    t.OnSuccess([&nB](const int& v)
+    {
+        if (v == 7) nB.fetch_add(1);
+    });
+    exec.Stop();  // 等待回调执行
     ASSERT_EQ(nA.load(), 1);
     ASSERT_EQ(nB.load(), 1);
 }
@@ -439,7 +431,7 @@ TEST(NothrowAsync_ThenOnCompletedTask)
     common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
     common::async::CTask<int> t = exec.Submit([]() { return 1; });
-    common::async::CTaskResult<int> r0 = t.Get(); // 任务已完成
+    common::async::CTaskResult<int> r0 = t.Get();  // 任务已完成
     ASSERT_TRUE(r0.HasValue());
     common::async::CTaskResult<int> r = t.Then([](int n) { return n + 1; }).Get();
     ASSERT_TRUE(r.HasValue());
@@ -452,11 +444,10 @@ TEST(NothrowAsync_TransformException)
 {
     common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
-    common::async::CTaskResult<int> r =
-        exec.Submit([]() { return 1; })
-            .Then([](int) -> int { throw std::runtime_error("transform boom"); })
-            .Then([](int n) { return n + 1; }) // 上游异常无值，此步跳过
-            .Get();
+    common::async::CTaskResult<int> r = exec.Submit([]() { return 1; })
+                                            .Then([](int) -> int { throw std::runtime_error("transform boom"); })
+                                            .Then([](int n) { return n + 1; })  // 上游异常无值，此步跳过
+                                            .Get();
     ASSERT_TRUE(!r.HasValue());
     ASSERT_EQ(r.Reason(), common::async::detail::kException);
     exec.Stop();
@@ -496,7 +487,7 @@ TEST(NothrowAsync_ThenAfterStop)
     common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
     common::async::CTask<int> t = exec.Submit([]() { return 1; });
-    t.Get(); // 任务已完成
+    t.Get();  // 任务已完成
     exec.Stop();
     common::async::CTaskResult<int> r = t.Then([](int n) { return n + 1; }).Get();
     ASSERT_TRUE(!r.HasValue());
@@ -523,7 +514,7 @@ TEST(NothrowAsync_RestartExecutor)
 /// @brief Post：未启动失败；启动后成功且任务执行。
 TEST(NothrowAsync_PostBehavior)
 {
-    common::async::CAsyncExecutor execIdle(1); // 未 Start
+    common::async::CAsyncExecutor execIdle(1);  // 未 Start
     ASSERT_TRUE(!execIdle.Post([]() {}));
 
     common::async::CAsyncExecutor exec(1);
@@ -546,7 +537,7 @@ TEST(NothrowAsync_DeepChain)
     }
     common::async::CTaskResult<int> r = t.Get();
     ASSERT_TRUE(r.HasValue());
-    ASSERT_EQ(r.Value(), 55); // 1+2+...+10
+    ASSERT_EQ(r.Value(), 55);  // 1+2+...+10
     exec.Stop();
 }
 
@@ -556,8 +547,7 @@ TEST(NothrowAsync_VoidOnNone)
     common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
     std::atomic<int> nNone(0);
-    common::async::CTask<void> vt =
-        exec.Submit([]() { throw std::runtime_error("void boom"); }); // void 任务无值
+    common::async::CTask<void> vt = exec.Submit([]() { throw std::runtime_error("void boom"); });  // void 任务无值
     vt.OnNone([&nNone](common::async::detail::CTaskEndReason reason)
     {
         if (reason == common::async::detail::kException)
@@ -578,13 +568,12 @@ TEST(NothrowAsync_WorkerThread)
     ASSERT_TRUE(exec.Start());
     std::thread::id mainId = std::this_thread::get_id();
     std::thread::id workerId;
-    common::async::CTaskResult<void> r =
-        exec.Submit([&workerId, mainId]()
-        {
-            workerId = std::this_thread::get_id();
-            (void)mainId;
-        }).Get();
+    common::async::CTaskResult<void> r = exec.Submit([&workerId, mainId]()
+    {
+        workerId = std::this_thread::get_id();
+        (void)mainId;
+    }).Get();
     ASSERT_TRUE(r.HasValue());
-    ASSERT_TRUE(workerId != mainId); // 任务在工作线程执行
+    ASSERT_TRUE(workerId != mainId);  // 任务在工作线程执行
     exec.Stop();
 }

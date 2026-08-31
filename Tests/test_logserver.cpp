@@ -3,24 +3,23 @@
 ///
 /// 覆盖半包 / 粘包 / 非法报文 / 来源清理等边界，验证业务模块逻辑。
 
+#include <unistd.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
-#include <unistd.h>
-
-#include "TestFramework.h"
 
 #include "Protocol/LogProtocol.h"
 #include "Service/LogStorage.h"
+#include "TestFramework.h"
 
 namespace {
 
 /// @brief 生成唯一临时目录路径。
 std::string TempDir()
 {
-    return std::string("/tmp/logserver_test_") +
-           std::to_string(static_cast<long long>(::getpid()));
+    return std::string("/tmp/logserver_test_") + std::to_string(static_cast<long long>(::getpid()));
 }
 
 /// @brief 读取文件内容；文件不存在返回空串。
@@ -54,7 +53,7 @@ logserver::LogRecord MakeRecord(const std::string& strLevel, const std::string& 
     return record;
 }
 
-} // namespace
+}  // namespace
 
 /// @brief 协议：完整报文解析与往返编解码。
 TEST(LogProtocol_ParseComplete)

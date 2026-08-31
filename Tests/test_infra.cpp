@@ -4,30 +4,30 @@
 ///   指标注册表 / 连接级上下文 / 异步事件分发。
 
 #include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
-#include <netinet/in.h>
 #include <string>
-#include <sys/socket.h>
-#include <sys/stat.h>
 #include <thread>
-#include <unistd.h>
 #include <vector>
-
-#include "TestFramework.h"
 
 #include "Event/EventDispatcher.h"
 #include "Infra/AsyncExecutorModule.h"
-#include "Infra/ConfigReloadModule.h"
 #include "Infra/ConfigModule.h"
+#include "Infra/ConfigReloadModule.h"
 #include "Log/Logger.h"
 #include "Module/Module.h"
 #include "Module/ModuleManager.h"
 #include "Network/NetworkModule.h"
 #include "Network/TcpServer.h"
 #include "Observability/MetricsModule.h"
+#include "TestFramework.h"
 
 namespace {
 
@@ -36,24 +36,17 @@ struct OrderRecorder
 {
     static std::vector<std::string> s_order;
 
-    static void Record(const std::string& strName)
-    {
-        s_order.push_back(strName);
-    }
+    static void Record(const std::string& strName) { s_order.push_back(strName); }
 
-    static void Clear()
-    {
-        s_order.clear();
-    }
+    static void Clear() { s_order.clear(); }
 };
 std::vector<std::string> OrderRecorder::s_order;
 
 /// @brief 用于记录初始化顺序的测试模块。
 class COrderModule : public sc::CModule
 {
-public:
-    explicit COrderModule(const char* strName, const sc::InterfaceId* pDepIid = nullptr)
-        : sc::CModule(strName)
+   public:
+    explicit COrderModule(const char* strName, const sc::InterfaceId* pDepIid = nullptr) : sc::CModule(strName)
     {
         if (pDepIid != nullptr)
         {
@@ -68,18 +61,11 @@ public:
     }
 
     // 生命周期：拓扑排序测试只关注初始化顺序，其余阶段空实现。
-    bool Start() override
-    {
-        return true;
-    }
+    bool Start() override { return true; }
 
-    void Stop() override
-    {
-    }
+    void Stop() override {}
 
-    void Shutdown() override
-    {
-    }
+    void Shutdown() override {}
 };
 
 /// @brief 建立到本机端口的 TCP 连接；失败返回 -1。
@@ -103,7 +89,7 @@ int ConnectTo(std::uint16_t nPort)
     return nFd;
 }
 
-} // namespace
+}  // namespace
 
 /// @brief 依赖拓扑排序：被依赖的接口模块先于依赖者初始化，即使注册顺序相反。
 TEST(ModuleManager_TopologicalOrder)
@@ -119,7 +105,7 @@ TEST(ModuleManager_TopologicalOrder)
 
     ASSERT_TRUE(manager.InitializeAll());
     ASSERT_EQ(OrderRecorder::s_order.size(), static_cast<size_t>(2));
-    ASSERT_EQ(OrderRecorder::s_order[0], std::string("a")); // 被依赖者先初始化
+    ASSERT_EQ(OrderRecorder::s_order[0], std::string("a"));  // 被依赖者先初始化
     ASSERT_EQ(OrderRecorder::s_order[1], std::string("b"));
 }
 
@@ -132,7 +118,7 @@ TEST(ModuleManager_MultiInstance)
     sc::CModule* pM1 = new COrderModule("m1", nullptr);
     sc::CModule* pM2 = new COrderModule("m2", nullptr);
     ASSERT_TRUE(manager.RegisterModule(iid, pM1));
-    ASSERT_TRUE(manager.RegisterModule(iid, pM2)); // 同一接口可再次注册
+    ASSERT_TRUE(manager.RegisterModule(iid, pM2));  // 同一接口可再次注册
 
     ASSERT_EQ(manager.ModuleCountByIid(iid), static_cast<size_t>(2));
     std::vector<sc::IModule*> vec = manager.GetModulesByIid(iid);
@@ -151,14 +137,13 @@ TEST(ModuleManager_MultiInstance)
 /// @brief 配置热加载：IConfig::ReloadIfChanged 感知文件变更并整体重载。
 TEST(Config_ReloadIfChanged)
 {
-    std::string strPath = "/tmp/config_reload_" +
-                          std::to_string(static_cast<long long>(::getpid())) + ".ini";
+    std::string strPath = "/tmp/config_reload_" + std::to_string(static_cast<long long>(::getpid())) + ".ini";
     std::ofstream(strPath.c_str()) << "port = 1000\n";
 
     sc::CConfigModule config;
     ASSERT_TRUE(config.LoadFile(strPath));
     ASSERT_EQ(config.GetInt("port", 0), 1000);
-    ASSERT_TRUE(!config.ReloadIfChanged()); // 未变更不重载
+    ASSERT_TRUE(!config.ReloadIfChanged());  // 未变更不重载
 
     // 修改文件内容并等待 mtime 变化（秒级精度）
     std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -172,11 +157,10 @@ TEST(Config_ReloadIfChanged)
 /// @brief 日志文件滚动：超过大小上限后生成 .1 备份。
 TEST(Logger_FileRotation)
 {
-    std::string strPath = "/tmp/logger_rot_" +
-                          std::to_string(static_cast<long long>(::getpid())) + ".log";
+    std::string strPath = "/tmp/logger_rot_" + std::to_string(static_cast<long long>(::getpid())) + ".log";
     common::log::CLogger& logger = common::log::CLogger::Instance();
     logger.OpenFile(strPath);
-    logger.SetMaxFileSize(100); // 100 字节触发滚动
+    logger.SetMaxFileSize(100);  // 100 字节触发滚动
 
     for (int i = 0; i < 20; ++i)
     {
@@ -203,12 +187,10 @@ TEST(Network_ConnectionLimit)
     std::uint16_t nPort = static_cast<std::uint16_t>(20000 + (::getpid() % 5000));
 
     std::atomic<int> nAccept(0);
-    if (!server.Start(nPort,
-            [&nAccept](common::network::ConnectionId, const std::string&) { nAccept.fetch_add(1); },
-            [](common::network::ConnectionId, const char*, size_t) {},
-            [](common::network::ConnectionId) {}))
+    if (!server.Start(nPort, [&nAccept](common::network::ConnectionId, const std::string&) { nAccept.fetch_add(1); },
+                      [](common::network::ConnectionId, const char*, size_t) {}, [](common::network::ConnectionId) {}))
     {
-        ASSERT_TRUE(false); // 端口被占用（测试环境偶然冲突）
+        ASSERT_TRUE(false);  // 端口被占用（测试环境偶然冲突）
     }
 
     // 第一个连接：应正常建立并触发 Accept
@@ -223,12 +205,12 @@ TEST(Network_ConnectionLimit)
 
     // 第二个连接：达到上限，服务器端拒绝（不触发 Accept）
     int nFd2 = ConnectTo(nPort);
-    ASSERT_TRUE(nFd2 >= 0); // 内核完成握手，但服务器端会直接关闭
+    ASSERT_TRUE(nFd2 >= 0);  // 内核完成握手，但服务器端会直接关闭
     for (int i = 0; i < 100 && nAccept.load() < 2; ++i)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    ASSERT_EQ(nAccept.load(), 1); // 上限之外的连接不进入 Accept
+    ASSERT_EQ(nAccept.load(), 1);  // 上限之外的连接不进入 Accept
     ASSERT_EQ(server.ConnectionCount(), static_cast<size_t>(1));
 
     ::close(nFd1);
@@ -239,8 +221,7 @@ TEST(Network_ConnectionLimit)
 /// @brief 配置热加载广播：修改配置文件后，CConfigReloadModule 检测变更并发布事件。
 TEST(ConfigReloadModule_Broadcast)
 {
-    std::string strPath = "/tmp/cfg_reload_evt_" +
-                          std::to_string(static_cast<long long>(::getpid())) + ".ini";
+    std::string strPath = "/tmp/cfg_reload_evt_" + std::to_string(static_cast<long long>(::getpid())) + ".ini";
     std::ofstream(strPath.c_str()) << "key = 1\n";
 
     sc::CModuleManager manager;
@@ -251,12 +232,11 @@ TEST(ConfigReloadModule_Broadcast)
     ASSERT_TRUE(manager.RegisterModule(new sc::CConfigReloadModule(200)));
 
     // 订阅 config.reloaded 事件
-    sc::IEventDispatcher* pIface =
-        manager.Resolve<sc::IEventDispatcher>(sc::IID_IEventDispatcher());
+    sc::IEventDispatcher* pIface = manager.Resolve<sc::IEventDispatcher>(sc::IID_IEventDispatcher());
     ASSERT_TRUE(pIface != nullptr);
     std::atomic<int> nEvents(0);
-    sc::SubscriptionId nSubId = pIface->Subscribe(sc::events::kConfigReloaded,
-        [&nEvents](const sc::Event&) { nEvents.fetch_add(1); });
+    sc::SubscriptionId nSubId =
+        pIface->Subscribe(sc::events::kConfigReloaded, [&nEvents](const sc::Event&) { nEvents.fetch_add(1); });
     ASSERT_TRUE(nSubId != sc::kInvalidSubscriptionId);
 
     ASSERT_TRUE(manager.InitializeAll());
@@ -338,8 +318,7 @@ TEST(EventDispatcher_PublishAsync)
     ASSERT_TRUE(manager.RegisterModule(sc::IID_IAsyncExecutor(), new sc::CAsyncExecutorModule(1)));
     ASSERT_TRUE(manager.RegisterModule(sc::IID_IEventDispatcher(), new sc::CEventDispatcher()));
 
-    sc::IEventDispatcher* pIface =
-        manager.Resolve<sc::IEventDispatcher>(sc::IID_IEventDispatcher());
+    sc::IEventDispatcher* pIface = manager.Resolve<sc::IEventDispatcher>(sc::IID_IEventDispatcher());
     ASSERT_TRUE(pIface != nullptr);
 
     std::atomic<int> nAsync(0);

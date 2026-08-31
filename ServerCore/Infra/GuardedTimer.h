@@ -2,8 +2,8 @@
 
 #include <cstdint>
 
-#include "Timer/TimerManager.h"
 #include "Module/WeakPtr.h"
+#include "Timer/TimerManager.h"
 
 namespace sc {
 
@@ -35,19 +35,17 @@ namespace sc {
 ///
 /// @return 定时器标识（取消时用）。
 template <typename TimerT, typename T, typename F>
-common::timer::TimerId AddGuardedPeriodicTimer(
-    TimerT* pTimer, std::int64_t nIntervalMs,
-    const CWeakPtr<T>& spWeak, F fnCallback)
+common::timer::TimerId AddGuardedPeriodicTimer(TimerT* pTimer, std::int64_t nIntervalMs, const CWeakPtr<T>& spWeak,
+                                               F fnCallback)
 {
-    return pTimer->AddPeriodicTimer(nIntervalMs,
-        [spWeak, fnCallback]()
+    return pTimer->AddPeriodicTimer(nIntervalMs, [spWeak, fnCallback]()
+    {
+        ScopedInterfacePtr<T> sp = spWeak.Lock();
+        if (sp && fnCallback)
         {
-            ScopedInterfacePtr<T> sp = spWeak.Lock();
-            if (sp && fnCallback)
-            {
-                fnCallback(sp);
-            }
-        });
+            fnCallback(sp);
+        }
+    });
 }
 
-} // namespace sc
+}  // namespace sc
