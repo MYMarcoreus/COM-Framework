@@ -19,8 +19,11 @@ bool CHttpRouter::Register(const HttpRoute& route)
     return true;
 }
 
-bool CHttpRouter::Dispatch(WFHttpTask* pServerTask, const std::string& strMethod, const std::string& strPath)
+bool CHttpRouter::Dispatch(CHttpRequest& req, CHttpResponse& resp)
 {
+    const std::string strMethod = req.Method();
+    const std::string strPath = req.Path();
+
     for (const Entry& entry : m_vecRoutes)
     {
         const HttpRoute& route = entry.route;
@@ -36,8 +39,13 @@ bool CHttpRouter::Dispatch(WFHttpTask* pServerTask, const std::string& strMethod
         {
             continue;
         }
-        // 命中：调用 handler（传入完整路径，供前缀路由提取剩余段）。
-        return route.handler(pServerTask, strPath);
+        // 前缀路由：把剩余路径段写入 PathParam（exact 路由为空）。
+        if (!route.exact)
+        {
+            req.SetPathParam(strPath.substr(strPrefix.size()));
+        }
+        // 命中：调用 handler。
+        return route.handler(req, resp);
     }
     return false;
 }

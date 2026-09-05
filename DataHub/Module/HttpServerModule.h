@@ -30,7 +30,8 @@ class CMemberService;
 ///   - 请求入口：OnRequest 回调 → 成员记录 → 路由分发 → 未命中回 404。
 ///
 /// 分层：
-///   - 框架层（web::）：HttpRouter 路由注册表、CHttpUtil 工具（响应写/静态文件）
+///   - 框架层（web::）：CHttpRouter 路由注册表、CHttpIo 消息读写、
+///     CHttpEncoding 编解码、CHttpMedia 类型判定、CHttpFile 文件收发
 ///   - 业务层：CHttpHandlers（各 API 业务处理）、CMemberService（在线成员）
 ///   - 装配层：本类（生命周期 + 路由注册）
 ///
@@ -64,10 +65,10 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     void OnRequest(WFHttpTask* pServerTask);
 
     // 首页 GET /：返回前端 index.html。
-    bool HandleIndex(WFHttpTask* pServerTask);
+    bool HandleIndex(web::CHttpResponse& resp);
 
     // 静态资源 GET /style.css、/app.js。
-    bool HandleStatic(WFHttpTask* pServerTask, const std::string& strName);
+    bool HandleStatic(web::CHttpResponse& resp, const std::string& strName);
 
     // 从磁盘加载 index.html 内容（Start 前调用）。
     bool LoadIndexHtml();

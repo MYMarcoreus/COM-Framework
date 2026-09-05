@@ -1,8 +1,7 @@
 #include "Module/MemberService.h"
 
 #include <chrono>
-
-#include "Framework/HttpUtil.h"
+#include <string>
 
 namespace datahub {
 
@@ -20,36 +19,36 @@ CMemberService::CMemberService() {}
 
 /// @brief 获取客户端标识。
 ///
-/// 优先取 X-Client-Id 请求头（前端生成并持久化的 UUID，用于跨请求标识同一浏览器）；
+/// 优先取 X-Client-Id 请求头（前端持久化 UUID，跨请求标识同一浏览器）；
 /// 无该头时退回 "IP:port"（如 curl 等命令行访问）。
-std::string CMemberService::ClientId(WFHttpTask* pServerTask)
+std::string CMemberService::ClientId(web::CHttpRequest& req)
 {
-    std::string strId = web::CHttpUtil::GetHeader(pServerTask, "X-Client-Id");
+    std::string strId = req.Header("X-Client-Id");
     if (strId.empty())
     {
-        strId = web::CHttpUtil::PeerAddress(pServerTask);
+        strId = req.Peer();
     }
     return strId;
 }
 
 /// @brief 记录成员活跃（每次请求调用）；返回客户端标识。
-std::string CMemberService::Touch(WFHttpTask* pServerTask)
+std::string CMemberService::Touch(web::CHttpRequest& req)
 {
     // 仅当请求携带有效 X-Client-Id 头时记录成员；无头请求（curl、静态资源、
     // 探测等）不计入，避免产生 "IP:port" 假成员。
-    std::string strHeader = web::CHttpUtil::GetHeader(pServerTask, "X-Client-Id");
+    std::string strHeader = req.Header("X-Client-Id");
     if (strHeader.empty())
     {
         return std::string();
     }
 
-    std::string strClientId = ClientId(pServerTask);
+    std::string strClientId = ClientId(req);
     if (strClientId.empty() || strClientId == "unknown:0")
     {
         return strClientId;
     }
     // 提取来源 IP（不含端口），供成员展示。
-    std::string strIp = web::CHttpUtil::PeerAddress(pServerTask);
+    std::string strIp = req.Peer();
     std::string::size_type nColon = strIp.find_last_of(':');
     if (nColon != std::string::npos)
     {
