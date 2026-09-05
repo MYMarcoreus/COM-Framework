@@ -108,40 +108,17 @@ body {
   background:rgba(17,24,39,.88); color:#fff; padding:9px 16px; border-radius:8px;
   font-size:13px; z-index:100; display:none; box-shadow:0 4px 12px rgba(0,0,0,.2); }
 
-/* ===== 租户栏 / 面板 ===== */
+/* ===== 租户栏（仅标识当前租户；切换/管理在 /tenants） ===== */
 .tenantbar { background:#24313f; color:#fff; padding:6px 16px; flex-shrink:0;
   display:flex; align-items:center; gap:10px; font-size:13px; }
-.tenantbar .tn-label { opacity:.8; }
+.tenantbar .tn-label { opacity:.8; flex-shrink:0; }
 .tenantbar .tn-current { font-weight:700; overflow:hidden; text-overflow:ellipsis;
-  white-space:nowrap; max-width:55%; }
-.tenantbar .tn-toggle { margin-left:auto; border:none; border-radius:8px;
-  background:rgba(255,255,255,.16); color:#fff; font-size:12px; padding:4px 10px;
-  cursor:pointer; }
-.tenantbar .tn-toggle:active { opacity:.8; }
-.tenantpanel { display:none; background:#eef2ff; border-bottom:1px solid var(--border);
-  padding:8px 16px 12px; flex-shrink:0; max-height:40vh; overflow-y:auto; }
-.tenantpanel.show { display:block; }
-.tenantpanel .tn-list-title { font-size:12px; color:#6366f1; font-weight:600; margin-bottom:6px; }
-.tenantpanel .tn-list { display:flex; flex-direction:column; gap:2px; }
-.tenantpanel .tn-item { display:flex; align-items:center; gap:10px; padding:6px 8px;
-  border-radius:8px; cursor:pointer; }
-.tenantpanel .tn-item.active { background:#e0e7ff; }
-.tenantpanel .tn-name { font-size:14px; font-weight:600; }
-.tenantpanel .tn-code { font-family:ui-monospace,Menlo,monospace; color:var(--muted); font-size:12px; }
-.tenantpanel .tn-forget { margin-left:auto; color:#cbd5e1; font-size:12px; padding:0 6px; }
-.tenantpanel .tn-forget:hover { color:var(--danger); }
-.tenantpanel .tn-row { display:flex; gap:8px; margin-top:8px; }
-.tenantpanel .tn-row input { flex:1; border:1px solid var(--border); border-radius:8px;
-  padding:8px 10px; font-size:13px; outline:none; min-width:0; }
-.tenantpanel .tn-row button { border:none; border-radius:8px; background:var(--accent);
-  color:#fff; font-size:13px; padding:0 14px; cursor:pointer; flex-shrink:0; }
-.tenantpanel .tn-hint { margin-top:8px; color:var(--muted); font-size:11px; }
-
-/* ===== 聊天页租户切换（轻量，整行可点） ===== */
-.tenantpanel .tn-item { cursor:pointer; }
-.tenantpanel .tn-item:hover { background:#e0e7ff; }
-.tenantpanel .tn-manage { margin-top:8px; border-top:1px solid var(--border); padding-top:8px; }
-.tenantpanel .tn-manage a { color:#6366f1; font-size:13px; font-weight:600; text-decoration:none; }
+  white-space:nowrap; min-width:0; }
+.tenantbar .tn-manage { margin-left:auto; color:#fff; border-radius:8px;
+  background:rgba(255,255,255,.16); font-size:12px; padding:4px 10px;
+  text-decoration:none; flex-shrink:0; }
+.tenantbar .tn-manage:hover { background:rgba(255,255,255,.28); }
+.tenantbar .tn-manage:active { opacity:.8; }
 
 /* ===== 租户管理页（/tenants） ===== */
 body.mpage { overflow:auto; display:block; }

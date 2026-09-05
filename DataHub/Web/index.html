@@ -19,17 +19,12 @@
     </div>
   </div>
 
-  <!-- 租户栏（轻量切换；创建/加入/退出在独立管理页 /tenants） -->
+  <!-- 租户栏：仅标识“当前所在租户”；切换/创建/加入/退出在独立页 /tenants -->
+  <!-- 租户=有边界的组织，聊天室不内切租户，避免削弱隔离语义 -->
   <div class="tenantbar" id="tenantBar">
     <span class="tn-label">🏢 租户</span>
     <span class="tn-current" id="tenantName">公共租户</span>
-    <button type="button" class="tn-toggle" id="tenantToggle">切换 ▾</button>
-  </div>
-  <!-- 租户面板（下拉：仅切换已加入租户） -->
-  <div class="tenantpanel" id="tenantPanel">
-    <div class="tn-list-title">切换到（点击进入）</div>
-    <div class="tn-list" id="tenantList"></div>
-    <div class="tn-manage"><a href="/tenants">🏢 租户管理：创建 / 加入 / 退出 →</a></div>
+    <a class="tn-manage" href="/tenants" title="创建 / 加入 / 切换 / 退出">管理 / 切换 ▸</a>
   </div>
 
   <!-- 成员面板 -->

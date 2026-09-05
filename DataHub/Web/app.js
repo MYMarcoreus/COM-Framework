@@ -294,47 +294,17 @@
       .catch(function(){ $('memberList').innerHTML = '<div style="color:var(--muted);font-size:13px;">加载失败</div>'; });
   }
 
-  // ============ 租户切换（轻量；创建/加入/退出已移至 /tenants 管理页） ============
-  function toggleTenantPanel() {
-    var p = $('tenantPanel');
-    var show = !p.classList.contains('show');
-    p.classList.toggle('show', show);
-    if (show) renderTenants();
-  }
-  function renderTenants() {
-    var list = $('tenantList');
-    var html = '';
-    // 公共租户恒在。
-    html += '<div class="tn-item' + (DH.currentCode === 'public' ? ' active' : '') + '"' +
-            ' onclick="window.__switchTenant(\'public\')">' +
-            '<span class="tn-name">🏢 公共租户</span><span class="tn-code">public</span></div>';
-    for (var i = 0; i < DH.tenants.length; i++) {
-      var t = DH.tenants[i];
-      var cls = (DH.currentCode === t.code) ? ' active' : '';
-      html += '<div class="tn-item' + cls + '" onclick="window.__switchTenant(\'' + t.code + '\')">' +
-              '<span class="tn-name">' + escapeHtml(t.name) + '</span>' +
-              '<span class="tn-code">' + escapeHtml(t.code) + '</span></div>';
-    }
-    list.innerHTML = html;
-  }
-  // 进入租户：切换当前租户并重置视图（每租户数据/成员/游标独立）。
-  function enterTenant(code) {
-    DH.setCurrent(code);
-    seen = {}; lastSeq = 0; lastDateKey = ''; memberCount = 0;
-    chatEl.innerHTML = '';
+  // ============ 当前租户（切换/创建/加入/退出一律在 /tenants 管理页） ============
+  // 租户 = 有边界的组织。聊天页固定于“当前租户”、不在页面内切换租户，
+  // 以免削弱租户隔离的语义：进入其它租户需到 /tenants 选“进入”。
+  function initTenantBar() {
     $('tenantName').textContent = DH.currentName;
-    $('tenantPanel').classList.remove('show');
-    $('statusText').textContent = '连接中…';
-    // 非公共租户：凭码登记为成员（幂等；角色由服务端决定）。
-    if (code !== 'public') {
-      DH.apiFetch('/api/tenant/join', { method:'POST', body:code })
+    // 非公共租户：直接打开/刷新本页（或从管理页跳回）时确保成员身份（幂等）。
+    if (DH.currentCode !== 'public') {
+      DH.apiFetch('/api/tenant/join', { method:'POST', body:DH.currentCode })
         .catch(function(){});
     }
-    renderTenants();
-    poll();
   }
-  // 供 renderTenants 的内联 onclick 调用（全局作用域查找）。
-  window.__switchTenant = enterTenant;
 
   // ============ 发送文本 ============
   function sendText() {
@@ -473,12 +443,8 @@
   }
 
   // ============ 启动 ============
-  // 租户切换器控件（创建/加入/退出已移至 /tenants 管理页）。
-  $('tenantToggle').addEventListener('click', toggleTenantPanel);
-
-  // 恢复上次所在租户（common.js 已 load），渲染后开始轮询。
-  $('tenantName').textContent = DH.currentName;
-  renderTenants();
+  // 当前租户由 /tenants 决定（common.js 已 load）；聊天页固定于该租户，不在页内切换。
+  initTenantBar();
   poll();
   setInterval(poll, POLL_MS);
   setInterval(loadMembers, POLL_MS); // 后台更新成员（用于"我"地址推断）
