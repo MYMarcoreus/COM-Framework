@@ -6,11 +6,13 @@
 #include "workflow/WFHttpServer.h"
 
 namespace datahub {
+namespace web {
 
 /// @brief HTTP 工具函数（响应写入 / 请求读取 / 编码转义）。
 ///
-/// 供 HTTP 服务与各业务处理器复用，静态函数，无状态。
-class HttpUtil
+/// 通用 Web 框架工具（无业务依赖），静态函数，无状态。
+/// 响应写入与请求解析基于 workflow 消息对象。
+class CHttpUtil
 {
    public:
     // 写 JSON 响应。
@@ -41,6 +43,24 @@ class HttpUtil
 
     // HTML 转义（防 XSS）。
     static std::string HtmlEscape(const std::string& strRaw);
+
+    // 依据文件名后缀返回 MIME 类型；未知返回 "application/octet-stream"。
+    static std::string MimeType(const std::string& strName);
+
+    // 判断是否为浏览器可内联显示的图片（png/jpg/jpeg/gif/webp/bmp/svg）。
+    static bool IsImageName(const std::string& strName);
+
+    // 写文件响应：按类型返回内联（图片，供 <img> 渲染）或附件下载（RFC 5987
+    // 中文名编码），并支持 HTTP Range 分段（206 Partial Content）。
+    // @param strName         文件名（决定 Content-Type / Content-Disposition）
+    // @param pData / nSize   文件内容
+    // @param strRangeHeader  请求的 Range 头（空表示完整返回）
+    static void WriteFile(WFHttpTask* pServerTask, const std::string& strName, const char* pData, size_t nSize,
+                          const std::string& strRangeHeader);
+
+    // 从磁盘读取整个文件到字符串；成功返回 true。
+    static bool ReadFile(const std::string& strPath, std::string& strOut);
 };
 
+}  // namespace web
 }  // namespace datahub
