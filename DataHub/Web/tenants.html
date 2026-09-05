@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>DataHub · 租户管理</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="mpage">
+  <!-- 顶栏 -->
+  <div class="topbar">
+    <div class="brand" onclick="location.href='/'">
+      <div class="title">🏢 租户管理</div>
+      <div class="subtitle">创建 / 加入 / 进入工作租户</div>
+    </div>
+    <div class="spacer"></div>
+    <a class="back" href="/">返回聊天室</a>
+  </div>
+
+  <main class="mpane">
+    <!-- 当前聊天租户 -->
+    <section class="mcard">
+      <div class="mcard-desc" id="mHint">当前聊天租户：…</div>
+    </section>
+
+    <!-- 创建租户 -->
+    <section class="mcard">
+      <div class="mcard-head">创建租户</div>
+      <div class="mcard-desc">创建后你自动成为该租户的 Owner，可凭租户码邀请他人加入。</div>
+      <div class="mline"><input id="mkName" maxlength="48" placeholder="租户名称，如：产线组"><button id="mkBtn">创建</button></div>
+    </section>
+
+    <!-- 凭码加入 -->
+    <section class="mcard">
+      <div class="mcard-head">凭码加入</div>
+      <div class="mcard-desc">输入他人分享的 6 位租户码，加入后即为该租户成员。</div>
+      <div class="mline"><input id="mjCode" maxlength="6" placeholder="6 位租户码"><button id="mjBtn">加入</button></div>
+    </section>
+
+    <!-- 我的租户 -->
+    <section class="mcard">
+      <div class="mcard-head">我的租户</div>
+      <div class="mcard-desc">点击「进入」开始聊天；Owner 可删除租户内任意数据，成员仅可删自己创建的数据。</div>
+      <div id="mList"></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+  <script src="common.js"></script>
+  <script src="tenants.js"></script>
+</body>
+</html>

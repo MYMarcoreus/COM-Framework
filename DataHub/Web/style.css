@@ -136,3 +136,38 @@ body {
 .tenantpanel .tn-row button { border:none; border-radius:8px; background:var(--accent);
   color:#fff; font-size:13px; padding:0 14px; cursor:pointer; flex-shrink:0; }
 .tenantpanel .tn-hint { margin-top:8px; color:var(--muted); font-size:11px; }
+
+/* ===== 聊天页租户切换（轻量，整行可点） ===== */
+.tenantpanel .tn-item { cursor:pointer; }
+.tenantpanel .tn-item:hover { background:#e0e7ff; }
+.tenantpanel .tn-manage { margin-top:8px; border-top:1px solid var(--border); padding-top:8px; }
+.tenantpanel .tn-manage a { color:#6366f1; font-size:13px; font-weight:600; text-decoration:none; }
+
+/* ===== 租户管理页（/tenants） ===== */
+body.mpage { overflow:auto; display:block; }
+.mpage .topbar .brand { cursor:pointer; }
+.mpage .topbar .back { color:#fff; background:rgba(255,255,255,.16); padding:5px 12px; border-radius:12px; font-size:13px; text-decoration:none; }
+.mpane { max-width:560px; margin:0 auto; padding:16px 12px calc(16px + env(safe-area-inset-bottom)); display:flex; flex-direction:column; gap:14px; }
+.mcard { background:#fff; border:1px solid var(--border); border-radius:12px; padding:14px 16px; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+.mcard .mcard-head { font-size:15px; font-weight:700; }
+.mcard .mcard-desc { font-size:12px; color:var(--muted); margin:4px 0 10px; line-height:1.55; }
+.mcard .mcard-desc b { color:var(--text); }
+.mcard .mcard-desc .link { color:#6366f1; font-weight:600; text-decoration:none; }
+.mcard .mline { display:flex; gap:8px; }
+.mcard .mline input { flex:1; min-width:0; border:1px solid var(--border); border-radius:8px; padding:9px 12px; font-size:14px; outline:none; }
+.mcard .mline input:focus { border-color:var(--accent); }
+.mcard .mline button { border:none; border-radius:8px; background:var(--accent); color:#fff; padding:9px 18px; font-size:14px; font-weight:600; cursor:pointer; flex-shrink:0; }
+.mcard .mline button:active { opacity:.8; }
+/* 租户条目 */
+.trow { display:flex; align-items:center; gap:10px; padding:9px 2px; border-bottom:1px solid #f1f5f9; }
+.trow:last-child { border-bottom:none; }
+.trow .tname { font-size:14px; font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.trow .tcode { font-family:ui-monospace,Menlo,monospace; color:var(--muted); font-size:12px; flex-shrink:0; }
+.trow .trole { font-size:11px; padding:2px 8px; border-radius:10px; background:#eef2ff; color:#6366f1; flex-shrink:0; }
+.trow .trole.owner { background:#d1fae5; color:#047857; }
+.trow .tspacer { flex:1; }
+.trow button { border:none; border-radius:8px; padding:6px 12px; font-size:12px; cursor:pointer; flex-shrink:0; }
+.trow .go { background:var(--accent); color:#fff; }
+.trow .rm { background:#fef2f2; color:var(--danger); }
+.trow .rm:hover { background:#fee2e2; }
+.empty { color:var(--muted); font-size:13px; padding:6px 2px; }

@@ -19,19 +19,17 @@
     </div>
   </div>
 
-  <!-- 租户栏 -->
+  <!-- 租户栏（轻量切换；创建/加入/退出在独立管理页 /tenants） -->
   <div class="tenantbar" id="tenantBar">
     <span class="tn-label">🏢 租户</span>
     <span class="tn-current" id="tenantName">公共租户</span>
-    <button type="button" class="tn-toggle" id="tenantToggle">切换 / 新建 ▾</button>
+    <button type="button" class="tn-toggle" id="tenantToggle">切换 ▾</button>
   </div>
-  <!-- 租户面板（下拉） -->
+  <!-- 租户面板（下拉：仅切换已加入租户） -->
   <div class="tenantpanel" id="tenantPanel">
-    <div class="tn-list-title">我的租户（点击名称进入）</div>
+    <div class="tn-list-title">切换到（点击进入）</div>
     <div class="tn-list" id="tenantList"></div>
-    <div class="tn-row"><input id="tnCreateName" placeholder="新租户名称…" maxlength="48"><button id="tnCreateBtn">创建</button></div>
-    <div class="tn-row"><input id="tnJoinCode" placeholder="输入 6 位租户码加入" maxlength="6"><button id="tnJoinBtn">加入</button></div>
-    <div class="tn-hint">凭租户码进入/共享；公共租户为未选择租户时的默认地。</div>
+    <div class="tn-manage"><a href="/tenants">🏢 租户管理：创建 / 加入 / 退出 →</a></div>
   </div>
 
   <!-- 成员面板 -->
@@ -62,6 +60,7 @@
   </div>
   <div class="toast" id="toast"></div>
 
+<script src="common.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

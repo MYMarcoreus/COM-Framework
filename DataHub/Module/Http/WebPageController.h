@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
+#include <vector>
 
 #include "Framework/HttpMessage.h"
 
@@ -12,10 +14,12 @@ class CHttpRouter;
 
 /// @brief 页面 / 静态资源控制器（装配层子组件）。
 ///
-/// 与业务控制器（CHttpHandlers）平行：首页与前端静态资源（index.html /
-/// style.css / app.js）的加载、缓存与响应全部内聚在本类，装配层只负责
-/// 注册路由。资源在 Initialize 时一次性读入内存（此后不再触盘），响应带
-/// ETag，客户端命中 If-None-Match 时回 304 以省流量。
+/// 与业务控制器（CHttpHandlers / CTenantsController）平行：页面与前端静态
+/// 资源（index.html / style.css / app.js / common.js / tenants.html /
+/// tenants.js）的加载、缓存与响应全部内聚在本类，装配层只负责注册路由。
+/// 路由→资源以 m_pages 表驱动：新增页面只需在构造函数表加一项。资源在
+/// Initialize 时一次性读入内存（此后不再触盘），响应带 ETag，客户端命中
+/// If-None-Match 时回 304 以省流量。
 class CWebPageController
 {
    public:
@@ -30,7 +34,7 @@ class CWebPageController
     // 首页是否已成功加载。
     bool IndexLoaded() const;
 
-    // 注册本控制器负责的路由（GET /、/style.css、/app.js）。
+    // 注册本控制器负责的全部路由（按 m_pages 表：/、静态资源与 /tenants 页）。
     void RegisterRoutes(web::CHttpRouter& router);
 
    private:
@@ -42,22 +46,28 @@ class CWebPageController
         std::string strType;
     };
 
-    // 从磁盘读取一份资源并计算 ETag；缺失时保留空内容。
-    bool LoadAsset(const std::string& strFile, const std::string& strMime, Asset& out);
+    // 一份可注册资源：路由描述 + 已加载内容（页面 / 静态资源共用）。
+    struct Page
+    {
+        const char* szRoute;          // 路由（如 "/"、"/tenants"）
+        const char* szFile;           // 磁盘文件名（webDir 下）
+        const char* szMime;           // Content-Type
+        const char* szMissingBody;    // 资源缺失时的响应体
+        const char* szMissingStatus;  // 资源缺失时的状态码（首页 503，其余 404）
+        Asset asset;
+    };
+
+    // 读取一份资源文件并计算 ETag；缺失时保留空内容。
+    bool LoadAsset(Page& page);
 
     // 处理单份资源请求（含 304 协商）。
-    // @param szMissingBody    资源缺失时的响应体
-    // @param szMissingStatus  资源缺失时的状态码（"/" 用 503，静态用 404）
-    bool HandleAsset(web::CHttpRequest& req, web::CHttpResponse& resp, const Asset& asset, const char* szMissingBody,
-                     const char* szMissingStatus);
+    bool HandleAsset(web::CHttpRequest& req, web::CHttpResponse& resp, const Page& page);
 
     // 由内容生成强 ETag（FNV-1a 哈希 + 长度）。
     static std::string MakeEtag(const std::string& strContent);
 
     std::string m_strWebDir;
-    Asset m_index;  // GET /
-    Asset m_style;  // GET /style.css
-    Asset m_app;    // GET /app.js
+    std::vector<Page> m_pages;  // 路由→资源表（构造函数填满；注册后元素地址稳定）
 };
 
 }  // namespace datahub

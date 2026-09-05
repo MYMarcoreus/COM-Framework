@@ -2,41 +2,18 @@
 (function () {
   'use strict';
 
+  // 公共小件由 common.js 提供：DH.CLIENT_ID（账号）/ DH.tenants（我的租户）/
+  // DH.currentCode（当前租户）/ DH.apiFetch（自动附 X-Client-Id、X-Tenant）。
+  // 租户的创建 / 加入 / 退出已移至独立管理页 /tenants，本页仅保留轻量切换。
+  var CLIENT_ID = DH.CLIENT_ID;
+  function apiFetch(url, options) { return DH.apiFetch(url, options); }
+
   // ============ 状态 ============
   var seen = {};        // 已渲染的消息 id → true
   var POLL_MS = 2000;   // 轮询间隔
   var membersShown = false;
   var lastSeq = 0;       // 已收到的最新消息序号（游标增量同步，每租户独立）
   var memberCount = 0;   // 在线成员数（状态栏展示）
-  var tenants = [];      // 我已加入的租户 [{code,name}]（本地持久化）
-  var currentCode = 'public';  // 当前租户码（X-Tenant）
-  var currentName = '公共租户';
-
-  // ============ 客户端标识（跨请求标识同一浏览器，避免成员按端口膨胀） ============
-  function getClientId() {
-    var KEY = 'datahub_client_id';
-    var id = '';
-    try { id = localStorage.getItem(KEY) || ''; } catch(e){}
-    if (!id) {
-      // 生成 UUID v4
-      id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c){
-        var r = Math.random()*16|0, v = c==='x' ? r : (r&0x3|0x8);
-        return v.toString(16);
-      });
-      try { localStorage.setItem(KEY, id); } catch(e){}
-    }
-    return id;
-  }
-  var CLIENT_ID = getClientId();
-
-  // 统一 fetch：自动附加 X-Client-Id（成员标识）与 X-Tenant（当前租户）。
-  function apiFetch(url, options) {
-    options = options || {};
-    options.headers = options.headers || {};
-    options.headers['X-Client-Id'] = CLIENT_ID;
-    options.headers['X-Tenant'] = currentCode;
-    return fetch(url, options);
-  }
 
   // ============ 分段拉取文件 ============
   // workflow 对单次超大响应体在部分网络环境下会截断（约 110KB），故大文件
@@ -317,114 +294,47 @@
       .catch(function(){ $('memberList').innerHTML = '<div style="color:var(--muted);font-size:13px;">加载失败</div>'; });
   }
 
-  // ============ 租户切换 ============
-  function tenantNameOf(code) {
-    if (code === 'public') return '公共租户';
-    for (var i = 0; i < tenants.length; i++) if (tenants[i].code === code) return tenants[i].name;
-    return code;
-  }
-  function saveTenants() {
-    try { localStorage.setItem('datahub_tenants', JSON.stringify(tenants)); } catch(e){}
-  }
-  function addTenant(code, name) {
-    for (var i = 0; i < tenants.length; i++) {
-      if (tenants[i].code === code) { tenants[i].name = name; saveTenants(); return; }
-    }
-    tenants.push({ code: code, name: name });
-    saveTenants();
-  }
-  function forgetTenant(code) {
-    if (code === 'public') return;
-    tenants = tenants.filter(function(t){ return t.code !== code; });
-    saveTenants();
-    if (currentCode === code) enterTenant('public'); else renderTenants();
-  }
-  // 进入租户：切换当前租户并重置视图（每租户数据/成员/游标独立）。
-  function enterTenant(code) {
-    currentCode = code;
-    currentName = tenantNameOf(code);
-    try { localStorage.setItem('datahub_current_tenant', code); } catch(e){}
-    seen = {}; lastSeq = 0; lastDateKey = ''; memberCount = 0;
-    chatEl.innerHTML = '';
-    updateTenantName();
-    renderTenants();
-    $('tenantPanel').classList.remove('show');
-    $('statusText').textContent = '连接中…';
-    // 非公共租户：凭码登记为成员（角色由服务端决定；失败可忽略，自删仍可用）。
-    if (code !== 'public') {
-      apiFetch('/api/tenant/join', { method:'POST', body:code })
-        .then(function(r){ return r.json(); })
-        .then(function(j){ if (j.role) updateTenantName(); })
-        .catch(function(){});
-    }
-    poll();
-  }
-  function updateTenantName() { $('tenantName').textContent = currentName; }
-  function renderTenants() {
-    var list = $('tenantList');
-    var html = '';
-    var pub = (currentCode === 'public') ? ' active' : '';
-    html += '<div class="tn-item' + pub + '" onclick="window.__enterTenant(\'public\')">' +
-            '<span class="tn-name">🏢 公共租户</span><span class="tn-code">public</span></div>';
-    for (var i = 0; i < tenants.length; i++) {
-      var t = tenants[i];
-      var cls = (currentCode === t.code) ? ' active' : '';
-      html += '<div class="tn-item' + cls + '">' +
-              '<span class="tn-name" onclick="window.__enterTenant(\'' + t.code + '\')">' + escapeHtml(t.name) + '</span>' +
-              '<span class="tn-code">' + escapeHtml(t.code) + '</span>' +
-              '<span class="tn-forget" title="移出我的租户" onclick="window.__forgetTenant(\'' + t.code + '\')">✕</span>' +
-              '</div>';
-    }
-    list.innerHTML = html;
-  }
+  // ============ 租户切换（轻量；创建/加入/退出已移至 /tenants 管理页） ============
   function toggleTenantPanel() {
     var p = $('tenantPanel');
     var show = !p.classList.contains('show');
     p.classList.toggle('show', show);
     if (show) renderTenants();
   }
-  function createTenant() {
-    var name = $('tnCreateName').value.trim();
-    if (!name) { toast('请输入租户名称'); return; }
-    apiFetch('/api/tenant', { method:'POST', body:name })
-      .then(function(r){ return r.json(); })
-      .then(function(j){
-        if (j.code) {
-          addTenant(j.code, j.name || name);
-          $('tnCreateName').value = '';
-          toast('已创建租户「' + (j.name || name) + '」，码 ' + j.code + '（请保存）');
-          enterTenant(j.code);
-        } else toast(j.error || '创建失败');
-      })
-      .catch(function(){ toast('网络错误'); });
+  function renderTenants() {
+    var list = $('tenantList');
+    var html = '';
+    // 公共租户恒在。
+    html += '<div class="tn-item' + (DH.currentCode === 'public' ? ' active' : '') + '"' +
+            ' onclick="window.__switchTenant(\'public\')">' +
+            '<span class="tn-name">🏢 公共租户</span><span class="tn-code">public</span></div>';
+    for (var i = 0; i < DH.tenants.length; i++) {
+      var t = DH.tenants[i];
+      var cls = (DH.currentCode === t.code) ? ' active' : '';
+      html += '<div class="tn-item' + cls + '" onclick="window.__switchTenant(\'' + t.code + '\')">' +
+              '<span class="tn-name">' + escapeHtml(t.name) + '</span>' +
+              '<span class="tn-code">' + escapeHtml(t.code) + '</span></div>';
+    }
+    list.innerHTML = html;
   }
-  function joinTenant() {
-    var code = $('tnJoinCode').value.trim();
-    if (!code) { toast('请输入租户码'); return; }
-    apiFetch('/api/tenant/info?code=' + encodeURIComponent(code))
-      .then(function(r){ return r.json(); })
-      .then(function(j){
-        if (j.code) {
-          addTenant(j.code, j.name || code);
-          $('tnJoinCode').value = '';
-          toast('已加入租户「' + (j.name || code) + '」');
-          enterTenant(j.code);
-        } else toast(j.error || '租户不存在');
-      })
-      .catch(function(){ toast('网络错误'); });
-  }
-  function loadTenants() {
-    try { tenants = JSON.parse(localStorage.getItem('datahub_tenants') || '[]') || []; } catch(e){ tenants = []; }
-    var c = 'public';
-    try { c = localStorage.getItem('datahub_current_tenant') || 'public'; } catch(e){ c = 'public'; }
-    currentCode = c;
-    currentName = tenantNameOf(c);
-    updateTenantName();
+  // 进入租户：切换当前租户并重置视图（每租户数据/成员/游标独立）。
+  function enterTenant(code) {
+    DH.setCurrent(code);
+    seen = {}; lastSeq = 0; lastDateKey = ''; memberCount = 0;
+    chatEl.innerHTML = '';
+    $('tenantName').textContent = DH.currentName;
+    $('tenantPanel').classList.remove('show');
+    $('statusText').textContent = '连接中…';
+    // 非公共租户：凭码登记为成员（幂等；角色由服务端决定）。
+    if (code !== 'public') {
+      DH.apiFetch('/api/tenant/join', { method:'POST', body:code })
+        .catch(function(){});
+    }
     renderTenants();
+    poll();
   }
   // 供 renderTenants 的内联 onclick 调用（全局作用域查找）。
-  window.__enterTenant = enterTenant;
-  window.__forgetTenant = forgetTenant;
+  window.__switchTenant = enterTenant;
 
   // ============ 发送文本 ============
   function sendText() {
@@ -563,15 +473,12 @@
   }
 
   // ============ 启动 ============
-  // 租户切换器控件
+  // 租户切换器控件（创建/加入/退出已移至 /tenants 管理页）。
   $('tenantToggle').addEventListener('click', toggleTenantPanel);
-  $('tnCreateBtn').addEventListener('click', createTenant);
-  $('tnJoinBtn').addEventListener('click', joinTenant);
-  $('tnCreateName').addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); createTenant(); } });
-  $('tnJoinCode').addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); joinTenant(); } });
 
-  // 恢复上次所在租户后再开始轮询（每租户数据/成员/游标独立）。
-  loadTenants();
+  // 恢复上次所在租户（common.js 已 load），渲染后开始轮询。
+  $('tenantName').textContent = DH.currentName;
+  renderTenants();
   poll();
   setInterval(poll, POLL_MS);
   setInterval(loadMembers, POLL_MS); // 后台更新成员（用于"我"地址推断）

@@ -10,73 +10,97 @@
 
 namespace datahub {
 
-/// @brief 创建页面/静态资源控制器。
-CWebPageController::CWebPageController(const std::string& strWebDir) : m_strWebDir(strWebDir) {}
+/// @brief 创建页面/静态资源控制器；初始化路由→资源表。
+///
+/// 新增前端页面或静态资源只需在此表加一行：Load 会按表加载，
+/// RegisterRoutes 会按表注册。首页（"/"）缺失视为致命（回 503），
+/// 其余静态资源缺失回 404。
+CWebPageController::CWebPageController(const std::string& strWebDir) : m_strWebDir(strWebDir)
+{
+    static const Page kPages[] = {
+        {"/", "index.html", "text/html; charset=utf-8", "前端页面未加载", "503", {}},
+        {"/style.css", "style.css", "text/css; charset=utf-8", "not found", "404", {}},
+        {"/app.js", "app.js", "text/javascript; charset=utf-8", "not found", "404", {}},
+        {"/common.js", "common.js", "text/javascript; charset=utf-8", "not found", "404", {}},
+        {"/tenants", "tenants.html", "text/html; charset=utf-8", "not found", "404", {}},
+        {"/tenants.js", "tenants.js", "text/javascript; charset=utf-8", "not found", "404", {}},
+    };
+    m_pages.assign(kPages, kPages + sizeof(kPages) / sizeof(kPages[0]));
+}
 
 /// @brief 从磁盘加载全部前端资源到内存（一次性；之后请求不再触盘）。
 bool CWebPageController::Load()
 {
-    // index.html：首页内容；缺失视为致命（GET / 回 503）。
-    if (!LoadAsset("index.html", "text/html; charset=utf-8", m_index))
+    for (std::size_t i = 0; i < m_pages.size(); ++i)
     {
-        common::log::CLogger::Instance().Warn("[DataHub] 前端 index.html 加载失败: " + m_strWebDir +
-                                              "/index.html（GET / 将返回 503）");
-        return false;
+        if (LoadAsset(m_pages[i]))
+        {
+            continue;
+        }
+        // 首页缺失视为致命：GET / 回 503；其余静态资源尽力加载（缺失回 404）。
+        if (std::string(m_pages[i].szRoute) == "/")
+        {
+            common::log::CLogger::Instance().Warn("[DataHub] 前端 index.html 加载失败: " + m_strWebDir +
+                                                  "/index.html（GET / 将返回 503）");
+        }
     }
-    // 静态资源：尽力加载；单份缺失时对应路由回 404。
-    LoadAsset("style.css", "text/css; charset=utf-8", m_style);
-    LoadAsset("app.js", "text/javascript; charset=utf-8", m_app);
-    return true;
+    return IndexLoaded();
 }
 
 bool CWebPageController::IndexLoaded() const
 {
-    return !m_index.strContent.empty();
+    for (std::size_t i = 0; i < m_pages.size(); ++i)
+    {
+        if (std::string(m_pages[i].szRoute) == "/")
+        {
+            return !m_pages[i].asset.strContent.empty();
+        }
+    }
+    return false;
 }
 
-/// @brief 读取一份资源文件并计算 ETag。
-bool CWebPageController::LoadAsset(const std::string& strFile, const std::string& strMime, Asset& out)
+/// @brief 读取一份资源文件并计算 ETag；缺失时保留空内容。
+bool CWebPageController::LoadAsset(Page& page)
 {
     std::string strContent;
-    if (!web::CHttpText::ReadFile(m_strWebDir + "/" + strFile, strContent))
+    if (!web::CHttpText::ReadFile(m_strWebDir + "/" + page.szFile, strContent))
     {
         return false;
     }
-    out.strContent = strContent;
-    out.strEtag = MakeEtag(strContent);
-    out.strType = strMime;
+    page.asset.strContent = strContent;
+    page.asset.strEtag = MakeEtag(strContent);
+    page.asset.strType = page.szMime;
     return true;
 }
 
-/// @brief 注册 GET /、/style.css、/app.js。
+/// @brief 注册全部路由（按 m_pages 表）。
+/// 捕获元素下标而非迭代器/引用，避免 lambda 持有悬垂指针。
 void CWebPageController::RegisterRoutes(web::CHttpRouter& router)
 {
-    router.Register({"GET", "/", [this](web::CHttpRequest& req, web::CHttpResponse& resp)
-    { return HandleAsset(req, resp, m_index, "前端页面未加载", "503"); }});
-    router.Register({"GET", "/style.css", [this](web::CHttpRequest& req, web::CHttpResponse& resp)
-    { return HandleAsset(req, resp, m_style, "not found", "404"); }});
-    router.Register({"GET", "/app.js", [this](web::CHttpRequest& req, web::CHttpResponse& resp)
-    { return HandleAsset(req, resp, m_app, "not found", "404"); }});
+    for (std::size_t i = 0; i < m_pages.size(); ++i)
+    {
+        router.Register({"GET", m_pages[i].szRoute, [this, i](web::CHttpRequest& req, web::CHttpResponse& resp)
+        { return HandleAsset(req, resp, m_pages[i]); }});
+    }
 }
 
 /// @brief 处理单份资源：缺失回缺省状态码；命中 If-None-Match 回 304；否则 200 全文。
-bool CWebPageController::HandleAsset(web::CHttpRequest& req, web::CHttpResponse& resp, const Asset& asset,
-                                     const char* szMissingBody, const char* szMissingStatus)
+bool CWebPageController::HandleAsset(web::CHttpRequest& req, web::CHttpResponse& resp, const Page& page)
 {
-    if (asset.strContent.empty())
+    if (page.asset.strContent.empty())
     {
-        resp.WriteText(szMissingBody, szMissingStatus, "text/plain");
+        resp.WriteText(page.szMissingBody, page.szMissingStatus, "text/plain");
         return true;
     }
-    resp.AddHeader("ETag", asset.strEtag.c_str());
+    resp.AddHeader("ETag", page.asset.strEtag.c_str());
     // 强缓存：命中 ETag 则 304，节省重复传输。
     std::string strInm = req.Header("If-None-Match");
-    if (!strInm.empty() && strInm == asset.strEtag)
+    if (!strInm.empty() && strInm == page.asset.strEtag)
     {
-        resp.WriteText("", "304", asset.strType.c_str());
+        resp.WriteText("", "304", page.asset.strType.c_str());
         return true;
     }
-    resp.WriteText(asset.strContent, "200", asset.strType.c_str());
+    resp.WriteText(page.asset.strContent, "200", page.asset.strType.c_str());
     return true;
 }
 
