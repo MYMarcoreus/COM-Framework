@@ -124,6 +124,26 @@ bool CDataStoreModule::Remove(const CTenant& tenant, const std::string& strId)
     return m_pStore->Remove(tenant.strCode, strId);
 }
 
+std::size_t CDataStoreModule::Count(const CTenant& tenant) const
+{
+    return m_pStore->Count(tenant.strCode);
+}
+
+std::uint64_t CDataStoreModule::TotalBytes(const CTenant& tenant) const
+{
+    return m_pStore->TotalBytes(tenant.strCode);
+}
+
+/// @brief 清空某租户全部数据项（删除租户前调用，运维控制面用）。
+void CDataStoreModule::PurgeTenant(const CTenant& tenant)
+{
+    std::vector<DataItemInfo> vecItems = List(tenant);
+    for (const DataItemInfo& item : vecItems)
+    {
+        m_pStore->Remove(tenant.strCode, item.strId);
+    }
+}
+
 SC_BEGIN_INTERFACE_MAP(CDataStoreModule, sc::CModule)
 SC_INTERFACE_ENTRY(IDataStore)
 SC_END_INTERFACE_MAP(CDataStoreModule, sc::CModule)

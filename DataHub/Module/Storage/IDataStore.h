@@ -67,6 +67,17 @@ SC_INTERFACE(IDataStore, "datahub::IDataStore", "63821b50-55e9-44df-a88a-8f899df
 
     // 删除租户内数据项；成功返回 true。
     virtual bool Remove(const CTenant& tenant, const std::string& strId) = 0;
+
+    // ---- 服务端管理 / 统计能力（运维控制面 /api/admin 用） ----
+
+    // 租户当前数据项数量。
+    virtual std::size_t Count(const CTenant& tenant) const = 0;
+
+    // 租户当前内容占用总字节。
+    virtual std::uint64_t TotalBytes(const CTenant& tenant) const = 0;
+
+    // 清空某租户全部数据项（删除租户前调用）。
+    virtual void PurgeTenant(const CTenant& tenant) = 0;
 };
 
 }  // namespace sc

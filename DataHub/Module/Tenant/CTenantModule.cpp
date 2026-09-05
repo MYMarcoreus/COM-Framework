@@ -199,6 +199,152 @@ bool CTenantModule::ListMembers(const std::string& strCode, std::vector<sc::CTen
     return true;
 }
 
+/// @brief 枚举全部租户（含内置公共租户；运维控制面用）。
+void CTenantModule::ListTenants(std::vector<CTenant>& vecOut) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    vecOut.clear();
+    vecOut.reserve(m_mapTenants.size());
+    for (const auto& pair : m_mapTenants)
+    {
+        vecOut.push_back(pair.second);
+    }
+}
+
+/// @brief 重命名租户（公共租户名亦可改；码不变）。
+bool CTenantModule::RenameTenant(const std::string& strCode, const std::string& strName)
+{
+    const std::string::size_type nBeg = strName.find_first_not_of(" \t\r\n");
+    if (nBeg == std::string::npos)
+    {
+        return false;  // 空名
+    }
+    const std::string::size_type nEnd = strName.find_last_not_of(" \t\r\n");
+    if (nEnd - nBeg + 1 > 48)
+    {
+        return false;  // 超长
+    }
+    std::string strTrimmed = strName.substr(nBeg, nEnd - nBeg + 1);
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_mapTenants.find(strCode);
+    if (it == m_mapTenants.end())
+    {
+        return false;
+    }
+    it->second.strName = strTrimmed;
+    return true;
+}
+
+/// @brief 调整租户容量限制（0 = 不限制）。
+bool CTenantModule::SetTenantLimits(const std::string& strCode, const CTenantLimits& limits)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_mapTenants.find(strCode);
+    if (it == m_mapTenants.end())
+    {
+        return false;
+    }
+    it->second.limits = limits;
+    return true;
+}
+
+/// @brief 删除租户（内置公共租户不可删），成员花名册一并移除。
+/// 数据项由调用方（管理装配层）经 IDataStore::PurgeTenant 清理。
+bool CTenantModule::RemoveTenant(const std::string& strCode)
+{
+    if (strCode == m_strDefaultCode)
+    {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_mapTenants.erase(strCode) == 0)
+    {
+        return false;
+    }
+    m_mapMembers.erase(strCode);
+    return true;
+}
+
+/// @brief 某租户内 Owner 数量（调用方须已持有 m_mutex）。
+std::size_t CTenantModule::OwnerCountLocked(const std::string& strCode) const
+{
+    auto itTenant = m_mapMembers.find(strCode);
+    if (itTenant == m_mapMembers.end())
+    {
+        return 0;
+    }
+    std::size_t nOwners = 0;
+    for (const auto& pair : itTenant->second)
+    {
+        if (pair.second.role == sc::TenantRole::kOwner)
+        {
+            ++nOwners;
+        }
+    }
+    return nOwners;
+}
+
+/// @brief 从花名册移除成员（公共租户不可用；须保留至少一名 Owner）。
+bool CTenantModule::RemoveMember(const std::string& strCode, const std::string& strAccount)
+{
+    if (strCode == m_strDefaultCode || strAccount.empty())
+    {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_mapTenants.find(strCode) == m_mapTenants.end())
+    {
+        return false;
+    }
+    auto itTenant = m_mapMembers.find(strCode);
+    if (itTenant == m_mapMembers.end())
+    {
+        return false;
+    }
+    auto itAccount = itTenant->second.find(strAccount);
+    if (itAccount == itTenant->second.end())
+    {
+        return false;
+    }
+    if (itAccount->second.role == sc::TenantRole::kOwner && OwnerCountLocked(strCode) <= 1)
+    {
+        return false;  // 不能移除最后一名 Owner
+    }
+    itTenant->second.erase(itAccount);
+    return true;
+}
+
+/// @brief 设置成员角色（目标须已是成员；公共租户不可用；保留至少一名 Owner）。
+bool CTenantModule::SetMemberRole(const std::string& strCode, const std::string& strAccount, sc::TenantRole role)
+{
+    if (strCode == m_strDefaultCode || strAccount.empty())
+    {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_mapTenants.find(strCode) == m_mapTenants.end())
+    {
+        return false;
+    }
+    auto itTenant = m_mapMembers.find(strCode);
+    if (itTenant == m_mapMembers.end())
+    {
+        return false;
+    }
+    auto itAccount = itTenant->second.find(strAccount);
+    if (itAccount == itTenant->second.end())
+    {
+        return false;
+    }
+    sc::TenantRole oldRole = itAccount->second.role;
+    if (oldRole == sc::TenantRole::kOwner && role == sc::TenantRole::kMember && OwnerCountLocked(strCode) <= 1)
+    {
+        return false;  // 不能把最后一名 Owner 降级
+    }
+    itAccount->second.role = role;
+    return true;
+}
+
 std::size_t CTenantModule::Count() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);

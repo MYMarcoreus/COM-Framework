@@ -8,6 +8,7 @@
 #include <string>
 
 #include "Log/Logger.h"
+#include "Module/Admin/CAdminController.h"
 #include "Module/Http/HttpHandlers.h"
 #include "Module/Http/MemberService.h"
 #include "Module/Http/RequestContext.h"
@@ -45,6 +46,21 @@ std::string StatusClass(const std::string& strStatus)
     }
     return strClass;
 }
+// 是否本机回环来源（"127.0.0.1:port" / "[::1]:port"）。
+bool IsLoopbackPeer(const std::string& strPeer)
+{
+    const std::string::size_type nColon = strPeer.rfind(':');
+    if (nColon == std::string::npos)
+    {
+        return false;
+    }
+    std::string strHost = strPeer.substr(0, nColon);
+    if (strHost.size() >= 2 && strHost[0] == '[' && strHost[strHost.size() - 1] == ']')
+    {
+        strHost = strHost.substr(1, strHost.size() - 2);
+    }
+    return strHost == "127.0.0.1" || strHost == "::1" || strHost == "localhost";
+}
 }  // namespace
 
 /// @brief 创建 HTTP 服务模块。
@@ -54,10 +70,17 @@ CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& str
 
 /// @brief 创建 HTTP 服务模块（带单次上传/请求体上限）。
 CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir, std::uint64_t nMaxBodyBytes)
+    : CHttpServerModule(nPort, strWebDir, nMaxBodyBytes, "")
+{}
+
+/// @brief 创建 HTTP 服务模块（含管理 API 令牌）。
+CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir, std::uint64_t nMaxBodyBytes,
+                                     const std::string& strAdminToken)
     : sc::CModule("http"),
       m_nPort(nPort),
       m_strWebDir(strWebDir),
       m_nMaxBodyBytes(nMaxBodyBytes),
+      m_strAdminToken(strAdminToken),
       m_server([this](WFHttpTask* pTask) { OnRequest(pTask); }),
       m_bStarted(false)
 {
@@ -122,6 +145,10 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
     m_pTenantCtl->RegisterRoutes(m_router);
     // —— 页面 / 静态资源：由页面控制器（CWebPageController）自注册。
     m_pPages->RegisterRoutes(m_router);
+
+    // —— 管理 API：/api/admin/*（本机回环 + 令牌闸门在 OnRequest 统一裁决）。
+    m_pAdminCtl = std::unique_ptr<CAdminController>(new CAdminController(m_pStore.Get(), m_pTenants.Get()));
+    m_pAdminCtl->RegisterRoutes(m_routerAdmin);
     return true;
 }
 
@@ -155,6 +182,7 @@ void CHttpServerModule::Stop()
 void CHttpServerModule::Shutdown()
 {
     Stop();
+    m_pAdminCtl.reset();
     m_pPages.reset();
     m_pTenantCtl.reset();
     m_pHandlers.reset();
@@ -203,7 +231,21 @@ void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
             strCode = m_pTenants->DefaultCode();
         }
         ctx.bResolved = m_pTenants != nullptr && m_pTenants->FindTenant(strCode, ctx.tenant);
-        if (!ctx.bResolved)
+        // 0) 管理 API 快速通道：/api/admin/* 仅本机回环 + 令牌可访问，不经租户成员闸门。
+        if (strPath.compare(0, 10, "/api/admin") == 0)
+        {
+            const bool bLoopback = IsLoopbackPeer(req.Peer());
+            const bool bAuthorized = !m_strAdminToken.empty() && req.Header("X-Admin-Token") == m_strAdminToken;
+            if (!bLoopback || !bAuthorized)
+            {
+                resp.WriteJson("{\"error\":\"admin forbidden\"}", "403");
+            }
+            else if (!m_routerAdmin.Dispatch(req, resp))
+            {
+                resp.WriteText("Not Found", "404", "text/plain");
+            }
+        }
+        else if (!ctx.bResolved)
         {
             resp.WriteJson("{\"error\":\"tenant not found\"}", "404");
         }

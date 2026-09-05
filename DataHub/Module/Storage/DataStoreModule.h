@@ -48,6 +48,9 @@ class CDataStoreModule : public sc::CModule, public IDataStore
     std::vector<DataItemInfo> List(const CTenant& tenant) const override;
     std::vector<DataItemInfo> ListSince(const CTenant& tenant, std::uint64_t nSince) const override;
     bool Remove(const CTenant& tenant, const std::string& strId) override;
+    std::size_t Count(const CTenant& tenant) const override;
+    std::uint64_t TotalBytes(const CTenant& tenant) const override;
+    void PurgeTenant(const CTenant& tenant) override;
 
     SC_DECLARE_INTERFACE_MAP();
 

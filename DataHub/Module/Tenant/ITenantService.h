@@ -40,6 +40,28 @@ SC_INTERFACE(ITenantService, "datahub::ITenantService", "4d9fa6e2-1c73-4b8e-9f41
     // 某租户的成员花名册（公共租户为空）。@return true。
     virtual bool ListMembers(const std::string& strCode, std::vector<CTenantMember>& vecOut) const = 0;
 
+    // ---- 服务端管理能力（运维控制面 /api/admin，仅本机回环可访问） ----
+
+    // 枚举全部租户（含内置公共租户）。
+    virtual void ListTenants(std::vector<CTenant>& vecOut) const = 0;
+
+    // 重命名租户（公共租户名亦可改）；@return false = 不存在 / 名称非法。
+    virtual bool RenameTenant(const std::string& strCode, const std::string& strName) = 0;
+
+    // 调整租户容量限制（0 = 不限制）；@return false = 不存在。
+    virtual bool SetTenantLimits(const std::string& strCode, const CTenantLimits& limits) = 0;
+
+    // 删除租户（内置公共租户不可删），成员花名册一并移除；@return false = 不存在 / 不可删。
+    // 其数据项由调用方（管理装配层）经 IDataStore::PurgeTenant 另行清理。
+    virtual bool RemoveTenant(const std::string& strCode) = 0;
+
+    // 从花名册移除成员（公共租户不可用）；需保留至少一名 Owner。
+    virtual bool RemoveMember(const std::string& strCode, const std::string& strAccount) = 0;
+
+    // 设置成员角色（owner/member）；目标须已是该租户成员（公共租户不可用）；
+    // 降级 Owner 时需保留至少一名 Owner。
+    virtual bool SetMemberRole(const std::string& strCode, const std::string& strAccount, TenantRole role) = 0;
+
     // 当前租户数量。
     virtual std::size_t Count() const = 0;
 };

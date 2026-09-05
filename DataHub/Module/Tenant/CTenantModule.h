@@ -41,6 +41,12 @@ class CTenantModule : public sc::CModule, public ITenantService
     bool JoinTenant(const std::string& strCode, const std::string& strAccount, sc::TenantRole& out) override;
     bool TenantRoleOf(const std::string& strCode, const std::string& strAccount, sc::TenantRole& out) const override;
     bool ListMembers(const std::string& strCode, std::vector<sc::CTenantMember>& vecOut) const override;
+    void ListTenants(std::vector<CTenant>& vecOut) const override;
+    bool RenameTenant(const std::string& strCode, const std::string& strName) override;
+    bool SetTenantLimits(const std::string& strCode, const CTenantLimits& limits) override;
+    bool RemoveTenant(const std::string& strCode) override;
+    bool RemoveMember(const std::string& strCode, const std::string& strAccount) override;
+    bool SetMemberRole(const std::string& strCode, const std::string& strAccount, sc::TenantRole role) override;
     std::size_t Count() const override;
 
     SC_DECLARE_INTERFACE_MAP();
@@ -48,6 +54,9 @@ class CTenantModule : public sc::CModule, public ITenantService
    private:
     // 生成不与现有租户冲突的短码。
     std::string GenerateCode() const;
+
+    // 某租户内 Owner 数量（须持锁调用）。
+    std::size_t OwnerCountLocked(const std::string& strCode) const;
 
     std::string m_strDefaultCode;  // "public"
     CTenantLimits m_defaultLimits;

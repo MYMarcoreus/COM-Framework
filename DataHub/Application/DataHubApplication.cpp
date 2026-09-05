@@ -84,8 +84,11 @@ bool CDataHubApplication::RegisterModules()
     //    单次上传/请求体上限来自 [http] max_body_bytes（缺省 32MB，0 表示不限制）。
     std::string strWebDir = m_config.GetString("web.dir", "");
     int nMaxBodyBytes = m_config.GetInt("http.max_body_bytes", 33554432);
+    // 内部管理 API（/api/admin/*）访问令牌：见 [admin] token。
+    // 仅本机回环 + 该令牌可访问；供独立的 DataHubAdmin（控制面）使用。
+    std::string strAdminToken = m_config.GetString("admin.token", "");
     if (!m_moduleManager.RegisterModule(new CHttpServerModule(
-            m_nPort, strWebDir, nMaxBodyBytes > 0 ? static_cast<std::uint64_t>(nMaxBodyBytes) : 0ULL)))
+            m_nPort, strWebDir, nMaxBodyBytes > 0 ? static_cast<std::uint64_t>(nMaxBodyBytes) : 0ULL, strAdminToken)))
     {
         return false;
     }

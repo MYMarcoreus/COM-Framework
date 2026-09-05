@@ -20,6 +20,7 @@ using sc::IDataStore;
 using sc::IHttpService;
 
 // 前置声明。
+class CAdminController;
 class CHttpHandlers;
 class CMemberService;
 class CTenantsController;
@@ -62,6 +63,11 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     // @param nMaxBodyBytes 单次上传/请求体上限（字节；0 表示不限制）。
     CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir, std::uint64_t nMaxBodyBytes);
 
+    // 创建 HTTP 服务模块（含内部管理 API 令牌）。
+    // @param strAdminToken 管理 API（/api/admin/*）访问令牌；空串 = 不开放管理 API。
+    CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir, std::uint64_t nMaxBodyBytes,
+                      const std::string& strAdminToken);
+
     virtual ~CHttpServerModule();
 
     bool Initialize(const sc::CResolveContext& ctx) override;
@@ -83,6 +89,7 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     std::uint16_t m_nPort;
     std::string m_strWebDir;        // 前端资源目录
     std::uint64_t m_nMaxBodyBytes;  // 单次上传/请求体上限（字节；0 表示不限制）
+    std::string m_strAdminToken;    // 管理 API 令牌（空 = 不开放 /api/admin/*）
 
     sc::ScopedInterfacePtr<IDataStore> m_pStore;
     sc::ScopedInterfacePtr<sc::ITenantService> m_pTenants;  // 租户注册表（解析 X-Tenant）
@@ -91,7 +98,9 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     std::unique_ptr<CHttpHandlers> m_pHandlers;             // 租户内业务 API（业务层）
     std::unique_ptr<CTenantsController> m_pTenantCtl;       // 租户管理（业务层）
     std::unique_ptr<CWebPageController> m_pPages;           // 页面/静态资源（业务层）
-    web::CHttpRouter m_router;                              // 路由注册表（框架层）
+    std::unique_ptr<CAdminController> m_pAdminCtl;          // 管理 API（本机回环 + 令牌）
+    web::CHttpRouter m_router;                              // 租户内/页面路由
+    web::CHttpRouter m_routerAdmin;                         // 管理 API 路由（/api/admin/*）
     WFHttpServer m_server;
     bool m_bStarted;
 };
