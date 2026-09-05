@@ -10,6 +10,7 @@
 #include "Module/Module.h"
 #include "Module/ScopedInterfacePtr.h"
 #include "Module/Storage/IDataStore.h"
+#include "Module/Tenant/ITenantService.h"
 #include "Observability/IMetrics.h"
 #include "workflow/WFHttpServer.h"
 
@@ -73,6 +74,7 @@ class CHttpServerModule : public sc::CModule, public IHttpService
 
    private:
     // 请求处理回调（WFHttpServer 线程池中执行；lambda 捕获本实例）。
+    // 流程：租户解析（X-Space → CTenant，挂到请求上下文）→ 成员记录 → 分发。
     void OnRequest(WFHttpTask* pServerTask);
 
     std::uint16_t m_nPort;
@@ -80,11 +82,12 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     std::uint64_t m_nMaxBodyBytes;  // 单次上传/请求体上限（字节；0 表示不限制）
 
     sc::ScopedInterfacePtr<IDataStore> m_pStore;
-    sc::ScopedInterfacePtr<sc::IMetrics> m_pMetrics;       // 指标注册表（可选，缺失不上报）
-    std::unique_ptr<CMemberService> m_pMembers;            // 成员服务（业务层）
-    std::unique_ptr<CHttpHandlers> m_pHandlers;            // 业务 API（业务层）
-    std::unique_ptr<CWebPageController> m_pPages;          // 页面/静态资源（业务层）
-    web::CHttpRouter m_router;                             // 路由注册表（框架层）
+    sc::ScopedInterfacePtr<sc::ITenantService> m_pTenants;  // 租户注册表（解析 X-Space）
+    sc::ScopedInterfacePtr<sc::IMetrics> m_pMetrics;        // 指标注册表（可选，缺失不上报）
+    std::unique_ptr<CMemberService> m_pMembers;             // 成员服务（业务层）
+    std::unique_ptr<CHttpHandlers> m_pHandlers;             // 业务 API（业务层）
+    std::unique_ptr<CWebPageController> m_pPages;           // 页面/静态资源（业务层）
+    web::CHttpRouter m_router;                              // 路由注册表（框架层）
     WFHttpServer m_server;
     bool m_bStarted;
 };

@@ -35,6 +35,11 @@ class CHttpRequest
     // Content-Length 请求头数值（无该头 / 非数字返回 0）。供体量上限判断。
     std::uint64_t ContentLength() const;
 
+    // 通用请求附加数据槽（入口拦截器可挂上下文；本层不解释内容）。
+    // 当前用法：OnRequest 挂已解析的 CTenant*，供业务读取，生命周期属于请求处理栈。
+    void* UserData() const;
+    void SetUserData(void* pUserData);
+
     // 读取请求体内容（空表示无 body）。
     std::string Body() const;
 
@@ -48,6 +53,7 @@ class CHttpRequest
    private:
     WFHttpTask* m_pServerTask;
     std::string m_strPathParam;
+    void* m_pUserData;  // 请求附加数据（生命周期由设置方保证）
 };
 
 /// @brief HTTP 响应封装（只写侧）。

@@ -10,14 +10,33 @@
 #include "Framework/HttpRouter.h"
 #include "Framework/HttpText.h"
 #include "Module/Http/MemberService.h"
+#include "Module/Tenant/ITenantService.h"
 
 namespace datahub {
 
+using sc::CTenant;
 using sc::DataItemInfo;
 using sc::DataKind;
+using sc::ITenantService;
 
-CHttpHandlers::CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers, std::uint64_t nMaxBodyBytes)
-    : m_pStore(pStore), m_pMembers(pMembers), m_nMaxBodyBytes(nMaxBodyBytes)
+namespace {
+// 取当前请求所属租户：入口 OnRequest 解析后挂在请求上下文（UserData）。
+const CTenant& RequestTenant(web::CHttpRequest& req)
+{
+    const CTenant* pTenant = static_cast<const CTenant*>(req.UserData());
+    if (pTenant != nullptr)
+    {
+        return *pTenant;
+    }
+    // 兜底（正常流程不会触发）。
+    static const CTenant kFallback;
+    return kFallback;
+}
+}  // namespace
+
+CHttpHandlers::CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers, ITenantService* pTenants,
+                             std::uint64_t nMaxBodyBytes)
+    : m_pStore(pStore), m_pMembers(pMembers), m_pTenants(pTenants), m_nMaxBodyBytes(nMaxBodyBytes)
 {}
 
 /// @brief 注册本控制器负责的全部业务路由（装配层 Initialize 时调用）。
@@ -38,6 +57,11 @@ void CHttpHandlers::RegisterRoutes(web::CHttpRouter& router)
                      [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleGetFile(req, resp); }});
     router.Register({"DELETE", "/api/item/{id}",
                      [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleDelete(req, resp); }});
+    // —— 空间（租户）域 ——
+    router.Register({"POST", "/api/space",
+                     [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleCreateSpace(req, resp); }});
+    router.Register({"GET", "/api/space/info",
+                     [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleSpaceInfo(req, resp); }});
 }
 
 // ----------------------------------------------------------------------------
@@ -71,7 +95,8 @@ bool CHttpHandlers::HandleList(web::CHttpRequest& req, web::CHttpResponse& resp)
             nSince = nParsed;
         }
     }
-    std::vector<DataItemInfo> vecItems = m_pStore->ListSince(nSince);
+    const CTenant& tenant = RequestTenant(req);
+    std::vector<DataItemInfo> vecItems = m_pStore->ListSince(tenant, nSince);
     std::ostringstream oss;
     oss << "{\"items\":[";
     bool bFirst = true;
@@ -104,7 +129,8 @@ bool CHttpHandlers::HandleMembers(web::CHttpRequest& req, web::CHttpResponse& re
         return true;
     }
     m_pMembers->Prune();
-    std::map<std::string, CMemberService::MemberInfo> mapMembers = m_pMembers->Snapshot();
+    const CTenant& tenant = RequestTenant(req);
+    std::map<std::string, CMemberService::MemberInfo> mapMembers = m_pMembers->Snapshot(tenant);
     std::ostringstream oss;
     oss << "{\"members\":[";
     bool bFirst = true;
@@ -151,7 +177,8 @@ bool CHttpHandlers::HandleUploadText(web::CHttpRequest& req, web::CHttpResponse&
         return true;
     }
     std::string strFrom = CMemberService::ClientId(req);
-    std::string strId = m_pStore->SaveText(strBody, strFrom);
+    const CTenant& tenant = RequestTenant(req);
+    std::string strId = m_pStore->SaveText(tenant, strBody, strFrom);
     if (strId.empty())
     {
         resp.WriteJson("{\"error\":\"save failed\"}", "500");
@@ -173,9 +200,10 @@ bool CHttpHandlers::HandleGetText(web::CHttpRequest& req, web::CHttpResponse& re
         resp.WriteJson("{\"error\":\"store unavailable\"}", "500");
         return true;
     }
+    const CTenant& tenant = RequestTenant(req);
     std::string strId = web::CHttpText::UrlDecode(req.PathParam());
     std::string strText;
-    if (!m_pStore->GetText(strId, strText))
+    if (!m_pStore->GetText(tenant, strId, strText))
     {
         resp.WriteJson("{\"error\":\"not found\"}", "404");
         return true;
@@ -207,7 +235,8 @@ bool CHttpHandlers::HandleUploadFile(web::CHttpRequest& req, web::CHttpResponse&
         return true;
     }
     std::string strFrom = CMemberService::ClientId(req);
-    std::string strId = m_pStore->SaveFile(strFileName, strBody.data(), strBody.size(), strFrom);
+    const CTenant& tenant = RequestTenant(req);
+    std::string strId = m_pStore->SaveFile(tenant, strFileName, strBody.data(), strBody.size(), strFrom);
     if (strId.empty())
     {
         resp.WriteJson("{\"error\":\"save failed\"}", "500");
@@ -229,10 +258,11 @@ bool CHttpHandlers::HandleGetFile(web::CHttpRequest& req, web::CHttpResponse& re
         resp.WriteJson("{\"error\":\"store unavailable\"}", "500");
         return true;
     }
+    const CTenant& tenant = RequestTenant(req);
     std::string strId = web::CHttpText::UrlDecode(req.PathParam());
     std::string strName;
     std::vector<char> vecData;
-    if (!m_pStore->GetFile(strId, strName, vecData))
+    if (!m_pStore->GetFile(tenant, strId, strName, vecData))
     {
         resp.WriteJson("{\"error\":\"not found\"}", "404");
         return true;
@@ -252,10 +282,11 @@ bool CHttpHandlers::HandleDelete(web::CHttpRequest& req, web::CHttpResponse& res
         resp.WriteJson("{\"error\":\"store unavailable\"}", "500");
         return true;
     }
+    const CTenant& tenant = RequestTenant(req);
     std::string strId = web::CHttpText::UrlDecode(req.PathParam());
     // 归属校验：仅允许删除自己创建的数据项；来源为空的历史数据项可任意删。
     DataItemInfo info;
-    if (!m_pStore->GetInfo(strId, info))
+    if (!m_pStore->GetInfo(tenant, strId, info))
     {
         resp.WriteJson("{\"error\":\"not found\"}", "404");
         return true;
@@ -266,12 +297,82 @@ bool CHttpHandlers::HandleDelete(web::CHttpRequest& req, web::CHttpResponse& res
         resp.WriteJson("{\"error\":\"forbidden\"}", "403");
         return true;
     }
-    if (!m_pStore->Remove(strId))
+    if (!m_pStore->Remove(tenant, strId))
     {
         resp.WriteJson("{\"error\":\"not found\"}", "404");
         return true;
     }
     resp.WriteJson("{\"ok\":true}");
+    return true;
+}
+
+// ----------------------------------------------------------------------------
+// 创建空间（租户）：POST /api/space —— 名称为请求体（UTF-8，非空；空则用默认名）
+// ----------------------------------------------------------------------------
+bool CHttpHandlers::HandleCreateSpace(web::CHttpRequest& req, web::CHttpResponse& resp)
+{
+    if (m_pTenants == nullptr)
+    {
+        resp.WriteJson("{\"error\":\"tenant service unavailable\"}", "500");
+        return true;
+    }
+    // 名称取请求体（workflow 拒绝零长度 POST body，故 body 恒非空）。
+    std::string strName = req.Body();
+    // 去掉首尾空白（含换行）。
+    std::string::size_type nStart = strName.find_first_not_of(" \t\r\n");
+    std::string::size_type nEnd = strName.find_last_not_of(" \t\r\n");
+    if (nStart == std::string::npos)
+    {
+        strName.clear();
+    }
+    else
+    {
+        strName = strName.substr(nStart, nEnd - nStart + 1);
+    }
+    if (strName.size() > 48)
+    {
+        strName = strName.substr(0, 48);
+    }
+    CTenant tenant;
+    if (!m_pTenants->CreateTenant(strName, tenant))
+    {
+        resp.WriteJson("{\"error\":\"create failed\"}", "500");
+        return true;
+    }
+    std::ostringstream oss;
+    oss << "{\"code\":" << web::CHttpText::JsonString(tenant.strCode)
+        << ",\"name\":" << web::CHttpText::JsonString(tenant.strName) << "}";
+    resp.WriteJson(oss.str());
+    return true;
+}
+
+// ----------------------------------------------------------------------------
+// 查询空间信息：GET /api/space/info?code=xxx —— 供"凭码加入"前校验存在性
+// ----------------------------------------------------------------------------
+bool CHttpHandlers::HandleSpaceInfo(web::CHttpRequest& req, web::CHttpResponse& resp)
+{
+    if (m_pTenants == nullptr)
+    {
+        resp.WriteJson("{\"error\":\"tenant service unavailable\"}", "500");
+        return true;
+    }
+    std::string strCode = req.QueryParam("code");
+    if (strCode.empty())
+    {
+        resp.WriteJson("{\"error\":\"missing code\"}", "400");
+        return true;
+    }
+    CTenant tenant;
+    if (!m_pTenants->FindTenant(strCode, tenant))
+    {
+        resp.WriteJson("{\"error\":\"space not found\"}", "404");
+        return true;
+    }
+    std::ostringstream oss;
+    oss << "{\"code\":" << web::CHttpText::JsonString(tenant.strCode)
+        << ",\"name\":" << web::CHttpText::JsonString(tenant.strName) << ",\"created\":" << tenant.nCreateMs
+        << "}";
+    resp.WriteJson(oss.str());
     return true;
 }
 

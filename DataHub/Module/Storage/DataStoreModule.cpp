@@ -1,20 +1,14 @@
 #include "Module/Storage/DataStoreModule.h"
 
+#include <utility>
+
 #include "Module/InterfaceMap.h"
 #include "Module/ResolveContext.h"
 
 namespace datahub {
 
-/// @brief 创建数据存储模块（可指定容量配额，0 = 不限制）。
-CDataStoreModule::CDataStoreModule(std::size_t nMaxItems, std::uint64_t nMaxTotalBytes,
-                                   std::uint64_t nMaxItemBytes)
-    : sc::CModule("store"),
-      m_pStore(new common::storage::CFileStore())
-{
-    m_pStore->SetMaxItems(nMaxItems);
-    m_pStore->SetMaxTotalBytes(nMaxTotalBytes);
-    m_pStore->SetMaxItemBytes(nMaxItemBytes);
-}
+/// @brief 创建数据存储模块（按租户隔离）。
+CDataStoreModule::CDataStoreModule() : sc::CModule("store") {}
 
 /// @brief 销毁数据存储模块。
 CDataStoreModule::~CDataStoreModule() {}
@@ -33,23 +27,43 @@ bool CDataStoreModule::Start()
 
 void CDataStoreModule::Stop() {}
 
-void CDataStoreModule::Shutdown() {}
-
-std::string CDataStoreModule::SaveText(const std::string& strContent, const std::string& strFrom)
+void CDataStoreModule::Shutdown()
 {
-    return m_pStore->SaveText(strContent, strFrom);
+    m_mapStores.clear();
 }
 
-std::string CDataStoreModule::SaveFile(const std::string& strName, const void* pData, std::size_t nSize,
+/// @brief 取（或惰性创建）某租户的数据存储实例，并应用其容量限制。
+common::storage::CFileStore* CDataStoreModule::EnsureStore(const CTenant& tenant) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto it = m_mapStores.find(tenant.strCode);
+    if (it == m_mapStores.end())
+    {
+        std::unique_ptr<common::storage::CFileStore> pStore(new common::storage::CFileStore());
+        pStore->SetMaxItems(tenant.limits.nMaxItems);
+        pStore->SetMaxTotalBytes(tenant.limits.nMaxTotalBytes);
+        pStore->SetMaxItemBytes(tenant.limits.nMaxItemBytes);
+        it = m_mapStores.insert(std::make_pair(tenant.strCode, std::move(pStore))).first;
+    }
+    return it->second.get();
+}
+
+std::string CDataStoreModule::SaveText(const CTenant& tenant, const std::string& strContent,
                                        const std::string& strFrom)
 {
-    return m_pStore->SaveFile(strName, pData, nSize, strFrom);
+    return EnsureStore(tenant)->SaveText(strContent, strFrom);
 }
 
-bool CDataStoreModule::GetInfo(const std::string& strId, DataItemInfo& info) const
+std::string CDataStoreModule::SaveFile(const CTenant& tenant, const std::string& strName, const void* pData,
+                                       std::size_t nSize, const std::string& strFrom)
+{
+    return EnsureStore(tenant)->SaveFile(strName, pData, nSize, strFrom);
+}
+
+bool CDataStoreModule::GetInfo(const CTenant& tenant, const std::string& strId, DataItemInfo& info) const
 {
     common::storage::StoreItemInfo storeInfo;
-    if (!m_pStore->GetInfo(strId, storeInfo))
+    if (!EnsureStore(tenant)->GetInfo(strId, storeInfo))
     {
         return false;
     }
@@ -63,20 +77,21 @@ bool CDataStoreModule::GetInfo(const std::string& strId, DataItemInfo& info) con
     return true;
 }
 
-bool CDataStoreModule::GetText(const std::string& strId, std::string& strOut) const
+bool CDataStoreModule::GetText(const CTenant& tenant, const std::string& strId, std::string& strOut) const
 {
-    return m_pStore->GetText(strId, strOut);
+    return EnsureStore(tenant)->GetText(strId, strOut);
 }
 
-bool CDataStoreModule::GetFile(const std::string& strId, std::string& strName, std::vector<char>& vecData) const
+bool CDataStoreModule::GetFile(const CTenant& tenant, const std::string& strId, std::string& strName,
+                               std::vector<char>& vecData) const
 {
-    return m_pStore->GetFile(strId, strName, vecData);
+    return EnsureStore(tenant)->GetFile(strId, strName, vecData);
 }
 
-std::vector<DataItemInfo> CDataStoreModule::List() const
+std::vector<DataItemInfo> CDataStoreModule::List(const CTenant& tenant) const
 {
     std::vector<DataItemInfo> vecResult;
-    std::vector<common::storage::StoreItemInfo> vecStore = m_pStore->List();
+    std::vector<common::storage::StoreItemInfo> vecStore = EnsureStore(tenant)->List();
     vecResult.reserve(vecStore.size());
     for (const common::storage::StoreItemInfo& storeInfo : vecStore)
     {
@@ -93,10 +108,10 @@ std::vector<DataItemInfo> CDataStoreModule::List() const
     return vecResult;
 }
 
-std::vector<DataItemInfo> CDataStoreModule::ListSince(std::uint64_t nSince) const
+std::vector<DataItemInfo> CDataStoreModule::ListSince(const CTenant& tenant, std::uint64_t nSince) const
 {
     std::vector<DataItemInfo> vecResult;
-    std::vector<common::storage::StoreItemInfo> vecStore = m_pStore->ListSince(nSince);
+    std::vector<common::storage::StoreItemInfo> vecStore = EnsureStore(tenant)->ListSince(nSince);
     vecResult.reserve(vecStore.size());
     for (const common::storage::StoreItemInfo& storeInfo : vecStore)
     {
@@ -113,9 +128,9 @@ std::vector<DataItemInfo> CDataStoreModule::ListSince(std::uint64_t nSince) cons
     return vecResult;
 }
 
-bool CDataStoreModule::Remove(const std::string& strId)
+bool CDataStoreModule::Remove(const CTenant& tenant, const std::string& strId)
 {
-    return m_pStore->Remove(strId);
+    return EnsureStore(tenant)->Remove(strId);
 }
 
 SC_BEGIN_INTERFACE_MAP(CDataStoreModule, sc::CModule)

@@ -21,7 +21,7 @@ namespace web {
 // CHttpRequest
 // ---------------------------------------------------------------------------
 
-CHttpRequest::CHttpRequest(WFHttpTask* pServerTask) : m_pServerTask(pServerTask) {}
+CHttpRequest::CHttpRequest(WFHttpTask* pServerTask) : m_pServerTask(pServerTask), m_pUserData(nullptr) {}
 
 std::string CHttpRequest::Method() const
 {
@@ -155,6 +155,16 @@ std::string CHttpRequest::PathParam() const
 void CHttpRequest::SetPathParam(const std::string& strParam)
 {
     m_strPathParam = strParam;
+}
+
+void* CHttpRequest::UserData() const
+{
+    return m_pUserData;
+}
+
+void CHttpRequest::SetUserData(void* pUserData)
+{
+    m_pUserData = pUserData;
 }
 
 // ---------------------------------------------------------------------------

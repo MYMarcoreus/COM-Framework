@@ -5,6 +5,7 @@
 #include "Log/Logger.h"
 #include "Module/Http/HttpServerModule.h"
 #include "Module/Storage/DataStoreModule.h"
+#include "Module/Tenant/CTenantModule.h"
 
 namespace datahub {
 
@@ -61,26 +62,30 @@ bool CDataHubApplication::RegisterModules()
         return false;
     }
 
-    // ② 数据存储模块（按接口注册，供 HTTP 服务模块按接口解析）。
-    //    容量策略来自 [store] 配置（0 = 不限制）：max_items / max_total_mb / max_item_mb。
-    int nStoreMaxItems = m_config.GetInt("store.max_items", 0);
-    std::uint64_t nStoreTotal = MbToBytes(m_config.GetInt("store.max_total_mb", 0));
-    std::uint64_t nStoreItem = MbToBytes(m_config.GetInt("store.max_item_mb", 0));
-    if (!m_moduleManager.RegisterModule(sc::IID_IDataStore(),
-                                        new CDataStoreModule(ToCount(nStoreMaxItems), nStoreTotal, nStoreItem)))
+    // ② 租户注册表模块（含内置公共租户；新建租户统一使用 [store] 配置的默认配额）
+    sc::CTenantLimits defaultLimits;
+    defaultLimits.nMaxItems = ToCount(m_config.GetInt("store.max_items", 0));
+    defaultLimits.nMaxTotalBytes = MbToBytes(m_config.GetInt("store.max_total_mb", 0));
+    defaultLimits.nMaxItemBytes = MbToBytes(m_config.GetInt("store.max_item_mb", 0));
+    if (!m_moduleManager.RegisterModule(sc::IID_ITenantService(), new CTenantModule(defaultLimits)))
     {
         return false;
     }
 
-    // ③ HTTP 数据传输服务模块（基于 Sogou Workflow）
+    // ③ 数据存储模块（按租户隔离：每租户独立存储与配额，来自租户实体）
+    if (!m_moduleManager.RegisterModule(sc::IID_IDataStore(), new CDataStoreModule()))
+    {
+        return false;
+    }
+
+    // ④ HTTP 数据传输服务模块（基于 Sogou Workflow）
     //    前端页面为独立资源文件：构建时部署到用户目录 ~/.datahub/。
     //    配置 [web] dir 指定静态资源目录；留空则使用默认用户目录 ~/.datahub。
     //    单次上传/请求体上限来自 [http] max_body_bytes（缺省 32MB，0 表示不限制）。
     std::string strWebDir = m_config.GetString("web.dir", "");
     int nMaxBodyBytes = m_config.GetInt("http.max_body_bytes", 33554432);
-    if (!m_moduleManager.RegisterModule(
-            new CHttpServerModule(m_nPort, strWebDir,
-                                  nMaxBodyBytes > 0 ? static_cast<std::uint64_t>(nMaxBodyBytes) : 0ULL)))
+    if (!m_moduleManager.RegisterModule(new CHttpServerModule(
+            m_nPort, strWebDir, nMaxBodyBytes > 0 ? static_cast<std::uint64_t>(nMaxBodyBytes) : 0ULL)))
     {
         return false;
     }

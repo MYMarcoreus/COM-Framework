@@ -5,6 +5,7 @@
 
 #include "Framework/HttpMessage.h"
 #include "Module/Storage/IDataStore.h"
+#include "Module/Tenant/ITenantService.h"
 
 namespace datahub {
 
@@ -15,48 +16,44 @@ static const std::uint64_t kDefaultMaxBodyBytes = 33554432ULL;
 class CMemberService;
 namespace web { class CHttpRouter; }
 
-/// @brief HTTP 业务处理器（DataHub 业务 API）。
+/// @brief HTTP 业务处理器（DataHub 业务 API，按租户隔离）。
 ///
-/// 实例类：构造时注入数据存储与成员服务，不依赖静态全局状态。
-/// 各方法对应一个路由，由装配层注册进 CHttpRouter；签名使用框架的
-/// CHttpRequest / CHttpResponse，不直接接触 workflow 类型。
-/// 首页与静态资源由装配层处理，不在本类职责内。
+/// 实例类：构造时注入数据存储、成员服务与租户注册表，不依赖静态全局状态。
+/// 每个请求的"当前租户"由装配层在入口解析后挂到请求上下文（CHttpRequest
+/// 的 UserData 槽），业务各方法经 RequestTenant(req) 读取，不再各自解析头。
+/// 首页与静态资源由装配层（CWebPageController）处理，不在本类职责内。
 class CHttpHandlers
 {
    public:
     // @param pStore         数据存储（IDataStore，装配层注入）
     // @param pMembers       成员服务（CMemberService，装配层注入）
+    // @param pTenants       租户注册表（ITenantService，装配层注入）
     // @param nMaxBodyBytes  单次上传/请求体上限（字节）；超过返回 413。
-    CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers,
+    CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers, sc::ITenantService* pTenants,
                   std::uint64_t nMaxBodyBytes = kDefaultMaxBodyBytes);
 
     // 注册本控制器负责的全部业务路由（由装配层在 Initialize 时调用）。
     void RegisterRoutes(web::CHttpRouter& router);
 
-    // 消息列表：GET /api/list。
+    // —— 消息 / 文件 / 成员（均按当前租户隔离）——
     bool HandleList(web::CHttpRequest& req, web::CHttpResponse& resp);
-
-    // 在线成员：GET /api/members。
     bool HandleMembers(web::CHttpRequest& req, web::CHttpResponse& resp);
-
-    // 上传文本：POST /api/text（body 为内容）。
     bool HandleUploadText(web::CHttpRequest& req, web::CHttpResponse& resp);
-
-    // 获取文本：GET /api/text/<id>（id 取自 req.PathParam()）。
     bool HandleGetText(web::CHttpRequest& req, web::CHttpResponse& resp);
-
-    // 上传文件：POST /api/file（header X-File-Name 指定文件名）。
     bool HandleUploadFile(web::CHttpRequest& req, web::CHttpResponse& resp);
-
-    // 下载文件 / 图片：GET /api/file/<id>。
     bool HandleGetFile(web::CHttpRequest& req, web::CHttpResponse& resp);
-
-    // 删除：DELETE /api/item/<id>。
     bool HandleDelete(web::CHttpRequest& req, web::CHttpResponse& resp);
 
+    // —— 空间（租户）——
+    // 创建空间：POST /api/space（名称经 X-Space-Name 头传入）。
+    bool HandleCreateSpace(web::CHttpRequest& req, web::CHttpResponse& resp);
+    // 查询空间：GET /api/space/info?code=xxx（供凭码加入前校验存在性）。
+    bool HandleSpaceInfo(web::CHttpRequest& req, web::CHttpResponse& resp);
+
    private:
-    sc::IDataStore* m_pStore;  // 数据存储（生命周期由装配层管理）
-    CMemberService* m_pMembers;
+    sc::IDataStore* m_pStore;       // 数据存储（生命周期由装配层管理）
+    CMemberService* m_pMembers;     // 成员服务
+    sc::ITenantService* m_pTenants; // 租户注册表
     std::uint64_t m_nMaxBodyBytes;  // 单次上传/请求体上限（字节）
 };
 

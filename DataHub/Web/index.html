@@ -19,6 +19,21 @@
     </div>
   </div>
 
+  <!-- 空间（租户）栏 -->
+  <div class="spacebar" id="spaceBar">
+    <span class="sp-label">📦 空间</span>
+    <span class="sp-current" id="spaceName">公共空间</span>
+    <button type="button" class="sp-toggle" id="spaceToggle">切换 / 新建 ▾</button>
+  </div>
+  <!-- 空间面板（下拉） -->
+  <div class="spacepanel" id="spacePanel">
+    <div class="sp-list-title">我的空间（点击名称进入）</div>
+    <div class="sp-list" id="spaceList"></div>
+    <div class="sp-row"><input id="spCreateName" placeholder="新空间名称…" maxlength="48"><button id="spCreateBtn">创建</button></div>
+    <div class="sp-row"><input id="spJoinCode" placeholder="输入 6 位空间码加入" maxlength="6"><button id="spJoinBtn">加入</button></div>
+    <div class="sp-hint">凭空间码进入/共享；公共空间为未选择空间时的默认地。</div>
+  </div>
+
   <!-- 成员面板 -->
   <div class="members" id="members">
     <div class="mtitle">👥 在线成员（IP:端口）</div>

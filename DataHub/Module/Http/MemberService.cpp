@@ -31,8 +31,8 @@ std::string CMemberService::ClientId(web::CHttpRequest& req)
     return strId;
 }
 
-/// @brief 记录成员活跃（每次请求调用）；返回客户端标识。
-std::string CMemberService::Touch(web::CHttpRequest& req)
+/// @brief 记录成员在指定租户的活跃（仅当请求携带 X-Client-Id 头）。
+std::string CMemberService::Touch(web::CHttpRequest& req, const CTenant& tenant)
 {
     // 仅当请求携带有效 X-Client-Id 头时记录成员；无头请求（curl、静态资源、
     // 探测等）不计入，避免产生 "IP:port" 假成员。
@@ -56,7 +56,7 @@ std::string CMemberService::Touch(web::CHttpRequest& req)
     }
     std::int64_t nNowMs = NowMs();
     std::lock_guard<std::mutex> lock(m_mutex);
-    MemberInfo& info = m_mapMembers[strClientId];
+    MemberInfo& info = m_mapByTenant[tenant.strCode][strClientId];
     info.strIp = strIp;
     if (info.nFirstMs == 0)
     {
@@ -66,44 +66,62 @@ std::string CMemberService::Touch(web::CHttpRequest& req)
     return strClientId;
 }
 
-/// @brief 清理超过 30 秒未活跃的成员（返回清理数量）。
-size_t CMemberService::Prune()
+/// @brief 清理超过 30 秒未活跃的成员（全部租户）。
+std::size_t CMemberService::Prune()
 {
     const std::int64_t nTimeoutMs = 30000;  // 30 秒
     std::int64_t nNowMs = NowMs();
     std::lock_guard<std::mutex> lock(m_mutex);
-    size_t nRemoved = 0;
-    for (auto it = m_mapMembers.begin(); it != m_mapMembers.end();)
+    std::size_t nRemoved = 0;
+    for (auto tenantIt = m_mapByTenant.begin(); tenantIt != m_mapByTenant.end();)
     {
-        if (nNowMs - it->second.nLastMs > nTimeoutMs)
+        auto& mapMembers = tenantIt->second;
+        for (auto it = mapMembers.begin(); it != mapMembers.end();)
         {
-            it = m_mapMembers.erase(it);
-            ++nRemoved;
+            if (nNowMs - it->second.nLastMs > nTimeoutMs)
+            {
+                it = mapMembers.erase(it);
+                ++nRemoved;
+            }
+            else
+            {
+                ++it;
+            }
+        }
+        if (mapMembers.empty())
+        {
+            tenantIt = m_mapByTenant.erase(tenantIt);
         }
         else
         {
-            ++it;
+            ++tenantIt;
         }
     }
     return nRemoved;
 }
 
-std::map<std::string, CMemberService::MemberInfo> CMemberService::Snapshot() const
+std::map<std::string, CMemberService::MemberInfo> CMemberService::Snapshot(const CTenant& tenant) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_mapMembers;
+    auto tenantIt = m_mapByTenant.find(tenant.strCode);
+    if (tenantIt == m_mapByTenant.end())
+    {
+        return std::map<std::string, MemberInfo>();
+    }
+    return tenantIt->second;
 }
 
-size_t CMemberService::Count() const
+std::size_t CMemberService::Count(const CTenant& tenant) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_mapMembers.size();
+    auto tenantIt = m_mapByTenant.find(tenant.strCode);
+    return tenantIt == m_mapByTenant.end() ? 0 : tenantIt->second.size();
 }
 
 void CMemberService::Clear()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_mapMembers.clear();
+    m_mapByTenant.clear();
 }
 
 }  // namespace datahub

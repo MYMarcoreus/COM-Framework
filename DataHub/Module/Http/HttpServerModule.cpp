@@ -17,12 +17,10 @@ namespace datahub {
 /// @brief 创建 HTTP 服务模块。
 CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir)
     : CHttpServerModule(nPort, strWebDir, kDefaultMaxBodyBytes)
-{
-}
+{}
 
 /// @brief 创建 HTTP 服务模块（带单次上传/请求体上限）。
-CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir,
-                                     std::uint64_t nMaxBodyBytes)
+CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir, std::uint64_t nMaxBodyBytes)
     : sc::CModule("http"),
       m_nPort(nPort),
       m_strWebDir(strWebDir),
@@ -30,8 +28,9 @@ CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& str
       m_server([this](WFHttpTask* pTask) { OnRequest(pTask); }),
       m_bStarted(false)
 {
-    // 依赖 IDataStore 接口模块：生命周期拓扑排序保证其先初始化 / 启动。
+    // 依赖接口模块：生命周期拓扑排序保证其先初始化 / 启动。
     AddDependency(sc::IID_IDataStore());
+    AddDependency(sc::IID_ITenantService());
 
     // 前端目录归一化：空串回退到默认用户目录 $HOME/.datahub（仅解析一次）。
     // 后续由 CWebPageController 使用该目录加载前端资源。
@@ -60,12 +59,20 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
         return false;
     }
 
+    // 租户注册表（解析每个请求的 X-Space → CTenant）。
+    m_pTenants.Reset(ctx.Resolve<sc::ITenantService>());
+    if (m_pTenants == nullptr)
+    {
+        return false;
+    }
+
     // 可观测性：可选依赖 IMetrics（未装配时不上报，不影响启动）。
     m_pMetrics.Reset(ctx.Resolve<sc::IMetrics>());
 
     // 业务层实例（依赖注入）。
     m_pMembers = std::unique_ptr<CMemberService>(new CMemberService());
-    m_pHandlers = std::unique_ptr<CHttpHandlers>(new CHttpHandlers(m_pStore.Get(), m_pMembers.get(), m_nMaxBodyBytes));
+    m_pHandlers =
+        std::unique_ptr<CHttpHandlers>(new CHttpHandlers(m_pStore.Get(), m_pMembers.get(), m_pTenants.Get(), m_nMaxBodyBytes));
     m_pPages = std::unique_ptr<CWebPageController>(new CWebPageController(m_strWebDir));
 
     // 前端资源一次性读入内存（缺失时由控制器回 503 / 404）。
@@ -115,6 +122,7 @@ void CHttpServerModule::Shutdown()
     m_pPages.reset();
     m_pHandlers.reset();
     m_pMembers.reset();
+    m_pTenants.Reset();
     m_pStore.Reset();
 }
 
@@ -142,21 +150,38 @@ void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
     web::CHttpRequest req(pServerTask);
     web::CHttpResponse resp(pServerTask);
 
-    // 业务处理：成员记录 + 路由分发。异常兜底（任何 handler 抛异常都不得
-    // 穿过 Workflow 线程），统一回 500 并记录日志。
+    // 当前租户（生命周期在本函数栈；经 req.UserData() 供业务读取）。
+    sc::CTenant tenant;
     try
     {
-        if (m_pMembers)
+        // 1) 租户解析：缺省 X-Space → 公共租户；未知空间码回 404（防止越权到别的租户）。
+        std::string strCode = req.Header("X-Space");
+        if (strCode.empty() && m_pTenants != nullptr)
         {
-            m_pMembers->Touch(req);
+            strCode = m_pTenants->DefaultCode();
         }
-        if (m_pMetrics != nullptr)
+        const bool bResolved = m_pTenants != nullptr && m_pTenants->FindTenant(strCode, tenant);
+        if (!bResolved)
         {
-            m_pMetrics->SetGauge("http.members", static_cast<double>(m_pMembers != nullptr ? m_pMembers->Count() : 0));
+            resp.WriteJson("{\"error\":\"space not found\"}", "404");
         }
-        if (!m_router.Dispatch(req, resp))
+        else
         {
-            resp.WriteText("Not Found", "404", "text/plain");
+            // 2) 挂到请求上下文 → 成员记录（按租户）→ 路由分发。
+            req.SetUserData(&tenant);
+            if (m_pMembers)
+            {
+                m_pMembers->Touch(req, tenant);
+            }
+            if (m_pMetrics != nullptr)
+            {
+                m_pMetrics->SetGauge("http.members",
+                                     static_cast<double>(m_pMembers != nullptr ? m_pMembers->Count(tenant) : 0));
+            }
+            if (!m_router.Dispatch(req, resp))
+            {
+                resp.WriteText("Not Found", "404", "text/plain");
+            }
         }
     }
     catch (const std::exception& e)
