@@ -242,9 +242,8 @@ bool CFileStore::Remove(const std::string& strTenant, const std::string& strId)
         return false;  // 跨租户删除视为不存在
     }
     const Item& item = it->second;
-    const std::uint64_t nPayload = item.kind == StoreItemKind::kText
-                                       ? static_cast<std::uint64_t>(item.strText.size())
-                                       : static_cast<std::uint64_t>(item.vecData.size());
+    const std::uint64_t nPayload = item.kind == StoreItemKind::kText ? static_cast<std::uint64_t>(item.strText.size())
+                                                                     : static_cast<std::uint64_t>(item.vecData.size());
     m_mapItems.erase(it);
     // 更新该租户统计；归零则移除。
     auto itStat = m_mapStats.find(strTenant);

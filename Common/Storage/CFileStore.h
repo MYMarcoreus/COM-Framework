@@ -20,9 +20,9 @@ enum class StoreItemKind : int
 /// @brief 租户容量限制（0 = 不限制）。保存时传入，约束对应租户。
 struct StoreLimits
 {
-    std::size_t nMaxItems = 0;        // 该租户最大条数
-    std::uint64_t nMaxTotalBytes = 0; // 该租户内容总字节上限
-    std::uint64_t nMaxItemBytes = 0;  // 该租户单条字节上限
+    std::size_t nMaxItems = 0;         // 该租户最大条数
+    std::uint64_t nMaxTotalBytes = 0;  // 该租户内容总字节上限
+    std::uint64_t nMaxItemBytes = 0;   // 该租户单条字节上限
 };
 
 /// @brief 数据项元信息（列出 / 展示用）。
@@ -66,14 +66,13 @@ class CFileStore
     explicit CFileStore(std::size_t nIdLen);
 
     // 保存文本到指定租户，返回全局唯一短码；失败（含配额超限）返回空串。
-    std::string SaveText(const std::string& strTenant, const std::string& strContent,
-                         const std::string& strFrom = "", const StoreLimits& limits = StoreLimits());
+    std::string SaveText(const std::string& strTenant, const std::string& strContent, const std::string& strFrom = "",
+                         const StoreLimits& limits = StoreLimits());
 
     // 保存二进制文件到指定租户，返回全局唯一短码；失败返回空串。
     // @param strName 文件名（展示用；为空时自动填 "file.bin"）
-    std::string SaveFile(const std::string& strTenant, const std::string& strName, const void* pData,
-                         std::size_t nSize, const std::string& strFrom = "",
-                         const StoreLimits& limits = StoreLimits());
+    std::string SaveFile(const std::string& strTenant, const std::string& strName, const void* pData, std::size_t nSize,
+                         const std::string& strFrom = "", const StoreLimits& limits = StoreLimits());
 
     // 按短码获取指定租户内数据项元信息；不存在 / 不属于该租户返回 false。
     bool GetInfo(const std::string& strTenant, const std::string& strId, StoreItemInfo& info) const;
@@ -109,13 +108,13 @@ class CFileStore
     struct Item
     {
         StoreItemKind kind;
-        std::string strTenant;      // 所属租户（tenant_id）
+        std::string strTenant;  // 所属租户（tenant_id）
         std::string strName;
         std::string strFrom;        // 来源标识（如 "IP:port"）
         std::string strText;        // 文本内容
         std::vector<char> vecData;  // 文件内容
         std::int64_t nCreateMs;
-        std::uint64_t nSeq;         // 全局序号（保存时分配）
+        std::uint64_t nSeq;  // 全局序号（保存时分配）
     };
 
     // 租户统计（配额计数用）。
@@ -133,9 +132,9 @@ class CFileStore
 
     std::size_t m_nIdLen;
     mutable std::mutex m_mutex;
-    std::map<std::string, Item> m_mapItems;  // 全局"表"：id → item
+    std::map<std::string, Item> m_mapItems;        // 全局"表"：id → item
     std::map<std::string, TenantStat> m_mapStats;  // 租户统计（配额计数）
-    std::uint64_t m_nNextSeq = 0;            // 全局序号（只增不减，勿随 Clear 重置）
+    std::uint64_t m_nNextSeq = 0;                  // 全局序号（只增不减，勿随 Clear 重置）
 };
 
 }  // namespace storage

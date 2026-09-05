@@ -6,9 +6,7 @@
 namespace datahub {
 
 /// @brief 创建数据存储模块（共享表多租户：单实例存储）。
-CDataStoreModule::CDataStoreModule()
-    : sc::CModule("store"), m_pStore(new common::storage::CFileStore())
-{}
+CDataStoreModule::CDataStoreModule() : sc::CModule("store"), m_pStore(new common::storage::CFileStore()) {}
 
 /// @brief 销毁数据存储模块。
 CDataStoreModule::~CDataStoreModule() {}
@@ -42,8 +40,7 @@ common::storage::StoreLimits CDataStoreModule::LimitsOf(const CTenant& tenant)
     return limits;
 }
 
-std::string CDataStoreModule::SaveText(const CTenant& tenant, const std::string& strContent,
-                                       const std::string& strFrom)
+std::string CDataStoreModule::SaveText(const CTenant& tenant, const std::string& strContent, const std::string& strFrom)
 {
     return m_pStore->SaveText(tenant.strCode, strContent, strFrom, LimitsOf(tenant));
 }
