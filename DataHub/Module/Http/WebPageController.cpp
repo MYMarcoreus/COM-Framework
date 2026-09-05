@@ -1,7 +1,7 @@
 #include "Module/Http/WebPageController.h"
 
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 
 #include "Framework/HttpRouter.h"
@@ -51,15 +51,12 @@ bool CWebPageController::LoadAsset(const std::string& strFile, const std::string
 /// @brief 注册 GET /、/style.css、/app.js。
 void CWebPageController::RegisterRoutes(web::CHttpRouter& router)
 {
-    router.Register({"GET", "/",
-                     [this](web::CHttpRequest& req, web::CHttpResponse& resp)
-                     { return HandleAsset(req, resp, m_index, "前端页面未加载", "503"); }});
-    router.Register({"GET", "/style.css",
-                     [this](web::CHttpRequest& req, web::CHttpResponse& resp)
-                     { return HandleAsset(req, resp, m_style, "not found", "404"); }});
-    router.Register({"GET", "/app.js",
-                     [this](web::CHttpRequest& req, web::CHttpResponse& resp)
-                     { return HandleAsset(req, resp, m_app, "not found", "404"); }});
+    router.Register({"GET", "/", [this](web::CHttpRequest& req, web::CHttpResponse& resp)
+    { return HandleAsset(req, resp, m_index, "前端页面未加载", "503"); }});
+    router.Register({"GET", "/style.css", [this](web::CHttpRequest& req, web::CHttpResponse& resp)
+    { return HandleAsset(req, resp, m_style, "not found", "404"); }});
+    router.Register({"GET", "/app.js", [this](web::CHttpRequest& req, web::CHttpResponse& resp)
+    { return HandleAsset(req, resp, m_app, "not found", "404"); }});
 }
 
 /// @brief 处理单份资源：缺失回缺省状态码；命中 If-None-Match 回 304；否则 200 全文。
@@ -93,8 +90,7 @@ std::string CWebPageController::MakeEtag(const std::string& strContent)
         nHash *= 1099511628211ULL;
     }
     char szBuf[64];
-    std::snprintf(szBuf, sizeof(szBuf), "\"%016llx-%zu\"", static_cast<unsigned long long>(nHash),
-                  strContent.size());
+    std::snprintf(szBuf, sizeof(szBuf), "\"%016llx-%zu\"", static_cast<unsigned long long>(nHash), strContent.size());
     return std::string(szBuf);
 }
 

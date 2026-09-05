@@ -61,8 +61,7 @@ std::string CFileStore::SaveText(const std::string& strContent, const std::strin
     std::lock_guard<std::mutex> lock(m_mutex);
     const std::uint64_t nPayload = static_cast<std::uint64_t>(strContent.size());
     // 配额检查：条数 / 单条大小 / 总容量任一超限则拒绝。
-    if ((m_nMaxItems > 0 && m_mapItems.size() >= m_nMaxItems) ||
-        (m_nMaxItemBytes > 0 && nPayload > m_nMaxItemBytes) ||
+    if ((m_nMaxItems > 0 && m_mapItems.size() >= m_nMaxItems) || (m_nMaxItemBytes > 0 && nPayload > m_nMaxItemBytes) ||
         (m_nMaxTotalBytes > 0 && m_nTotalBytes + nPayload > m_nMaxTotalBytes))
     {
         return std::string();
@@ -89,8 +88,7 @@ std::string CFileStore::SaveFile(const std::string& strName, const void* pData, 
     std::lock_guard<std::mutex> lock(m_mutex);
     const std::uint64_t nPayload = static_cast<std::uint64_t>(nSize);
     // 配额检查：条数 / 单条大小 / 总容量任一超限则拒绝。
-    if ((m_nMaxItems > 0 && m_mapItems.size() >= m_nMaxItems) ||
-        (m_nMaxItemBytes > 0 && nPayload > m_nMaxItemBytes) ||
+    if ((m_nMaxItems > 0 && m_mapItems.size() >= m_nMaxItems) || (m_nMaxItemBytes > 0 && nPayload > m_nMaxItemBytes) ||
         (m_nMaxTotalBytes > 0 && m_nTotalBytes + nPayload > m_nMaxTotalBytes))
     {
         return std::string();
@@ -240,9 +238,8 @@ bool CFileStore::Remove(const std::string& strId)
         return false;
     }
     const Item& item = it->second;
-    const std::uint64_t nPayload = item.kind == StoreItemKind::kText
-                                       ? static_cast<std::uint64_t>(item.strText.size())
-                                       : static_cast<std::uint64_t>(item.vecData.size());
+    const std::uint64_t nPayload = item.kind == StoreItemKind::kText ? static_cast<std::uint64_t>(item.strText.size())
+                                                                     : static_cast<std::uint64_t>(item.vecData.size());
     m_nTotalBytes -= nPayload;
     m_mapItems.erase(it);
     return true;

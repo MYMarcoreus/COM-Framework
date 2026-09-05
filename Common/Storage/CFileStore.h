@@ -112,7 +112,7 @@ class CFileStore
         std::string strText;        // 文本内容
         std::vector<char> vecData;  // 文件内容
         std::int64_t nCreateMs;
-        std::uint64_t nSeq;         // 单调递增序号（保存时分配）
+        std::uint64_t nSeq;  // 单调递增序号（保存时分配）
     };
 
     // 生成不重复的短码。
@@ -126,11 +126,11 @@ class CFileStore
     std::map<std::string, Item> m_mapItems;
 
     // 序号与配额（在锁内读写）。
-    std::uint64_t m_nNextSeq = 0;       // 下一可用序号（只增不减，勿随 Clear 重置）
-    std::size_t m_nMaxItems = 0;        // 0 = 不限制条数
-    std::uint64_t m_nMaxTotalBytes = 0; // 0 = 不限制总字节
-    std::uint64_t m_nMaxItemBytes = 0;  // 0 = 不限制单条字节
-    std::uint64_t m_nTotalBytes = 0;    // 当前占用总字节
+    std::uint64_t m_nNextSeq = 0;        // 下一可用序号（只增不减，勿随 Clear 重置）
+    std::size_t m_nMaxItems = 0;         // 0 = 不限制条数
+    std::uint64_t m_nMaxTotalBytes = 0;  // 0 = 不限制总字节
+    std::uint64_t m_nMaxItemBytes = 0;   // 0 = 不限制单条字节
+    std::uint64_t m_nTotalBytes = 0;     // 当前占用总字节
 };
 
 }  // namespace storage

@@ -6,7 +6,9 @@
 
 namespace datahub {
 
-namespace web { class CHttpRouter; }
+namespace web {
+class CHttpRouter;
+}
 
 /// @brief 页面 / 静态资源控制器（装配层子组件）。
 ///
@@ -46,8 +48,8 @@ class CWebPageController
     // 处理单份资源请求（含 304 协商）。
     // @param szMissingBody    资源缺失时的响应体
     // @param szMissingStatus  资源缺失时的状态码（"/" 用 503，静态用 404）
-    bool HandleAsset(web::CHttpRequest& req, web::CHttpResponse& resp, const Asset& asset,
-                     const char* szMissingBody, const char* szMissingStatus);
+    bool HandleAsset(web::CHttpRequest& req, web::CHttpResponse& resp, const Asset& asset, const char* szMissingBody,
+                     const char* szMissingStatus);
 
     // 由内容生成强 ETag（FNV-1a 哈希 + 长度）。
     static std::string MakeEtag(const std::string& strContent);
