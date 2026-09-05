@@ -130,9 +130,8 @@ std::string CHttpText::MimeType(const std::string& strName)
                    [](unsigned char c) { return static_cast<char>(::tolower(c)); });
     std::size_t nLen = strLower.size();
 
-    auto EndsWith = [&](const char* szSuffix, std::size_t nSuffix) {
-        return nLen >= nSuffix && strLower.compare(nLen - nSuffix, nSuffix, szSuffix) == 0;
-    };
+    auto EndsWith = [&](const char* szSuffix, std::size_t nSuffix)
+    { return nLen >= nSuffix && strLower.compare(nLen - nSuffix, nSuffix, szSuffix) == 0; };
 
     if (EndsWith(".png", 4)) return "image/png";
     if (EndsWith(".jpg", 4) || EndsWith(".jpeg", 5)) return "image/jpeg";

@@ -9,6 +9,7 @@ namespace datahub {
 
 // 前置声明（装配层持有实例）。
 class CMemberService;
+namespace web { class CHttpRouter; }
 
 /// @brief HTTP 业务处理器（DataHub 业务 API）。
 ///
@@ -22,6 +23,9 @@ class CHttpHandlers
     // @param pStore   数据存储（IDataStore，装配层注入）
     // @param pMembers 成员服务（CMemberService，装配层注入）
     CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers);
+
+    // 注册本控制器负责的全部业务路由（由装配层在 Initialize 时调用）。
+    void RegisterRoutes(web::CHttpRouter& router);
 
     // 消息列表：GET /api/list。
     bool HandleList(web::CHttpRequest& req, web::CHttpResponse& resp);

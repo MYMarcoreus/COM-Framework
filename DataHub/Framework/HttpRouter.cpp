@@ -7,14 +7,54 @@ namespace web {
 
 CHttpRouter::CHttpRouter() {}
 
+/// @brief 把路径拆成段（按 '/' 分割，忽略首尾空段）。
+static void SplitPath(const std::string& strPath, std::vector<std::string>& vecSegs)
+{
+    vecSegs.clear();
+    std::string strSeg;
+    for (char c : strPath)
+    {
+        if (c == '/')
+        {
+            if (!strSeg.empty())
+            {
+                vecSegs.push_back(strSeg);
+                strSeg.clear();
+            }
+        }
+        else
+        {
+            strSeg.push_back(c);
+        }
+    }
+    if (!strSeg.empty())
+    {
+        vecSegs.push_back(strSeg);
+    }
+}
+
+/// @brief 判断某段是否为捕获段（{name} 形式）。
+static bool IsCaptureSeg(const std::string& strSeg)
+{
+    return strSeg.size() >= 3 && strSeg.front() == '{' && strSeg.back() == '}';
+}
+
 bool CHttpRouter::Register(const HttpRoute& route)
 {
-    if (route.method == nullptr || route.prefix == nullptr || !route.handler)
+    if (route.method == nullptr || route.pattern == nullptr || !route.handler)
     {
         return false;
     }
     Entry entry;
     entry.route = route;
+    // 预解析模板段。
+    std::vector<std::string> vecSegs;
+    SplitPath(route.pattern, vecSegs);
+    for (const std::string& strSeg : vecSegs)
+    {
+        entry.vecSegs.push_back(strSeg);
+        entry.vecIsCapture.push_back(IsCaptureSeg(strSeg));
+    }
     m_vecRoutes.push_back(entry);
     return true;
 }
@@ -22,7 +62,8 @@ bool CHttpRouter::Register(const HttpRoute& route)
 bool CHttpRouter::Dispatch(CHttpRequest& req, CHttpResponse& resp)
 {
     const std::string strMethod = req.Method();
-    const std::string strPath = req.Path();
+    std::vector<std::string> vecPathSegs;
+    SplitPath(req.Path(), vecPathSegs);
 
     for (const Entry& entry : m_vecRoutes)
     {
@@ -32,19 +73,36 @@ bool CHttpRouter::Dispatch(CHttpRequest& req, CHttpResponse& resp)
         {
             continue;
         }
-        // 路径匹配：exact 全等 or 前缀。
-        const std::string strPrefix = route.prefix;
-        bool bMatch = route.exact ? (strPath == strPrefix) : (strPath.compare(0, strPrefix.size(), strPrefix) == 0);
-        if (!bMatch)
+        // 段数不一致：不匹配。
+        if (entry.vecSegs.size() != vecPathSegs.size())
         {
             continue;
         }
-        // 前缀路由：把剩余路径段写入 PathParam（exact 路由为空）。
-        if (!route.exact)
+        // 逐段匹配：字面段须相等，捕获段收集值。
+        std::string strParams;
+        bool bMatched = true;
+        for (std::size_t i = 0; i < entry.vecSegs.size(); ++i)
         {
-            req.SetPathParam(strPath.substr(strPrefix.size()));
+            if (entry.vecIsCapture[i])
+            {
+                if (!strParams.empty())
+                {
+                    strParams += "/";
+                }
+                strParams += vecPathSegs[i];
+            }
+            else if (entry.vecSegs[i] != vecPathSegs[i])
+            {
+                bMatched = false;
+                break;
+            }
         }
-        // 命中：调用 handler。
+        if (!bMatched)
+        {
+            continue;
+        }
+        // 命中：把捕获段写入 PathParam。
+        req.SetPathParam(strParams);
         return route.handler(req, resp);
     }
     return false;

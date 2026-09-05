@@ -142,8 +142,7 @@ void CHttpResponse::WriteFile(const std::string& strName, const char* pData, siz
         std::string strDisposition;
         if (CHttpText::HasNonAscii(strName))
         {
-            strDisposition =
-                "attachment; filename=\"download.bin\"; filename*=UTF-8''" + CHttpText::UrlEncode(strName);
+            strDisposition = "attachment; filename=\"download.bin\"; filename*=UTF-8''" + CHttpText::UrlEncode(strName);
         }
         else
         {

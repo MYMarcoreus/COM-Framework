@@ -74,13 +74,13 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     bool LoadIndexHtml();
 
     std::uint16_t m_nPort;
-    std::string m_strWebDir;  // 前端资源目录
+    std::string m_strWebDir;     // 前端资源目录
     std::string m_strIndexHtml;  // 已加载的 index.html 内容（空表示加载失败）
 
     sc::ScopedInterfacePtr<IDataStore> m_pStore;
-    std::unique_ptr<CMemberService> m_pMembers;    // 成员服务（业务层）
-    std::unique_ptr<CHttpHandlers> m_pHandlers;    // 业务 API（业务层）
-    web::CHttpRouter m_router;                     // 路由注册表（框架层）
+    std::unique_ptr<CMemberService> m_pMembers;  // 成员服务（业务层）
+    std::unique_ptr<CHttpHandlers> m_pHandlers;  // 业务 API（业务层）
+    web::CHttpRouter m_router;                   // 路由注册表（框架层）
     WFHttpServer m_server;
     bool m_bStarted;
 };

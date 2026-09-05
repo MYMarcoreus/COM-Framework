@@ -16,16 +16,16 @@ typedef std::function<bool(CHttpRequest&, CHttpResponse&)> HttpHandler;
 struct HttpRoute
 {
     const char* method;   // "GET"/"POST"/"DELETE"...
-    const char* prefix;   // 路径前缀（如 "/api/text/"）；exact=true 时作全等匹配
-    bool exact;           // true=路径全等；false=前缀匹配
+    const char* pattern;  // 路径模板，如 "/api/list" 精确、"/api/text/{id}" 捕获段
     HttpHandler handler;  // 处理器（可为 lambda / std::bind / 成员函数）
 };
 
 /// @brief HTTP 路由注册表。
 ///
-/// 通用 Web 框架组件（无业务依赖）：按"方法 + 路径"注册处理函数并分发。
-/// 业务模块在装配期集中注册自己的路由；加新接口不改本类。
-/// 前缀命中时，把剩余路径段（如 /api/text/<id> 的 <id>）写入 req.PathParam()。
+/// 通用 Web 框架组件（无业务依赖）：按"方法 + 路径模板"注册处理函数并分发。
+/// 路径模板：字面段精确匹配；"{name}" 段捕获任意单段，分发时写入
+/// req.PathParam()（多个捕获段以 "/" 连接，单参数场景即取首段）。
+/// 业务在各自 Controller::RegisterRoutes 中注册；加新接口不改本类。
 /// 线程安全：注册与分发可跨线程调用（分发为只读查表）。
 class CHttpRouter
 {
@@ -43,9 +43,16 @@ class CHttpRouter
     std::size_t Count() const;
 
    private:
+    // 把路径模板拆成段；"{name}" 标记为捕获段。
+    void ParsePattern(const std::string& strPattern, std::vector<std::string>& vecSegs,
+                      std::vector<bool>& vecIsCapture) const;
+
     struct Entry
     {
         HttpRoute route;
+        std::vector<std::string> vecSegs;   // 模板段（已解析）
+        std::vector<bool> vecIsCapture;     // 每段是否捕获
+        std::vector<std::string> vecParams; // 捕获参数名（调试/预留）
     };
     std::vector<Entry> m_vecRoutes;
 };

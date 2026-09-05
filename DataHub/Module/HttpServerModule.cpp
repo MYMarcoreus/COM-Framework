@@ -52,28 +52,17 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
 
     // 注册路由（框架层 CHttpRouter）。
     // —— 页面 / 静态资源（本模块直接处理）
-    m_router.Register({"GET", "/", true,
-                       [this](web::CHttpRequest&, web::CHttpResponse& resp) { return HandleIndex(resp); }});
-    m_router.Register({"GET", "/style.css", true,
-                       [this](web::CHttpRequest&, web::CHttpResponse& resp) { return HandleStatic(resp, "style.css"); }});
-    m_router.Register({"GET", "/app.js", true,
-                       [this](web::CHttpRequest&, web::CHttpResponse& resp) { return HandleStatic(resp, "app.js"); }});
+    m_router.Register(
+        {"GET", "/", [this](web::CHttpRequest&, web::CHttpResponse& resp) { return HandleIndex(resp); }});
+    m_router.Register({"GET", "/style.css", [this](web::CHttpRequest&, web::CHttpResponse& resp) {
+                           return HandleStatic(resp, "style.css");
+                       }});
+    m_router.Register({"GET", "/app.js", [this](web::CHttpRequest&, web::CHttpResponse& resp) {
+                           return HandleStatic(resp, "app.js");
+                       }});
 
-    // —— 业务 API（委托 CHttpHandlers）
-    m_router.Register({"GET", "/api/list", true,
-                       [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return m_pHandlers->HandleList(req, resp); }});
-    m_router.Register({"GET", "/api/members", true,
-                       [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return m_pHandlers->HandleMembers(req, resp); }});
-    m_router.Register({"POST", "/api/text", true,
-                       [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return m_pHandlers->HandleUploadText(req, resp); }});
-    m_router.Register({"GET", "/api/text/", false,
-                       [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return m_pHandlers->HandleGetText(req, resp); }});
-    m_router.Register({"POST", "/api/file", true,
-                       [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return m_pHandlers->HandleUploadFile(req, resp); }});
-    m_router.Register({"GET", "/api/file/", false,
-                       [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return m_pHandlers->HandleGetFile(req, resp); }});
-    m_router.Register({"DELETE", "/api/item/", false,
-                       [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return m_pHandlers->HandleDelete(req, resp); }});
+    // —— 业务 API：由业务控制器（CHttpHandlers）自注册，路由归属业务类。
+    m_pHandlers->RegisterRoutes(m_router);
     return true;
 }
 
