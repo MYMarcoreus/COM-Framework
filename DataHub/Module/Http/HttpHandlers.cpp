@@ -17,9 +17,11 @@ namespace datahub {
 using sc::CTenant;
 using sc::DataItemInfo;
 using sc::DataKind;
+using sc::ITenantService;
 
-CHttpHandlers::CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers, std::uint64_t nMaxBodyBytes)
-    : m_pStore(pStore), m_pMembers(pMembers), m_nMaxBodyBytes(nMaxBodyBytes)
+CHttpHandlers::CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers, ITenantService* pTenants,
+                             std::uint64_t nMaxBodyBytes)
+    : m_pStore(pStore), m_pMembers(pMembers), m_pTenants(pTenants), m_nMaxBodyBytes(nMaxBodyBytes)
 {}
 
 /// @brief 注册本控制器负责的全部业务路由（装配层 Initialize 时调用）。
@@ -262,15 +264,18 @@ bool CHttpHandlers::HandleDelete(web::CHttpRequest& req, web::CHttpResponse& res
     }
     const CTenant& tenant = RequestContextOf(req).Tenant();
     std::string strId = web::CHttpText::UrlDecode(req.PathParam());
-    // 归属校验：仅允许删除自己创建的数据项；来源为空的历史数据项可任意删。
+    // 归属 + 角色校验：Owner 可删任意；否则仅允许删除自己创建的数据项。
     DataItemInfo info;
     if (!m_pStore->GetInfo(tenant, strId, info))
     {
         resp.WriteJson("{\"error\":\"not found\"}", "404");
         return true;
     }
-    std::string strRequester = CMemberService::ClientId(req);
-    if (!info.strFrom.empty() && info.strFrom != strRequester)
+    const std::string strRequester = RequestContextOf(req).strAccountId;
+    sc::TenantRole role = sc::TenantRole::kMember;
+    const bool bOwner = m_pTenants != nullptr && m_pTenants->TenantRoleOf(tenant.strCode, strRequester, role) &&
+                        role == sc::TenantRole::kOwner;
+    if (!bOwner && !info.strFrom.empty() && info.strFrom != strRequester)
     {
         resp.WriteJson("{\"error\":\"forbidden\"}", "403");
         return true;

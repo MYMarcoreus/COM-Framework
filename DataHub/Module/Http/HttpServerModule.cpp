@@ -15,6 +15,7 @@
 #include "Module/Http/WebPageController.h"
 #include "Module/InterfaceMap.h"
 #include "Module/ResolveContext.h"
+#include "Module/Tenant/CTenant.h"
 #include "workflow/HttpMessage.h"
 
 namespace datahub {
@@ -103,7 +104,8 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
 
     // 业务层实例（依赖注入）。
     m_pMembers = std::unique_ptr<CMemberService>(new CMemberService());
-    m_pHandlers = std::unique_ptr<CHttpHandlers>(new CHttpHandlers(m_pStore.Get(), m_pMembers.get(), m_nMaxBodyBytes));
+    m_pHandlers = std::unique_ptr<CHttpHandlers>(
+        new CHttpHandlers(m_pStore.Get(), m_pMembers.get(), m_pTenants.Get(), m_nMaxBodyBytes));
     m_pTenantCtl = std::unique_ptr<CTenantsController>(new CTenantsController(m_pTenants.Get()));
     m_pPages = std::unique_ptr<CWebPageController>(new CWebPageController(m_strWebDir));
 
@@ -207,34 +209,55 @@ void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
         }
         else
         {
-            // 2) 挂到请求上下文 → 成员记录（按租户）→ 路由分发。
+            // 2) 账号：X-Client-Id（浏览器持久化 UUID），缺省退回对端地址。
             req.SetUserData(&ctx);
-            if (m_pMembers)
+            ctx.strAccountId = req.Header("X-Client-Id");
+            if (ctx.strAccountId.empty())
             {
-                m_pMembers->Touch(req, ctx.tenant);
+                ctx.strAccountId = req.Peer();
             }
-            if (m_pMetrics != nullptr)
+
+            // 3) 权限闸门：非公共租户的业务路由须为该租户成员；
+            //    /api/tenant* 为平台（跨租户）管理能力，豁免；公共租户人人可访问。
+            const bool bPublic = ctx.tenant.strCode == m_pTenants->DefaultCode();
+            const bool bTenantMgmt = strPath.compare(0, 11, "/api/tenant") == 0;
+            sc::TenantRole role = sc::TenantRole::kMember;
+            const bool bAllowed =
+                bPublic || bTenantMgmt || m_pTenants->TenantRoleOf(ctx.tenant.strCode, ctx.strAccountId, role);
+            if (!bAllowed)
             {
-                m_pMetrics->SetGauge("http.members",
-                                     static_cast<double>(m_pMembers != nullptr ? m_pMembers->Count(ctx.tenant) : 0));
-                m_pMetrics->Inc("http." + ctx.tenant.strCode + ".requests");
+                resp.WriteJson("{\"error\":\"not a tenant member\"}", "403");
             }
-            if (!m_router.Dispatch(req, resp))
+            else
             {
-                resp.WriteText("Not Found", "404", "text/plain");
+                // 4) 成员记录（按租户）→ 路由分发。
+                if (m_pMembers)
+                {
+                    m_pMembers->Touch(req, ctx.tenant);
+                }
+                if (m_pMetrics != nullptr)
+                {
+                    m_pMetrics->SetGauge(
+                        "http.members", static_cast<double>(m_pMembers != nullptr ? m_pMembers->Count(ctx.tenant) : 0));
+                    m_pMetrics->Inc("http." + ctx.tenant.strCode + ".requests");
+                }
+                if (!m_router.Dispatch(req, resp))
+                {
+                    resp.WriteText("Not Found", "404", "text/plain");
+                }
             }
         }
     }
     catch (const std::exception& e)
     {
         common::log::CLogger::Instance().Error("[DataHub][rid=" + ctx.strRequestId + "][tenant=" + ctx.tenant.strCode +
-                                              "] 请求处理异常: " + std::string(e.what()));
+                                               "] 请求处理异常: " + std::string(e.what()));
         resp.WriteText("Internal Server Error", "500", "text/plain");
     }
     catch (...)
     {
         common::log::CLogger::Instance().Error("[DataHub][rid=" + ctx.strRequestId + "][tenant=" + ctx.tenant.strCode +
-                                              "] 请求处理未知异常");
+                                               "] 请求处理未知异常");
         resp.WriteText("Internal Server Error", "500", "text/plain");
     }
 
@@ -249,9 +272,8 @@ void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
             m_pMetrics->Inc("http." + ctx.tenant.strCode + ".status." + strClass);
         }
     }
-    const auto nElapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                                                 tBegin)
-                                .count();
+    const auto nElapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - tBegin).count();
     common::log::CLogger::Instance().Info("[DataHub] rid=" + ctx.strRequestId + " " + strMethod + " " + strPath +
                                           " tenant=" + (ctx.bResolved ? ctx.tenant.strCode : std::string("(unknown)")) +
                                           " -> " + strStatus + " " + std::to_string(nElapsedMs) + "ms");

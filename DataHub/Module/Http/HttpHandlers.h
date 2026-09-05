@@ -5,6 +5,7 @@
 
 #include "Framework/HttpMessage.h"
 #include "Module/Storage/IDataStore.h"
+#include "Module/Tenant/ITenantService.h"
 
 namespace datahub {
 
@@ -21,15 +22,17 @@ class CHttpRouter;
 ///
 /// 只处理"租户内"消息/文件/成员业务；"当前租户"由装配层在入口解析进
 /// CRequestContext（经 CHttpRequest::UserData 挂载），本控制器经
-/// RequestContextOf(req).Tenant() 读取，不再各自解析、不接触租户注册表。
-/// 租户的生命周期管理在 CTenantsController；页面/静态资源在 CWebPageController。
+/// RequestContextOf(req).Tenant() 读取。注入 ITenantService 仅用于授权
+/// （删除按角色：Owner 可删任意，Member 仅自删）。租户生命周期管理在
+/// CTenantsController；页面/静态资源在 CWebPageController。
 class CHttpHandlers
 {
    public:
     // @param pStore         数据存储（IDataStore，装配层注入）
     // @param pMembers       成员服务（CMemberService，装配层注入）
+    // @param pTenants       租户注册表（仅用于角色授权，装配层注入）
     // @param nMaxBodyBytes  单次上传/请求体上限（字节）；超过返回 413。
-    CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers,
+    CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers, sc::ITenantService* pTenants,
                   std::uint64_t nMaxBodyBytes = kDefaultMaxBodyBytes);
 
     // 注册本控制器负责的全部业务路由（由装配层在 Initialize 时调用）。
@@ -57,9 +60,10 @@ class CHttpHandlers
     bool HandleDelete(web::CHttpRequest& req, web::CHttpResponse& resp);
 
    private:
-    sc::IDataStore* m_pStore;     // 数据存储（生命周期由装配层管理）
-    CMemberService* m_pMembers;   // 成员服务
-    std::uint64_t m_nMaxBodyBytes;  // 单次上传/请求体上限（字节）
+    sc::IDataStore* m_pStore;        // 数据存储（生命周期由装配层管理）
+    CMemberService* m_pMembers;      // 成员服务
+    sc::ITenantService* m_pTenants;  // 租户注册表（授权：角色判定）
+    std::uint64_t m_nMaxBodyBytes;   // 单次上传/请求体上限（字节）
 };
 
 }  // namespace datahub

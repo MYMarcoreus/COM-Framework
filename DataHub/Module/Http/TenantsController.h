@@ -3,34 +3,43 @@
 #include <string>
 
 #include "Framework/HttpMessage.h"
+#include "Module/Http/RequestContext.h"
 #include "Module/Tenant/ITenantService.h"
 
 namespace datahub {
 
-namespace web { class CHttpRouter; }
+namespace web {
+class CHttpRouter;
+}
 
 /// @brief 租户（资源）控制器 —— 跨租户的平台能力，与"租户内业务"分离。
 ///
-/// 负责租户的生命周期管理：创建租户、按码查询租户（供凭码加入前校验）。
-/// 与 CHttpHandlers（租户内消息/文件/成员业务）解耦；路由注册到同一
-/// CHttpRouter，由装配层编排。依赖 ITenantService（租户注册表）。
+/// 负责租户的生命周期与成员管理：创建（创建者成为 Owner）、凭码加入、
+/// 成员花名册与按码查询。与 CHttpHandlers（租户内消息/文件/成员业务）
+/// 解耦；路由注册到同一 CHttpRouter。依赖 ITenantService。
 class CTenantsController
 {
    public:
-    // @param pTenants 租户注册表（ITenantService，装配层注入）。
+    // @param pTenants 租户注册表 + 成员（ITenantService，装配层注入）。
     explicit CTenantsController(sc::ITenantService* pTenants);
 
-    // 注册本控制器负责的路由（POST /api/tenant、GET /api/tenant/info）。
+    // 注册本控制器路由（/api/tenant、/api/tenant/info、/api/tenant/join、/api/tenant/members）。
     void RegisterRoutes(web::CHttpRouter& router);
 
-    // 创建租户：POST /api/tenant（名称为请求体，UTF-8 非空）。返回 {code,name}。
+    // 创建租户：POST /api/tenant（名称为请求体）。创建者成为 Owner。
     bool HandleCreate(web::CHttpRequest& req, web::CHttpResponse& resp);
 
-    // 查询租户：GET /api/tenant/info?code=xxx（供凭码加入前校验存在性）。
+    // 查询租户：GET /api/tenant/info?code=xxx。
     bool HandleInfo(web::CHttpRequest& req, web::CHttpResponse& resp);
 
+    // 凭码加入（加入当前/指定租户）：POST /api/tenant/join（body 可携带码）。
+    bool HandleJoin(web::CHttpRequest& req, web::CHttpResponse& resp);
+
+    // 当前租户成员花名册：GET /api/tenant/members。
+    bool HandleMembers(web::CHttpRequest& req, web::CHttpResponse& resp);
+
    private:
-    sc::ITenantService* m_pTenants;  // 租户注册表（生命周期由装配层管理）
+    sc::ITenantService* m_pTenants;  // 租户注册表 + 成员（生命周期由装配层管理）
 };
 
 }  // namespace datahub

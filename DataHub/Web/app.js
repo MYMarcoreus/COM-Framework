@@ -350,6 +350,13 @@
     renderTenants();
     $('tenantPanel').classList.remove('show');
     $('statusText').textContent = '连接中…';
+    // 非公共租户：凭码登记为成员（角色由服务端决定；失败可忽略，自删仍可用）。
+    if (code !== 'public') {
+      apiFetch('/api/tenant/join', { method:'POST', body:code })
+        .then(function(r){ return r.json(); })
+        .then(function(j){ if (j.role) updateTenantName(); })
+        .catch(function(){});
+    }
     poll();
   }
   function updateTenantName() { $('tenantName').textContent = currentName; }

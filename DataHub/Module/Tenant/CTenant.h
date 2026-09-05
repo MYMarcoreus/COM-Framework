@@ -27,4 +27,22 @@ struct CTenant
     std::int64_t nCreateMs = 0;  // 创建时间（毫秒）
 };
 
+/// @brief 租户内角色。
+///
+/// 账号 = 客户端标识（X-Client-Id，浏览器持久化 UUID）；角色决定授权：
+/// Owner 可删除任意数据 / 管理成员，Member 可读写 / 管理自己创建的数据。
+enum class TenantRole : int
+{
+    kOwner = 0,  // 所有者
+    kMember = 1  // 成员
+};
+
+/// @brief 租户成员（账号 + 角色）。
+struct CTenantMember
+{
+    std::string strAccountId;  // 账号（客户端标识 X-Client-Id）
+    TenantRole role;           // 角色
+    std::int64_t nJoinMs = 0;  // 加入时间（毫秒）
+};
+
 }  // namespace sc

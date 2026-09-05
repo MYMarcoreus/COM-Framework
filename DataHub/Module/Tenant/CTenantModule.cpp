@@ -79,8 +79,8 @@ std::string CTenantModule::GenerateCode() const
     }
 }
 
-/// @brief 创建租户并生成唯一码。
-bool CTenantModule::CreateTenant(const std::string& strName, CTenant& out)
+/// @brief 创建租户并生成唯一码；创建者（非空账号）成为 Owner。
+bool CTenantModule::CreateTenant(const std::string& strName, const std::string& strOwnerAccount, CTenant& out)
 {
     if (strName.size() > 48)
     {
@@ -93,6 +93,15 @@ bool CTenantModule::CreateTenant(const std::string& strName, CTenant& out)
     tenant.limits = m_defaultLimits;
     tenant.nCreateMs = TenantNowMs();
     m_mapTenants[tenant.strCode] = tenant;
+    // 创建者记为 Owner。
+    if (!strOwnerAccount.empty())
+    {
+        sc::CTenantMember member;
+        member.strAccountId = strOwnerAccount;
+        member.role = sc::TenantRole::kOwner;
+        member.nJoinMs = tenant.nCreateMs;
+        m_mapMembers[tenant.strCode][strOwnerAccount] = member;
+    }
     out = tenant;
     return true;
 }
@@ -106,6 +115,87 @@ bool CTenantModule::FindTenant(const std::string& strCode, CTenant& out) const
         return false;
     }
     out = it->second;
+    return true;
+}
+
+/// @brief 账号凭码加入租户；未在花名册则作为 Member 加入。
+bool CTenantModule::JoinTenant(const std::string& strCode, const std::string& strAccount, sc::TenantRole& out)
+{
+    if (strAccount.empty())
+    {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_mapTenants.find(strCode) == m_mapTenants.end())
+    {
+        return false;  // 租户不存在
+    }
+    if (strCode == m_strDefaultCode)
+    {
+        out = sc::TenantRole::kMember;  // 公共租户：人人皆成员
+        return true;
+    }
+    auto itAccount = m_mapMembers[strCode].find(strAccount);
+    if (itAccount != m_mapMembers[strCode].end())
+    {
+        out = itAccount->second.role;
+        return true;
+    }
+    sc::CTenantMember member;
+    member.strAccountId = strAccount;
+    member.role = sc::TenantRole::kMember;
+    member.nJoinMs = TenantNowMs();
+    m_mapMembers[strCode][strAccount] = member;
+    out = sc::TenantRole::kMember;
+    return true;
+}
+
+/// @brief 查询账号在某租户的角色；公共租户恒为 Member；未加入返回 false。
+bool CTenantModule::TenantRoleOf(const std::string& strCode, const std::string& strAccount, sc::TenantRole& out) const
+{
+    if (strCode == m_strDefaultCode)
+    {
+        out = sc::TenantRole::kMember;
+        return true;
+    }
+    if (strAccount.empty())
+    {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    auto itTenant = m_mapMembers.find(strCode);
+    if (itTenant == m_mapMembers.end())
+    {
+        return false;
+    }
+    auto itAccount = itTenant->second.find(strAccount);
+    if (itAccount == itTenant->second.end())
+    {
+        return false;
+    }
+    out = itAccount->second.role;
+    return true;
+}
+
+/// @brief 某租户的成员花名册（公共租户为空）。
+bool CTenantModule::ListMembers(const std::string& strCode, std::vector<sc::CTenantMember>& vecOut) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    vecOut.clear();
+    if (strCode == m_strDefaultCode)
+    {
+        return true;
+    }
+    auto itTenant = m_mapMembers.find(strCode);
+    if (itTenant == m_mapMembers.end())
+    {
+        return true;
+    }
+    vecOut.reserve(itTenant->second.size());
+    for (const auto& pair : itTenant->second)
+    {
+        vecOut.push_back(pair.second);
+    }
     return true;
 }
 
