@@ -19,19 +19,19 @@
     </div>
   </div>
 
-  <!-- 空间（租户）栏 -->
-  <div class="spacebar" id="spaceBar">
-    <span class="sp-label">📦 空间</span>
-    <span class="sp-current" id="spaceName">公共空间</span>
-    <button type="button" class="sp-toggle" id="spaceToggle">切换 / 新建 ▾</button>
+  <!-- 租户栏 -->
+  <div class="tenantbar" id="tenantBar">
+    <span class="tn-label">🏢 租户</span>
+    <span class="tn-current" id="tenantName">公共租户</span>
+    <button type="button" class="tn-toggle" id="tenantToggle">切换 / 新建 ▾</button>
   </div>
-  <!-- 空间面板（下拉） -->
-  <div class="spacepanel" id="spacePanel">
-    <div class="sp-list-title">我的空间（点击名称进入）</div>
-    <div class="sp-list" id="spaceList"></div>
-    <div class="sp-row"><input id="spCreateName" placeholder="新空间名称…" maxlength="48"><button id="spCreateBtn">创建</button></div>
-    <div class="sp-row"><input id="spJoinCode" placeholder="输入 6 位空间码加入" maxlength="6"><button id="spJoinBtn">加入</button></div>
-    <div class="sp-hint">凭空间码进入/共享；公共空间为未选择空间时的默认地。</div>
+  <!-- 租户面板（下拉） -->
+  <div class="tenantpanel" id="tenantPanel">
+    <div class="tn-list-title">我的租户（点击名称进入）</div>
+    <div class="tn-list" id="tenantList"></div>
+    <div class="tn-row"><input id="tnCreateName" placeholder="新租户名称…" maxlength="48"><button id="tnCreateBtn">创建</button></div>
+    <div class="tn-row"><input id="tnJoinCode" placeholder="输入 6 位租户码加入" maxlength="6"><button id="tnJoinBtn">加入</button></div>
+    <div class="tn-hint">凭租户码进入/共享；公共租户为未选择租户时的默认地。</div>
   </div>
 
   <!-- 成员面板 -->

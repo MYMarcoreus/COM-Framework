@@ -32,13 +32,13 @@ struct DataItemInfo
 /// @brief 数据存储接口（按租户隔离）。
 ///
 /// 供 HTTP 服务模块在请求处理时存取数据项；所有操作以租户为隔离边界，
-/// 同一数据只在所属租户（空间）内可见。数据项标识由实现生成（短码）。
+/// 同一数据只在所属租户内可见。数据项标识由实现生成（短码）。
 SC_INTERFACE(IDataStore, "datahub::IDataStore", "63821b50-55e9-44df-a88a-8f899df1defb")
 {
    public:
     virtual ~IDataStore() {}
 
-    // 以下操作均以租户（空间）为隔离边界。
+    // 以下操作均以租户为隔离边界。
 
     // 保存文本内容到指定租户，返回生成的数据项标识；失败返回空串。
     virtual std::string SaveText(const CTenant& tenant, const std::string& strContent,

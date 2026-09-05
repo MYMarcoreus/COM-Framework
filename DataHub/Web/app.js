@@ -6,11 +6,11 @@
   var seen = {};        // 已渲染的消息 id → true
   var POLL_MS = 2000;   // 轮询间隔
   var membersShown = false;
-  var lastSeq = 0;      // 已收到的最新消息序号（游标增量同步，每空间独立）
-  var memberCount = 0;  // 在线成员数（状态栏展示）
-  var spaces = [];      // 我已加入的空间 [{code,name}]（本地持久化）
-  var currentCode = 'public';  // 当前空间码（X-Space）
-  var currentName = '公共空间';
+  var lastSeq = 0;       // 已收到的最新消息序号（游标增量同步，每租户独立）
+  var memberCount = 0;   // 在线成员数（状态栏展示）
+  var tenants = [];      // 我已加入的租户 [{code,name}]（本地持久化）
+  var currentCode = 'public';  // 当前租户码（X-Tenant）
+  var currentName = '公共租户';
 
   // ============ 客户端标识（跨请求标识同一浏览器，避免成员按端口膨胀） ============
   function getClientId() {
@@ -29,12 +29,12 @@
   }
   var CLIENT_ID = getClientId();
 
-  // 统一 fetch：自动附加 X-Client-Id（成员标识）与 X-Space（当前租户/空间）。
+  // 统一 fetch：自动附加 X-Client-Id（成员标识）与 X-Tenant（当前租户）。
   function apiFetch(url, options) {
     options = options || {};
     options.headers = options.headers || {};
     options.headers['X-Client-Id'] = CLIENT_ID;
-    options.headers['X-Space'] = currentCode;
+    options.headers['X-Tenant'] = currentCode;
     return fetch(url, options);
   }
 
@@ -317,107 +317,107 @@
       .catch(function(){ $('memberList').innerHTML = '<div style="color:var(--muted);font-size:13px;">加载失败</div>'; });
   }
 
-  // ============ 空间（租户）切换 ============
-  function spaceNameOf(code) {
-    if (code === 'public') return '公共空间';
-    for (var i = 0; i < spaces.length; i++) if (spaces[i].code === code) return spaces[i].name;
+  // ============ 租户切换 ============
+  function tenantNameOf(code) {
+    if (code === 'public') return '公共租户';
+    for (var i = 0; i < tenants.length; i++) if (tenants[i].code === code) return tenants[i].name;
     return code;
   }
-  function saveSpaces() {
-    try { localStorage.setItem('datahub_spaces', JSON.stringify(spaces)); } catch(e){}
+  function saveTenants() {
+    try { localStorage.setItem('datahub_tenants', JSON.stringify(tenants)); } catch(e){}
   }
-  function addSpace(code, name) {
-    for (var i = 0; i < spaces.length; i++) {
-      if (spaces[i].code === code) { spaces[i].name = name; saveSpaces(); return; }
+  function addTenant(code, name) {
+    for (var i = 0; i < tenants.length; i++) {
+      if (tenants[i].code === code) { tenants[i].name = name; saveTenants(); return; }
     }
-    spaces.push({ code: code, name: name });
-    saveSpaces();
+    tenants.push({ code: code, name: name });
+    saveTenants();
   }
-  function forgetSpace(code) {
+  function forgetTenant(code) {
     if (code === 'public') return;
-    spaces = spaces.filter(function(s){ return s.code !== code; });
-    saveSpaces();
-    if (currentCode === code) enterSpace('public'); else renderSpaces();
+    tenants = tenants.filter(function(t){ return t.code !== code; });
+    saveTenants();
+    if (currentCode === code) enterTenant('public'); else renderTenants();
   }
-  // 进入空间：切换当前空间并重置视图（每空间数据/成员/游标独立）。
-  function enterSpace(code) {
+  // 进入租户：切换当前租户并重置视图（每租户数据/成员/游标独立）。
+  function enterTenant(code) {
     currentCode = code;
-    currentName = spaceNameOf(code);
-    try { localStorage.setItem('datahub_current_space', code); } catch(e){}
+    currentName = tenantNameOf(code);
+    try { localStorage.setItem('datahub_current_tenant', code); } catch(e){}
     seen = {}; lastSeq = 0; lastDateKey = ''; memberCount = 0;
     chatEl.innerHTML = '';
-    updateSpaceName();
-    renderSpaces();
-    $('spacePanel').classList.remove('show');
+    updateTenantName();
+    renderTenants();
+    $('tenantPanel').classList.remove('show');
     $('statusText').textContent = '连接中…';
     poll();
   }
-  function updateSpaceName() { $('spaceName').textContent = currentName; }
-  function renderSpaces() {
-    var list = $('spaceList');
+  function updateTenantName() { $('tenantName').textContent = currentName; }
+  function renderTenants() {
+    var list = $('tenantList');
     var html = '';
     var pub = (currentCode === 'public') ? ' active' : '';
-    html += '<div class="sp-item' + pub + '" onclick="window.__enterSpace(\'public\')">' +
-            '<span class="sp-name">📦 公共空间</span><span class="sp-code">default</span></div>';
-    for (var i = 0; i < spaces.length; i++) {
-      var s = spaces[i];
-      var cls = (currentCode === s.code) ? ' active' : '';
-      html += '<div class="sp-item' + cls + '">' +
-              '<span class="sp-name" onclick="window.__enterSpace(\'' + s.code + '\')">' + escapeHtml(s.name) + '</span>' +
-              '<span class="sp-code">' + escapeHtml(s.code) + '</span>' +
-              '<span class="sp-forget" title="移出我的空间" onclick="window.__forgetSpace(\'' + s.code + '\')">✕</span>' +
+    html += '<div class="tn-item' + pub + '" onclick="window.__enterTenant(\'public\')">' +
+            '<span class="tn-name">🏢 公共租户</span><span class="tn-code">public</span></div>';
+    for (var i = 0; i < tenants.length; i++) {
+      var t = tenants[i];
+      var cls = (currentCode === t.code) ? ' active' : '';
+      html += '<div class="tn-item' + cls + '">' +
+              '<span class="tn-name" onclick="window.__enterTenant(\'' + t.code + '\')">' + escapeHtml(t.name) + '</span>' +
+              '<span class="tn-code">' + escapeHtml(t.code) + '</span>' +
+              '<span class="tn-forget" title="移出我的租户" onclick="window.__forgetTenant(\'' + t.code + '\')">✕</span>' +
               '</div>';
     }
     list.innerHTML = html;
   }
-  function toggleSpacePanel() {
-    var p = $('spacePanel');
+  function toggleTenantPanel() {
+    var p = $('tenantPanel');
     var show = !p.classList.contains('show');
     p.classList.toggle('show', show);
-    if (show) renderSpaces();
+    if (show) renderTenants();
   }
-  function createSpace() {
-    var name = $('spCreateName').value.trim();
-    if (!name) { toast('请输入空间名称'); return; }
-    apiFetch('/api/space', { method:'POST', body:name })
+  function createTenant() {
+    var name = $('tnCreateName').value.trim();
+    if (!name) { toast('请输入租户名称'); return; }
+    apiFetch('/api/tenant', { method:'POST', body:name })
       .then(function(r){ return r.json(); })
       .then(function(j){
         if (j.code) {
-          addSpace(j.code, j.name || name);
-          $('spCreateName').value = '';
-          toast('已创建「' + (j.name || name) + '」，空间码 ' + j.code + '（请保存）');
-          enterSpace(j.code);
+          addTenant(j.code, j.name || name);
+          $('tnCreateName').value = '';
+          toast('已创建租户「' + (j.name || name) + '」，码 ' + j.code + '（请保存）');
+          enterTenant(j.code);
         } else toast(j.error || '创建失败');
       })
       .catch(function(){ toast('网络错误'); });
   }
-  function joinSpace() {
-    var code = $('spJoinCode').value.trim();
-    if (!code) { toast('请输入空间码'); return; }
-    apiFetch('/api/space/info?code=' + encodeURIComponent(code))
+  function joinTenant() {
+    var code = $('tnJoinCode').value.trim();
+    if (!code) { toast('请输入租户码'); return; }
+    apiFetch('/api/tenant/info?code=' + encodeURIComponent(code))
       .then(function(r){ return r.json(); })
       .then(function(j){
         if (j.code) {
-          addSpace(j.code, j.name || code);
-          $('spJoinCode').value = '';
-          toast('已加入「' + (j.name || code) + '」');
-          enterSpace(j.code);
-        } else toast(j.error || '空间不存在');
+          addTenant(j.code, j.name || code);
+          $('tnJoinCode').value = '';
+          toast('已加入租户「' + (j.name || code) + '」');
+          enterTenant(j.code);
+        } else toast(j.error || '租户不存在');
       })
       .catch(function(){ toast('网络错误'); });
   }
-  function loadSpaces() {
-    try { spaces = JSON.parse(localStorage.getItem('datahub_spaces') || '[]') || []; } catch(e){ spaces = []; }
+  function loadTenants() {
+    try { tenants = JSON.parse(localStorage.getItem('datahub_tenants') || '[]') || []; } catch(e){ tenants = []; }
     var c = 'public';
-    try { c = localStorage.getItem('datahub_current_space') || 'public'; } catch(e){ c = 'public'; }
+    try { c = localStorage.getItem('datahub_current_tenant') || 'public'; } catch(e){ c = 'public'; }
     currentCode = c;
-    currentName = spaceNameOf(c);
-    updateSpaceName();
-    renderSpaces();
+    currentName = tenantNameOf(c);
+    updateTenantName();
+    renderTenants();
   }
-  // 供 renderSpaces 的内联 onclick 调用（全局作用域查找）。
-  window.__enterSpace = enterSpace;
-  window.__forgetSpace = forgetSpace;
+  // 供 renderTenants 的内联 onclick 调用（全局作用域查找）。
+  window.__enterTenant = enterTenant;
+  window.__forgetTenant = forgetTenant;
 
   // ============ 发送文本 ============
   function sendText() {
@@ -556,15 +556,15 @@
   }
 
   // ============ 启动 ============
-  // 空间切换器控件
-  $('spaceToggle').addEventListener('click', toggleSpacePanel);
-  $('spCreateBtn').addEventListener('click', createSpace);
-  $('spJoinBtn').addEventListener('click', joinSpace);
-  $('spCreateName').addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); createSpace(); } });
-  $('spJoinCode').addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); joinSpace(); } });
+  // 租户切换器控件
+  $('tenantToggle').addEventListener('click', toggleTenantPanel);
+  $('tnCreateBtn').addEventListener('click', createTenant);
+  $('tnJoinBtn').addEventListener('click', joinTenant);
+  $('tnCreateName').addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); createTenant(); } });
+  $('tnJoinCode').addEventListener('keydown', function(e){ if (e.key === 'Enter') { e.preventDefault(); joinTenant(); } });
 
-  // 恢复上次所在空间后再开始轮询（每空间数据/成员/游标独立）。
-  loadSpaces();
+  // 恢复上次所在租户后再开始轮询（每租户数据/成员/游标独立）。
+  loadTenants();
   poll();
   setInterval(poll, POLL_MS);
   setInterval(loadMembers, POLL_MS); // 后台更新成员（用于"我"地址推断）

@@ -1,5 +1,8 @@
 #include "Module/Http/HttpServerModule.h"
 
+#include <atomic>
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <string>
@@ -7,12 +10,41 @@
 #include "Log/Logger.h"
 #include "Module/Http/HttpHandlers.h"
 #include "Module/Http/MemberService.h"
+#include "Module/Http/RequestContext.h"
+#include "Module/Http/TenantsController.h"
 #include "Module/Http/WebPageController.h"
 #include "Module/InterfaceMap.h"
 #include "Module/ResolveContext.h"
 #include "workflow/HttpMessage.h"
 
 namespace datahub {
+
+namespace {
+// 生成递增请求标识（日志/追踪）。
+std::string MakeRequestId()
+{
+    static std::atomic<std::uint64_t> sCounter(0);
+    char szBuf[24];
+    std::snprintf(szBuf, sizeof(szBuf), "%08llx", static_cast<unsigned long long>(sCounter.fetch_add(1)));
+    return std::string(szBuf);
+}
+// 状态码 → 分类（2xx/3xx/4xx/5xx）。
+std::string StatusClass(const std::string& strStatus)
+{
+    std::string strClass = "5xx";
+    if (!strStatus.empty())
+    {
+        const char cFirst = strStatus[0];
+        if (cFirst == '2')
+            strClass = "2xx";
+        else if (cFirst == '3')
+            strClass = "3xx";
+        else if (cFirst == '4')
+            strClass = "4xx";
+    }
+    return strClass;
+}
+}  // namespace
 
 /// @brief 创建 HTTP 服务模块。
 CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir)
@@ -59,7 +91,7 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
         return false;
     }
 
-    // 租户注册表（解析每个请求的 X-Space → CTenant）。
+    // 租户注册表（解析每个请求的 X-Tenant → CTenant）。
     m_pTenants.Reset(ctx.Resolve<sc::ITenantService>());
     if (m_pTenants == nullptr)
     {
@@ -71,8 +103,8 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
 
     // 业务层实例（依赖注入）。
     m_pMembers = std::unique_ptr<CMemberService>(new CMemberService());
-    m_pHandlers =
-        std::unique_ptr<CHttpHandlers>(new CHttpHandlers(m_pStore.Get(), m_pMembers.get(), m_pTenants.Get(), m_nMaxBodyBytes));
+    m_pHandlers = std::unique_ptr<CHttpHandlers>(new CHttpHandlers(m_pStore.Get(), m_pMembers.get(), m_nMaxBodyBytes));
+    m_pTenantCtl = std::unique_ptr<CTenantsController>(new CTenantsController(m_pTenants.Get()));
     m_pPages = std::unique_ptr<CWebPageController>(new CWebPageController(m_strWebDir));
 
     // 前端资源一次性读入内存（缺失时由控制器回 503 / 404）。
@@ -82,8 +114,10 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
     }
 
     // 注册路由（框架层 CHttpRouter）。
-    // —— 业务 API：由业务控制器（CHttpHandlers）自注册。
+    // —— 租户内业务：由 CHttpHandlers 自注册。
     m_pHandlers->RegisterRoutes(m_router);
+    // —— 租户管理：由 CTenantsController 自注册（/api/tenant）。
+    m_pTenantCtl->RegisterRoutes(m_router);
     // —— 页面 / 静态资源：由页面控制器（CWebPageController）自注册。
     m_pPages->RegisterRoutes(m_router);
     return true;
@@ -120,6 +154,7 @@ void CHttpServerModule::Shutdown()
 {
     Stop();
     m_pPages.reset();
+    m_pTenantCtl.reset();
     m_pHandlers.reset();
     m_pMembers.reset();
     m_pTenants.Reset();
@@ -150,33 +185,39 @@ void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
     web::CHttpRequest req(pServerTask);
     web::CHttpResponse resp(pServerTask);
 
-    // 当前租户（生命周期在本函数栈；经 req.UserData() 供业务读取）。
-    sc::CTenant tenant;
+    // 请求级上下文（生命周期在本函数栈；经 req.UserData() 供业务读取）。
+    CRequestContext ctx;
+    ctx.strRequestId = MakeRequestId();
+    const auto tBegin = std::chrono::steady_clock::now();
+    const std::string strMethod = req.Method();
+    const std::string strPath = req.Path();
+
     try
     {
-        // 1) 租户解析：缺省 X-Space → 公共租户；未知空间码回 404（防止越权到别的租户）。
-        std::string strCode = req.Header("X-Space");
+        // 1) 租户解析：缺省 X-Tenant → 公共租户；未知租户回 404（防止越权到别的租户）。
+        std::string strCode = req.Header("X-Tenant");
         if (strCode.empty() && m_pTenants != nullptr)
         {
             strCode = m_pTenants->DefaultCode();
         }
-        const bool bResolved = m_pTenants != nullptr && m_pTenants->FindTenant(strCode, tenant);
-        if (!bResolved)
+        ctx.bResolved = m_pTenants != nullptr && m_pTenants->FindTenant(strCode, ctx.tenant);
+        if (!ctx.bResolved)
         {
-            resp.WriteJson("{\"error\":\"space not found\"}", "404");
+            resp.WriteJson("{\"error\":\"tenant not found\"}", "404");
         }
         else
         {
             // 2) 挂到请求上下文 → 成员记录（按租户）→ 路由分发。
-            req.SetUserData(&tenant);
+            req.SetUserData(&ctx);
             if (m_pMembers)
             {
-                m_pMembers->Touch(req, tenant);
+                m_pMembers->Touch(req, ctx.tenant);
             }
             if (m_pMetrics != nullptr)
             {
                 m_pMetrics->SetGauge("http.members",
-                                     static_cast<double>(m_pMembers != nullptr ? m_pMembers->Count(tenant) : 0));
+                                     static_cast<double>(m_pMembers != nullptr ? m_pMembers->Count(ctx.tenant) : 0));
+                m_pMetrics->Inc("http." + ctx.tenant.strCode + ".requests");
             }
             if (!m_router.Dispatch(req, resp))
             {
@@ -186,32 +227,34 @@ void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
     }
     catch (const std::exception& e)
     {
-        common::log::CLogger::Instance().Error("[DataHub] 请求处理异常: " + std::string(e.what()));
+        common::log::CLogger::Instance().Error("[DataHub][rid=" + ctx.strRequestId + "][tenant=" + ctx.tenant.strCode +
+                                              "] 请求处理异常: " + std::string(e.what()));
         resp.WriteText("Internal Server Error", "500", "text/plain");
     }
     catch (...)
     {
-        common::log::CLogger::Instance().Error("[DataHub] 请求处理未知异常");
+        common::log::CLogger::Instance().Error("[DataHub][rid=" + ctx.strRequestId + "][tenant=" + ctx.tenant.strCode +
+                                              "] 请求处理未知异常");
         resp.WriteText("Internal Server Error", "500", "text/plain");
     }
 
-    // 按状态码分布记录（供错误率 / 可用性观测）。
+    // 3) 可观测性：全局 + 按租户的状态码分布；访问日志（rid/方法/路径/租户/耗时）。
+    const std::string strStatus = resp.StatusCode();
+    const std::string strClass = StatusClass(strStatus);
     if (m_pMetrics != nullptr)
     {
-        std::string strStatus = resp.StatusCode();
-        std::string strClass = "5xx";
-        if (!strStatus.empty())
-        {
-            char cFirst = strStatus[0];
-            if (cFirst == '2')
-                strClass = "2xx";
-            else if (cFirst == '3')
-                strClass = "3xx";
-            else if (cFirst == '4')
-                strClass = "4xx";
-        }
         m_pMetrics->Inc("http.status." + strClass);
+        if (ctx.bResolved)
+        {
+            m_pMetrics->Inc("http." + ctx.tenant.strCode + ".status." + strClass);
+        }
     }
+    const auto nElapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                                 tBegin)
+                                .count();
+    common::log::CLogger::Instance().Info("[DataHub] rid=" + ctx.strRequestId + " " + strMethod + " " + strPath +
+                                          " tenant=" + (ctx.bResolved ? ctx.tenant.strCode : std::string("(unknown)")) +
+                                          " -> " + strStatus + " " + std::to_string(nElapsedMs) + "ms");
 
     // 统一响应头。
     protocol::HttpResponse* pRaw = pServerTask->get_resp();

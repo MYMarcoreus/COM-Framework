@@ -30,7 +30,7 @@ CTenantModule::CTenantModule(const CTenantLimits& defaultLimits)
 {
     CTenant publicTenant;
     publicTenant.strCode = m_strDefaultCode;
-    publicTenant.strName = "公共空间";
+    publicTenant.strName = "公共租户";
     publicTenant.limits = m_defaultLimits;
     publicTenant.nCreateMs = TenantNowMs();
     m_mapTenants[m_strDefaultCode] = publicTenant;
@@ -89,7 +89,7 @@ bool CTenantModule::CreateTenant(const std::string& strName, CTenant& out)
     std::lock_guard<std::mutex> lock(m_mutex);
     CTenant tenant;
     tenant.strCode = GenerateCode();
-    tenant.strName = strName.empty() ? "未命名空间" : strName;
+    tenant.strName = strName.empty() ? "未命名租户" : strName;
     tenant.limits = m_defaultLimits;
     tenant.nCreateMs = TenantNowMs();
     m_mapTenants[tenant.strCode] = tenant;
