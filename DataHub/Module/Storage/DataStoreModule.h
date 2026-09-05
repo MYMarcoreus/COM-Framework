@@ -2,9 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -21,12 +19,12 @@ using sc::DataItemInfo;
 using sc::DataKind;
 using sc::IDataStore;
 
-/// @brief 数据存储模块（按租户隔离）。
+/// @brief 数据存储模块（共享表多租户，业界主流模型）。
 ///
-/// 为每个租户（空间）维护独立的 common::storage::CFileStore 实例：
-/// 同一数据只在所属租户内可见；容量限制取自租户实体，每租户独立计数。
-/// 纯内存、线程安全；不落盘（如需持久化可替换/扩展后端）。
-/// 模块名 "store"。
+/// 内部只持有一个 common::storage::CFileStore（共享"表"），每行带租户码
+/// （tenant_id）；本模块把所有接口的 CTenant 翻译为"租户码 + 该租户配额"
+/// 传给存储，存储层强制按租户过滤。等同"共享表 + WHERE tenant_id=?"。
+/// 纯内存、线程安全；不落盘（如需持久化可替换后端实现）。模块名 "store"。
 class CDataStoreModule : public sc::CModule, public IDataStore
 {
    public:
@@ -54,11 +52,10 @@ class CDataStoreModule : public sc::CModule, public IDataStore
     SC_DECLARE_INTERFACE_MAP();
 
    private:
-    // 取（或惰性创建）某租户的数据存储实例并应用其容量限制。
-    common::storage::CFileStore* EnsureStore(const CTenant& tenant) const;
+    // 把租户实体换算为共享存储的容量限制（0 = 不限制）。
+    static common::storage::StoreLimits LimitsOf(const CTenant& tenant);
 
-    mutable std::mutex m_mutex;
-    mutable std::map<std::string, std::unique_ptr<common::storage::CFileStore> > m_mapStores;
+    std::unique_ptr<common::storage::CFileStore> m_pStore;  // 共享表存储（单实例）
 };
 
 }  // namespace datahub
