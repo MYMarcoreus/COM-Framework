@@ -1,42 +1,43 @@
-#include "Module/MemberTracker.h"
+#include "Module/MemberService.h"
 
 #include <chrono>
 
-#include "Module/HttpUtil.h"
+#include "Framework/HttpUtil.h"
 
 namespace datahub {
 
-std::map<std::string, MemberTracker::MemberInfo> MemberTracker::s_mapMembers;
-std::mutex MemberTracker::s_mutex;
-
+namespace {
 /// @brief 当前时间（毫秒）。
-static std::int64_t NowMs()
+std::int64_t NowMs()
 {
     return static_cast<std::int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
             .count());
 }
+}  // namespace
+
+CMemberService::CMemberService() {}
 
 /// @brief 获取客户端标识。
 ///
 /// 优先取 X-Client-Id 请求头（前端生成并持久化的 UUID，用于跨请求标识同一浏览器）；
 /// 无该头时退回 "IP:port"（如 curl 等命令行访问）。
-std::string MemberTracker::ClientId(WFHttpTask* pServerTask)
+std::string CMemberService::ClientId(WFHttpTask* pServerTask)
 {
-    std::string strId = HttpUtil::GetHeader(pServerTask, "X-Client-Id");
+    std::string strId = web::CHttpUtil::GetHeader(pServerTask, "X-Client-Id");
     if (strId.empty())
     {
-        strId = HttpUtil::PeerAddress(pServerTask);
+        strId = web::CHttpUtil::PeerAddress(pServerTask);
     }
     return strId;
 }
 
 /// @brief 记录成员活跃（每次请求调用）；返回客户端标识。
-std::string MemberTracker::Touch(WFHttpTask* pServerTask)
+std::string CMemberService::Touch(WFHttpTask* pServerTask)
 {
     // 仅当请求携带有效 X-Client-Id 头时记录成员；无头请求（curl、静态资源、
     // 探测等）不计入，避免产生 "IP:port" 假成员。
-    std::string strHeader = HttpUtil::GetHeader(pServerTask, "X-Client-Id");
+    std::string strHeader = web::CHttpUtil::GetHeader(pServerTask, "X-Client-Id");
     if (strHeader.empty())
     {
         return std::string();
@@ -48,15 +49,15 @@ std::string MemberTracker::Touch(WFHttpTask* pServerTask)
         return strClientId;
     }
     // 提取来源 IP（不含端口），供成员展示。
-    std::string strIp = HttpUtil::PeerAddress(pServerTask);
+    std::string strIp = web::CHttpUtil::PeerAddress(pServerTask);
     std::string::size_type nColon = strIp.find_last_of(':');
     if (nColon != std::string::npos)
     {
         strIp = strIp.substr(0, nColon);
     }
     std::int64_t nNowMs = NowMs();
-    std::lock_guard<std::mutex> lock(s_mutex);
-    MemberInfo& info = s_mapMembers[strClientId];
+    std::lock_guard<std::mutex> lock(m_mutex);
+    MemberInfo& info = m_mapMembers[strClientId];
     info.strIp = strIp;
     if (info.nFirstMs == 0)
     {
@@ -67,17 +68,17 @@ std::string MemberTracker::Touch(WFHttpTask* pServerTask)
 }
 
 /// @brief 清理超过 30 秒未活跃的成员（返回清理数量）。
-size_t MemberTracker::Prune()
+size_t CMemberService::Prune()
 {
     const std::int64_t nTimeoutMs = 30000;  // 30 秒
     std::int64_t nNowMs = NowMs();
-    std::lock_guard<std::mutex> lock(s_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
     size_t nRemoved = 0;
-    for (auto it = s_mapMembers.begin(); it != s_mapMembers.end();)
+    for (auto it = m_mapMembers.begin(); it != m_mapMembers.end();)
     {
         if (nNowMs - it->second.nLastMs > nTimeoutMs)
         {
-            it = s_mapMembers.erase(it);
+            it = m_mapMembers.erase(it);
             ++nRemoved;
         }
         else
@@ -88,23 +89,22 @@ size_t MemberTracker::Prune()
     return nRemoved;
 }
 
-/// @brief 成员快照。
-std::map<std::string, MemberTracker::MemberInfo> MemberTracker::Snapshot()
+std::map<std::string, CMemberService::MemberInfo> CMemberService::Snapshot() const
 {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    return s_mapMembers;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_mapMembers;
 }
 
-size_t MemberTracker::Count()
+size_t CMemberService::Count() const
 {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    return s_mapMembers.size();
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_mapMembers.size();
 }
 
-void MemberTracker::Clear()
+void CMemberService::Clear()
 {
-    std::lock_guard<std::mutex> lock(s_mutex);
-    s_mapMembers.clear();
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_mapMembers.clear();
 }
 
 }  // namespace datahub

@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
+#include "Framework/HttpRouter.h"
 #include "Module/IDataStore.h"
 #include "Module/IHttpService.h"
 #include "Module/InterfaceMap.h"
@@ -15,20 +17,25 @@ namespace datahub {
 using sc::IDataStore;
 using sc::IHttpService;
 
-/// @brief HTTP 数据传输服务模块（基于 Sogou Workflow）。
+// 前置声明。
+class CHttpHandlers;
+class CMemberService;
+
+/// @brief HTTP 数据传输服务模块（装配层）。
 ///
-/// 封装 WFHttpServer 作为 ServerCore 模块注册，作为 HTTP 服务外观：
-///   - 生命周期：Initialize（解析 IDataStore + 加载前端页面）/ Start / Stop / Shutdown；
-///   - 路由分发：ProcessRequest / Dispatch 分派到 HttpHandlers 各业务处理器。
+/// 职责（三层中的"模块装配层"）：
+///   - 生命周期：Initialize（解析 IDataStore + 组装业务层 + 注册路由）/
+///     Start / Stop / Shutdown；
+///   - 装配：创建 CMemberService / CHttpHandlers，注册路由到 web::CHttpRouter；
+///   - 请求入口：OnRequest 回调 → 成员记录 → 路由分发 → 未命中回 404。
 ///
-/// 职责分层：
-///   - HttpServerModule：生命周期 + 路由（本文件）
-///   - HttpHandlers：各 API 业务处理（列表 / 文本 / 文件 / 成员 / 删除 / 首页）
-///   - HttpUtil：HTTP 工具（响应写入 / 请求读取 / 编码转义）
-///   - MemberTracker：在线成员跟踪
+/// 分层：
+///   - 框架层（web::）：HttpRouter 路由注册表、CHttpUtil 工具（响应写/静态文件）
+///   - 业务层：CHttpHandlers（各 API 业务处理）、CMemberService（在线成员）
+///   - 装配层：本类（生命周期 + 路由注册）
 ///
 /// 前端页面为独立资源文件，构建时由 Makefile 部署到用户目录
-/// `~/.datahub/index.html`，运行时从磁盘加载（路径确定，与工作目录无关）。
+/// `~/.datahub/`（index.html + style.css + app.js），运行时从磁盘读取。
 ///
 /// 模块名 "http"。
 class CHttpServerModule : public sc::CModule, public IHttpService
@@ -36,9 +43,9 @@ class CHttpServerModule : public sc::CModule, public IHttpService
    public:
     // 创建 HTTP 服务模块。
     // @param nPort     监听端口。
-    // @param strIndex 前端页面文件绝对路径；空串表示使用默认用户目录
-    //                `$HOME/.datahub/index.html`（由 Makefile 构建时部署）。
-    explicit CHttpServerModule(std::uint16_t nPort, const std::string& strIndex = "");
+    // @param strWebDir 前端静态资源目录（含 index.html/style.css/app.js）；
+    //                 空串表示默认用户目录 `$HOME/.datahub`。
+    explicit CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir = "");
 
     virtual ~CHttpServerModule();
 
@@ -53,24 +60,26 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     SC_DECLARE_INTERFACE_MAP();
 
    private:
-    // 请求处理回调（WFHttpServer 调用）。
-    static void ProcessRequest(WFHttpTask* pServerTask);
+    // 请求处理回调（WFHttpServer 线程池中执行；lambda 捕获本实例）。
+    void OnRequest(WFHttpTask* pServerTask);
 
-    // 路由分发：返回是否已写响应。
-    static bool Dispatch(WFHttpTask* pServerTask, const std::string& strMethod, const std::string& strPath);
+    // 首页 GET /：返回前端 index.html。
+    bool HandleIndex(WFHttpTask* pServerTask);
 
-    // 从磁盘加载前端页面文件（路径 m_strIndexPath 由配置 [web] index 指定）；成功返回 true。
+    // 静态资源 GET /style.css、/app.js。
+    bool HandleStatic(WFHttpTask* pServerTask, const std::string& strName);
+
+    // 从磁盘加载 index.html 内容（Start 前调用）。
     bool LoadIndexHtml();
 
-    // 当前数据存储（Initialize 后可用）。
-    static IDataStore* s_pStore;
-    // 已加载的前端页面内容（静态指针，供静态回调访问；Initialize 时指向实例成员）。
-    static const std::string* s_pIndexHtml;
-
     std::uint16_t m_nPort;
-    std::string m_strIndexPath;  // 前端页面文件路径
-    std::string m_strIndexHtml;  // 已加载的前端页面内容（空表示加载失败）
+    std::string m_strWebDir;  // 前端资源目录
+    std::string m_strIndexHtml;  // 已加载的 index.html 内容（空表示加载失败）
+
     sc::ScopedInterfacePtr<IDataStore> m_pStore;
+    std::unique_ptr<CMemberService> m_pMembers;    // 成员服务（业务层）
+    std::unique_ptr<CHttpHandlers> m_pHandlers;    // 业务 API（业务层）
+    web::CHttpRouter m_router;                     // 路由注册表（框架层）
     WFHttpServer m_server;
     bool m_bStarted;
 };

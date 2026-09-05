@@ -1,28 +1,32 @@
 #include "Module/HttpServerModule.h"
 
-#include <fstream>
-#include <sstream>
-#include <string>
-
+#include "Framework/HttpUtil.h"
 #include "Log/Logger.h"
 #include "Module/HttpHandlers.h"
-#include "Module/HttpUtil.h"
 #include "Module/InterfaceMap.h"
-#include "Module/MemberTracker.h"
+#include "Module/MemberService.h"
 #include "Module/ResolveContext.h"
 #include "workflow/HttpMessage.h"
 
 namespace datahub {
 
-IDataStore* CHttpServerModule::s_pStore = nullptr;
-const std::string* CHttpServerModule::s_pIndexHtml = nullptr;
+namespace {
+
+// 去掉路径中的 query 部分（? 之后）。
+std::string StripQuery(const std::string& strUri)
+{
+    std::string::size_type nQ = strUri.find('?');
+    return nQ == std::string::npos ? strUri : strUri.substr(0, nQ);
+}
+
+}  // namespace
 
 /// @brief 创建 HTTP 服务模块。
-CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strIndex)
+CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir)
     : sc::CModule("http"),
       m_nPort(nPort),
-      m_strIndexPath(strIndex),
-      m_server(&CHttpServerModule::ProcessRequest),
+      m_strWebDir(strWebDir),
+      m_server([this](WFHttpTask* pTask) { OnRequest(pTask); }),
       m_bStarted(false)
 {
     // 依赖 IDataStore 接口模块：生命周期拓扑排序保证其先初始化 / 启动。
@@ -35,11 +39,7 @@ CHttpServerModule::~CHttpServerModule()
     Stop();
 }
 
-/// @brief 从初始化上下文解析数据存储接口，并加载前端页面。
-///
-/// @param ctx 初始化上下文（依赖注入）。
-///
-/// @return true 数据存储接口就绪；false 缺失。
+/// @brief 从初始化上下文解析数据存储接口，组装业务层并注册路由。
 bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
 {
     m_pStore.Reset(ctx.Resolve<IDataStore>());
@@ -47,55 +47,79 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
     {
         return false;
     }
-    // 回调为静态方法，通过静态指针访问数据存储与前端页面。
-    s_pStore = m_pStore.Get();
-    HttpHandlers::SetStore(s_pStore);
 
-    // 加载前端页面（独立资源文件）；失败仅告警，不影响服务启动。
+    // 业务层实例（依赖注入）。
+    m_pMembers = std::unique_ptr<CMemberService>(new CMemberService());
+    m_pHandlers = std::unique_ptr<CHttpHandlers>(new CHttpHandlers(m_pStore.Get(), m_pMembers.get()));
+
+    // 加载首页（index.html 内容，供 GET / 返回）。
     if (!LoadIndexHtml())
     {
-        common::log::CLogger::Instance().Warn("[DataHub] 前端页面加载失败: " + m_strIndexPath + "（GET / 将返回 503）");
+        common::log::CLogger::Instance().Warn("[DataHub] 前端 index.html 加载失败: " + m_strWebDir +
+                                              "（GET / 将返回 503）");
     }
-    s_pIndexHtml = &m_strIndexHtml;
-    HttpHandlers::SetIndexHtml(s_pIndexHtml);
+
+    // 注册路由（框架层 CHttpRouter）。
+    // —— 页面 / 静态资源（本模块直接处理）
+    m_router.Register({"GET", "/", true, [this](WFHttpTask* t, const std::string&) { return HandleIndex(t); }});
+    m_router.Register({"GET", "/style.css", true, [this](WFHttpTask* t, const std::string&) {
+                           return HandleStatic(t, "style.css");
+                       }});
+    m_router.Register({"GET", "/app.js", true, [this](WFHttpTask* t, const std::string&) {
+                           return HandleStatic(t, "app.js");
+                       }});
+
+    // —— 业务 API（委托 CHttpHandlers）
+    m_router.Register({"GET", "/api/list", true, [this](WFHttpTask* t, const std::string&) {
+                           return m_pHandlers->HandleList(t);
+                       }});
+    m_router.Register({"GET", "/api/members", true, [this](WFHttpTask* t, const std::string&) {
+                           return m_pHandlers->HandleMembers(t);
+                       }});
+    m_router.Register({"POST", "/api/text", true, [this](WFHttpTask* t, const std::string&) {
+                           return m_pHandlers->HandleUploadText(t);
+                       }});
+    m_router.Register({"GET", "/api/text/", false, [this](WFHttpTask* t, const std::string& p) {
+                           return m_pHandlers->HandleGetText(t, web::CHttpUtil::UrlDecode(p.substr(10)));
+                       }});
+    m_router.Register({"POST", "/api/file", true, [this](WFHttpTask* t, const std::string&) {
+                           return m_pHandlers->HandleUploadFile(t);
+                       }});
+    m_router.Register({"GET", "/api/file/", false, [this](WFHttpTask* t, const std::string& p) {
+                           return m_pHandlers->HandleGetFile(t, web::CHttpUtil::UrlDecode(p.substr(10)));
+                       }});
+    m_router.Register({"DELETE", "/api/item/", false, [this](WFHttpTask* t, const std::string& p) {
+                           return m_pHandlers->HandleDelete(t, web::CHttpUtil::UrlDecode(p.substr(10)));
+                       }});
     return true;
 }
 
-/// @brief 从磁盘加载前端页面文件。
+/// @brief 从磁盘加载前端 index.html 文件。
 ///
-/// 路径解析：
-///   - 配置 [web] index 指定（m_strIndexPath，绝对路径）；否则
-///   - 默认用户目录 `$HOME/.datahub/index.html`（构建时由 Makefile 部署）。
-/// 直接读取，无自动推导，与进程工作目录无关。
-///
-/// @return true 加载成功；false 文件不存在或读取失败。
+/// 路径解析：m_strWebDir 指定（配置 [web] index 的目录）；否则
+/// 默认用户目录 `$HOME/.datahub/index.html`（构建时由 Makefile 部署）。
 bool CHttpServerModule::LoadIndexHtml()
 {
-    std::string strPath = m_strIndexPath;
-    if (strPath.empty())
+    std::string strDir = m_strWebDir;
+    if (strDir.empty())
     {
         const char* szHome = ::getenv("HOME");
         if (szHome == nullptr)
         {
             return false;
         }
-        strPath = std::string(szHome) + "/.datahub/index.html";
+        strDir = std::string(szHome) + "/.datahub";
     }
-
-    std::ifstream ifs(strPath.c_str(), std::ios::binary);
-    if (!ifs.is_open())
+    std::string strContent;
+    if (!web::CHttpUtil::ReadFile(strDir + "/index.html", strContent))
     {
         return false;
     }
-    std::stringstream ss;
-    ss << ifs.rdbuf();
-    m_strIndexHtml = ss.str();
+    m_strIndexHtml = strContent;
     return !m_strIndexHtml.empty();
 }
 
 /// @brief 启动 HTTP 服务。
-///
-/// @return true 启动成功；false 端口被占用等。
 bool CHttpServerModule::Start()
 {
     if (m_bStarted)
@@ -125,12 +149,9 @@ void CHttpServerModule::Stop()
 void CHttpServerModule::Shutdown()
 {
     Stop();
+    m_pHandlers.reset();
+    m_pMembers.reset();
     m_pStore.Reset();
-    s_pStore = nullptr;
-    s_pIndexHtml = nullptr;
-    HttpHandlers::SetStore(nullptr);
-    HttpHandlers::SetIndexHtml(nullptr);
-    MemberTracker::Clear();
 }
 
 std::uint16_t CHttpServerModule::Port() const
@@ -146,26 +167,23 @@ std::string CHttpServerModule::Status() const
 // ----------------------------------------------------------------------------
 // 请求处理回调（Workflow 线程池中执行）
 // ----------------------------------------------------------------------------
-void CHttpServerModule::ProcessRequest(WFHttpTask* pServerTask)
+void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
 {
     protocol::HttpRequest* pReq = pServerTask->get_req();
     protocol::HttpResponse* pResp = pServerTask->get_resp();
 
     // 记录成员活跃（客户端标识），供在线成员列表展示。
-    MemberTracker::Touch(pServerTask);
-
-    std::string strMethod = pReq->get_method();
-    std::string strPath = pReq->get_request_uri();
-    // 去掉 query 部分（? 之后）。
-    std::string::size_type nQ = strPath.find('?');
-    if (nQ != std::string::npos)
+    if (m_pMembers)
     {
-        strPath = strPath.substr(0, nQ);
+        m_pMembers->Touch(pServerTask);
     }
 
-    if (!Dispatch(pServerTask, strMethod, strPath))
+    std::string strMethod = pReq->get_method();
+    std::string strPath = StripQuery(pReq->get_request_uri());
+
+    if (!m_router.Dispatch(pServerTask, strMethod, strPath))
     {
-        HttpUtil::WriteText(pServerTask, "Not Found", "404", "text/plain");
+        web::CHttpUtil::WriteText(pServerTask, "Not Found", "404", "text/plain");
     }
 
     // 统一响应头。
@@ -173,55 +191,49 @@ void CHttpServerModule::ProcessRequest(WFHttpTask* pServerTask)
 }
 
 // ----------------------------------------------------------------------------
-// 路由分发
+// 首页与静态资源
 // ----------------------------------------------------------------------------
-bool CHttpServerModule::Dispatch(WFHttpTask* pServerTask, const std::string& strMethod, const std::string& strPath)
+bool CHttpServerModule::HandleIndex(WFHttpTask* pServerTask)
 {
-    // 首页（GET /）
-    if (strMethod == "GET" && strPath == "/")
+    protocol::HttpResponse* pResp = pServerTask->get_resp();
+    if (m_strIndexHtml.empty())
     {
-        return HttpHandlers::HandleIndex(pServerTask);
+        pResp->set_status_code("503");
+        pResp->add_header_pair("Content-Type", "text/plain; charset=utf-8");
+        pResp->append_output_body("前端页面未加载");
+        return true;
     }
-    // 前端静态资源：style.css / app.js（index.html 引用的独立文件）
-    if (strMethod == "GET" && (strPath == "/style.css" || strPath == "/app.js"))
+    pResp->set_status_code("200");
+    pResp->add_header_pair("Content-Type", "text/html; charset=utf-8");
+    pResp->append_output_body(m_strIndexHtml.data(), m_strIndexHtml.size());
+    return true;
+}
+
+bool CHttpServerModule::HandleStatic(WFHttpTask* pServerTask, const std::string& strName)
+{
+    std::string strDir = m_strWebDir;
+    if (strDir.empty())
     {
-        return HttpHandlers::HandleStatic(pServerTask, strPath.substr(1));
+        const char* szHome = ::getenv("HOME");
+        if (szHome == nullptr)
+        {
+            web::CHttpUtil::WriteText(pServerTask, "static unavailable", "503", "text/plain");
+            return true;
+        }
+        strDir = std::string(szHome) + "/.datahub";
     }
-    // 列表（GET /api/list）
-    if (strMethod == "GET" && strPath == "/api/list")
+    std::string strContent;
+    if (!web::CHttpUtil::ReadFile(strDir + "/" + strName, strContent))
     {
-        return HttpHandlers::HandleList(pServerTask);
+        web::CHttpUtil::WriteText(pServerTask, "not found", "404", "text/plain");
+        return true;
     }
-    // 在线成员（GET /api/members）
-    if (strMethod == "GET" && strPath == "/api/members")
-    {
-        return HttpHandlers::HandleMembers(pServerTask);
-    }
-    // 上传文本（POST /api/text）
-    if (strMethod == "POST" && strPath == "/api/text")
-    {
-        return HttpHandlers::HandleUploadText(pServerTask);
-    }
-    // 上传文件（POST /api/file）
-    if (strMethod == "POST" && strPath == "/api/file")
-    {
-        return HttpHandlers::HandleUploadFile(pServerTask);
-    }
-    // GET /api/text/<id>、GET /api/file/<id>、DELETE /api/item/<id>
-    // 注意前缀 "/api/text/" 长度为 10（/api/ 5 + text/ 5）。
-    if (strMethod == "GET" && strPath.compare(0, 10, "/api/text/") == 0)
-    {
-        return HttpHandlers::HandleGetText(pServerTask, HttpUtil::UrlDecode(strPath.substr(10)));
-    }
-    if (strMethod == "GET" && strPath.compare(0, 10, "/api/file/") == 0)
-    {
-        return HttpHandlers::HandleGetFile(pServerTask, HttpUtil::UrlDecode(strPath.substr(10)));
-    }
-    if (strMethod == "DELETE" && strPath.compare(0, 10, "/api/item/") == 0)
-    {
-        return HttpHandlers::HandleDelete(pServerTask, HttpUtil::UrlDecode(strPath.substr(10)));
-    }
-    return false;
+    protocol::HttpResponse* pResp = pServerTask->get_resp();
+    pResp->set_status_code("200");
+    std::string strMime = web::CHttpUtil::MimeType(strName);
+    pResp->add_header_pair("Content-Type", (strMime + "; charset=utf-8").c_str());
+    pResp->append_output_body(strContent.data(), strContent.size());
+    return true;
 }
 
 SC_BEGIN_INTERFACE_MAP(CHttpServerModule, sc::CModule)

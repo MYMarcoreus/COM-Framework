@@ -7,47 +7,45 @@
 
 namespace datahub {
 
-/// @brief HTTP 业务处理器。
+// 前置声明（装配层持有实例）。
+class CMemberService;
+
+/// @brief HTTP 业务处理器（DataHub 业务 API）。
 ///
-/// 实现各 API 路由的具体处理（列表 / 文本 / 文件 / 成员 / 删除 / 首页）。
-/// 通过静态指针访问数据存储与前端页面（由 HttpServerModule 在 Initialize 时设置）。
-class HttpHandlers
+/// 实例类：构造时注入数据存储与成员服务，不再依赖静态全局状态。
+/// 各方法对应一个路由，由装配层注册进 CHttpRouter。
+/// 首页与静态资源由框架层（web）处理，不在本类职责内。
+class CHttpHandlers
 {
    public:
-    // 设置数据存储与前端页面（HttpServerModule::Initialize 调用）。
-    static void SetStore(sc::IDataStore* pStore);
-    static void SetIndexHtml(const std::string* pIndexHtml);
-
-    // 首页：返回前端页面。
-    static bool HandleIndex(WFHttpTask* pServerTask);
-
-    // 静态资源：GET /style.css、/app.js（前端页面引用的独立资源）。
-    static bool HandleStatic(WFHttpTask* pServerTask, const std::string& strName);
+    // @param pStore   数据存储（IDataStore，装配层注入）
+    // @param pMembers 成员服务（CMemberService，装配层注入）
+    CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers);
 
     // 消息列表：GET /api/list。
-    static bool HandleList(WFHttpTask* pServerTask);
+    bool HandleList(WFHttpTask* pServerTask);
 
     // 在线成员：GET /api/members。
-    static bool HandleMembers(WFHttpTask* pServerTask);
+    bool HandleMembers(WFHttpTask* pServerTask);
 
     // 上传文本：POST /api/text。
-    static bool HandleUploadText(WFHttpTask* pServerTask);
+    bool HandleUploadText(WFHttpTask* pServerTask);
 
     // 获取文本：GET /api/text/<id>。
-    static bool HandleGetText(WFHttpTask* pServerTask, const std::string& strId);
+    bool HandleGetText(WFHttpTask* pServerTask, const std::string& strId);
 
     // 上传文件：POST /api/file。
-    static bool HandleUploadFile(WFHttpTask* pServerTask);
+    bool HandleUploadFile(WFHttpTask* pServerTask);
 
     // 下载文件 / 图片：GET /api/file/<id>。
-    static bool HandleGetFile(WFHttpTask* pServerTask, const std::string& strId);
+    bool HandleGetFile(WFHttpTask* pServerTask, const std::string& strId);
 
     // 删除：DELETE /api/item/<id>。
-    static bool HandleDelete(WFHttpTask* pServerTask, const std::string& strId);
+    bool HandleDelete(WFHttpTask* pServerTask, const std::string& strId);
 
    private:
-    static sc::IDataStore* s_pStore;
-    static const std::string* s_pIndexHtml;
+    sc::IDataStore* m_pStore;  // 数据存储（生命周期由装配层管理）
+    CMemberService* m_pMembers;
 };
 
 }  // namespace datahub
