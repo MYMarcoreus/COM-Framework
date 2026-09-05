@@ -3,7 +3,7 @@
 #include <string>
 
 #include "Framework/HttpMessage.h"
-#include "Module/IDataStore.h"
+#include "Module/Storage/IDataStore.h"
 
 namespace datahub {
 

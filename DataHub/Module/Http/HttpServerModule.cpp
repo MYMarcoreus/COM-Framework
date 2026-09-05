@@ -1,12 +1,12 @@
-#include "Module/HttpServerModule.h"
+#include "Module/Http/HttpServerModule.h"
 
 #include <string>
 
 #include "Framework/HttpText.h"
 #include "Log/Logger.h"
-#include "Module/HttpHandlers.h"
+#include "Module/Http/HttpHandlers.h"
 #include "Module/InterfaceMap.h"
-#include "Module/MemberService.h"
+#include "Module/Http/MemberService.h"
 #include "Module/ResolveContext.h"
 #include "workflow/HttpMessage.h"
 
@@ -52,14 +52,11 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
 
     // 注册路由（框架层 CHttpRouter）。
     // —— 页面 / 静态资源（本模块直接处理）
-    m_router.Register(
-        {"GET", "/", [this](web::CHttpRequest&, web::CHttpResponse& resp) { return HandleIndex(resp); }});
-    m_router.Register({"GET", "/style.css", [this](web::CHttpRequest&, web::CHttpResponse& resp) {
-                           return HandleStatic(resp, "style.css");
-                       }});
-    m_router.Register({"GET", "/app.js", [this](web::CHttpRequest&, web::CHttpResponse& resp) {
-                           return HandleStatic(resp, "app.js");
-                       }});
+    m_router.Register({"GET", "/", [this](web::CHttpRequest&, web::CHttpResponse& resp) { return HandleIndex(resp); }});
+    m_router.Register({"GET", "/style.css", [this](web::CHttpRequest&, web::CHttpResponse& resp)
+    { return HandleStatic(resp, "style.css"); }});
+    m_router.Register({"GET", "/app.js",
+                       [this](web::CHttpRequest&, web::CHttpResponse& resp) { return HandleStatic(resp, "app.js"); }});
 
     // —— 业务 API：由业务控制器（CHttpHandlers）自注册，路由归属业务类。
     m_pHandlers->RegisterRoutes(m_router);

@@ -5,8 +5,8 @@
 #include <string>
 
 #include "Framework/HttpRouter.h"
-#include "Module/IDataStore.h"
-#include "Module/IHttpService.h"
+#include "Module/Storage/IDataStore.h"
+#include "Module/Http/IHttpService.h"
 #include "Module/InterfaceMap.h"
 #include "Module/Module.h"
 #include "Module/ScopedInterfacePtr.h"

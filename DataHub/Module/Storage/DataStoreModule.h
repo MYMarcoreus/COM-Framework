@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "Module/IDataStore.h"
+#include "Module/Storage/IDataStore.h"
 #include "Module/InterfaceMap.h"
 #include "Module/Module.h"
 #include "Storage/CFileStore.h"

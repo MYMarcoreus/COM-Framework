@@ -1,4 +1,4 @@
-#include "Module/HttpHandlers.h"
+#include "Module/Http/HttpHandlers.h"
 
 #include <algorithm>
 #include <map>
@@ -7,9 +7,9 @@
 #include <utility>
 #include <vector>
 
-#include "Framework/HttpText.h"
 #include "Framework/HttpRouter.h"
-#include "Module/MemberService.h"
+#include "Framework/HttpText.h"
+#include "Module/Http/MemberService.h"
 
 namespace datahub {
 
@@ -23,27 +23,20 @@ CHttpHandlers::CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers) :
 void CHttpHandlers::RegisterRoutes(web::CHttpRouter& router)
 {
     // 路径模板：字面段精确匹配；"{id}" 段捕获，分发后经 req.PathParam() 读取。
-    router.Register({"GET", "/api/list", [this](web::CHttpRequest& req, web::CHttpResponse& resp) {
-                         return HandleList(req, resp);
-                     }});
-    router.Register({"GET", "/api/members", [this](web::CHttpRequest& req, web::CHttpResponse& resp) {
-                         return HandleMembers(req, resp);
-                     }});
-    router.Register({"POST", "/api/text", [this](web::CHttpRequest& req, web::CHttpResponse& resp) {
-                         return HandleUploadText(req, resp);
-                     }});
-    router.Register({"GET", "/api/text/{id}", [this](web::CHttpRequest& req, web::CHttpResponse& resp) {
-                         return HandleGetText(req, resp);
-                     }});
-    router.Register({"POST", "/api/file", [this](web::CHttpRequest& req, web::CHttpResponse& resp) {
-                         return HandleUploadFile(req, resp);
-                     }});
-    router.Register({"GET", "/api/file/{id}", [this](web::CHttpRequest& req, web::CHttpResponse& resp) {
-                         return HandleGetFile(req, resp);
-                     }});
-    router.Register({"DELETE", "/api/item/{id}", [this](web::CHttpRequest& req, web::CHttpResponse& resp) {
-                         return HandleDelete(req, resp);
-                     }});
+    router.Register({"GET", "/api/list",
+                     [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleList(req, resp); }});
+    router.Register({"GET", "/api/members",
+                     [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleMembers(req, resp); }});
+    router.Register({"POST", "/api/text",
+                     [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleUploadText(req, resp); }});
+    router.Register({"GET", "/api/text/{id}",
+                     [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleGetText(req, resp); }});
+    router.Register({"POST", "/api/file",
+                     [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleUploadFile(req, resp); }});
+    router.Register({"GET", "/api/file/{id}",
+                     [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleGetFile(req, resp); }});
+    router.Register({"DELETE", "/api/item/{id}",
+                     [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleDelete(req, resp); }});
 }
 
 // ----------------------------------------------------------------------------

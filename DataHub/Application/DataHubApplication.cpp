@@ -1,8 +1,8 @@
 #include "Application/DataHubApplication.h"
 
 #include "Log/Logger.h"
-#include "Module/DataStoreModule.h"
-#include "Module/HttpServerModule.h"
+#include "Module/Storage/DataStoreModule.h"
+#include "Module/Http/HttpServerModule.h"
 
 namespace datahub {
 
