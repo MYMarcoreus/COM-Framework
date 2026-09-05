@@ -1,12 +1,14 @@
 #include "Module/Http/HttpServerModule.h"
 
+#include <cstdlib>
+#include <exception>
 #include <string>
 
 #include "Framework/HttpText.h"
 #include "Log/Logger.h"
 #include "Module/Http/HttpHandlers.h"
-#include "Module/InterfaceMap.h"
 #include "Module/Http/MemberService.h"
+#include "Module/InterfaceMap.h"
 #include "Module/ResolveContext.h"
 #include "workflow/HttpMessage.h"
 
@@ -22,6 +24,17 @@ CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& str
 {
     // 依赖 IDataStore 接口模块：生命周期拓扑排序保证其先初始化 / 启动。
     AddDependency(sc::IID_IDataStore());
+
+    // 前端目录归一化：空串回退到默认用户目录 $HOME/.datahub（仅解析一次）。
+    // 后续 LoadIndexHtml / HandleStatic 直接使用 m_strWebDir，不再重复解析。
+    if (m_strWebDir.empty())
+    {
+        const char* szHome = ::getenv("HOME");
+        if (szHome != nullptr)
+        {
+            m_strWebDir = std::string(szHome) + "/.datahub";
+        }
+    }
 }
 
 /// @brief 销毁 HTTP 服务模块。
@@ -38,6 +51,9 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
     {
         return false;
     }
+
+    // 可观测性：可选依赖 IMetrics（未装配时不上报，不影响启动）。
+    m_pMetrics.Reset(ctx.Resolve<sc::IMetrics>());
 
     // 业务层实例（依赖注入）。
     m_pMembers = std::unique_ptr<CMemberService>(new CMemberService());
@@ -66,18 +82,13 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
 /// @brief 从磁盘加载前端 index.html 文件。
 bool CHttpServerModule::LoadIndexHtml()
 {
-    std::string strDir = m_strWebDir;
-    if (strDir.empty())
+    // m_strWebDir 已在构造时归一化；仍为空表示 HOME 不可用。
+    if (m_strWebDir.empty())
     {
-        const char* szHome = ::getenv("HOME");
-        if (szHome == nullptr)
-        {
-            return false;
-        }
-        strDir = std::string(szHome) + "/.datahub";
+        return false;
     }
     std::string strContent;
-    if (!web::CHttpText::ReadFile(strDir + "/index.html", strContent))
+    if (!web::CHttpText::ReadFile(m_strWebDir + "/index.html", strContent))
     {
         return false;
     }
@@ -135,19 +146,59 @@ std::string CHttpServerModule::Status() const
 // ----------------------------------------------------------------------------
 void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
 {
+    if (m_pMetrics != nullptr)
+    {
+        m_pMetrics->Inc("http.requests");
+    }
+
     // 封装请求 / 响应（业务层不直接接触 workflow 类型）。
     web::CHttpRequest req(pServerTask);
     web::CHttpResponse resp(pServerTask);
 
-    // 记录成员活跃（客户端标识），供在线成员列表展示。
-    if (m_pMembers)
+    // 业务处理：成员记录 + 路由分发。异常兜底（任何 handler 抛异常都不得
+    // 穿过 Workflow 线程），统一回 500 并记录日志。
+    try
     {
-        m_pMembers->Touch(req);
+        if (m_pMembers)
+        {
+            m_pMembers->Touch(req);
+        }
+        if (m_pMetrics != nullptr)
+        {
+            m_pMetrics->SetGauge("http.members", static_cast<double>(m_pMembers != nullptr ? m_pMembers->Count() : 0));
+        }
+        if (!m_router.Dispatch(req, resp))
+        {
+            resp.WriteText("Not Found", "404", "text/plain");
+        }
+    }
+    catch (const std::exception& e)
+    {
+        common::log::CLogger::Instance().Error("[DataHub] 请求处理异常: " + std::string(e.what()));
+        resp.WriteText("Internal Server Error", "500", "text/plain");
+    }
+    catch (...)
+    {
+        common::log::CLogger::Instance().Error("[DataHub] 请求处理未知异常");
+        resp.WriteText("Internal Server Error", "500", "text/plain");
     }
 
-    if (!m_router.Dispatch(req, resp))
+    // 按状态码分布记录（供错误率 / 可用性观测）。
+    if (m_pMetrics != nullptr)
     {
-        resp.WriteText("Not Found", "404", "text/plain");
+        std::string strStatus = resp.StatusCode();
+        std::string strClass = "5xx";
+        if (!strStatus.empty())
+        {
+            char cFirst = strStatus[0];
+            if (cFirst == '2')
+                strClass = "2xx";
+            else if (cFirst == '3')
+                strClass = "3xx";
+            else if (cFirst == '4')
+                strClass = "4xx";
+        }
+        m_pMetrics->Inc("http.status." + strClass);
     }
 
     // 统一响应头。
@@ -171,19 +222,14 @@ bool CHttpServerModule::HandleIndex(web::CHttpResponse& resp)
 
 bool CHttpServerModule::HandleStatic(web::CHttpResponse& resp, const std::string& strName)
 {
-    std::string strDir = m_strWebDir;
-    if (strDir.empty())
+    // m_strWebDir 已在构造时归一化；仍为空表示 HOME 不可用。
+    if (m_strWebDir.empty())
     {
-        const char* szHome = ::getenv("HOME");
-        if (szHome == nullptr)
-        {
-            resp.WriteText("static unavailable", "503", "text/plain");
-            return true;
-        }
-        strDir = std::string(szHome) + "/.datahub";
+        resp.WriteText("static unavailable", "503", "text/plain");
+        return true;
     }
     std::string strContent;
-    if (!web::CHttpText::ReadFile(strDir + "/" + strName, strContent))
+    if (!web::CHttpText::ReadFile(m_strWebDir + "/" + strName, strContent))
     {
         resp.WriteText("not found", "404", "text/plain");
         return true;

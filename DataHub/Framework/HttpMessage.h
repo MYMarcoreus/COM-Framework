@@ -66,6 +66,9 @@ class CHttpResponse
     // @param strRangeHeader  请求的 Range 头（空表示完整返回）
     void WriteFile(const std::string& strName, const char* pData, size_t nSize, const std::string& strRangeHeader);
 
+    // 当前响应状态码（"200"/"404"/...；尚未写入时为空串）。供可观测性统计。
+    std::string StatusCode() const;
+
    private:
     WFHttpTask* m_pServerTask;
 };

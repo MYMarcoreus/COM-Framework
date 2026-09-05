@@ -60,9 +60,10 @@ bool CHttpHandlers::HandleList(web::CHttpRequest& req, web::CHttpResponse& resp)
             oss << ",";
         }
         bFirst = false;
-        oss << "{\"id\":\"" << info.strId << "\"" << ",\"type\":\"" << (info.kind == DataKind::kText ? "text" : "file")
-            << "\"" << ",\"name\":\"" << web::CHttpText::HtmlEscape(info.strName) << "\"" << ",\"from\":\""
-            << web::CHttpText::HtmlEscape(info.strFrom) << "\"" << ",\"size\":" << info.nSize
+        oss << "{\"id\":" << web::CHttpText::JsonString(info.strId)
+            << ",\"type\":" << web::CHttpText::JsonString(info.kind == DataKind::kText ? "text" : "file")
+            << ",\"name\":" << web::CHttpText::JsonString(info.strName)
+            << ",\"from\":" << web::CHttpText::JsonString(info.strFrom) << ",\"size\":" << info.nSize
             << ",\"time\":" << info.nCreateMs << "}";
     }
     oss << "]}";
@@ -97,8 +98,8 @@ bool CHttpHandlers::HandleMembers(web::CHttpRequest& req, web::CHttpResponse& re
             oss << ",";
         }
         bFirst = false;
-        oss << "{\"id\":\"" << web::CHttpText::HtmlEscape(pair.first) << "\"" << ",\"ip\":\""
-            << web::CHttpText::HtmlEscape(pair.second.strIp) << "\"" << ",\"first\":" << pair.second.nFirstMs
+        oss << "{\"id\":" << web::CHttpText::JsonString(pair.first)
+            << ",\"ip\":" << web::CHttpText::JsonString(pair.second.strIp) << ",\"first\":" << pair.second.nFirstMs
             << ",\"last\":" << pair.second.nLastMs << "}";
     }
     oss << "]}";
@@ -130,7 +131,7 @@ bool CHttpHandlers::HandleUploadText(web::CHttpRequest& req, web::CHttpResponse&
         return true;
     }
     std::ostringstream oss;
-    oss << "{\"id\":\"" << strId << "\"}";
+    oss << "{\"id\":" << web::CHttpText::JsonString(strId) << "}";
     resp.WriteJson(oss.str());
     return true;
 }
@@ -181,7 +182,7 @@ bool CHttpHandlers::HandleUploadFile(web::CHttpRequest& req, web::CHttpResponse&
         return true;
     }
     std::ostringstream oss;
-    oss << "{\"id\":\"" << strId << "\"}";
+    oss << "{\"id\":" << web::CHttpText::JsonString(strId) << "}";
     resp.WriteJson(oss.str());
     return true;
 }

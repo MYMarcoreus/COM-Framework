@@ -116,6 +116,12 @@ void CHttpResponse::WriteJson(const std::string& strJson, const char* szStatus)
     WriteText(strJson, szStatus, "application/json; charset=utf-8");
 }
 
+std::string CHttpResponse::StatusCode() const
+{
+    const char* szCode = m_pServerTask->get_resp()->get_status_code();
+    return szCode != nullptr ? std::string(szCode) : std::string();
+}
+
 void CHttpResponse::WriteText(const std::string& strBody, const char* szStatus, const char* szType)
 {
     protocol::HttpResponse* pResp = m_pServerTask->get_resp();

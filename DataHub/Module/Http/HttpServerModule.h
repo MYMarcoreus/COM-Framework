@@ -5,11 +5,12 @@
 #include <string>
 
 #include "Framework/HttpRouter.h"
-#include "Module/Storage/IDataStore.h"
 #include "Module/Http/IHttpService.h"
 #include "Module/InterfaceMap.h"
 #include "Module/Module.h"
 #include "Module/ScopedInterfacePtr.h"
+#include "Module/Storage/IDataStore.h"
+#include "Observability/IMetrics.h"
 #include "workflow/WFHttpServer.h"
 
 namespace datahub {
@@ -30,10 +31,14 @@ class CMemberService;
 ///   - 请求入口：OnRequest 回调 → 成员记录 → 路由分发 → 未命中回 404。
 ///
 /// 分层：
-///   - 框架层（web::）：CHttpRouter 路由注册表、CHttpIo 消息读写、
-///     CHttpEncoding 编解码、CHttpMedia 类型判定、CHttpFile 文件收发
+///   - 框架层（web::，Framework/ 目录）：CHttpRouter 路由注册表、CHttpRequest /
+///     CHttpResponse 消息读写（HttpMessage.h）、CHttpText 文本编解码工具
 ///   - 业务层：CHttpHandlers（各 API 业务处理）、CMemberService（在线成员）
 ///   - 装配层：本类（生命周期 + 路由注册）
+///
+/// 可观测性（可选依赖 IMetrics，未装配时不上报）：在 OnRequest 记录
+///   http.requests（累计请求数）、http.status.<2xx/3xx/4xx/5xx>（状态码分布）、
+///   http.members（在线成员数仪表）。
 ///
 /// 前端页面为独立资源文件，构建时由 Makefile 部署到用户目录
 /// `~/.datahub/`（index.html + style.css + app.js），运行时从磁盘读取。
@@ -78,9 +83,10 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     std::string m_strIndexHtml;  // 已加载的 index.html 内容（空表示加载失败）
 
     sc::ScopedInterfacePtr<IDataStore> m_pStore;
-    std::unique_ptr<CMemberService> m_pMembers;  // 成员服务（业务层）
-    std::unique_ptr<CHttpHandlers> m_pHandlers;  // 业务 API（业务层）
-    web::CHttpRouter m_router;                   // 路由注册表（框架层）
+    sc::ScopedInterfacePtr<sc::IMetrics> m_pMetrics;  // 指标注册表（可选，缺失不上报）
+    std::unique_ptr<CMemberService> m_pMembers;       // 成员服务（业务层）
+    std::unique_ptr<CHttpHandlers> m_pHandlers;       // 业务 API（业务层）
+    web::CHttpRouter m_router;                        // 路由注册表（框架层）
     WFHttpServer m_server;
     bool m_bStarted;
 };

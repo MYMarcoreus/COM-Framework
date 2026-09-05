@@ -123,6 +123,59 @@ std::string CHttpText::HtmlEscape(const std::string& strRaw)
     return strOut;
 }
 
+std::string CHttpText::JsonEscape(const std::string& strRaw)
+{
+    static const char* const kHex = "0123456789abcdef";
+    std::string strOut;
+    strOut.reserve(strRaw.size() + 8);
+    for (unsigned char c : strRaw)
+    {
+        switch (c)
+        {
+            case '"':
+                strOut += "\\\"";
+                break;
+            case '\\':
+                strOut += "\\\\";
+                break;
+            case '\b':
+                strOut += "\\b";
+                break;
+            case '\f':
+                strOut += "\\f";
+                break;
+            case '\n':
+                strOut += "\\n";
+                break;
+            case '\r':
+                strOut += "\\r";
+                break;
+            case '\t':
+                strOut += "\\t";
+                break;
+            default:
+                if (c < 0x20)
+                {
+                    // 其余控制符 → \u00XX。
+                    strOut += "\\u00";
+                    strOut.push_back(kHex[(c >> 4) & 0x0F]);
+                    strOut.push_back(kHex[c & 0x0F]);
+                }
+                else
+                {
+                    strOut.push_back(static_cast<char>(c));
+                }
+                break;
+        }
+    }
+    return strOut;
+}
+
+std::string CHttpText::JsonString(const std::string& strRaw)
+{
+    return "\"" + JsonEscape(strRaw) + "\"";
+}
+
 std::string CHttpText::MimeType(const std::string& strName)
 {
     std::string strLower = strName;

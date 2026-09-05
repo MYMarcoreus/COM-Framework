@@ -7,7 +7,7 @@ namespace web {
 
 /// @brief HTTP 文本工具（纯函数，无 workflow 依赖）。
 ///
-/// URL / HTML 编解码、非 ASCII 判断、磁盘文件读取、MIME 类型判定。
+/// URL / HTML / JSON 编解码、非 ASCII 判断、磁盘文件读取、MIME 类型判定。
 class CHttpText
 {
    public:
@@ -23,6 +23,12 @@ class CHttpText
 
     // HTML 转义（防 XSS）。
     static std::string HtmlEscape(const std::string& strRaw);
+
+    // JSON 字符串转义（"、\ 及控制符 → 合法 JSON 转义；UTF-8 多字节原样保留）。
+    static std::string JsonEscape(const std::string& strRaw);
+
+    // JSON 字符串字面量（返回带引号的合法 JSON 字符串，用于拼 JSON 成员值）。
+    static std::string JsonString(const std::string& strRaw);
 
     // 依据文件名后缀返回 MIME 类型；未知返回 "application/octet-stream"。
     static std::string MimeType(const std::string& strName);
