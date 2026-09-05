@@ -18,11 +18,11 @@ namespace datahub {
 CWebPageController::CWebPageController(const std::string& strWebDir) : m_strWebDir(strWebDir)
 {
     static const Page kPages[] = {
-        {"/", "index.html", "text/html; charset=utf-8", "前端页面未加载", "503", {}},
+        {"/", "tenants.html", "text/html; charset=utf-8", "前端页面未加载", "503", {}},
+        {"/chat", "index.html", "text/html; charset=utf-8", "前端页面未加载", "503", {}},
         {"/style.css", "style.css", "text/css; charset=utf-8", "not found", "404", {}},
         {"/app.js", "app.js", "text/javascript; charset=utf-8", "not found", "404", {}},
         {"/common.js", "common.js", "text/javascript; charset=utf-8", "not found", "404", {}},
-        {"/tenants", "tenants.html", "text/html; charset=utf-8", "not found", "404", {}},
         {"/tenants.js", "tenants.js", "text/javascript; charset=utf-8", "not found", "404", {}},
     };
     m_pages.assign(kPages, kPages + sizeof(kPages) / sizeof(kPages[0]));
@@ -37,11 +37,11 @@ bool CWebPageController::Load()
         {
             continue;
         }
-        // 首页缺失视为致命：GET / 回 503；其余静态资源尽力加载（缺失回 404）。
+        // 根页缺失视为致命：GET /（租户管理页）回 503；其余尽力加载（缺失回对应状态）。
         if (std::string(m_pages[i].szRoute) == "/")
         {
-            common::log::CLogger::Instance().Warn("[DataHub] 前端 index.html 加载失败: " + m_strWebDir +
-                                                  "/index.html（GET / 将返回 503）");
+            common::log::CLogger::Instance().Warn("[DataHub] 前端根页 tenants.html 加载失败: " + m_strWebDir +
+                                                  "/tenants.html（GET / 将返回 503）");
         }
     }
     return IndexLoaded();

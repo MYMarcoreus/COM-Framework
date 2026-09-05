@@ -1,4 +1,4 @@
-// DataHub 租户管理页逻辑（/tenants）：创建 / 凭码加入 / 进入 / 移出。
+// DataHub 根页（/）租户选择/管理逻辑：创建 / 凭码加入 / 进入 / 移出。
 // 共享状态（账号、我的租户、当前租户）来自 common.js 的 window.DH。
 (function () {
   'use strict';
@@ -46,7 +46,7 @@
     // 当前聊天租户提示。
     var curName = DH.currentName + (DH.currentCode !== 'public' ? ' · ' + DH.currentCode : '');
     $('mHint').innerHTML = '当前聊天租户：<b>' + esc(curName) + '</b>' +
-      '　<a class="link" href="/">去聊天 →</a>';
+      '　<a class="link" href="/chat">去聊天 →</a>';
 
     // 列表：公共租户恒在，其后为已加入租户。
     var html = rowHtml('public', '公共租户', 'public', '开放', '进入');
@@ -82,12 +82,12 @@
   function enter(code) {
     if (code === 'public') {
       DH.setCurrent('public');
-      location.href = '/';
+      location.href = '/chat';
       return;
     }
     DH.apiFetch('/api/tenant/join', { method: 'POST', body: code })
       .then(function (r) { if (!r.ok) throw new Error('无法加入 (' + r.status + ')'); return r.json(); })
-      .then(function () { DH.setCurrent(code); location.href = '/'; })
+      .then(function () { DH.setCurrent(code); location.href = '/chat'; })
       .catch(function (e) { toast(e.message || '进入失败'); });
   }
 

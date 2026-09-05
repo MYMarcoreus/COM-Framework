@@ -108,7 +108,7 @@ body {
   background:rgba(17,24,39,.88); color:#fff; padding:9px 16px; border-radius:8px;
   font-size:13px; z-index:100; display:none; box-shadow:0 4px 12px rgba(0,0,0,.2); }
 
-/* ===== 租户栏（仅标识当前租户；切换/管理在 /tenants） ===== */
+/* ===== 租户栏（仅标识当前租户；切换/管理在根页 /） ===== */
 .tenantbar { background:#24313f; color:#fff; padding:6px 16px; flex-shrink:0;
   display:flex; align-items:center; gap:10px; font-size:13px; }
 .tenantbar .tn-label { opacity:.8; flex-shrink:0; }
@@ -120,7 +120,7 @@ body {
 .tenantbar .tn-manage:hover { background:rgba(255,255,255,.28); }
 .tenantbar .tn-manage:active { opacity:.8; }
 
-/* ===== 租户管理页（/tenants） ===== */
+/* ===== 租户选择页（根路径 /） ===== */
 body.mpage { overflow:auto; display:block; }
 .mpage .topbar .brand { cursor:pointer; }
 .mpage .topbar .back { color:#fff; background:rgba(255,255,255,.16); padding:5px 12px; border-radius:12px; font-size:13px; text-decoration:none; }

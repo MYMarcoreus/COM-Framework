@@ -4,7 +4,7 @@
 
   // 公共小件由 common.js 提供：DH.CLIENT_ID（账号）/ DH.tenants（我的租户）/
   // DH.currentCode（当前租户）/ DH.apiFetch（自动附 X-Client-Id、X-Tenant）。
-  // 租户的创建 / 加入 / 退出已移至独立管理页 /tenants，本页仅保留轻量切换。
+  // 租户的选择 / 创建 / 加入 / 退出在根页 / 进行；本页固定于当前租户。
   var CLIENT_ID = DH.CLIENT_ID;
   function apiFetch(url, options) { return DH.apiFetch(url, options); }
 
@@ -294,9 +294,9 @@
       .catch(function(){ $('memberList').innerHTML = '<div style="color:var(--muted);font-size:13px;">加载失败</div>'; });
   }
 
-  // ============ 当前租户（切换/创建/加入/退出一律在 /tenants 管理页） ============
+  // ============ 当前租户（切换/创建/加入/退出一律在根页 / 租户选择） ============
   // 租户 = 有边界的组织。聊天页固定于“当前租户”、不在页面内切换租户，
-  // 以免削弱租户隔离的语义：进入其它租户需到 /tenants 选“进入”。
+  // 以免削弱租户隔离的语义：进入其它租户需回到根页 / 选“进入”。
   function initTenantBar() {
     $('tenantName').textContent = DH.currentName;
     // 非公共租户：直接打开/刷新本页（或从管理页跳回）时确保成员身份（幂等）。
@@ -443,7 +443,7 @@
   }
 
   // ============ 启动 ============
-  // 当前租户由 /tenants 决定（common.js 已 load）；聊天页固定于该租户，不在页内切换。
+  // 当前租户由根页 /（租户选择）决定（common.js 已 load）；聊天页固定于该租户，不在页内切换。
   initTenantBar();
   poll();
   setInterval(poll, POLL_MS);

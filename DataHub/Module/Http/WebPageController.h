@@ -34,7 +34,7 @@ class CWebPageController
     // 首页是否已成功加载。
     bool IndexLoaded() const;
 
-    // 注册本控制器负责的全部路由（按 m_pages 表：/、静态资源与 /tenants 页）。
+    // 注册本控制器负责的全部路由（按 m_pages 表：/ 租户管理页、/chat 聊天室与静态资源）。
     void RegisterRoutes(web::CHttpRouter& router);
 
    private:
@@ -49,7 +49,7 @@ class CWebPageController
     // 一份可注册资源：路由描述 + 已加载内容（页面 / 静态资源共用）。
     struct Page
     {
-        const char* szRoute;          // 路由（如 "/"、"/tenants"）
+        const char* szRoute;          // 路由（如 "/"、"/chat"）
         const char* szFile;           // 磁盘文件名（webDir 下）
         const char* szMime;           // Content-Type
         const char* szMissingBody;    // 资源缺失时的响应体
