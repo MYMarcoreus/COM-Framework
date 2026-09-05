@@ -58,6 +58,58 @@ std::string CHttpRequest::Header(const char* szName) const
     return std::string();
 }
 
+std::string CHttpRequest::QueryParam(const char* szName) const
+{
+    std::string strUri = m_pServerTask->get_req()->get_request_uri();
+    std::string::size_type nQ = strUri.find('?');
+    if (nQ == std::string::npos)
+    {
+        return std::string();
+    }
+    std::string strQuery = strUri.substr(nQ + 1);
+    std::string::size_type nPos = 0;
+    while (nPos <= strQuery.size())
+    {
+        std::string::size_type nAmp = strQuery.find('&', nPos);
+        if (nAmp == std::string::npos)
+        {
+            nAmp = strQuery.size();
+        }
+        std::string strPair = strQuery.substr(nPos, nAmp - nPos);
+        std::string::size_type nEq = strPair.find('=');
+        std::string strKey = nEq == std::string::npos ? strPair : strPair.substr(0, nEq);
+        if (strKey == szName)
+        {
+            return nEq == std::string::npos ? std::string() : strPair.substr(nEq + 1);
+        }
+        if (nAmp == strQuery.size())
+        {
+            break;
+        }
+        nPos = nAmp + 1;
+    }
+    return std::string();
+}
+
+std::uint64_t CHttpRequest::ContentLength() const
+{
+    std::string strLen = Header("Content-Length");
+    if (strLen.empty())
+    {
+        return 0;
+    }
+    std::uint64_t nLen = 0;
+    for (char c : strLen)
+    {
+        if (c < '0' || c > '9')
+        {
+            return 0;
+        }
+        nLen = nLen * 10 + static_cast<std::uint64_t>(c - '0');
+    }
+    return nLen;
+}
+
 std::string CHttpRequest::Body() const
 {
     protocol::HttpRequest* pReq = m_pServerTask->get_req();
@@ -128,6 +180,12 @@ void CHttpResponse::WriteText(const std::string& strBody, const char* szStatus, 
     pResp->set_status_code(szStatus);
     pResp->add_header_pair("Content-Type", szType);
     pResp->append_output_body(strBody.data(), strBody.size());
+}
+
+void CHttpResponse::AddHeader(const char* szName, const char* szValue)
+{
+    protocol::HttpResponse* pResp = m_pServerTask->get_resp();
+    pResp->add_header_pair(szName, szValue);
 }
 
 void CHttpResponse::WriteFile(const std::string& strName, const char* pData, size_t nSize,

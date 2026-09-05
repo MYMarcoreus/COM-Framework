@@ -16,7 +16,8 @@ namespace datahub {
 using sc::DataItemInfo;
 using sc::DataKind;
 
-CHttpHandlers::CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers) : m_pStore(pStore), m_pMembers(pMembers)
+CHttpHandlers::CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers, std::uint64_t nMaxBodyBytes)
+    : m_pStore(pStore), m_pMembers(pMembers), m_nMaxBodyBytes(nMaxBodyBytes)
 {}
 
 /// @brief 注册本控制器负责的全部业务路由（装配层 Initialize 时调用）。
@@ -49,7 +50,28 @@ bool CHttpHandlers::HandleList(web::CHttpRequest& req, web::CHttpResponse& resp)
         resp.WriteJson("{\"error\":\"store unavailable\"}", "500");
         return true;
     }
-    std::vector<DataItemInfo> vecItems = m_pStore->List();
+    // 游标增量同步：?since=<seq> 只拉新增（按序号升序，旧→新）；缺省返回全量。
+    std::uint64_t nSince = 0;
+    std::string strSince = req.QueryParam("since");
+    if (!strSince.empty())
+    {
+        std::uint64_t nParsed = 0;
+        bool bValid = true;
+        for (char c : strSince)
+        {
+            if (c < '0' || c > '9')
+            {
+                bValid = false;
+                break;
+            }
+            nParsed = nParsed * 10 + static_cast<std::uint64_t>(c - '0');
+        }
+        if (bValid)
+        {
+            nSince = nParsed;
+        }
+    }
+    std::vector<DataItemInfo> vecItems = m_pStore->ListSince(nSince);
     std::ostringstream oss;
     oss << "{\"items\":[";
     bool bFirst = true;
@@ -64,7 +86,7 @@ bool CHttpHandlers::HandleList(web::CHttpRequest& req, web::CHttpResponse& resp)
             << ",\"type\":" << web::CHttpText::JsonString(info.kind == DataKind::kText ? "text" : "file")
             << ",\"name\":" << web::CHttpText::JsonString(info.strName)
             << ",\"from\":" << web::CHttpText::JsonString(info.strFrom) << ",\"size\":" << info.nSize
-            << ",\"time\":" << info.nCreateMs << "}";
+            << ",\"seq\":" << info.nSeq << ",\"time\":" << info.nCreateMs << "}";
     }
     oss << "]}";
     resp.WriteJson(oss.str());
@@ -123,6 +145,11 @@ bool CHttpHandlers::HandleUploadText(web::CHttpRequest& req, web::CHttpResponse&
         resp.WriteJson("{\"error\":\"empty body\"}", "400");
         return true;
     }
+    if (m_nMaxBodyBytes > 0 && static_cast<std::uint64_t>(strBody.size()) > m_nMaxBodyBytes)
+    {
+        resp.WriteJson("{\"error\":\"body too large\"}", "413");
+        return true;
+    }
     std::string strFrom = CMemberService::ClientId(req);
     std::string strId = m_pStore->SaveText(strBody, strFrom);
     if (strId.empty())
@@ -174,6 +201,11 @@ bool CHttpHandlers::HandleUploadFile(web::CHttpRequest& req, web::CHttpResponse&
         resp.WriteJson("{\"error\":\"empty body\"}", "400");
         return true;
     }
+    if (m_nMaxBodyBytes > 0 && static_cast<std::uint64_t>(strBody.size()) > m_nMaxBodyBytes)
+    {
+        resp.WriteJson("{\"error\":\"body too large\"}", "413");
+        return true;
+    }
     std::string strFrom = CMemberService::ClientId(req);
     std::string strId = m_pStore->SaveFile(strFileName, strBody.data(), strBody.size(), strFrom);
     if (strId.empty())
@@ -221,6 +253,19 @@ bool CHttpHandlers::HandleDelete(web::CHttpRequest& req, web::CHttpResponse& res
         return true;
     }
     std::string strId = web::CHttpText::UrlDecode(req.PathParam());
+    // 归属校验：仅允许删除自己创建的数据项；来源为空的历史数据项可任意删。
+    DataItemInfo info;
+    if (!m_pStore->GetInfo(strId, info))
+    {
+        resp.WriteJson("{\"error\":\"not found\"}", "404");
+        return true;
+    }
+    std::string strRequester = CMemberService::ClientId(req);
+    if (!info.strFrom.empty() && info.strFrom != strRequester)
+    {
+        resp.WriteJson("{\"error\":\"forbidden\"}", "403");
+        return true;
+    }
     if (!m_pStore->Remove(strId))
     {
         resp.WriteJson("{\"error\":\"not found\"}", "404");

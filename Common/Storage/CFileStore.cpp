@@ -59,13 +59,23 @@ std::string CFileStore::SaveText(const std::string& strContent, const std::strin
         return std::string();
     }
     std::lock_guard<std::mutex> lock(m_mutex);
+    const std::uint64_t nPayload = static_cast<std::uint64_t>(strContent.size());
+    // 配额检查：条数 / 单条大小 / 总容量任一超限则拒绝。
+    if ((m_nMaxItems > 0 && m_mapItems.size() >= m_nMaxItems) ||
+        (m_nMaxItemBytes > 0 && nPayload > m_nMaxItemBytes) ||
+        (m_nMaxTotalBytes > 0 && m_nTotalBytes + nPayload > m_nMaxTotalBytes))
+    {
+        return std::string();
+    }
     Item item;
     item.kind = StoreItemKind::kText;
     item.strFrom = strFrom;
     item.strText = strContent;
     item.nCreateMs = NowMs();
+    item.nSeq = ++m_nNextSeq;
     std::string strId = GenerateId();
     m_mapItems[strId] = std::move(item);
+    m_nTotalBytes += nPayload;
     return strId;
 }
 
@@ -77,6 +87,14 @@ std::string CFileStore::SaveFile(const std::string& strName, const void* pData, 
         return std::string();
     }
     std::lock_guard<std::mutex> lock(m_mutex);
+    const std::uint64_t nPayload = static_cast<std::uint64_t>(nSize);
+    // 配额检查：条数 / 单条大小 / 总容量任一超限则拒绝。
+    if ((m_nMaxItems > 0 && m_mapItems.size() >= m_nMaxItems) ||
+        (m_nMaxItemBytes > 0 && nPayload > m_nMaxItemBytes) ||
+        (m_nMaxTotalBytes > 0 && m_nTotalBytes + nPayload > m_nMaxTotalBytes))
+    {
+        return std::string();
+    }
     Item item;
     item.kind = StoreItemKind::kFile;
     item.strName = strName.empty() ? "file.bin" : strName;
@@ -84,8 +102,10 @@ std::string CFileStore::SaveFile(const std::string& strName, const void* pData, 
     const char* pBytes = static_cast<const char*>(pData);
     item.vecData.assign(pBytes, pBytes + nSize);
     item.nCreateMs = NowMs();
+    item.nSeq = ++m_nNextSeq;
     std::string strId = GenerateId();
     m_mapItems[strId] = std::move(item);
+    m_nTotalBytes += nPayload;
     return strId;
 }
 
@@ -105,6 +125,7 @@ bool CFileStore::GetInfo(const std::string& strId, StoreItemInfo& info) const
     info.nSize = item.kind == StoreItemKind::kText ? static_cast<std::uint64_t>(item.strText.size())
                                                    : static_cast<std::uint64_t>(item.vecData.size());
     info.nCreateMs = item.nCreateMs;
+    info.nSeq = item.nSeq;
     return true;
 }
 
@@ -149,6 +170,7 @@ std::vector<StoreItemInfo> CFileStore::List() const
         info.nSize = item.kind == StoreItemKind::kText ? static_cast<std::uint64_t>(item.strText.size())
                                                        : static_cast<std::uint64_t>(item.vecData.size());
         info.nCreateMs = item.nCreateMs;
+        info.nSeq = item.nSeq;
         vecResult.push_back(info);
     }
     // 按创建时间倒序（新的在前）。
@@ -157,10 +179,73 @@ std::vector<StoreItemInfo> CFileStore::List() const
     return vecResult;
 }
 
+std::vector<StoreItemInfo> CFileStore::ListSince(std::uint64_t nSince) const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<StoreItemInfo> vecResult;
+    for (const auto& pair : m_mapItems)
+    {
+        const Item& item = pair.second;
+        if (item.nSeq <= nSince)
+        {
+            continue;
+        }
+        StoreItemInfo info;
+        info.strId = pair.first;
+        info.kind = item.kind;
+        info.strName = item.strName;
+        info.strFrom = item.strFrom;
+        info.nSize = item.kind == StoreItemKind::kText ? static_cast<std::uint64_t>(item.strText.size())
+                                                       : static_cast<std::uint64_t>(item.vecData.size());
+        info.nCreateMs = item.nCreateMs;
+        info.nSeq = item.nSeq;
+        vecResult.push_back(info);
+    }
+    // 按序号升序（旧→新），便于客户端按顺序追加渲染。
+    std::sort(vecResult.begin(), vecResult.end(),
+              [](const StoreItemInfo& a, const StoreItemInfo& b) { return a.nSeq < b.nSeq; });
+    return vecResult;
+}
+
+void CFileStore::SetMaxItems(std::size_t nMax)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_nMaxItems = nMax;
+}
+
+void CFileStore::SetMaxTotalBytes(std::uint64_t nMax)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_nMaxTotalBytes = nMax;
+}
+
+void CFileStore::SetMaxItemBytes(std::uint64_t nMax)
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_nMaxItemBytes = nMax;
+}
+
+std::uint64_t CFileStore::TotalBytes() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_nTotalBytes;
+}
+
 bool CFileStore::Remove(const std::string& strId)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_mapItems.erase(strId) > 0;
+    auto it = m_mapItems.find(strId);
+    if (it == m_mapItems.end())
+    {
+        return false;
+    }
+    const Item& item = it->second;
+    const std::uint64_t nPayload = item.kind == StoreItemKind::kText
+                                       ? static_cast<std::uint64_t>(item.strText.size())
+                                       : static_cast<std::uint64_t>(item.vecData.size());
+    m_nTotalBytes -= nPayload;
+    m_mapItems.erase(it);
+    return true;
 }
 
 std::size_t CFileStore::Size() const
@@ -173,6 +258,8 @@ void CFileStore::Clear()
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_mapItems.clear();
+    m_nTotalBytes = 0;
+    // 注意：m_nNextSeq 不重置，避免清空后新数据序号回退导致游标错乱。
 }
 
 }  // namespace storage

@@ -25,7 +25,10 @@ using sc::IDataStore;
 class CDataStoreModule : public sc::CModule, public IDataStore
 {
    public:
-    CDataStoreModule();
+    // @param nMaxItems      最大数据条数（0 = 不限制）
+    // @param nMaxTotalBytes 最大内容总字节（0 = 不限制）
+    // @param nMaxItemBytes  单条内容最大字节（0 = 不限制）
+    CDataStoreModule(std::size_t nMaxItems = 0, std::uint64_t nMaxTotalBytes = 0, std::uint64_t nMaxItemBytes = 0);
 
     virtual ~CDataStoreModule();
 
@@ -41,6 +44,7 @@ class CDataStoreModule : public sc::CModule, public IDataStore
     bool GetText(const std::string& strId, std::string& strOut) const override;
     bool GetFile(const std::string& strId, std::string& strName, std::vector<char>& vecData) const override;
     std::vector<DataItemInfo> List() const override;
+    std::vector<DataItemInfo> ListSince(std::uint64_t nSince) const override;
     bool Remove(const std::string& strId) override;
 
     SC_DECLARE_INTERFACE_MAP();

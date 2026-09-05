@@ -5,8 +5,16 @@
 
 namespace datahub {
 
-/// @brief 创建数据存储模块。
-CDataStoreModule::CDataStoreModule() : sc::CModule("store"), m_pStore(new common::storage::CFileStore()) {}
+/// @brief 创建数据存储模块（可指定容量配额，0 = 不限制）。
+CDataStoreModule::CDataStoreModule(std::size_t nMaxItems, std::uint64_t nMaxTotalBytes,
+                                   std::uint64_t nMaxItemBytes)
+    : sc::CModule("store"),
+      m_pStore(new common::storage::CFileStore())
+{
+    m_pStore->SetMaxItems(nMaxItems);
+    m_pStore->SetMaxTotalBytes(nMaxTotalBytes);
+    m_pStore->SetMaxItemBytes(nMaxItemBytes);
+}
 
 /// @brief 销毁数据存储模块。
 CDataStoreModule::~CDataStoreModule() {}
@@ -51,6 +59,7 @@ bool CDataStoreModule::GetInfo(const std::string& strId, DataItemInfo& info) con
     info.strFrom = storeInfo.strFrom;
     info.nSize = storeInfo.nSize;
     info.nCreateMs = storeInfo.nCreateMs;
+    info.nSeq = storeInfo.nSeq;
     return true;
 }
 
@@ -78,6 +87,27 @@ std::vector<DataItemInfo> CDataStoreModule::List() const
         info.strFrom = storeInfo.strFrom;
         info.nSize = storeInfo.nSize;
         info.nCreateMs = storeInfo.nCreateMs;
+        info.nSeq = storeInfo.nSeq;
+        vecResult.push_back(info);
+    }
+    return vecResult;
+}
+
+std::vector<DataItemInfo> CDataStoreModule::ListSince(std::uint64_t nSince) const
+{
+    std::vector<DataItemInfo> vecResult;
+    std::vector<common::storage::StoreItemInfo> vecStore = m_pStore->ListSince(nSince);
+    vecResult.reserve(vecStore.size());
+    for (const common::storage::StoreItemInfo& storeInfo : vecStore)
+    {
+        DataItemInfo info;
+        info.strId = storeInfo.strId;
+        info.kind = storeInfo.kind == common::storage::StoreItemKind::kText ? DataKind::kText : DataKind::kFile;
+        info.strName = storeInfo.strName;
+        info.strFrom = storeInfo.strFrom;
+        info.nSize = storeInfo.nSize;
+        info.nCreateMs = storeInfo.nCreateMs;
+        info.nSeq = storeInfo.nSeq;
         vecResult.push_back(info);
     }
     return vecResult;

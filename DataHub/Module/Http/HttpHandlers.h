@@ -1,11 +1,15 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include "Framework/HttpMessage.h"
 #include "Module/Storage/IDataStore.h"
 
 namespace datahub {
+
+// 默认单次上传/请求体上限（字节）：32MB。可由装配层按配置覆盖。
+static const std::uint64_t kDefaultMaxBodyBytes = 33554432ULL;
 
 // 前置声明（装配层持有实例）。
 class CMemberService;
@@ -20,9 +24,11 @@ namespace web { class CHttpRouter; }
 class CHttpHandlers
 {
    public:
-    // @param pStore   数据存储（IDataStore，装配层注入）
-    // @param pMembers 成员服务（CMemberService，装配层注入）
-    CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers);
+    // @param pStore         数据存储（IDataStore，装配层注入）
+    // @param pMembers       成员服务（CMemberService，装配层注入）
+    // @param nMaxBodyBytes  单次上传/请求体上限（字节）；超过返回 413。
+    CHttpHandlers(sc::IDataStore* pStore, CMemberService* pMembers,
+                  std::uint64_t nMaxBodyBytes = kDefaultMaxBodyBytes);
 
     // 注册本控制器负责的全部业务路由（由装配层在 Initialize 时调用）。
     void RegisterRoutes(web::CHttpRouter& router);
@@ -51,6 +57,7 @@ class CHttpHandlers
    private:
     sc::IDataStore* m_pStore;  // 数据存储（生命周期由装配层管理）
     CMemberService* m_pMembers;
+    std::uint64_t m_nMaxBodyBytes;  // 单次上传/请求体上限（字节）
 };
 
 }  // namespace datahub

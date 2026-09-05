@@ -4,10 +4,10 @@
 #include <exception>
 #include <string>
 
-#include "Framework/HttpText.h"
 #include "Log/Logger.h"
 #include "Module/Http/HttpHandlers.h"
 #include "Module/Http/MemberService.h"
+#include "Module/Http/WebPageController.h"
 #include "Module/InterfaceMap.h"
 #include "Module/ResolveContext.h"
 #include "workflow/HttpMessage.h"
@@ -16,9 +16,17 @@ namespace datahub {
 
 /// @brief 创建 HTTP 服务模块。
 CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir)
+    : CHttpServerModule(nPort, strWebDir, kDefaultMaxBodyBytes)
+{
+}
+
+/// @brief 创建 HTTP 服务模块（带单次上传/请求体上限）。
+CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir,
+                                     std::uint64_t nMaxBodyBytes)
     : sc::CModule("http"),
       m_nPort(nPort),
       m_strWebDir(strWebDir),
+      m_nMaxBodyBytes(nMaxBodyBytes),
       m_server([this](WFHttpTask* pTask) { OnRequest(pTask); }),
       m_bStarted(false)
 {
@@ -26,7 +34,7 @@ CHttpServerModule::CHttpServerModule(std::uint16_t nPort, const std::string& str
     AddDependency(sc::IID_IDataStore());
 
     // 前端目录归一化：空串回退到默认用户目录 $HOME/.datahub（仅解析一次）。
-    // 后续 LoadIndexHtml / HandleStatic 直接使用 m_strWebDir，不再重复解析。
+    // 后续由 CWebPageController 使用该目录加载前端资源。
     if (m_strWebDir.empty())
     {
         const char* szHome = ::getenv("HOME");
@@ -57,43 +65,21 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
 
     // 业务层实例（依赖注入）。
     m_pMembers = std::unique_ptr<CMemberService>(new CMemberService());
-    m_pHandlers = std::unique_ptr<CHttpHandlers>(new CHttpHandlers(m_pStore.Get(), m_pMembers.get()));
+    m_pHandlers = std::unique_ptr<CHttpHandlers>(new CHttpHandlers(m_pStore.Get(), m_pMembers.get(), m_nMaxBodyBytes));
+    m_pPages = std::unique_ptr<CWebPageController>(new CWebPageController(m_strWebDir));
 
-    // 加载首页（index.html 内容，供 GET / 返回）。
-    if (!LoadIndexHtml())
+    // 前端资源一次性读入内存（缺失时由控制器回 503 / 404）。
+    if (m_pPages->Load())
     {
-        common::log::CLogger::Instance().Warn("[DataHub] 前端 index.html 加载失败: " + m_strWebDir +
-                                              "（GET / 将返回 503）");
+        common::log::CLogger::Instance().Info("[DataHub] 前端资源已加载: " + m_strWebDir);
     }
 
     // 注册路由（框架层 CHttpRouter）。
-    // —— 页面 / 静态资源（本模块直接处理）
-    m_router.Register({"GET", "/", [this](web::CHttpRequest&, web::CHttpResponse& resp) { return HandleIndex(resp); }});
-    m_router.Register({"GET", "/style.css", [this](web::CHttpRequest&, web::CHttpResponse& resp)
-    { return HandleStatic(resp, "style.css"); }});
-    m_router.Register({"GET", "/app.js",
-                       [this](web::CHttpRequest&, web::CHttpResponse& resp) { return HandleStatic(resp, "app.js"); }});
-
-    // —— 业务 API：由业务控制器（CHttpHandlers）自注册，路由归属业务类。
+    // —— 业务 API：由业务控制器（CHttpHandlers）自注册。
     m_pHandlers->RegisterRoutes(m_router);
+    // —— 页面 / 静态资源：由页面控制器（CWebPageController）自注册。
+    m_pPages->RegisterRoutes(m_router);
     return true;
-}
-
-/// @brief 从磁盘加载前端 index.html 文件。
-bool CHttpServerModule::LoadIndexHtml()
-{
-    // m_strWebDir 已在构造时归一化；仍为空表示 HOME 不可用。
-    if (m_strWebDir.empty())
-    {
-        return false;
-    }
-    std::string strContent;
-    if (!web::CHttpText::ReadFile(m_strWebDir + "/index.html", strContent))
-    {
-        return false;
-    }
-    m_strIndexHtml = strContent;
-    return !m_strIndexHtml.empty();
 }
 
 /// @brief 启动 HTTP 服务。
@@ -126,6 +112,7 @@ void CHttpServerModule::Stop()
 void CHttpServerModule::Shutdown()
 {
     Stop();
+    m_pPages.reset();
     m_pHandlers.reset();
     m_pMembers.reset();
     m_pStore.Reset();
@@ -204,39 +191,6 @@ void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
     // 统一响应头。
     protocol::HttpResponse* pRaw = pServerTask->get_resp();
     pRaw->add_header_pair("Server", "DataHub/1.0");
-}
-
-// ----------------------------------------------------------------------------
-// 首页与静态资源
-// ----------------------------------------------------------------------------
-bool CHttpServerModule::HandleIndex(web::CHttpResponse& resp)
-{
-    if (m_strIndexHtml.empty())
-    {
-        resp.WriteText("前端页面未加载", "503", "text/plain");
-        return true;
-    }
-    resp.WriteText(m_strIndexHtml, "200", "text/html; charset=utf-8");
-    return true;
-}
-
-bool CHttpServerModule::HandleStatic(web::CHttpResponse& resp, const std::string& strName)
-{
-    // m_strWebDir 已在构造时归一化；仍为空表示 HOME 不可用。
-    if (m_strWebDir.empty())
-    {
-        resp.WriteText("static unavailable", "503", "text/plain");
-        return true;
-    }
-    std::string strContent;
-    if (!web::CHttpText::ReadFile(m_strWebDir + "/" + strName, strContent))
-    {
-        resp.WriteText("not found", "404", "text/plain");
-        return true;
-    }
-    std::string strMime = web::CHttpText::MimeType(strName);
-    resp.WriteText(strContent, "200", (strMime + "; charset=utf-8").c_str());
-    return true;
 }
 
 SC_BEGIN_INTERFACE_MAP(CHttpServerModule, sc::CModule)

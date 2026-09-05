@@ -25,6 +25,7 @@ struct DataItemInfo
     std::string strFrom;     // 来源标识（如 "IP:port"）
     std::uint64_t nSize;     // 字节数
     std::int64_t nCreateMs;  // 创建时间（毫秒）
+    std::uint64_t nSeq = 0;  // 单调递增序号（增量同步游标）
 };
 
 /// @brief 数据存储接口。
@@ -60,6 +61,10 @@ SC_INTERFACE(IDataStore, "datahub::IDataStore", "63821b50-55e9-44df-a88a-8f899df
 
     // 列出全部数据项（按创建时间倒序）。
     virtual std::vector<DataItemInfo> List() const = 0;
+
+    // 列出"序号 > nSince"的数据项（按序号升序，旧→新）；nSince=0 返回全部。
+    // 供前端游标增量同步（since 轮询），避免每次全量拉取。
+    virtual std::vector<DataItemInfo> ListSince(std::uint64_t nSince) const = 0;
 
     // 按数据项标识删除；成功返回 true。
     virtual bool Remove(const std::string& strId) = 0;

@@ -3,9 +3,11 @@
   'use strict';
 
   // ============ 状态 ============
-  var seen = {};      // 已渲染的消息 id → true
-  var POLL_MS = 2000; // 轮询间隔
+  var seen = {};        // 已渲染的消息 id → true
+  var POLL_MS = 2000;   // 轮询间隔
   var membersShown = false;
+  var lastSeq = 0;      // 已收到的最新消息序号（游标增量同步）
+  var memberCount = 0;  // 在线成员数（状态栏展示）
 
   // ============ 客户端标识（跨请求标识同一浏览器，避免成员按端口膨胀） ============
   function getClientId() {
@@ -158,6 +160,25 @@
   var lastDateKey = '';
   function scrollBottom() { chatEl.scrollTop = chatEl.scrollHeight; }
 
+  // 状态栏：在线人数 + 已渲染消息数。
+  function refreshCount() {
+    $('statusText').textContent = memberCount + ' 人在线 · ' + chatEl.querySelectorAll('.msg').length + ' 条';
+  }
+
+  // 删除自己发送的消息（他人消息前端不显示删除按钮；越权时服务端回 403）。
+  function deleteMsg(id) {
+    apiFetch('/api/item/' + encodeURIComponent(id), { method: 'DELETE' })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if (j.ok) {
+          var el = chatEl.querySelector('[data-id="' + id + '"]');
+          if (el && el.parentNode) el.parentNode.removeChild(el);
+          refreshCount();
+        } else toast(j.error || '删除失败');
+      })
+      .catch(function(){ toast('网络错误'); });
+  }
+
   function isImageName(name) {
     return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name || '');
   }
@@ -179,6 +200,7 @@
 
     var row = document.createElement('div');
     row.className = 'msg ' + (mineFlag ? 'mine' : 'other');
+    row.setAttribute('data-id', id);
 
     var avatar = document.createElement('div');
     avatar.className = 'avatar';
@@ -241,8 +263,23 @@
 
     row.appendChild(avatar);
     row.appendChild(body);
+    if (mineFlag) {
+      // 自己发送的消息：追加删除入口（他人消息不提供）。
+      var del = document.createElement('span');
+      del.className = 'msg-del';
+      del.textContent = '删除';
+      del.title = '删除这条消息';
+      del.style.cssText = 'font-size:11px;color:#999;cursor:pointer;user-select:none;' +
+                          'align-self:flex-end;margin:0 8px 8px 0;';
+      del.onclick = function(ev){
+        ev.stopPropagation(); ev.preventDefault();
+        deleteMsg(id);
+      };
+      row.appendChild(del);
+    }
     chatEl.appendChild(row);
     scrollBottom();
+    refreshCount();
   }
 
   // ============ 成员 ============
@@ -309,31 +346,31 @@
       .catch(function(){ toast('网络错误'); });
   }
 
-  // ============ 轮询（同步消息 + 成员） ============
+  // ============ 轮询（游标增量同步消息 + 成员） ============
+  // GET /api/list?since=<seq> 只返回"序号 > since"的新增项（升序）；首次 since=0 拉全量。
+  // 前端无需每次全量拉取：消息/成员增多时轮询负载不随历史线性增长。
   function poll() {
-    apiFetch('/api/list')
+    apiFetch('/api/list' + (lastSeq > 0 ? '?since=' + lastSeq : ''))
       .then(function(r){ return r.json(); })
       .then(function(j){
         var items = j.items || [];
-        $('statusText').textContent = '在线 · ' + items.length + ' 条';
-        var arr = items.slice().reverse(); // 从旧到新
-        arr.forEach(function(it){
+        items.forEach(function(it){
+          if (it.seq > lastSeq) lastSeq = it.seq;   // 推进游标
           // 通过 from（客户端标识）判断是否自己发送：刷新后仍正确。
           var mineFlag = (it.from === CLIENT_ID);
           if (it.type === 'file') {
             renderMsg(it.id, 'file', it.name, '', mineFlag, it.from, it.size, it.time);
-          } else {
-            if (!seen[it.id]) {
-              apiFetch('/api/text/' + encodeURIComponent(it.id))
-                .then(function(r){ return r.text(); })
-                .then(function(text){
-                  renderMsg(it.id, 'text', '', text, it.from === CLIENT_ID, it.from, 0, it.time);
-                })
-                .catch(function(){});
-            }
+          } else if (!seen[it.id]) {
+            apiFetch('/api/text/' + encodeURIComponent(it.id))
+              .then(function(r){ return r.text(); })
+              .then(function(text){
+                renderMsg(it.id, 'text', '', text, it.from === CLIENT_ID, it.from, 0, it.time);
+              })
+              .catch(function(){});
           }
         });
         scrollBottom();
+        refreshCount();
       })
       .catch(function(){ $('statusText').textContent = '离线'; });
 
@@ -341,8 +378,8 @@
     apiFetch('/api/members')
       .then(function(r){ return r.json(); })
       .then(function(j){
-        var n = (j.members || []).length;
-        $('statusText').textContent = n + ' 人在线 · ' + chatEl.querySelectorAll('.msg').length + ' 条';
+        memberCount = (j.members || []).length;
+        refreshCount();
         if (membersShown) loadMembers();
       })
       .catch(function(){});

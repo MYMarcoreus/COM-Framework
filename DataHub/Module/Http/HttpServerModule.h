@@ -21,13 +21,15 @@ using sc::IHttpService;
 // 前置声明。
 class CHttpHandlers;
 class CMemberService;
+class CWebPageController;
 
 /// @brief HTTP 数据传输服务模块（装配层）。
 ///
 /// 职责（三层中的"模块装配层"）：
 ///   - 生命周期：Initialize（解析 IDataStore + 组装业务层 + 注册路由）/
 ///     Start / Stop / Shutdown；
-///   - 装配：创建 CMemberService / CHttpHandlers，注册路由到 web::CHttpRouter；
+///   - 装配：创建 CMemberService / CHttpHandlers / CWebPageController，
+///     注册路由到 web::CHttpRouter；
 ///   - 请求入口：OnRequest 回调 → 成员记录 → 路由分发 → 未命中回 404。
 ///
 /// 分层：
@@ -53,6 +55,10 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     //                 空串表示默认用户目录 `$HOME/.datahub`。
     explicit CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir = "");
 
+    // 创建 HTTP 服务模块（带单次上传/请求体上限）。
+    // @param nMaxBodyBytes 单次上传/请求体上限（字节；0 表示不限制）。
+    CHttpServerModule(std::uint16_t nPort, const std::string& strWebDir, std::uint64_t nMaxBodyBytes);
+
     virtual ~CHttpServerModule();
 
     bool Initialize(const sc::CResolveContext& ctx) override;
@@ -69,24 +75,16 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     // 请求处理回调（WFHttpServer 线程池中执行；lambda 捕获本实例）。
     void OnRequest(WFHttpTask* pServerTask);
 
-    // 首页 GET /：返回前端 index.html。
-    bool HandleIndex(web::CHttpResponse& resp);
-
-    // 静态资源 GET /style.css、/app.js。
-    bool HandleStatic(web::CHttpResponse& resp, const std::string& strName);
-
-    // 从磁盘加载 index.html 内容（Start 前调用）。
-    bool LoadIndexHtml();
-
     std::uint16_t m_nPort;
-    std::string m_strWebDir;     // 前端资源目录
-    std::string m_strIndexHtml;  // 已加载的 index.html 内容（空表示加载失败）
+    std::string m_strWebDir;        // 前端资源目录
+    std::uint64_t m_nMaxBodyBytes;  // 单次上传/请求体上限（字节；0 表示不限制）
 
     sc::ScopedInterfacePtr<IDataStore> m_pStore;
-    sc::ScopedInterfacePtr<sc::IMetrics> m_pMetrics;  // 指标注册表（可选，缺失不上报）
-    std::unique_ptr<CMemberService> m_pMembers;       // 成员服务（业务层）
-    std::unique_ptr<CHttpHandlers> m_pHandlers;       // 业务 API（业务层）
-    web::CHttpRouter m_router;                        // 路由注册表（框架层）
+    sc::ScopedInterfacePtr<sc::IMetrics> m_pMetrics;       // 指标注册表（可选，缺失不上报）
+    std::unique_ptr<CMemberService> m_pMembers;            // 成员服务（业务层）
+    std::unique_ptr<CHttpHandlers> m_pHandlers;            // 业务 API（业务层）
+    std::unique_ptr<CWebPageController> m_pPages;          // 页面/静态资源（业务层）
+    web::CHttpRouter m_router;                             // 路由注册表（框架层）
     WFHttpServer m_server;
     bool m_bStarted;
 };

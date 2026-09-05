@@ -26,6 +26,7 @@ struct StoreItemInfo
     std::string strFrom;     // 来源标识（如 "IP:port"；可为空）
     std::uint64_t nSize;     // 字节数
     std::int64_t nCreateMs;  // 创建时间（毫秒）
+    std::uint64_t nSeq;      // 单调递增序号（保存时分配，增量同步游标）
 };
 
 /// @brief 通用文件存储组件（纯内存、线程安全）。
@@ -80,8 +81,20 @@ class CFileStore
     // 列出全部数据项（按创建时间倒序）。
     std::vector<StoreItemInfo> List() const;
 
+    // 列出"序号 > nSince"的数据项（按序号升序，旧→新）；nSince=0 返回全部。
+    // 供前端游标增量同步，避免每次全量拉取。
+    std::vector<StoreItemInfo> ListSince(std::uint64_t nSince) const;
+
     // 按短码删除数据项；成功返回 true。
     bool Remove(const std::string& strId);
+
+    // 容量/数量上限配置（默认 0 = 不限制）。保存超出上限时返回空串失败。
+    void SetMaxItems(std::size_t nMax);
+    void SetMaxTotalBytes(std::uint64_t nMax);
+    void SetMaxItemBytes(std::uint64_t nMax);
+
+    // 当前已占用内容总字节数（文本/文件内容合计）。
+    std::uint64_t TotalBytes() const;
 
     // 当前数据项数量。
     std::size_t Size() const;
@@ -99,6 +112,7 @@ class CFileStore
         std::string strText;        // 文本内容
         std::vector<char> vecData;  // 文件内容
         std::int64_t nCreateMs;
+        std::uint64_t nSeq;         // 单调递增序号（保存时分配）
     };
 
     // 生成不重复的短码。
@@ -110,6 +124,13 @@ class CFileStore
     std::size_t m_nIdLen;
     mutable std::mutex m_mutex;
     std::map<std::string, Item> m_mapItems;
+
+    // 序号与配额（在锁内读写）。
+    std::uint64_t m_nNextSeq = 0;       // 下一可用序号（只增不减，勿随 Clear 重置）
+    std::size_t m_nMaxItems = 0;        // 0 = 不限制条数
+    std::uint64_t m_nMaxTotalBytes = 0; // 0 = 不限制总字节
+    std::uint64_t m_nMaxItemBytes = 0;  // 0 = 不限制单条字节
+    std::uint64_t m_nTotalBytes = 0;    // 当前占用总字节
 };
 
 }  // namespace storage

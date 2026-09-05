@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 #include "workflow/WFHttpServer.h"
@@ -27,6 +28,12 @@ class CHttpRequest
 
     // 读取请求头值（大小写不敏感）；不存在返回空串。
     std::string Header(const char* szName) const;
+
+    // 读取 query 参数值（如 /api/list?since=5 的 since）；不存在返回空串。
+    std::string QueryParam(const char* szName) const;
+
+    // Content-Length 请求头数值（无该头 / 非数字返回 0）。供体量上限判断。
+    std::uint64_t ContentLength() const;
 
     // 读取请求体内容（空表示无 body）。
     std::string Body() const;
@@ -59,6 +66,9 @@ class CHttpResponse
     // 写纯文本响应。
     void WriteText(const std::string& strBody, const char* szStatus = "200",
                    const char* szType = "text/plain; charset=utf-8");
+
+    // 追加一个响应头（可在写响应体前调用，如 ETag / Cache-Control）。
+    void AddHeader(const char* szName, const char* szValue);
 
     // 写文件响应：图片内联或附件下载，并支持 HTTP Range 分段（206）。
     // @param strName         文件名（决定 Content-Type / Content-Disposition）
