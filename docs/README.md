@@ -38,7 +38,7 @@
 
 | 文档 | 内容 |
 |---|---|
-| [tenant.md](datahub/tenant.md) | 租户完全指南：概念/数据模型/授权/API/前端/双服务器拓扑/同步问题与演进 |
+| [tenant.md](datahub/tenant.md) | 租户完全指南：① 通用多租户知识（隔离模型/反模式/账号角色）② 业界与其它项目实现（Salesforce/Slack/AWS/主流框架）③ 本仓库 DataHub 落地对照 |
 
 ## 其他
 

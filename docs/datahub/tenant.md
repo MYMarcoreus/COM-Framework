@@ -1,314 +1,345 @@
-# DataHub 租户（Tenant）完全指南
+# 租户（Tenant / Multi-Tenancy）完全指南
 
-> 供学习：从"为什么有租户"到"数据怎么存、请求怎么鉴权、前端怎么交互、运维怎么管理、有哪些边界与演进方向"，一次讲透。
-
-DataHub 是一个跑在 COM-Framework（ServerCore 骨架 + Sogou Workflow HTTP）上的**局域网设备间数据传输**示例：设备（浏览器）加入一个"租户"后，可互发文本与文件。**租户（Tenant）**是本系统的隔离单元与权限边界，也是理解整个工程设计的主线。
-
----
-
-## 1. 一句话
-
-> **租户 = 一个有边界的"组织/工作区"**（类比公司/团队/Workspace）。设备不是互相乱聊，而是先**进入某个租户**，只能在**该租户内部**看到数据、成员和进行授权操作。就像你不能在 Slack 的聊天窗里直接切到另一家公司一样——**切换/管理租户必须在租户选择页做**，聊天页固定于当前租户。
-
-早期版本用过"空间 / X-Space"的叫法，后按业界语义统一为 **租户 / `X-Tenant`**。
+> **阅读顺序即三层递进**：
+> 第 1 部分讲**与任何项目都无关的通用租户知识**（概念、隔离模型、漏洞、账号/角色模型）；
+> 第 2 部分讲**业界与其它项目是怎么实现的**（Salesforce/Slack/AWS/主流框架…）；
+> 第 3 部分才落到**本仓库（DataHub）的具体实现**，并与前两部分对照。
+>
+> 若只想快速了解本仓库怎么做的，可直接跳第 3 部分；但建议完整读，因为第 3 部分的每个设计点几乎都对应第 1、2 部分的某个业界结论。
 
 ---
 
-## 2. 为什么要租户
+# 第 1 部分 · 通用租户知识（与具体项目无关）
 
-| 问题 | 没有租户 | 有租户后 |
+## 1.1 什么是多租户（Multi-tenancy）
+
+**多租户**是一种软件架构：**同一套软件/同一份部署，服务多个相互隔离的"客户组织（租户）"**。租户之间看不到彼此的数据、成员与配置，但共享计算与运维成本。
+
+三个词先分清：
+
+| 词 | 含义 |
+|---|---|
+| **租户（Tenant）** | 隔离单元 = 一个客户组织/团队/工作区。例如"某公司"、"某工作室" |
+| **账号（Account / User）** | 一个登录主体。**账号可以属于多个租户**（一个人在不同公司） |
+| **成员资格（Membership）** | "某账号在某租户内"这件事，通常带角色（如 所有者/管理员/成员） |
+
+> 业界对"租户"的叫法很多但意思相同：Org（GitHub 的组织）、Workspace（Slack 工作区）、Site（Atlassian）、Space/Team（飞书/Notion）、Enterprise（企微/钉钉）、Account/Tenant（云厂商）。
+
+## 1.2 为什么需要多租户
+
+| 动机 | 说明 |
+|---|---|
+| **成本** | N 家客户不用 N 套独立部署，一套即可 |
+| **隔离/合规** | 客户数据互不可见；满足数据合规与审计 |
+| **规模** | 一层按组织隔离，再按产品放量 |
+| **运营** | 统一升级、监控、计费、开通/停用 |
+| **协作** | 同一组织内成员共享工作区，组织外天然不可见 |
+
+**单租户 vs 多租户**不是好坏，是**业务形态**：面向大客户的重资产产品常"单租户专享实例"（物理隔离、定制、合规强），面向中小客户的 SaaS 产品普遍多租户。常见演进：多租户起步 → 高价值客户可升级"独立实例/专享集群"（**混合部署**，企业软件标配）。
+
+## 1.3 隔离发生在哪些维度
+
+新手以为"多租户 = 数据库加个字段"。其实隔离散落在每一层：
+
+- **数据**（最核心）：库/表/行级隔离；
+- **缓存**：Redis key 不加租户前缀会串租户；
+- **对象存储/文件**：路径带租户前缀（否则 `GET /file/{id}` 换租户可读）；
+- **任务/队列**：后台任务必须携带租户上下文（否则批处理把 A 的写进 B）；
+- **日志/指标**：按租户打标签（排查与计量）；
+- **配置/配额/计费**：每租户一套；
+- **密钥/白标/域名**：每租户独立设置。
+
+## 1.4 三类数据隔离模型（最核心的通用知识）
+
+| 模型 | 做法 | 隔离 | 成本 | 单租户可扩展 | 适用 |
+|---|---|---|---|---|---|
+| **Database-per-tenant** | 每租户一个数据库 | 最强 | 最高 | 强 | 大客户、合规强、专享 |
+| **Schema-per-tenant** | 共享数据库、每租户一个 schema | 强 | 中 | 中 | 中型、隔离与成本折中 |
+| **Shared table + tenant_id** | 一张表，每行带租户列 | 逻辑隔离 | 最低 | 弱（单表膨胀） | 海量小租户、SaaS 起步 |
+
+**这不是"选一个就完"**，业界常见**演进 + 混合**：
+- 先 shared table 快速起量 → 大租户迁 schema/db（按租户路由，类似"读写分离的租户路由表"）；
+- 或者反过来：默认每租户独享，成本高但隔离爽。
+
+**Shared-table 的关键**：所有查询**必须强制 `WHERE tenant_id = ?`**，靠"约定 + 拦截"两层保证，任何漏掉的地方就是数据泄漏（见 1.6）。
+
+## 1.5 应用层如何"感知租户"
+
+多租户数据库方案解决"存哪"，但**请求怎么知道自己是哪个租户**要靠应用层：
+
+1. **解析租户标识**：子域名（`acme.app.com`）、请求头、JWT/会话里的租户声明、或路径前缀；
+2. **放进请求/线程上下文**（TenantContext/ThreadLocal/Context）——一次请求的生命周期内全局可读；
+3. **传给数据访问层**并**强制拼接谓词**：不在 Controller 里手拼 `tenant_id`（会漏），而在**数据层/ORM/中间件统一注入**；
+4. 进阶做法：数据库**行级安全（RLS，如 Postgres `row_security`）**——即便 SQL 忘写租户条件，DB 层按当前租户自动过滤，**双保险**；
+5. 缓存/文件/任务同理会话级注入租户。
+
+## 1.6 常见反模式与攻击面（面试/审核心考点）
+
+| 反模式/漏洞 | 现象 | 防护 |
 |---|---|---|
-| 数据边界 | 所有设备一个"房间"，没有隔离 | 每个租户一套数据/成员/配额，互不可见 |
-| 越权 | 谁能删谁的东西说不清 | Owner / 成员角色化授权 |
-| 规模化 | 一锅粥 | 共享表 + tenant_id，与业界一致，可按租户观测 |
-| 使用心智 | 频道式随手切换，边界模糊 | 组织式：先入组、后协作 |
+| **IDOR / 换租户越权** | 传 `id` 不校验归属，改个租户 id 就读到别人数据（`BOLA` 是 OWASP API 第 1 类） | 数据层强制租户谓词；对象必须"租户内查找"，跨租户即 not-found |
+| 漏 `tenant_id` 过滤 | 聚合/统计/后台任务忘拼条件 | 统一拦截 + 行级安全兜底 |
+| **缓存串租户** | key 不带租户 | key/namespace 加租户前缀 |
+| 把租户 id 当"可信任入参" | 服务端直接信任前端传的租户 id | 从登录态/JWT 解析，不信任请求体 |
+| 后台任务无租户上下文 | 批处理张冠李戴 | 任务携带租户上下文 |
+| 只看存储不做边界 | 聊天/推送跨租户串 | presence/推送按租户订阅（见 2.5） |
 
-多租户在业界有两种典型实现，本项目采用后者（主流方案）：
+## 1.7 组织 / 账号 / 成员 / 角色（RBAC）
 
-| 模型 | 做法 | 本项目 |
-|---|---|---|
-| 隔离存储（database-per-tenant） | 每租户独立库/表 | ❌ 早期如此，已弃 |
-| **共享存储 + tenant_id（shared-table）** | 单表 + 每行租户列 + `WHERE tenant_id=?` | ✅ 当前 |
+一个常见误区：把"账号"当"租户"。正确建模是三层：
+
+```text
+账号（User，全局唯一）
+   └─ 成员资格（在哪些租户、什么角色）
+         ├─ Owner   拥有者：管理租户/成员/数据
+         ├─ Admin/管理员：成员与配置
+         └─ Member  成员：日常使用
+租户（Org/Workspace）
+   ├─ 数据 / 配额 / 设置
+   └─ 成员表 membership(tenant_id, user_id, role)
+```
+
+租户级"邀请/加入"（凭邀请码/链接）与"踢出/退出"是组织软件的基本闭环。角色决定权限：Owner 可删任意、可管成员；Member 只能用自己的。
+
+## 1.8 租户级功能（不止隔离）
+
+成熟的 SaaS 对租户做：**配额与计量**（条数/容量/带宽/并发）、**计费套餐**、**每租户配置/白标**、**审计日志**、**按租户的监控告警**。这些都会回到 1.3 的"每层都要带租户"。
 
 ---
 
-## 3. 数据模型（共享表 + tenant_id）
+# 第 2 部分 · 业界与其它项目是怎么实现的
 
-存储层在 **Common 的 `CFileStore`**（`Common/Storage/`），逻辑上是一张"共享表"：
+## 2.1 真实产品怎么做（对照学习）
 
-- `m_mapItems`：全局一张表，`id → Item`，**每行带 `strTenant`（tenant_id 列）**；
-- `m_mapStats`：每租户统计 `{nItems, nBytes}`（配额计数）；
-- `m_nNextSeq`：**全局单调自增序号**（相当于自增主键），各租户增量游标因此天然单调；
-- 所有读/列/删都强制按租户过滤（等价 `WHERE tenant_id=?`），**业务不可能跨租户读到数据**；
-- 纯内存、线程安全（内部加锁）。
+| 产品 | 它的"租户" | 存储/隔离选择 | 可借鉴点 |
+|---|---|---|---|
+| **Salesforce** | Org | 早期就多租户共享数据库 + **元数据驱动**（租户 id 进主键） | 单 schema 海量租户可行；元数据驱动 |
+| **Slack** | Workspace | workspace+channel 两级；**membership 驱动**加入 | "先进 workspace 再协作"的交互心智 |
+| **GitHub** | Organization | org→repo→team 多层；角色 owner/member | 组织模型与权限分层 |
+| **Atlassian/Jira** | Site | site=租户（含命名空间/独立子域） | 站点隔离 + 白标域名 |
+| **飞书/企微/钉钉** | 企业/组织 | 企业=租户，内部再分部门/群 | 组织树、审批、成员管理完善 |
+| **Notion/语雀/维格** | Space/团队 | space=租户、page/文档在 space 内 | "文档空间"式协作隔离 |
+| **AWS** | Account | 账号=强隔离边界 + 成本/权限单位 | 隔离与计费、资源都绑账号 |
+| **Azure/Entra** | Tenant（目录） | 目录级隔离 | 身份/目录即租户 |
+| **K8s** | Namespace | 软隔离，配 RBAC/网络策略 | namespace 心智可类比 |
+
+> 启示：成熟产品几乎都是"**租户入口先行**（选/建组织）+ **组织内共享** + **成员/角色管理** + **数据与实时都按组织隔离**"，这正是"租户 = 有边界组织"心智能被广泛接受的原因。
+
+## 2.2 主流技术栈的落地方式
+
+- **Spring（Java）**：`TenantContext`（ThreadLocal）由拦截器从 header/子域填好 → 数据访问用 **Hibernate 过滤器（filter）或 MyBatis 拦截器自动拼 tenant 条件**；租户多库用动态数据源/`apartment`（每 schema 一 context）。
+- **Ruby/Rails**：`apartment`（schema-per-tenant）或 `acts_as_tenant`（shared table + 自动 scope）。
+- **Django**：`django-tenants`（schema），`django-multitenant`（shared）。
+- **Node/Go**：靠**请求级 context/中间件**（`context.WithValue(ctx, tenantID)`）贯穿，数据层强制拼接；Go 常用 `gorm` 回调或 wrapper 统一 `Where("tenant_id=?")`。
+- **云数据库**：Postgres 直接支持**行级安全（RLS）**做共享表双保险；Snowflake/云数仓按组织命名空间。
+
+共同结论：**语言无关的通用三件套 = ① 请求级租户上下文 ② 数据层统一注入/RLS ③ 跨层租户键（缓存/文件/任务/日志）**。
+
+## 2.3 账号、身份与多组织
+
+业界从不把"登录"和"进哪个租户"混为一谈：
+- **统一身份认证（IdP）**一次登录 → 拿到"我的账号 + 我属于哪些组织 + 各组织的角色"；
+- 选组织进入（应用入口往往是组织选择器，如 Slack 登录后先列 workspace）；
+- 组织内再授权（RBAC/ABAC），成员/邀请/离职同步。
+
+## 2.4 控制面（Admin）与数据面分离
+
+中大型系统把"租户运营"独立成控制面：
+- **数据面**跑业务流量（按租户隔离的数据、实时协作）；
+- **控制面**管租户生命周期（开通/停用/配额/计费）、成员与角色、审计、全局观测；
+- 两者可以是同一进程（小型）、独立服务、甚至独立账号体系与权限（运营侧 RBAC）。
+> 这正是本仓库最后落地成"**DataHub（数据面）+ DataHubAdmin（控制面独立进程）**"的行业原型。
+
+## 2.5 实时与协作：租户边界不止在数据库
+
+聊天/文档/白板类产品的隔离还要覆盖**实时通道**：
+- **在线成员（presence）按租户/会话隔离**，不能跨租户看到谁在线；
+- **推送按租户订阅**：事件只发到"该租户内成员的连接"（WebSocket/SSE 频道 = `tenant:{id}`）；
+- 被踢/离开 = 服务端**主动关连接/撤订阅**（在线状态由连接生命周期决定，而非心跳猜）；
+- 会话重连后**对账**（拉租户名/角色/是否仍存在），补齐离线期间漏掉的事件。
+
+## 2.6 业界共识速记（可直接抄的原则）
+
+1. 租户 id 用不可变标识，数据只引用它、不按名字快照；
+2. 查询强制租户谓词 + （有条件时）行级安全双保险；
+3. 跨层（缓存/文件/队列/日志）统一带租户键；
+4. 账号 ≠ 租户：membership + role 第三层建模；
+5. 交互先"选/建组织"，组织内协作；
+6. 被踢/解散要给用户明确事件与离场，不是悄悄 404；
+7. 控制面与数据面分离，租户可运营（配额/计费/审计）。
+
+---
+
+# 第 3 部分 · 本仓库（DataHub）的实现
+
+> 现在看本项目，会发现几乎每个设计都是上面业界结论的落地。DataHub 是跑在 COM-Framework（ServerCore 骨架 + Sogou Workflow HTTP）上的**局域网设备间数据传输**示例；租户是其隔离与授权主线。
+
+## 3.1 映射：本项目怎么选型
+
+| 通用/业界结论 | 本项目落地 |
+|---|---|
+| 组织 = 租户（2.1 Slack/企微） | 租户=有边界组织；进租户才能协作；聊天页**不内切租户** |
+| shared table + tenant_id（1.4/2.2） | 共享表模型（单 `CFileStore` + 每行租户列 + 强制按租户过滤） |
+| 账号 ≠ 租户（1.7） | 账号=`X-Client-Id`（浏览器持久化 UUID）；membership+role 在花名册 |
+| 权限 Owner/Admin/Member（1.7） | `TenantRole{owner, member}` |
+| 请求级租户上下文（1.5/2.2） | `CRequestContext{tenant, accountId, requestId}` 经 `UserData` 下传 |
+| 数据层强制谓词 + 双保险（1.6） | `CFileStore` 所有读/列/删强制按租户过滤；跨租户=not found |
+| 控制面/数据面分离（2.4） | `DataHub`(8888 数据面) + `DataHubAdmin`(8899 控制面独立 exe) |
+| 实时/推送隔离（2.5） | 目前 presence 30s TTL + 轮询；SSE/WS 演进见 §3.11 |
+| 交互先进组织（2.1） | 根路径 `/` = 租户选择页，进入后才 `/chat` |
+
+## 3.2 领域实体（`DataHub/Module/Tenant/CTenant.h`，命名空间 `sc`）
+
+| 类型 | 字段 / 含义 |
+|---|---|
+| `CTenantLimits` | `nMaxItems`/`nMaxTotalBytes`/`nMaxItemBytes`（0=不限） |
+| `CTenant` | `strCode` 租户码（6 位可分享短码）、`strName`、`limits`、`nCreateMs` |
+| `TenantRole` | `kOwner`（删任意/管成员）、`kMember`（读写/自删） |
+| `CTenantMember` | `strAccountId`（=账号）、`role`、`nJoinMs` |
+| `DataItemInfo` | 消息/文件元信息（id/kind/name/from/size/created/seq） |
+
+**公共租户（public）**：内置，人人皆成员、无 Owner、无花名册、不可删，是"未选租户"的兜底；其"特殊性"作为单条内置记录 + 语义收口集中在 `CTenantModule`（业界"表里一行 + kind 标志"思路，而非为它造子类）。
+
+## 3.3 代码分层
+
+```text
+DataHub/
+├─ Module/Tenant/    ITenantService + CTenantModule（注册表+花名册）
+├─ Module/Storage/   IDataStore + CDataStoreModule（把 CTenant 翻译成 tenant_id）
+├─ Module/Http/      入口/闸门/控制器/在线成员/页面
+│   ├─ HttpServerModule   装配：解析租户→闸门→路由→日志/指标
+│   ├─ CHttpHandlers      租户内业务 list/text/file/item/delete
+│   ├─ CTenantsController 设备侧自服务 create/info/join/members
+│   ├─ CAdminController   内部管理 API（回环+令牌）
+│   ├─ CMemberService     在线成员 presence（30s TTL）
+│   └─ CRequestContext    请求上下文（tenant/account/requestId）
+└─ Web/               前端（index/app/common/tenants/style）
+Common/Storage/CFileStore   共享表多租户存储（纯内存）
+DataHubAdmin/              【独立进程】控制面：管理网页+代理→DataHub
+```
+
+## 3.4 数据模型（共享表 + tenant_id）实现
+
+`CFileStore`（`Common/Storage/`）逻辑上是"一张表"：
+- `m_mapItems`：`id→Item`，每行带 `strTenant`（tenant_id 列）；
+- `m_mapStats`：每租户 `{nItems,nBytes}`（配额计数）；
+- `m_nNextSeq`：**全局单调序号**（≈自增主键），各租户增量游标天然单调；
+- 一切读/列/删强制按租户过滤（`WHERE tenant_id=?`），线程安全。
 
 ```mermaid
 erDiagram
     TENANT ||--o{ ITEM : owns
     TENANT ||--o{ MEMBER : has
-    ITEM {
-        string id PK
-        string strTenant FK "tenant_id"
-        enum  kind "text|file"
-        string name
-        string from
-        bytes  content
-        uint64 seq "全局序号"
-        int64  createdMs
-    }
-    MEMBER {
-        string tenantCode FK
-        string accountId "X-Client-Id"
-        enum   role "owner|member"
-        int64  joinedMs
-    }
+    ITEM { string id PK; string strTenant FK "tenant_id"; enum kind; string name; string from; bytes content; uint64 seq; int64 createdMs }
+    MEMBER { string tenantCode FK; string accountId "X-Client-Id"; enum role "owner|member"; int64 joinedMs }
 ```
 
-> 演进注记：早期按"每租户一个 store 实例"隔离 → 重构为共享表模型，正是为了对齐业界"共享存储 + 租户列"的规模化思路（commit `ac540c1`）。
+> 演进注记：早期"每租户一个 store 实例"→ 重构为共享表 + tenant_id（对齐业界，commit `ac540c1`）。
 
----
-
-## 4. 领域实体（`DataHub/Module/Tenant/CTenant.h`，命名空间 `sc`）
-
-| 类型 | 字段 / 含义 |
-|---|---|
-| `CTenantLimits` | `nMaxItems` 条数、`nMaxTotalBytes` 总字节、`nMaxItemBytes` 单条字节；**0 = 不限**。配额随租户实体传递 |
-| `CTenant` | `strCode` 租户码（6 位短码，可分享）、`strName` 名、`limits` 配额、`nCreateMs` 创建时间 |
-| `TenantRole` | `kOwner`（可删任意/管成员）、`kMember`（读写/自删） |
-| `CTenantMember` | `strAccountId` 账号（浏览器 `X-Client-Id`）、`role`、`nJoinMs` |
-| `DataItemInfo` | 消息/文件元信息：`strId/kind/strName/strFrom/nSize/nCreateMs/nSeq` |
-
-**账号（Account）** = `X-Client-Id`（浏览器持久化 UUID，跨请求标识同一浏览器；命令行缺省退化为来源 `IP:port`）。授权、成员、删除判定**全部基于账号**，不是基于 IP/端口（避免成员按端口膨胀）。
-
----
-
-## 5. 公共租户（public）与特殊语义
-
-系统内置**公共租户**（码 `public`，名"公共租户"），是"未选择租户"时的默认地、向后兼容兜底。它的特殊性（在 `CTenantModule` 中集中处理，前端为常量）：
-
-- 人人皆成员（`TenantRoleOf` 恒为 `member`）；
-- 无 Owner、无花名册（`ListMembers` 为空）；
-- 不可删除、码固定；
-- 配额使用全局默认（`[store]` 配置）。
-
-> 设计讨论（供学习）：公共租户"能不能提取成一个类？"——正确边界**不是**给 `CTenant` 造子类（`CTenant` 是值实体、差异是策略而非结构），而是把它作为**单条内置记录 + 语义收口**（码/名/规则集中在模块内），业界普遍是"表里一行 + kind/is_default 标志"，而非类爆炸。
-
----
-
-## 6. 代码分层
-
-```text
-DataHub/
-├─ Module/Tenant/    领域层：ITenantService（接口）+ CTenantModule（注册表+花名册）
-├─ Module/Storage/   IDataStore（接口）+ CDataStoreModule（把 CTenant 翻译成 tenant_id）
-├─ Module/Http/      装配与业务层：
-│   ├─ HttpServerModule    入口/闸门/路由/观测
-│   ├─ CHttpHandlers       租户内业务（list/text/file/item/delete）
-│   ├─ CTenantsController  设备侧租户自服务（create/info/join/members）
-│   ├─ CAdminController    内部管理 API（/api/admin/*，回环+令牌）
-│   ├─ CMemberService      在线成员（presence，30s TTL）
-│   ├─ CRequestContext     每请求上下文（tenant/account/requestId）
-│   └─ WebPageController   静态页/资源（路由表驱动）
-├─ Module/Admin/     装配给 HttpServerModule 用的管理控制器
-└─ Web/              前端（index.html/app.js/common.js/tenants.html/tenants.js/style.css）
-
-Common/Storage/CFileStore   共享表多租户存储（纯内存）
-DataHubAdmin/               【独立进程】控制面：管理网页 + 代理 /api/admin/* → DataHub
-```
-
-依赖方向（单向、无环）：`业务服务器 → ServerCore → Common → 第三方`。
-
----
-
-## 7. 一次请求的生命周期（核心）
-
-`HttpServerModule::OnRequest`（workflow 线程池中执行）：
+## 3.5 一次请求的生命周期（核心）
 
 ```mermaid
 flowchart TD
-    A[HTTP 请求] --> B{路径是 /api/admin?}
-    B -- 是 --> B1[回环 127.0.0.1 且 X-Admin-Token 匹配?]
-    B1 -- 否 --> E403a[403 admin forbidden]
-    B1 -- 是 --> B2[分发给 CAdminController /api/admin/*]
+    A[HTTP 请求] --> B{/api/admin?}
+    B -- 是 --> B1{回环且 X-Admin-Token?}
+    B1 -- 否 --> E403a[403]
+    B1 -- 是 --> B2[CAdminController]
     B -- 否 --> C{解析 X-Tenant}
-    C -- 未知租户 --> E404[404 tenant not found 防越权]
-    C -- 成功 --> D[CRequestContext 装入 tenant + account X-Client-Id]
+    C -- 未知 --> E404[404 防越权]
+    C -- 成功 --> D[CRequestContext: tenant+account]
     D --> G{公共 或 /api/tenant* 或 是成员?}
     G -- 否 --> E403b[403 not a tenant member]
-    G -- 是 --> H[Touch 在线成员 + 指标]
-    H --> I[路由分发到业务/租户管理/页面]
-    I --> J[访问日志 rid/method/path/tenant->status/ms]
+    G -- 是 --> H[Touch presence + 指标]
+    H --> I[路由分发]
+    I --> J[访问日志 rid/tenant->status/ms]
 ```
 
-要点：
-- **`CRequestContext`**：`tenant + strAccountId + strRequestId + bResolved`，经 `req.UserData()` 供控制器读取（`RequestContextOf(req)`），是后续鉴权/限流/追踪中间件的"地基"；
-- **权限闸门统一裁决**：非公共租户的读/写/删都须是该租户成员；`/api/tenant*` 是跨租户平台能力、豁免；公共租户人人可访问；
-- **删除授权**：Owner 可删本租户任意条目；Member 仅可删自己条目（按账号比对）；
-- **未知租户 404**：防止越权到别的租户（也意味着：客户端如果带着"已不存在"的租户码，会永久 404——见 §11 的同步问题）。
+要点：未知租户 404（防越权到别的租户）；非公共租户读写删都须成员（`/api/tenant*` 平台能力豁免）；删除授权 Owner 任意 / Member 自删（按账号比对）。
 
----
+## 3.6 授权与守卫一览
 
-## 8. 授权与守卫一览
-
-| 规则 | 位置 | 说明 |
-|---|---|---|
-| 创建租户者自动为 Owner | `CreateTenant` | 非空账号 |
-| 凭码加入 = 幂等成为 Member | `JoinTenant` | 已在花名册则返回原角色 |
-| 公共租户人人成员/无花名册 | `TenantRoleOf`/`ListMembers` | |
-| 成员/角色/删除守卫 | `CTenantModule` | 公共不可删；移除/降级成员须保留 ≥1 Owner；改角色只对已加入成员 |
-| 数据配额在保存时按租户执行 | `CFileStore` | 超限保存失败 |
-| 管理 API 双闸门 | `HttpServerModule` | 回环 + 令牌 |
-| 短码字符集 | `CTenantModule` | 去掉易混淆 0/O/1/I/l |
-
----
-
-## 9. API 总览
-
-### 设备侧（浏览器，`X-Client-Id` + `X-Tenant` 头）
-
-| 方法/路径 | 作用 |
+| 规则 | 位置 |
 |---|---|
-| `POST /api/tenant` | 创建租户（body=名称），创建者成 Owner，返回 `{code,name,role}` |
-| `GET /api/tenant/info?code=` | 按码查租户（名称） |
-| `POST /api/tenant/join` | 凭码加入（body=code），返回 `{role}` |
-| `GET /api/tenant/members` | 当前租户花名册 |
-| `GET /api/list[/?since=]` | 租户内消息/文件列表（增量游标） |
-| `POST /api/text` `POST /api/file` | 发文本/上传文件 |
-| `GET /api/text/{id}` `GET /api/file/{id}` | 取内容（文件走 Range 分段，绕开大响应截断） |
-| `DELETE /api/item/{id}` | 删除（Owner 任意/成员自删） |
-| `GET /api/members` | 在线成员（presence） |
+| 创建者自动 Owner；凭码加入=幂等 Member | `CreateTenant`/`JoinTenant` |
+| 公共租户人人成员/无花名册 | `TenantRoleOf`/`ListMembers` |
+| 公共不可删；移除/降级成员保留 ≥1 Owner；角色只对已加入成员 | `CTenantModule` |
+| 配额在保存时按租户执行 | `CFileStore` |
+| 管理 API = 回环 + 令牌双闸门 | `HttpServerModule` |
 
-### 管理侧（`/api/admin/*`，仅本机回环 + `X-Admin-Token`）
+## 3.7 API 总览
 
-| 方法/路径 | 作用 |
-|---|---|
-| `GET /overview` | 全部租户 + 汇总统计（成员/条目/字节） |
-| `GET /tenant?code=` | 单租户详情（成员 + 条目） |
-| `DELETE /tenant?code=` | 删除租户（含清数据；公共不可删） |
-| `POST /tenant/rename` | 改名（表单 `code,name`） |
-| `POST /tenant/limits` | 配额（`maxItems/maxTotalBytes/maxItemBytes`，0=不限） |
-| `GET /item?code&id` | 条目元信息 + 文本预览 |
-| `DELETE /item?code&id` | 删条目 |
-| `DELETE /member?code&account` | 移除成员（守卫保留 Owner） |
-| `POST /member/role` | 改角色（owner/member） |
+**设备侧**（`X-Client-Id` + `X-Tenant`）：`POST /api/tenant`（创建）、`GET /api/tenant/info?code=`、`POST /api/tenant/join`、`GET /api/tenant/members`、`GET /api/list[?since]`、`POST /api/text|file`、`GET /api/text|file/{id}`（文件 Range 分段）、`DELETE /api/item/{id}`、`GET /api/members`。
 
-> 这些管理接口由**独立的 DataHubAdmin 控制面**经反向代理调用（令牌只在服务器配置里，不进浏览器）。浏览器直连 8888 的 `/api/admin/*` 会 403。
+**管理侧 `/api/admin/*`**（回环+`X-Admin-Token`）：`overview`、`tenant?code`（详情）、`DELETE tenant`、`rename`、`limits`、`item`（预览/删除）、`member`（移除）、`member/role`。
 
----
-
-## 10. 双服务器拓扑（控制面 / 数据面）
+## 3.8 双服务器拓扑
 
 ```mermaid
 flowchart LR
-    subgraph 数据面 DataHub :8888
-      R[HTTP 业务 /api + 页面]
-      A[管理 API /api/admin 回环+令牌]
-    end
-    subgraph 控制面 DataHubAdmin :8899（独立 exe，仅本机）
-      P[管理网页]
-      PR[代理 /api/admin/* + 注入令牌]
-    end
-    D[设备浏览器] --> R
-    O[运维浏览器本机] --> P
-    P --> PR
-    PR -->|http://127.0.0.1:8888| A
+  D[设备浏览器] -->|:8888 HTTP/API| R[DataHub 数据面]
+  R --- A[管理 API 回环+令牌]
+  O[运维浏览器本机] -->|:8899| P[DataHubAdmin 控制面]
+  P -->|代理 /api/admin + 注入令牌| A
 ```
 
-- **DataHub**（`build/debug/datahub 8888`）：持有租户/成员/数据（进程内内存），也是唯一事实源；
-- **DataHubAdmin**（`build/debug/datahub-admin 8899`）：独立服务器 exe，只承载管理网页并代理管理 API；不持有数据，天然与 DataHub 解耦；
-- 配置：`DataHub/datahub.ini`（`[server] [http] [store] [admin] token`）；`DataHubAdmin/datahub-admin.ini`（`[server] port`、`[upstream] base/token`）；两处 `token` 必须一致。
+- 配置：`DataHub/datahub.ini`（`[server][http][store][admin].token`）；`DataHubAdmin/datahub-admin.ini`（`[server]port`、`[upstream]base/token`），两处 token 一致。
 
----
+## 3.9 前端：页面与状态
 
-## 11. 前端：页面与状态（重要）
+- `/`（根）= **租户选择页**：创建/凭码加入/我的租户/进入；展示各租户角色标签（从花名册比对账号得出）→ 默认落地即"先选组织"（对应 2.1/2.6⑤）。
+- `/chat` = 聊天室，**固定于当前租户、无页内切换**（对应"租户=有边界组织"，2.6⑤）。
+- `common.js（window.DH）`：账号 `CLIENT_ID`、我的租户/当前租户（localStorage）、`apiFetch` 自动附 `X-Client-Id`+`X-Tenant`、`setCurrent/addTenant/removeTenant`。
+- 进入非公共租户做幂等 join 登记成员。
 
-| 路由 | 页面 | 职责 |
+## 3.10 数据同步：本仓库现状 vs 真实业务应有行为
+
+服务端内部多按**不可变租户码**键存，改名等大多自洽；**真正失步的是客户端 localStorage 缓存**与被删/被踢后的自愈缺失：
+
+| 变更 | 现状 | 真实业务应有（=2.6⑥） |
 |---|---|---|
-| `/` | 租户选择页（`tenants.html`+`tenants.js`） | 默认落地：创建/凭码加入/我的租户列表/进入；展示我在各租户的角色标签（从花名册比对账号得出） |
-| `/chat` | 聊天室（`index.html`+`app.js`） | 固定于"当前租户"，**无页内切换**（租户=有边界组织）；顶栏显示当前租户 + 「管理/切换」→ `/` |
+| 改名 | 客户端缓存旧名 | 在线刷新；历史消息不跟着改 |
+| 删租户 | 客户端永久 404 卡死 | 通知解散、全员离场、离线者进入即提示回落 |
+| 被踢 | 客户端一直 403 | 通知/断连、即时离场并清理 |
+| 角色 | 服务端即时 | 通知本人，UI 联动 |
+| 删一条数据 | 已加载气泡残留 | 撤回/删除事件随游标 |
+| 服务重启 | 内存全清、客户端缓存留着 | 持久化 + 会话可恢复（本项目为演示内存态是有意为之） |
 
-**`common.js`（`window.DH`）**：两页共享的公共小件
-- 账号 `DH.CLIENT_ID`（localStorage `datahub_client_id`）；
-- 我的租户/当前租户（`datahub_tenants` / `datahub_current_tenant`）；
-- `DH.apiFetch`：自动附 `X-Client-Id` 与 `X-Tenant`（允许按租户覆写，管理页查角色用）；
-- `DH.setCurrent/addTenant/removeTenant/tenantNameOf`。
+**传输层结论（已论证）**：workflow nossl **无 WS 服务端**（WS 只有客户端分支），WFServer 是请求/应答模型、无连接接管/外部推送 API → 想真下行优先 **SSE**（纯 HTTP）；确要 WS 协议需在 Common 自研轻量 WS 服务端（同进程双监听，HTTP 仍 workflow）。推荐演进：`/api/tenant/state` 状态对账 → 需要实时上 SSE → 再考虑自研 WS。
 
-进入非公共租户时做一次**幂等 join** 登记成员；管理页"进入"→ setCurrent + 跳 `/chat`。
+## 3.11 已知限制与演进路线
 
----
-
-## 12. 数据同步与"真实业务该有的行为"（学习重点）
-
-服务端内部：多数实体只存**不可变租户码**，所以改名/删租户大多天然自洽（E3/E4 按 code 键，不存名字）。**真正会失步的是客户端 localStorage 缓存**，以及"被删/被踢后无自愈路径"：
-
-| 变更 | 影响 | 真实业务应有的行为 |
-|---|---|---|
-| 改名 | 各浏览器缓存旧名 | 在线即时刷新；**历史消息不跟着改名**（数据按 id/code 引用，从不按名字快照） |
-| 删租户 | 客户端仍指向已删码 → 永久 404 | 服务端通知"租户已解散"，全员离场；离线者进入发现码不存在即清理回落 |
-| 被踢 | 客户端仍在轮询 → 403 | 服务端主动断连/通知"你已被移出"，客户端立即离开并清理 |
-| 角色变更 | 服务端即时生效 | 通知本人/Owner；UI 联动显隐管理按钮 |
-| 配额 | 只影响下次写 | 不推 |
-| 删一条数据 | 已加载客户端残留气泡 | 撤回/删除事件随增量游标下发，前端移除 |
-| 服务重启 | 内存态全清，客户端缓存却留着 | 真实业务必须持久化 + 会话可恢复（本项目为演示，内存态是有意为之） |
-
-**传输层怎么选**（结论已论证）：
-- 当前是"2s 轮询 + 状态对账"；workflow nossl **没有 WS 服务端**（只有 WS 客户端分支），WFServer 是请求/应答模型、无连接接管/外部推送 API；
-- 想真下行又不改第三方 → **SSE**（纯 HTTP，最适合低频控制面事件）；
-- 想要真 WS 协议 → Common 自实现轻量 WS 服务端（握手+帧+会话表+线程安全推送），HTTP 仍用 workflow、同进程双监听。
-
-**推荐演进顺序**：先做 `/api/tenant/state` 状态对账（改名/删租户/被踢自动回落）→ 需要实时时上 SSE → 确需 WS 再自研组件。
-
----
-
-## 13. 已知限制 & 演进路线
-
-| 限制 | 说明 / 演进 |
+| 限制 | 说明/演进 |
 |---|---|
-| 纯内存 | 重启即清（有意为之）。真实化需持久化租户/成员/数据 |
-| 无会话/多端 | 账号即 `X-Client-Id`，无登录令牌与多端互踢 |
-| 无服务端推送 | workflow 无 WS server；可 SSE / 自研 WS |
-| 无服务端事件对账 | 建议 `/api/tenant/state` + 客户端 reconcile |
-| 配额不追溯 | 缩减配额不清超限存量（语义如此） |
+| 纯内存 | 重启即清；真实化需持久化（对照 2.4 数据面应有状态） |
+| 无会话/多端 | 账号即 UUID，无令牌与多端互踢（对照 2.3） |
+| 无推送 | SSE / 自研 WS（对照 2.5） |
+| 无状态对账 | 建议 `/api/tenant/state` + 客户端 reconcile |
 
-**建议下一步（按价值排序）**：① `/api/tenant/state` 设备自愈对账；② 数据/成员持久化；③ SSE 事件通道；④ 可选自研 WS。
+建议下一步（按价值）：① 设备自愈状态对账 → ② 持久化 → ③ SSE 事件 → ④ 可选自研 WS。
 
----
-
-## 14. 构建 / 运行 / 冒烟
+## 3.12 构建 / 运行 / 冒烟
 
 ```bash
-# 构建（DataHub 与 DataHubAdmin 都含 Linux/Makefile，自动发现）
 ./build.sh --debug Common DataHub DataHubAdmin
-# 数据面
-cd DataHub && ../build/debug/datahub 8888
-# 控制面（另一个终端）
-cd DataHubAdmin && ../build/debug/datahub-admin 8899
+cd DataHub && ../build/debug/datahub 8888            # 数据面
+cd DataHubAdmin && ../build/debug/datahub-admin 8899 # 控制面
 ```
+实测要点：无/错令牌 403；非成员读写 403；Owner 删任意、Member 自删、删他人 403；未知租户 404；改名/配额/角色/移除/删除守卫生效；`./build/debug/tests`=81/81。
+浏览器：`http://localhost:8888/`（选租户）→ `/chat`；`http://127.0.0.1:8899/`（管理，仅本机）。
 
-冒烟要点（均已实测通过）：
-- 无令牌/错令牌访问 `/api/admin/*` → 403；正确令牌 → 200；
-- 非成员读写私有租户 → 403；Owner 可删任意、成员自删、非本人删他人 → 403；
-- 未知租户 → 404；公共租户默认开放；
-- 改名/配额/角色/移除/删除等守卫（公共不可删、保留 ≥1 Owner）生效；
-- 单元回归 `./build/debug/tests` = 81/81。
-
-浏览器：`http://localhost:8888/`（选租户）→ 进入 → `/chat`；`http://127.0.0.1:8899/`（服务端管理，仅本机）。
-
----
-
-## 15. 术语小表
+## 3.13 术语小表
 
 | 词 | 含义 |
 |---|---|
-| 租户 Tenant | 隔离/授权单元，= 一个组织/工作区 |
-| 租户码 code | 6 位分享码；`public` 为内置公共租户 |
-| 账号 Account | `X-Client-Id`（浏览器持久化 UUID），缺省退化为 `IP:port` |
-| Owner / Member | 所有者 / 成员 |
-| 花名册 roster | 某租户内账号+角色的权威名单（`ListMembers`） |
-| presence | 在线成员（`CMemberService`，30s TTL），与花名册是两回事 |
-| X-Tenant / X-Client-Id / X-Admin-Token | 请求头：当前租户 / 账号 / 管理令牌 |
-| 共享表 + tenant_id | 数据模型：单表每行带租户列 |
+| 租户 Tenant | 隔离/授权单元 = 一个组织 |
+| 租户码 code | 6 位分享码；`public` 内置公共租户 |
+| 账号 Account | `X-Client-Id`，缺省退化为 `IP:port` |
+| Owner/Member | 所有者/成员 |
+| 花名册 roster | 租户内账号+角色的权威名单 |
+| presence | 在线成员（30s TTL） |
+| 共享表+tenant_id | 数据模型（1.4 的第三种） |
+| X-Tenant/X-Client-Id/X-Admin-Token | 请求头：当前租户/账号/管理令牌 |
 
 ---
 
-*相关：总体架构见 [../architecture.md](../architecture.md)，ServerCore 模块/DI/网络见 [../servercore/*](../servercore/)。DataHub 前端路由与页面部署见 DataHub/Makefile 与 `DataHub/Web/`。*
+*相关文档：总体架构见 [../architecture.md](../architecture.md)；ServerCore 模块/DI/网络见 [../servercore/](../servercore/)。本仓库 DataHub 的租户代码目录为 `DataHub/Module/{Tenant,Storage,Http,Admin}` 与 `DataHubAdmin/`。*
