@@ -38,7 +38,7 @@
 
 | 文档 | 内容 |
 |---|---|
-| [tenant-concepts.md](datahub/tenant-concepts.md) | 租户概念详解（与项目无关）：多租户动机/隔离维度/三类存储模型/应用层租户上下文/反模式(BOLA)/账号-成员-角色 |
+| [tenant-concepts.md](datahub/tenant-concepts.md) | 租户/多租户概念详解（与项目无关）：先讲单租户再讲多租户（动机/隔离维度/三类存储模型/应用层租户上下文/反模式 BOLA/账号-成员-角色） |
 | [tenant-industry.md](datahub/tenant-industry.md) | 业界与其他项目实现：Salesforce/Slack/GitHub/AWS/K8s 等产品，Spring/Rails/Django/Node/Go 技术栈，控制面数据面，实时与推送隔离 |
 | [tenant-project.md](datahub/tenant-project.md) | 本项目（DataHub）落地：选型映射/实体/分层/共享表模型/请求生命周期/闸门/API/双服务器/前端/同步问题/限制 |
 
