@@ -52,11 +52,11 @@ class CAdminConsoleModule : public sc::CModule
     void OnUpstreamReply(WFHttpTask* pClientTask, WFHttpTask* pServerTask);
 
     std::uint16_t m_nPort;
-    std::string m_strUpstream;   // 上游 DataHub 基址（无结尾 '/'）
-    std::string m_strToken;      // X-Admin-Token
-    std::string m_strWebDir;     // 管理网页目录
-    std::string m_indexHtml;     // GET /
-    std::string m_adminJs;       // GET /admin.js
+    std::string m_strUpstream;  // 上游 DataHub 基址（无结尾 '/'）
+    std::string m_strToken;     // X-Admin-Token
+    std::string m_strWebDir;    // 管理网页目录
+    std::string m_indexHtml;    // GET /
+    std::string m_adminJs;      // GET /admin.js
     WFHttpServer m_server;
     bool m_bStarted;
 };

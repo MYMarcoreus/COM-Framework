@@ -33,8 +33,7 @@ std::map<std::string, std::string> ParseForm(const std::string& strBody)
     while (nPos <= strBody.size())
     {
         std::string::size_type nAmp = strBody.find('&', nPos);
-        std::string strPair =
-            nAmp == std::string::npos ? strBody.substr(nPos) : strBody.substr(nPos, nAmp - nPos);
+        std::string strPair = nAmp == std::string::npos ? strBody.substr(nPos) : strBody.substr(nPos, nAmp - nPos);
         std::string::size_type nEq = strPair.find('=');
         if (nEq != std::string::npos)
         {
@@ -67,13 +66,14 @@ std::uint64_t ParseUint(const std::string& str)
 // —— JSON 拼装小件（复用 web::CHttpText::JsonString 做字符串转义） ——
 void AppendMemberJson(std::ostringstream& oss, const CTenantMember& member)
 {
-    oss << "{\"account\":" << web::CHttpText::JsonString(member.strAccountId) << ",\"role\":\""
-        << RoleName(member.role) << "\",\"joined\":" << member.nJoinMs << "}";
+    oss << "{\"account\":" << web::CHttpText::JsonString(member.strAccountId) << ",\"role\":\"" << RoleName(member.role)
+        << "\",\"joined\":" << member.nJoinMs << "}";
 }
 void AppendItemJson(std::ostringstream& oss, const DataItemInfo& item)
 {
     oss << "{\"id\":" << web::CHttpText::JsonString(item.strId) << ",\"kind\":\""
-        << (item.kind == sc::DataKind::kText ? "text" : "file") << "\",\"name\":" << web::CHttpText::JsonString(item.strName)
+        << (item.kind == sc::DataKind::kText ? "text" : "file")
+        << "\",\"name\":" << web::CHttpText::JsonString(item.strName)
         << ",\"from\":" << web::CHttpText::JsonString(item.strFrom) << ",\"size\":" << item.nSize
         << ",\"created\":" << item.nCreateMs << "}";
 }
@@ -91,8 +91,8 @@ void CAdminController::RegisterRoutes(web::CHttpRouter& router)
                      [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleOverview(req, resp); }});
     router.Register({"GET", "/api/admin/tenant",
                      [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleTenant(req, resp); }});
-    router.Register({"DELETE", "/api/admin/tenant",
-                     [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleTenantDelete(req, resp); }});
+    router.Register({"DELETE", "/api/admin/tenant", [this](web::CHttpRequest& req, web::CHttpResponse& resp)
+    { return HandleTenantDelete(req, resp); }});
     router.Register({"POST", "/api/admin/tenant/rename",
                      [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleRename(req, resp); }});
     router.Register({"POST", "/api/admin/tenant/limits",
@@ -101,8 +101,8 @@ void CAdminController::RegisterRoutes(web::CHttpRouter& router)
                      [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleItem(req, resp); }});
     router.Register({"DELETE", "/api/admin/item",
                      [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleItemDelete(req, resp); }});
-    router.Register({"DELETE", "/api/admin/member",
-                     [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleMemberDelete(req, resp); }});
+    router.Register({"DELETE", "/api/admin/member", [this](web::CHttpRequest& req, web::CHttpResponse& resp)
+    { return HandleMemberDelete(req, resp); }});
     router.Register({"POST", "/api/admin/member/role",
                      [this](web::CHttpRequest& req, web::CHttpResponse& resp) { return HandleMemberRole(req, resp); }});
 }
@@ -137,21 +137,21 @@ bool CAdminController::HandleOverview(web::CHttpRequest& req, web::CHttpResponse
         }
         bFirst = false;
         oss << "{\"code\":" << web::CHttpText::JsonString(tenant.strCode)
-            << ",\"name\":" << web::CHttpText::JsonString(tenant.strName)
-            << ",\"isDefault\":" << (m_pTenants != nullptr && tenant.strCode == m_pTenants->DefaultCode() ? "true" : "false")
+            << ",\"name\":" << web::CHttpText::JsonString(tenant.strName) << ",\"isDefault\":"
+            << (m_pTenants != nullptr && tenant.strCode == m_pTenants->DefaultCode() ? "true" : "false")
             << ",\"maxItems\":" << tenant.limits.nMaxItems << ",\"maxTotalBytes\":" << tenant.limits.nMaxTotalBytes
             << ",\"maxItemBytes\":" << tenant.limits.nMaxItemBytes << ",\"created\":" << tenant.nCreateMs
-            << ",\"members\":" << [this, &tenant]() {
-                   std::vector<CTenantMember> vecMembers;
-                   std::size_t nMembers = 0;
-                   if (m_pTenants != nullptr)
-                   {
-                       m_pTenants->ListMembers(tenant.strCode, vecMembers);
-                       nMembers = vecMembers.size();
-                   }
-                   return nMembers;
-               }()
-            << ",\"items\":" << nItems << ",\"bytes\":" << nBytes << "}";
+            << ",\"members\":" << [this, &tenant]()
+        {
+            std::vector<CTenantMember> vecMembers;
+            std::size_t nMembers = 0;
+            if (m_pTenants != nullptr)
+            {
+                m_pTenants->ListMembers(tenant.strCode, vecMembers);
+                nMembers = vecMembers.size();
+            }
+            return nMembers;
+        }() << ",\"items\":" << nItems << ",\"bytes\":" << nBytes << "}";
     }
     oss << "],\"count\":" << vecTenants.size() << ",\"totalItems\":" << nTotalItems << ",\"totalBytes\":" << nTotalBytes
         << "}";
@@ -186,8 +186,8 @@ bool CAdminController::HandleTenant(web::CHttpRequest& req, web::CHttpResponse& 
     }
     std::ostringstream oss;
     oss << "{\"code\":" << web::CHttpText::JsonString(tenant.strCode)
-        << ",\"name\":" << web::CHttpText::JsonString(tenant.strName)
-        << ",\"isDefault\":" << (m_pTenants != nullptr && tenant.strCode == m_pTenants->DefaultCode() ? "true" : "false")
+        << ",\"name\":" << web::CHttpText::JsonString(tenant.strName) << ",\"isDefault\":"
+        << (m_pTenants != nullptr && tenant.strCode == m_pTenants->DefaultCode() ? "true" : "false")
         << ",\"maxItems\":" << tenant.limits.nMaxItems << ",\"maxTotalBytes\":" << tenant.limits.nMaxTotalBytes
         << ",\"maxItemBytes\":" << tenant.limits.nMaxItemBytes << ",\"created\":" << tenant.nCreateMs
         << ",\"members\":[";
@@ -212,8 +212,8 @@ bool CAdminController::HandleTenant(web::CHttpRequest& req, web::CHttpResponse& 
         bFirst = false;
         AppendItemJson(oss, item);
     }
-    oss << "],\"count\":" << vecItems.size() << ",\"bytes\":" << (m_pStore != nullptr ? m_pStore->TotalBytes(tenant) : 0)
-        << "}";
+    oss << "],\"count\":" << vecItems.size()
+        << ",\"bytes\":" << (m_pStore != nullptr ? m_pStore->TotalBytes(tenant) : 0) << "}";
     resp.WriteJson(oss.str());
     return true;
 }

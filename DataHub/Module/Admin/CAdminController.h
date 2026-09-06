@@ -57,7 +57,7 @@ class CAdminController
     // 设置成员角色：POST /api/admin/member/role（表单 code/account/role）。
     bool HandleMemberRole(web::CHttpRequest& req, web::CHttpResponse& resp);
 
-    sc::IDataStore* m_pStore;      // 数据存储（生命周期由装配层管理）
+    sc::IDataStore* m_pStore;        // 数据存储（生命周期由装配层管理）
     sc::ITenantService* m_pTenants;  // 租户注册表 + 成员
 };
 

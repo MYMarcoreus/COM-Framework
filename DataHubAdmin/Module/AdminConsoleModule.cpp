@@ -100,7 +100,8 @@ bool CAdminConsoleModule::Initialize(const sc::CResolveContext& ctx)
     {
         return true;
     }
-    auto LoadFile = [this](const std::string& strName) -> std::string {
+    auto LoadFile = [this](const std::string& strName) -> std::string
+    {
         std::string strOut;
         FILE* pFile = std::fopen((m_strWebDir + "/" + strName).c_str(), "rb");
         if (pFile == nullptr)

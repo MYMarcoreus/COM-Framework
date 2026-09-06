@@ -43,7 +43,7 @@ SC_INTERFACE(ITenantService, "datahub::ITenantService", "4d9fa6e2-1c73-4b8e-9f41
     // ---- 服务端管理能力（运维控制面 /api/admin，仅本机回环可访问） ----
 
     // 枚举全部租户（含内置公共租户）。
-    virtual void ListTenants(std::vector<CTenant>& vecOut) const = 0;
+    virtual void ListTenants(std::vector<CTenant> & vecOut) const = 0;
 
     // 重命名租户（公共租户名亦可改）；@return false = 不存在 / 名称非法。
     virtual bool RenameTenant(const std::string& strCode, const std::string& strName) = 0;
