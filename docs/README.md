@@ -34,6 +34,12 @@
 | 异步库（CAsyncExecutor/CTask） | [async-usage.md](common/async-usage.md) | [async-impl.md](common/async-impl.md) |
 | 协程库（CCoroutine） | [coroutine-usage.md](common/coroutine-usage.md) | [coroutine-impl.md](common/coroutine-impl.md) |
 
+## DataHub 应用（`docs/datahub/`）
+
+| 文档 | 内容 |
+|---|---|
+| [tenant.md](datahub/tenant.md) | 租户完全指南：概念/数据模型/授权/API/前端/双服务器拓扑/同步问题与演进 |
+
 ## 其他
 
 | 文档 | 内容 |
