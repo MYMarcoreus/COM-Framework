@@ -1,144 +1,88 @@
-# DataHub —— 设备间即时通讯（聊天室）服务
+# DataHub —— 局域网设备间即时通讯（多租户聊天室 + 独立控制面）
 
-基于 **ServerCore 骨架 + Sogou Workflow** 的局域网聊天室服务。
-手机、电脑等设备接入同一网络后，通过浏览器即可像聊天一样实时互传文本与文件。
+基于 **ServerCore 骨架 + Sogou Workflow** 的局域网聊天室服务：手机、电脑接入同一网络后，
+用浏览器即可像聊天一样实时互传**文本与文件**；支持**多租户（组织边界）**，并配有独立的
+**服务端管理控制面**（DataHubAdmin）。
+
+> 本 README 是快速上手与导航。**完整文档见 [`docs/datahub/`](../docs/datahub/datahub-overview.md)**
+> （总览 / 架构 / HTTP API / 存储 / 前端 / 配置）。
+
+## 双服务器拓扑
+
+```text
+DataHub(数据面, exe, :8888)  ← 局域网设备浏览器（X-Tenant/X-Client-Id/X-Token）
+DataHubAdmin(控制面, exe, 回环 :8899)  ← 仅本机浏览器；/api/admin/* 代理到数据面
+```
+
+- **数据面**：真正持有数据（纯内存、租户隔离），对外提供聊天/文件 API。
+- **控制面**：不持业务数据，只做管理网页 + 把 `/api/admin/*` 代理到数据面回环并注入
+  `X-Admin-Token`（令牌只在服务器侧）。
 
 ## 特性
 
-- **ServerCore 骨架**：复用 `CMyApplication` 生命周期 + 模块模型（`CModuleManager`）+ 配置/日志/指标
-- **Workflow HTTP**：`WFHttpServer` 高性能异步服务，封装为 ServerCore 模块（`CHttpServerModule`）
-- **纯内存存储**：通用组件 `common::storage::CFileStore`（文本 / 文件）
-- **聊天室界面**：IM 风格（自己右侧绿气泡、对方左侧白气泡、实时轮询同步）
-- **在线成员**：显示聊天室成员（IP:端口 + 最后活跃时间），点击顶栏展开
-- **文件与图片**：文件气泡可下载；图片文件内联预览（点击放大）
-- **移动端友好**：动态视口（`100dvh`）+ 键盘适配，输入框始终可见
-- **独立前端资源**：`Web/index.html` 与 C++ 代码分离，运行时从磁盘加载，便于独立维护与部署
+- **ServerCore 骨架**：`CMyApplication` 生命周期 + 模块模型 + 配置/日志/指标
+- **Workflow HTTP**：`WFHttpServer` 高性能异步服务（封装为 `CHttpServerModule`）
+- **多租户**：公共租户 `public` + 私有租户（6 位分享码）；Owner/Member 角色；业务 API 显式 `X-Tenant`
+- **设备账号**：每设备注册随机令牌（`X-Client-Id` + `X-Token`），防身份伪造
+- **纯内存存储**：`common::storage::CFileStore`（文本/文件；重启清空，前端对账自愈）
+- **聊天室界面**：IM 风格；消息游标增量轮询（`?since=`）、在线成员、图片内联预览
+- **文件/图片**：Range 分段下载（规避 workflow 大响应截断）；中文名 RFC 5987
+- **独立控制面**：DataHubAdmin 管理网页（租户/成员/条目/配额/改名/删除，操作留审计日志）
+- **独立前端资源**：`Web/*` 与 C++ 分离，构建部署到 `~/.datahub`（控制面 → `~/.datahub-admin`）
 
-## 架构
-
-```text
-main.cpp
-  ↓
-CDataHubApplication (ServerCore CMyApplication)
-  ├── CConfigModule / CLoggerModule / CMetricsModule   # 基类默认装配
-  ├── CDataStoreModule        # IDataStore：委托 common::storage::CFileStore（通用文件存储组件）
-  └── CHttpServerModule       # IHttpService：封装 Workflow WFHttpServer
-```
-
-- `CDataStoreModule` 按接口注册（`IID_IDataStore`），供 HTTP 模块按接口解析（依赖注入）。
-- `CHttpServerModule` 声明依赖 `IDataStore`，由 `CModuleManager` 拓扑排序保证先就绪。
-- HTTP 回调为 Workflow 线程池执行，通过接口访问数据存储（存储内部加锁，线程安全）。
-- **文件存储抽象**：数据存储能力由 Common 的通用组件 `common::storage::CFileStore`
-  （`Common/Storage/`）提供——纯内存、线程安全、短码生成，可被任意服务器项目复用；
-  `CDataStoreModule` 仅做接口适配（委托）。
-
-## 一键脚本（推荐）
+## 快速上手
 
 ```bash
-cd DataHub
-./run.sh                # 编译(debug) + 配置外部访问 + 启动
-./run.sh --release      # 编译(release) + 配置外部访问 + 启动
-./run.sh --no-forward   # 跳过端口转发（纯本机运行）
-./run.sh --stop         # 停止服务器并清理端口转发
-./run.sh -p 9000        # 指定端口（默认从 datahub.ini 读取）
+# 首次：子模块 workflow
+git submodule update --init --recursive && ./ThirdParty/build.sh workflow
+
+# 构建（自动部署前端）
+./build.sh --debug DataHub DataHubAdmin
+
+# 运行 —— 须在含 ini 的目录启动（配置按 cwd 读取）
+cd DataHub && ../build/debug/datahub          # 数据面 8888
+cd DataHubAdmin && ../build/debug/datahub-admin  # 控制面 8899（仅本机）
+
+# 或一键脚本（编译 + WSL 端口转发 + 启动）
+cd DataHub && ./run.sh
 ```
 
-脚本会自动完成：
-1. **编译**：调用根目录 `./build.sh` 构建 DataHub，并部署前端页面到 `~/.datahub/`
-2. **配置外部访问**：检测到 WSL2 环境时，自动调用 Windows `netsh` 添加端口转发（Windows 端口 → WSL IP 端口），并放行防火墙
-3. **启动**：后台启动 datahub 并输出访问地址（本机 + 局域网，供手机访问）
-4. **自检**：确认进程存活，日志写入 `/tmp/datahub_<端口>.log`
-
-> WSL2 环境（NAT 模式）下，手机等局域网设备无法直接访问 WSL 内部 IP，需经 Windows 宿主机端口转发——`run.sh` 自动处理，无需手动执行 netsh 命令。
-
-## 构建
-
-```bash
-# 1. 初始化子模块并编译 workflow 静态库（首次）
-git submodule update --init --recursive
-./ThirdParty/build.sh workflow
-
-# 2. 构建（构建时自动把前端页面部署到用户目录 ~/.datahub/index.html）
-./build.sh DataHub            # debug（默认）
-./build.sh --release DataHub  # release
-```
-
-## 运行（手动）
-
-```bash
-# 从任意目录运行均可（前端页面从用户目录 ~/.datahub/index.html 读取）
-./build/debug/datahub
-
-# 或指定端口
-./build/debug/datahub 9000
-```
-
-启动后，同网络内任何设备的浏览器访问：
-
-```text
-http://<服务器IP>:8888/
-```
-
-> 手机与电脑需在同一局域网（或服务器有公网地址）。手机访问时输入服务器的局域网 IP 即可。
-> 在 WSL2（NAT 模式）下手动启动时，需先在 Windows 配置端口转发（见 `run.sh` 内部实现）。
-
-## HTTP API
-
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| GET | `/` | 前端页面（手机 / 电脑浏览器；默认 `~/.datahub/index.html`） |
-| POST | `/api/text` | 发送文本；body 为内容 → `{"id":"..."}`（记录发送者 IP:端口） |
-| GET | `/api/text/<id>` | 获取文本内容 |
-| POST | `/api/file` | 上传文件；header `X-File-Name` 指定文件名，body 为内容 → `{"id":"..."}` |
-| GET | `/api/file/<id>` | 下载文件（响应头含 `Content-Disposition`，中文名用 RFC 5987 编码） |
-| GET | `/api/list` | 列出全部消息（含发送者 `from` 字段） |
-| GET | `/api/members` | 在线成员列表（IP:端口 + 最后活跃时间；30 秒无活跃自动移除） |
-| DELETE | `/api/item/<id>` | 删除数据项 |
-
-### 命令行示例
-
-```bash
-# 发送文本（curl 模拟，from 记录为请求来源 IP:端口）
-curl -X POST -d '你好，这是要传输的内容' http://127.0.0.1:8888/api/text
-
-# 获取文本（id 来自发送返回，或用 /api/list 查看）
-curl http://127.0.0.1:8888/api/text/<id>
-
-# 上传文件
-curl -X POST -H 'X-File-Name: photo.jpg' --data-binary @photo.jpg \
-     http://127.0.0.1:8888/api/file
-
-# 下载文件
-curl -OJ http://127.0.0.1:8888/api/file/<id>
-
-# 查看在线成员
-curl http://127.0.0.1:8888/api/members
-```
+访问：数据面 `http://<服务器IP>:8888/`（选租户/进入后聊天）；控制面 `http://127.0.0.1:8899/`。
 
 ## 目录结构
 
 ```text
 DataHub/
-├── main.cpp                    # 入口（解析端口、忽略 SIGPIPE）
-├── run.sh                      # 一键脚本：编译 + 配置外部访问(WSL 端口转发) + 启动
-├── datahub.ini                 # 配置（端口 / 日志）
-├── Application/
-│   └── DataHubApplication.*    # CDataHubApplication（基于 CMyApplication）
+├── main.cpp / run.sh / datahub.ini
+├── Application/DataHubApplication.*    # 装配 Tenant/Store/Http 模块
+├── Framework/                          # 通用 web:: HTTP 框架（可移植复用）
 ├── Module/
-│   ├── IDataStore.h            # 数据存储接口（sc 命名空间）
-│   ├── IHttpService.h          # HTTP 服务接口（sc 命名空间）
-│   ├── DataStoreModule.*       # 内存存储模块
-│   └── HttpServerModule.*      # Workflow HTTP 服务模块 + 路由
-├── Web/
-│   └── index.html             # 前端页面源文件（构建时部署到用户目录 ~/.datahub/）
-└── Linux/
-    └── Makefile                # 生成 build/datahub + 部署前端页面
+│   ├── Tenant/                         # ITenantService + CTenantModule（租户/花名册）
+│   ├── Storage/                        # IDataStore + DataStoreModule（封装 CFileStore）
+│   ├── Http/                           # HttpServerModule + 业务/租户/设备/页面控制器
+│   └── Admin/                          # CAdminController（/api/admin/*）
+├── Web/                                # tenants.html(.js)/index.html(app.js)/common.js/style.css
+└── Linux/Makefile                      # 产物 build/<mode>/datahub + 部署 ~/.datahub
+
+DataHubAdmin/                           # 独立控制面 exe（main.cpp + AdminConsoleModule + Web/）
 ```
 
-## 说明
+## 文档导航
 
-- 数据仅存内存，进程退出即清空（精简版；如需持久化可在 `CDataStoreModule` 扩展落盘）。
-- 文件大小受 Workflow 请求体内存限制；超大文件建议分批或改流式存储。
-- 服务器需监听 `0.0.0.0`（Workflow 默认），以便局域网设备访问。
-- **前端页面部署**：构建 DataHub 时，Makefile 自动把 `Web/index.html` 拷贝到用户目录 `~/.datahub/index.html`（固定路径，与工作目录无关）。
-- **页面路径**：运行时从 `~/.datahub/index.html` 读取；如需自定义，可在 `datahub.ini` 的 `[web] index` 填绝对路径。修改 HTML 后重启服务即可生效，无需重新编译 C++。
+| 需要… | 看… |
+|---|---|
+| 项目总览 / 文档导航 | [`docs/datahub/datahub-overview.md`](../docs/datahub/datahub-overview.md) |
+| 架构 / 装配 / 请求生命周期 / 扩展 | [`docs/datahub/datahub-architecture.md`](../docs/datahub/datahub-architecture.md) |
+| 完整 HTTP API / curl | [`docs/datahub/datahub-http-api.md`](../docs/datahub/datahub-http-api.md) |
+| 存储与三套内存模型 / 重启语义 | [`docs/datahub/datahub-storage.md`](../docs/datahub/datahub-storage.md) |
+| 前端与对账自愈 | [`docs/datahub/datahub-frontend.md`](../docs/datahub/datahub-frontend.md) |
+| 配置键 / 构建 / 排障 | [`docs/datahub/datahub-configuration.md`](../docs/datahub/datahub-configuration.md) |
+| 多租户专题（概念→业界→落地→审计） | [`docs/datahub/tenant-*.md`](../docs/datahub/tenant-concepts.md) |
+
+## 说明与边界
+
+- 数据仅存内存，进程退出即清空（如需持久化，给 `IDataStore` 换落盘/DB 实现，见
+  `docs/datahub/datahub-storage.md`）。
+- 单次上传上限由 `datahub.ini [http] max_body_bytes` 控制（默认 32MB，0 不限）。
+- 业务 API 需要设备令牌（先 `POST /api/device/register`）；管理 API 仅本机回环 + 令牌。
+- 前端改动无需重编译 C++：重新构建部署或手动拷贝后**重启服务**即可生效。
