@@ -9,6 +9,8 @@
 
 #include "Log/Logger.h"
 #include "Module/Admin/CAdminController.h"
+#include "Module/Http/CDeviceController.h"
+#include "Module/Http/CDeviceRegistry.h"
 #include "Module/Http/HttpHandlers.h"
 #include "Module/Http/MemberService.h"
 #include "Module/Http/RequestContext.h"
@@ -146,6 +148,11 @@ bool CHttpServerModule::Initialize(const sc::CResolveContext& ctx)
     // —— 页面 / 静态资源：由页面控制器（CWebPageController）自注册。
     m_pPages->RegisterRoutes(m_router);
 
+    // —— 设备注册：账号凭据（/api/device/register，免鉴权入口）。
+    m_pDevices = std::unique_ptr<CDeviceRegistry>(new CDeviceRegistry());
+    m_pDeviceCtl = std::unique_ptr<CDeviceController>(new CDeviceController(m_pDevices.get()));
+    m_pDeviceCtl->RegisterRoutes(m_router);
+
     // —— 管理 API：/api/admin/*（本机回环 + 令牌闸门在 OnRequest 统一裁决）。
     m_pAdminCtl = std::unique_ptr<CAdminController>(new CAdminController(m_pStore.Get(), m_pTenants.Get()));
     m_pAdminCtl->RegisterRoutes(m_routerAdmin);
@@ -183,6 +190,8 @@ void CHttpServerModule::Shutdown()
 {
     Stop();
     m_pAdminCtl.reset();
+    m_pDeviceCtl.reset();
+    m_pDevices.reset();
     m_pPages.reset();
     m_pTenantCtl.reset();
     m_pHandlers.reset();
@@ -224,15 +233,14 @@ void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
 
     try
     {
-        // 1) 租户解析：缺省 X-Tenant → 公共租户；未知租户回 404（防止越权到别的租户）。
-        std::string strCode = req.Header("X-Tenant");
-        if (strCode.empty() && m_pTenants != nullptr)
-        {
-            strCode = m_pTenants->DefaultCode();
-        }
-        ctx.bResolved = m_pTenants != nullptr && m_pTenants->FindTenant(strCode, ctx.tenant);
-        // 0) 管理 API 快速通道：/api/admin/* 仅本机回环 + 令牌可访问，不经租户成员闸门。
-        if (strPath.compare(0, 10, "/api/admin") == 0)
+        // 路径分类：管理 API / 设备 API（需租户+账号）/ 其它（页面、设备注册、静态）。
+        const bool bIsApi = strPath == "/api" || strPath.compare(0, 5, "/api/") == 0;
+        const bool bAdminPath = strPath.compare(0, 10, "/api/admin") == 0;
+        const bool bDeviceRegPath = strPath == "/api/device/register";
+        const bool bTenantMgmtPath = strPath.compare(0, 11, "/api/tenant") == 0;
+
+        // 0) 管理 API 快速通道：仅本机回环 + X-Admin-Token，不经设备/租户鉴权。
+        if (bAdminPath)
         {
             const bool bLoopback = IsLoopbackPeer(req.Peer());
             const bool bAuthorized = !m_strAdminToken.empty() && req.Header("X-Admin-Token") == m_strAdminToken;
@@ -245,48 +253,96 @@ void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
                 resp.WriteText("Not Found", "404", "text/plain");
             }
         }
-        else if (!ctx.bResolved)
+        // 1) 设备 API：先设备鉴权（X-Client-Id + X-Token，B1）→ 显式租户（B4）→ 成员闸门。
+        else if (bIsApi && !bDeviceRegPath)
         {
-            resp.WriteJson("{\"error\":\"tenant not found\"}", "404");
-        }
-        else
-        {
-            // 2) 账号：X-Client-Id（浏览器持久化 UUID），缺省退回对端地址。
-            req.SetUserData(&ctx);
-            ctx.strAccountId = req.Header("X-Client-Id");
-            if (ctx.strAccountId.empty())
+            const std::string strClientId = req.Header("X-Client-Id");
+            const bool bAuth = m_pDevices != nullptr && !strClientId.empty() &&
+                               m_pDevices->Verify(strClientId, req.Header("X-Token"));
+            if (!bAuth)
             {
-                ctx.strAccountId = req.Peer();
-            }
-
-            // 3) 权限闸门：非公共租户的业务路由须为该租户成员；
-            //    /api/tenant* 为平台（跨租户）管理能力，豁免；公共租户人人可访问。
-            const bool bPublic = ctx.tenant.strCode == m_pTenants->DefaultCode();
-            const bool bTenantMgmt = strPath.compare(0, 11, "/api/tenant") == 0;
-            sc::TenantRole role = sc::TenantRole::kMember;
-            const bool bAllowed =
-                bPublic || bTenantMgmt || m_pTenants->TenantRoleOf(ctx.tenant.strCode, ctx.strAccountId, role);
-            if (!bAllowed)
-            {
-                resp.WriteJson("{\"error\":\"not a tenant member\"}", "403");
+                resp.WriteJson("{\"error\":\"unauthorized device\"}", "401");
             }
             else
             {
-                // 4) 成员记录（按租户）→ 路由分发。
-                if (m_pMembers)
+                ctx.strAccountId = strClientId;  // 账号 = 已认证设备（不再信任自报/Peer 回退）
+                req.SetUserData(&ctx);
+                const std::string strHeaderTenant = req.Header("X-Tenant");
+                // B4：业务数据 API 必须显式携带 X-Tenant（公共也须显式传 public）；
+                //     租户管理 /api/tenant* 允许缺省（其自身带 code/body）。
+                if (!bTenantMgmtPath && strHeaderTenant.empty())
                 {
-                    m_pMembers->Touch(req, ctx.tenant);
+                    resp.WriteJson("{\"error\":\"missing X-Tenant: choose a tenant\"}", "400");
                 }
-                if (m_pMetrics != nullptr)
+                else
                 {
-                    m_pMetrics->SetGauge(
-                        "http.members", static_cast<double>(m_pMembers != nullptr ? m_pMembers->Count(ctx.tenant) : 0));
-                    m_pMetrics->Inc("http." + ctx.tenant.strCode + ".requests");
+                    const std::string strCode =
+                        strHeaderTenant.empty() ? m_pTenants->DefaultCode() : strHeaderTenant;
+                    ctx.bResolved = m_pTenants != nullptr && m_pTenants->FindTenant(strCode, ctx.tenant);
+                    if (!ctx.bResolved)
+                    {
+                        // B2：状态对账端点允许“租户不存在”进入控制器（返回 exists=false 供客户端回落）；
+                        //     其余业务路径仍回 404 防止越权到别的租户。
+                        if (strPath == "/api/tenant/state")
+                        {
+                            ctx.tenant.strCode = strCode;
+                            if (m_pMembers)
+                            {
+                                m_pMembers->Touch(req, ctx.tenant);
+                            }
+                            if (!m_router.Dispatch(req, resp))
+                            {
+                                resp.WriteText("Not Found", "404", "text/plain");
+                            }
+                        }
+                        else
+                        {
+                            resp.WriteJson("{\"error\":\"tenant not found\"}", "404");
+                        }
+                    }
+                    else
+                    {
+                        const bool bPublic = ctx.tenant.strCode == m_pTenants->DefaultCode();
+                        sc::TenantRole role = sc::TenantRole::kMember;
+                        const bool bAllowed =
+                            bPublic || bTenantMgmtPath ||
+                            m_pTenants->TenantRoleOf(ctx.tenant.strCode, ctx.strAccountId, role);
+                        if (!bAllowed)
+                        {
+                            resp.WriteJson("{\"error\":\"not a tenant member\"}", "403");
+                        }
+                        else
+                        {
+                            if (m_pMembers)
+                            {
+                                m_pMembers->Touch(req, ctx.tenant);
+                            }
+                            if (m_pMetrics != nullptr)
+                            {
+                                m_pMetrics->SetGauge("http.members",
+                                    static_cast<double>(m_pMembers != nullptr ? m_pMembers->Count(ctx.tenant) : 0));
+                                m_pMetrics->Inc("http." + ctx.tenant.strCode + ".requests");
+                            }
+                            if (!m_router.Dispatch(req, resp))
+                            {
+                                resp.WriteText("Not Found", "404", "text/plain");
+                            }
+                        }
+                    }
                 }
-                if (!m_router.Dispatch(req, resp))
-                {
-                    resp.WriteText("Not Found", "404", "text/plain");
-                }
+            }
+        }
+        // 2) 其它（静态页面/资源、/api/device/register）：直接分发，无需租户/账号。
+        else
+        {
+            if (m_pTenants != nullptr)
+            {
+                ctx.tenant.strCode = m_pTenants->DefaultCode();  // 便于访问日志/指标标签
+                ctx.bResolved = true;
+            }
+            if (!m_router.Dispatch(req, resp))
+            {
+                resp.WriteText("Not Found", "404", "text/plain");
             }
         }
     }

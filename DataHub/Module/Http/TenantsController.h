@@ -38,6 +38,9 @@ class CTenantsController
     // 当前租户成员花名册：GET /api/tenant/members。
     bool HandleMembers(web::CHttpRequest& req, web::CHttpResponse& resp);
 
+    // 当前租户状态（对账）：GET /api/tenant/state（改名/被踢/已删检测）。
+    bool HandleState(web::CHttpRequest& req, web::CHttpResponse& resp);
+
    private:
     sc::ITenantService* m_pTenants;  // 租户注册表 + 成员（生命周期由装配层管理）
 };

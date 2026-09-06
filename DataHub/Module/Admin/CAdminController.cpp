@@ -7,6 +7,7 @@
 
 #include "Framework/HttpRouter.h"
 #include "Framework/HttpText.h"
+#include "Log/Logger.h"
 
 namespace datahub {
 
@@ -24,6 +25,11 @@ namespace {
 const char* RoleName(TenantRole role)
 {
     return role == TenantRole::kOwner ? "owner" : "member";
+}
+// 审计：管理控制台（回环 + 令牌）变更操作落日志。
+void AuditAdmin(const std::string& strOp, const std::string& strTarget)
+{
+    common::log::CLogger::Instance().Info("[Audit] op=" + strOp + " target=" + strTarget + " actor=admin(loopback)");
 }
 // 解析 x-www-form-urlencoded 请求体 → 字段表（自动 URL 解码）。
 std::map<std::string, std::string> ParseForm(const std::string& strBody)
@@ -247,6 +253,7 @@ bool CAdminController::HandleTenantDelete(web::CHttpRequest& req, web::CHttpResp
     {
         m_pStore->PurgeTenant(tenant);  // 清空该租户全部数据
     }
+    AuditAdmin("tenant.delete", strCode);
     resp.WriteJson("{\"ok\":true}");
     return true;
 }
@@ -267,6 +274,7 @@ bool CAdminController::HandleRename(web::CHttpRequest& req, web::CHttpResponse& 
         resp.WriteJson("{\"error\":\"rename failed\"}", "400");
         return true;
     }
+    AuditAdmin("tenant.rename", strCode + " → " + strName);
     resp.WriteJson("{\"ok\":true}");
     return true;
 }
@@ -290,6 +298,7 @@ bool CAdminController::HandleLimits(web::CHttpRequest& req, web::CHttpResponse& 
         resp.WriteJson("{\"error\":\"tenant not found\"}", "404");
         return true;
     }
+    AuditAdmin("tenant.limits", strCode);
     resp.WriteJson("{\"ok\":true}");
     return true;
 }
@@ -361,6 +370,7 @@ bool CAdminController::HandleItemDelete(web::CHttpRequest& req, web::CHttpRespon
         resp.WriteJson("{\"error\":\"item not found\"}", "404");
         return true;
     }
+    AuditAdmin("item.delete", strCode + "/" + strId);
     resp.WriteJson("{\"ok\":true}");
     return true;
 }
@@ -380,6 +390,7 @@ bool CAdminController::HandleMemberDelete(web::CHttpRequest& req, web::CHttpResp
         resp.WriteJson("{\"error\":\"remove member failed (keep >= 1 owner)\"}", "400");
         return true;
     }
+    AuditAdmin("member.delete", strCode + "/" + strAccount);
     resp.WriteJson("{\"ok\":true}");
     return true;
 }
@@ -402,6 +413,7 @@ bool CAdminController::HandleMemberRole(web::CHttpRequest& req, web::CHttpRespon
         resp.WriteJson("{\"error\":\"set role failed (target must be member; keep >= 1 owner)\"}", "400");
         return true;
     }
+    AuditAdmin("member.role", strCode + "/" + strAccount + "=" + strRole);
     resp.WriteJson("{\"ok\":true}");
     return true;
 }

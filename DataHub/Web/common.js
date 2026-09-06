@@ -100,14 +100,72 @@
     refreshName();
   };
 
-  // ---- 统一 fetch：自动附加 X-Client-Id（账号）与 X-Tenant（当前租户） ----
+  // ---- 设备令牌（X-Token）：登录即注册，服务端签发随机设备令牌并校验归属 ----
+  // 身份 = X-Client-Id + X-Token 双因子式校验；服务端重启令牌表清空时，
+  // 注册接口幂等返回新令牌，客户端自动续期（401 时 apiFetch 会自动重注册重试一次）。
+  var KEY_TOKEN = 'datahub_device_token';
+  DH.token = '';
+  try { DH.token = localStorage.getItem(KEY_TOKEN) || ''; } catch (e) { DH.token = ''; }
+  DH._tokenP = null;
+  // @param force 强制重新注册（用于 401 续期）；始终幂等（服务端记住则原样返回）。
+  DH.ensureDevice = function (force) {
+    if (!force && DH.token) return Promise.resolve(DH.token);
+    if (DH._tokenP) return DH._tokenP;
+    DH._tokenP = fetch('/api/device/register', { method: 'POST', body: DH.CLIENT_ID })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        DH.token = j.token || '';
+        if (DH.token) { try { localStorage.setItem(KEY_TOKEN, DH.token); } catch (e) {} }
+        DH._tokenP = null;
+        return DH.token;
+      })
+      .catch(function () { DH._tokenP = null; return ''; });
+    return DH._tokenP;
+  };
+
+  // ---- 当前租户状态对账（B2/B6）：周期调用，检测改名 / 被踢 / 租户被删 ----
+  // 返回 {changed, kicked, renamed}；changed=true 时调用方应重置视图（本函数已回落清理）。
+  DH.reconcileCurrent = function () {
+    if (!DH.currentCode || DH.currentCode === 'public') return Promise.resolve({ changed: false });
+    return DH.apiFetch('/api/tenant/state')
+      .then(function (r) { return r.json(); })
+      .then(function (st) {
+        st = st || {};
+        // 不存在（被删）或非公共且角色为空（被踢）→ 从"我的租户"移除并回落公共。
+        if (st.exists === false || (st.code && st.code !== 'public' && !st.role)) {
+          var wasCurrent = DH.removeTenant(st.code || DH.currentCode);
+          return { changed: wasCurrent, kicked: true, deleted: (st.exists === false) };
+        }
+        // 改名：刷新本地缓存与当前显示名。
+        if (st.exists && st.name && st.name !== DH.tenantNameOf(st.code)) {
+          DH.addTenant(st.code, st.name);
+          if (st.code === DH.currentCode) refreshName();
+          return { changed: false, renamed: true, name: st.name };
+        }
+        return { changed: false };
+      })
+      .catch(function () { return { changed: false }; });
+  };
+
+  // ---- 统一 fetch：自动附加 X-Client-Id（账号）/ X-Tenant（当前租户）/ X-Token（设备令牌） ----
   // 已显式传入 X-Tenant 时不再覆写（管理页需按某租户查询角色时覆写）。
+  // 返回 Promise<Response>（先确保令牌已注册；401 时自动续期重试一次）。
   DH.apiFetch = function (url, options) {
     options = options || {};
     options.headers = options.headers || {};
     options.headers['X-Client-Id'] = DH.CLIENT_ID;
     if (!options.headers['X-Tenant']) options.headers['X-Tenant'] = DH.currentCode;
-    return fetch(url, options);
+    return DH.ensureDevice().then(function (token) {
+      if (token) options.headers['X-Token'] = token;
+      return fetch(url, options).then(function (resp) {
+        // 服务端重启令牌表清空 → 401：幂等重注册一次再重试（防 stale 循环）。
+        if (resp.status === 401 && !options._retried) {
+          options._retried = true;
+          return DH.ensureDevice(true).then(function () { return fetch(url, options); });
+        }
+        return resp;
+      });
+    });
   };
 
   // 首次加载即恢复状态。

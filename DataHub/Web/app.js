@@ -448,4 +448,22 @@
   poll();
   setInterval(poll, POLL_MS);
   setInterval(loadMembers, POLL_MS); // 后台更新成员（用于"我"地址推断）
+
+  // ============ 状态对账（B2/B6）：改名 / 被踢 / 租户被删 的自愈 ============
+  // 服务端控制面删除租户或移除成员后，本页不再 404/403 死循环：
+  // 检测到离场即回落公共并跳回根页选择；改名则原地刷新标题。
+  function reconcile() {
+    DH.reconcileCurrent().then(function (res) {
+      if (!res) return;
+      if (res.changed) {
+        toast(res.deleted ? '当前租户已被删除' : '你已被移出该租户');
+        setTimeout(function () { location.href = '/'; }, 600);
+      } else if (res.renamed && res.name) {
+        $('tenantName').textContent = DH.currentName;
+        toast('租户已改名：' + res.name);
+      }
+    });
+  }
+  setTimeout(reconcile, 3000);   // 进页 3s 后先对账一次（服务端数据可能已变）
+  setInterval(reconcile, 10000); // 之后每 10s 轻量对账（不叠加在 2s 数据轮询上）
 })();

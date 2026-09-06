@@ -21,6 +21,8 @@ using sc::IHttpService;
 
 // 前置声明。
 class CAdminController;
+class CDeviceController;
+class CDeviceRegistry;
 class CHttpHandlers;
 class CMemberService;
 class CTenantsController;
@@ -98,6 +100,8 @@ class CHttpServerModule : public sc::CModule, public IHttpService
     std::unique_ptr<CHttpHandlers> m_pHandlers;             // 租户内业务 API（业务层）
     std::unique_ptr<CTenantsController> m_pTenantCtl;       // 租户管理（业务层）
     std::unique_ptr<CWebPageController> m_pPages;           // 页面/静态资源（业务层）
+    std::unique_ptr<CDeviceRegistry> m_pDevices;            // 设备注册表（账号凭据）
+    std::unique_ptr<CDeviceController> m_pDeviceCtl;        // 设备注册 API（/api/device/register）
     std::unique_ptr<CAdminController> m_pAdminCtl;          // 管理 API（本机回环 + 令牌）
     web::CHttpRouter m_router;                              // 租户内/页面路由
     web::CHttpRouter m_routerAdmin;                         // 管理 API 路由（/api/admin/*）
