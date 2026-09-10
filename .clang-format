@@ -38,6 +38,8 @@ ColumnLimit: 120
 AlignAfterOpenBracket: Align
 # 行尾注释列对齐（成员变量注释、using 别名注释等）。
 AlignTrailingComments: true
+# **不要**按文件内容推导指针风格（Google 基准默认开启，会盖掉下面的 PointerAlignment）。
+DerivePointerAlignment: false
 # 指针/引用贴近类型名（const char* / const TValue&）。
 PointerAlignment: Left
 # 参数允许装箱（一行放多个参数），首参保留在首行。
@@ -67,6 +69,8 @@ BraceWrapping:
   SplitEmptyNamespace: true
 
 # ---- 换行 ----
+# **不要**重排注释内容（Google 基准默认开启，会把对齐好的注释表 / 图示 / 列表揉成散文）。
+ReflowComments: false
 # 二元运算符换行时留在行尾（if (a || b ||\n    c)）；
 # 成员访问 . / -> 为 clang-format 固有行为，恒换到行首（链式调用）。
 BreakBeforeBinaryOperators: None
