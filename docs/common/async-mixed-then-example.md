@@ -1,6 +1,6 @@
 # 示例：一条 promise 链里混用多种 then
 
-单文件，直接编译可跑。链上一行一个 then，注释里的编号与实现它的函数一一对应。
+链上一行一个 then，注释里的编号与实现它的函数一一对应。
 
 ## 代码
 
@@ -217,12 +217,6 @@ int main()
 }
 ```
 
-编译（先 `./build.sh --debug Common` 生成 `build/debug/libCommon.a`）：
-
-```bash
-g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon min_then.cpp build/debug/libCommon.a -o /tmp/min_then && /tmp/min_then
-```
-
 输出：
 
 ```text
@@ -232,13 +226,10 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon min_then.cpp build/debug/l
 
 第二行是把 `COrderCtx::nQty` 改成 `50` 后的结果：② 拒绝，③④⑤ 都不执行，catch / finally 照跑。
 
-几点说明（代码注释里也标了）：
+几点说明：
 
 - ③ 的链跑在库存模块自己的线程池上，先后顺序靠 `OnSettled → fnResolve → 本层 settle → 下一层`
   这条依赖边保证，不靠共享线程；唯一不保证先后的是旁支 ⑤。
 - 执行器是模块私有资源，不跨模块传；调用方只拿对方的 promise（跨上下文用 `CPromise::New` 桥接）。
 - then 里不用判断上一层：上游被拒绝时框架直接跳过本层。要看拒绝用 `Catch`，成败都收尾用 `Finally`。
 - 要「等」子链就返回它（`ThenPromise`）；普通 `Then` 的处理器只能返回 `CPromiseResult`，里面起的链主链一概不等。
-
-完整版（正常 / 库存不足 / 参数非法 / 内层链拒绝 四条路径 + 自校验）见
-[`examples/cases/ThenMixCase.cpp`](../../examples/cases/ThenMixCase.cpp)；API 与语义速查见 [async-usage.md](async-usage.md)。
