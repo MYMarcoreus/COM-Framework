@@ -1,7 +1,8 @@
 #include "Infra/TimerModule.h"
 
-#include "Module/InterfaceMap.h"
 #include <string>
+
+#include "Module/InterfaceMap.h"
 
 namespace sc {
 
@@ -10,13 +11,11 @@ SC_DEFINE_INTERFACE_MAP(CTimerModule, CModule, ITimer)
 
 /// @brief 创建定时器模块。
 CTimerModule::CTimerModule() : CModule("timer")
-{
-}
+{}
 
 /// @brief 销毁定时器模块。
 CTimerModule::~CTimerModule()
-{
-}
+{}
 
 /// @brief 初始化模块（无配置依赖，直接成功）。
 bool CTimerModule::Initialize(const CResolveContext& /*ctx*/)
@@ -31,15 +30,14 @@ bool CTimerModule::Start()
 }
 
 /// @brief 添加一次性定时器。
-common::timer::TimerId CTimerModule::AddTimer(std::int64_t delayMs,
-                                                const common::timer::TimerCallback& callback)
+common::timer::TimerId CTimerModule::AddTimer(std::int64_t delayMs, const common::timer::TimerCallback& callback)
 {
     return m_timer.AddTimer(delayMs, callback);
 }
 
 /// @brief 添加周期性定时器。
 common::timer::TimerId CTimerModule::AddPeriodicTimer(std::int64_t intervalMs,
-                                                        const common::timer::TimerCallback& callback)
+                                                      const common::timer::TimerCallback& callback)
 {
     return m_timer.AddPeriodicTimer(intervalMs, callback);
 }
@@ -58,7 +56,6 @@ void CTimerModule::Stop()
 
 /// @brief 关闭模块（定时器资源由 Stop 释放，无需额外处理）。
 void CTimerModule::Shutdown()
-{
-}
+{}
 
-} // namespace sc
+}  // namespace sc

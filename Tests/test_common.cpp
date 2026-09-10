@@ -44,7 +44,10 @@ TEST(ThreadPool_SubmitTasks)
     std::atomic<int> nCounter(0);
     for (int i = 0; i < 20; ++i)
     {
-        ASSERT_TRUE(pool.Submit([&nCounter]() { nCounter.fetch_add(1); }));
+        ASSERT_TRUE(pool.Submit([&nCounter]()
+        {
+            nCounter.fetch_add(1);
+        }));
     }
     pool.Stop();  // 等待所有已提交任务执行完毕
     ASSERT_EQ(nCounter.load(), 20);
@@ -91,7 +94,10 @@ TEST(Timer_OneShotFires)
     ASSERT_TRUE(timerManager.Start());
 
     std::atomic<int> nFired(0);
-    common::timer::TimerId nId = timerManager.AddTimer(30, [&nFired]() { nFired.fetch_add(1); });
+    common::timer::TimerId nId = timerManager.AddTimer(30, [&nFired]()
+    {
+        nFired.fetch_add(1);
+    });
     ASSERT_TRUE(nId != common::timer::kInvalidTimerId);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(120));

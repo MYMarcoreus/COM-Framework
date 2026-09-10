@@ -20,8 +20,9 @@ namespace detail {
 /// 从而保证绝不访问已销毁的对象内存。
 class CLifetime
 {
-public:
-    CLifetime() : m_bAlive(true) {}
+   public:
+    CLifetime() : m_bAlive(true)
+    {}
 
     // 是否存活（调用方须持有 m_mutex）。
     bool IsAlive() const
@@ -38,11 +39,11 @@ public:
     // 保护"IsAlive 检查 + AddRef"与"MarkDead + 析构"互斥。
     std::mutex m_mutex;
 
-private:
+   private:
     std::atomic<bool> m_bAlive;
 };
 
-} // namespace detail
+}  // namespace detail
 
 /// @brief 弱引用（不延长对象生命周期）。
 ///
@@ -68,12 +69,12 @@ private:
 template <typename T>
 class CWeakPtr
 {
-    static_assert(std::is_base_of<IUnknown, T>::value,
-                  "CWeakPtr<T> 要求 T 必须是 IUnknown 派生接口");
+    static_assert(std::is_base_of<IUnknown, T>::value, "CWeakPtr<T> 要求 T 必须是 IUnknown 派生接口");
 
-public:
+   public:
     // 创建空弱引用。
-    CWeakPtr() : m_ptr(nullptr) {}
+    CWeakPtr() : m_ptr(nullptr)
+    {}
 
     // 是否已失效（模块已销毁或从未绑定）。
     bool Expired() const
@@ -112,22 +113,26 @@ public:
     }
 
     // 返回借用的裸指针（不保证存活，仅供同步上下文 / 调试）。
-    T* UnsafeGet() const { return m_ptr; }
+    T* UnsafeGet() const
+    {
+        return m_ptr;
+    }
 
     // 是否仍有效（未被销毁）。
-    explicit operator bool() const { return !Expired(); }
+    explicit operator bool() const
+    {
+        return !Expired();
+    }
 
-private:
+   private:
     friend class CModule;
     friend class CRefObject;
 
-    CWeakPtr(T* ptr, const std::shared_ptr<detail::CLifetime>& spLifetime)
-        : m_ptr(ptr), m_pLifetime(spLifetime)
-    {
-    }
+    CWeakPtr(T* ptr, const std::shared_ptr<detail::CLifetime>& spLifetime) : m_ptr(ptr), m_pLifetime(spLifetime)
+    {}
 
     T* m_ptr;
     std::weak_ptr<detail::CLifetime> m_pLifetime;
 };
 
-} // namespace sc
+}  // namespace sc

@@ -2,18 +2,14 @@
 
 namespace sc {
 
-CBusinessFlow::CBusinessFlow()
-    : m_nPending(0), m_bCompleted(false), m_bFinished(false)
-{
-}
+CBusinessFlow::CBusinessFlow() : m_nPending(0), m_bCompleted(false), m_bFinished(false)
+{}
 
 CBusinessFlow::~CBusinessFlow()
-{
-}
+{}
 
 /// @brief 提交一个读/写子任务到模块调度器（自动 BeginTask/EndTask）。
-bool CBusinessFlow::SubmitTask(CModuleScheduler* pScheduler,
-                               CModuleScheduler::ETaskKind eKind,
+bool CBusinessFlow::SubmitTask(CModuleScheduler* pScheduler, CModuleScheduler::ETaskKind eKind,
                                const std::function<void()>& fnTask)
 {
     if (pScheduler == nullptr)
@@ -25,12 +21,12 @@ bool CBusinessFlow::SubmitTask(CModuleScheduler* pScheduler,
     BeginTask();
     bool bOk = pScheduler->Submit(eKind, [spSelf, fnTask]()
     {
-        fnTask(); // 子任务业务逻辑（异常由调度器包装捕获）
+        fnTask();  // 子任务业务逻辑（异常由调度器包装捕获）
         spSelf->EndTask();
     });
     if (!bOk)
     {
-        EndTask(); // 投递失败：立即归还计数
+        EndTask();  // 投递失败：立即归还计数
         return false;
     }
     return true;
@@ -76,8 +72,8 @@ void CBusinessFlow::MaybeFinish()
     }
     if (bShouldRun)
     {
-        m_callbacks.RunAll(); // 处理结束：逐个出栈（LIFO）触发
+        m_callbacks.RunAll();  // 处理结束：逐个出栈（LIFO）触发
     }
 }
 
-} // namespace sc
+}  // namespace sc

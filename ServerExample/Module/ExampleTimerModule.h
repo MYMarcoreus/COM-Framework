@@ -2,9 +2,9 @@
 
 #include <cstdint>
 
-#include "Module/ScopedInterfacePtr.h"
 #include "Infra/ITimer.h"
 #include "Module/Module.h"
+#include "Module/ScopedInterfacePtr.h"
 
 namespace serverexample {
 
@@ -14,7 +14,7 @@ namespace serverexample {
 /// 模块名 "timer"。
 class CExampleTimerModule : public sc::CModule
 {
-public:
+   public:
     explicit CExampleTimerModule(std::int64_t intervalMs);
 
     virtual ~CExampleTimerModule();
@@ -31,10 +31,10 @@ public:
     // 停止定时器并释放接口引用。
     void Shutdown() override;
 
-private:
+   private:
     std::int64_t m_nIntervalMs;
     sc::ScopedInterfacePtr<sc::ITimer> m_pTimer;
     common::timer::TimerId m_tTimerId;
 };
 
-} // namespace serverexample
+}  // namespace serverexample

@@ -26,12 +26,15 @@ namespace sc {
 ///  - 回调栈回放期间/之后不得再向本流程提交子任务。
 class CBusinessFlow : public std::enable_shared_from_this<CBusinessFlow>
 {
-public:
+   public:
     CBusinessFlow();
     virtual ~CBusinessFlow();
 
     /// @brief 流程回调栈（业务处理中压栈，流程结束回放）。
-    CCallbackStack& Callbacks() { return m_callbacks; }
+    CCallbackStack& Callbacks()
+    {
+        return m_callbacks;
+    }
 
     /// @brief 提交一个读/写子任务到模块调度器。
     ///
@@ -55,17 +58,20 @@ public:
     void Complete();
 
     /// @brief 是否已回放回调栈。
-    bool IsFinished() const { return m_bFinished.load(); }
+    bool IsFinished() const
+    {
+        return m_bFinished.load();
+    }
 
-private:
+   private:
     // 子任务计数归零且已 Complete → 回放回调栈（恰好一次，线程安全）。
     void MaybeFinish();
 
     CCallbackStack m_callbacks;
-    std::atomic<int>  m_nPending;    // 未结束的子任务数。
+    std::atomic<int> m_nPending;     // 未结束的子任务数。
     std::atomic<bool> m_bCompleted;  // 是否已 Complete。
     std::atomic<bool> m_bFinished;   // 是否已回放回调栈。
     std::mutex m_mutex;              // 串行化完成判定（防双重回放）。
 };
 
-} // namespace sc
+}  // namespace sc

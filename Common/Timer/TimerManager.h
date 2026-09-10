@@ -30,7 +30,7 @@ using TimerCallback = std::function<void()>;
 /// 定时器回调在 io 线程内执行，应尽快返回。
 class CTimerManager
 {
-public:
+   public:
     CTimerManager();
 
     ~CTimerManager();
@@ -48,8 +48,7 @@ public:
     bool Cancel(TimerId nId);
 
     // 注册命名周期定时器（便于按名称管理/取消）。
-    TimerId AddNamedTimer(const std::string& strName, std::int64_t nIntervalMs,
-                          const TimerCallback& fnCallback);
+    TimerId AddNamedTimer(const std::string& strName, std::int64_t nIntervalMs, const TimerCallback& fnCallback);
 
     // 按名称取消定时器。
     bool CancelNamedTimer(const std::string& strName);
@@ -60,14 +59,13 @@ public:
     // 是否正在运行。
     bool IsRunning() const;
 
-private:
+   private:
     // 调度一次异步等待（周期定时器到期后重新调度）。
-    void Schedule(std::shared_ptr<asio::steady_timer> pTimer, TimerId nId,
-                  std::int64_t nIntervalMs, const TimerCallback& fnCallback);
+    void Schedule(std::shared_ptr<asio::steady_timer> pTimer, TimerId nId, std::int64_t nIntervalMs,
+                  const TimerCallback& fnCallback);
 
     // 添加定时器。
-    TimerId AddTimerInternal(std::int64_t nDelayMs, std::int64_t nIntervalMs,
-                             const TimerCallback& fnCallback);
+    TimerId AddTimerInternal(std::int64_t nDelayMs, std::int64_t nIntervalMs, const TimerCallback& fnCallback);
 
     asio::io_context m_io;
     std::unique_ptr<asio::executor_work_guard<asio::io_context::executor_type> > m_pWork;
@@ -79,5 +77,5 @@ private:
     std::atomic<bool> m_bRunning;
 };
 
-} // namespace timer
-} // namespace common
+}  // namespace timer
+}  // namespace common

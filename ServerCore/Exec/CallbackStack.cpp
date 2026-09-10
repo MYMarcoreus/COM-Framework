@@ -43,14 +43,14 @@ bool CCallbackStack::Empty() const
 void CCallbackStack::RunAll()
 {
     // 取出全部回调后锁外执行，避免回调中再次 Push 时自锁。
-    std::vector<std::function<void()>> vecCallbacks;
+    std::vector<std::function<void()> > vecCallbacks;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         vecCallbacks.swap(m_vecCallbacks);
     }
     // LIFO：栈顶（尾部）先执行；单个回调异常不影响其余。
-    for (std::vector<std::function<void()>>::reverse_iterator it = vecCallbacks.rbegin();
-         it != vecCallbacks.rend(); ++it)
+    for (std::vector<std::function<void()> >::reverse_iterator it = vecCallbacks.rbegin(); it != vecCallbacks.rend();
+         ++it)
     {
         if (!(*it))
         {
@@ -62,8 +62,7 @@ void CCallbackStack::RunAll()
         }
         catch (const std::exception& e)
         {
-            common::log::CLogger::Instance().Error(
-                std::string("CCallbackStack::RunAll 回调异常: ") + e.what());
+            common::log::CLogger::Instance().Error(std::string("CCallbackStack::RunAll 回调异常: ") + e.what());
         }
         catch (...)
         {
@@ -78,4 +77,4 @@ void CCallbackStack::Clear()
     m_vecCallbacks.clear();
 }
 
-} // namespace sc
+}  // namespace sc

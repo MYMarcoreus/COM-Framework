@@ -5,9 +5,9 @@
 #include <string>
 #include <vector>
 
-#include "Observability/IMetrics.h"
 #include "Module/InterfaceMap.h"
 #include "Module/Module.h"
+#include "Observability/IMetrics.h"
 
 namespace sc {
 
@@ -17,7 +17,7 @@ namespace sc {
 /// 内部按名称维护原子值，首次写入自动注册（类型以首次写入为准）。
 class CMetricsModule : public CModule, public IMetrics
 {
-public:
+   public:
     CMetricsModule();
 
     virtual ~CMetricsModule();
@@ -51,13 +51,14 @@ public:
 
     SC_DECLARE_INTERFACE_MAP();
 
-private:
+   private:
     struct Entry
     {
-        MetricKind kind;      // 指标类型（首次写入时确定）
-        mutable double value; // 当前值（读写受 m_mutex 保护）
+        MetricKind kind;       // 指标类型（首次写入时确定）
+        mutable double value;  // 当前值（读写受 m_mutex 保护）
 
-        Entry() : kind(MetricKind::kCounter), value(0.0) {}
+        Entry() : kind(MetricKind::kCounter), value(0.0)
+        {}
     };
 
     // 获取或创建指标条目（锁外调用）。
@@ -67,4 +68,4 @@ private:
     mutable std::mutex m_mutex;
 };
 
-} // namespace sc
+}  // namespace sc

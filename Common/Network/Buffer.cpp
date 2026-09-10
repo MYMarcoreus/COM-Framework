@@ -8,10 +8,8 @@ namespace network {
 /// @brief 创建网络缓冲区。
 ///
 /// @param initialSize 初始容量。
-CBuffer::CBuffer(size_t initialSize)
-    : m_vecData(initialSize), m_nReadIndex(0), m_nWriteIndex(0)
-{
-}
+CBuffer::CBuffer(size_t initialSize) : m_vecData(initialSize), m_nReadIndex(0), m_nWriteIndex(0)
+{}
 
 /// @brief 追加数据到缓冲区可写区。
 ///
@@ -123,5 +121,5 @@ void CBuffer::EnsureWritable(size_t nLen)
     m_nReadIndex = 0;
 }
 
-} // namespace network
-} // namespace common
+}  // namespace network
+}  // namespace common

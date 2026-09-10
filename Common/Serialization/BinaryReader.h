@@ -14,7 +14,7 @@ namespace serialization {
 /// （调用方可决定是否丢弃整条消息）。
 class CBinaryReader
 {
-public:
+   public:
     // 从缓冲创建读取器（借用指针，读取期间缓冲必须保持存活）。
     CBinaryReader(const char* pData, size_t nSize);
 
@@ -54,7 +54,7 @@ public:
     // 是否处于出错状态（任一次读取失败）。
     bool Failed() const;
 
-private:
+   private:
     // 读取 nLen 字节到输出（失败时回滚位置）。
     bool ReadRaw(char* pOut, size_t nLen);
 
@@ -64,5 +64,5 @@ private:
     bool m_bFailed;
 };
 
-} // namespace serialization
-} // namespace common
+}  // namespace serialization
+}  // namespace common

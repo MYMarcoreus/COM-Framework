@@ -75,7 +75,8 @@ struct CAwaitAllGroup
     std::atomic<int> bRejected;  ///< 是否已有 promise 被拒绝（0/1）。
     std::atomic<int> nCode;      ///< 首个拒绝码（bRejected 为 1 时有效）。
 
-    CAwaitAllGroup() : nPending(0), bRejected(0), nCode(kRejected) {}
+    CAwaitAllGroup() : nPending(0), bRejected(0), nCode(kRejected)
+    {}
 };
 
 }  // namespace detail
@@ -110,7 +111,8 @@ class CCoroutine
     {}
 
     /// @brief 析构（不阻塞）。
-    virtual ~CCoroutine() {}
+    virtual ~CCoroutine()
+    {}
 
     /// @brief 不可拷贝（协程帧与运行状态唯一）。
     CCoroutine(const CCoroutine&) = delete;
@@ -122,19 +124,28 @@ class CCoroutine
     /// @brief await：阻塞获取协程最终结果（JS await 的阻塞版，不抛异常）。
     ///
     /// @return 最终结果：正常结束为兑现；await 到拒绝 / 执行器停止为对应拒绝码。
-    CPromiseResult Await() const { return m_pSegment->Await(); }
+    CPromiseResult Await() const
+    {
+        return m_pSegment->Await();
+    }
 
     /// @brief 共享上下文（懒创建，恒非空）。
     ///
     /// 协程与它起的子 promise（NewPromise()）共用同一实例（TContext 须可默认构造）。
-    std::shared_ptr<TContext> GetContext() const { return m_pCore->Context(); }
+    std::shared_ptr<TContext> GetContext() const
+    {
+        return m_pCore->Context();
+    }
 
     /// @brief 本协程作为可等待的 promise（供外层 CO_AWAIT 或 OnSettled 使用）。
     ///
     /// 须在 CAsyncExecutor::CoStart 启动之后调用（启动时绑定执行器并复位状态）。
     ///
     /// @return 指向本协程完成状态的 promise 句柄。
-    CPromise<TContext> AsPromise() const { return CPromise<TContext>::Make(m_pCore, m_pSegment); }
+    CPromise<TContext> AsPromise() const
+    {
+        return CPromise<TContext>::Make(m_pCore, m_pSegment);
+    }
 
     /// @brief 起一条子 promise（复用本协程的执行器与共享上下文）。
     ///
@@ -169,13 +180,19 @@ class CCoroutine
     /// 后，协程对象仍存活到最后一个 Resume 执行完毕（不悬垂）。
     ///
     /// @param sp 协程对象的 shared_ptr（CoStart 返回的那个）。
-    void SetSelf(const std::shared_ptr<void>& sp) { m_wpSelf = sp; }
+    void SetSelf(const std::shared_ptr<void>& sp)
+    {
+        m_wpSelf = sp;
+    }
 
    protected:
     // ---------------- 宏接口 ----------------
 
     /// @brief 当前恢复点（状态机步号；CO_BEGIN 的 switch 用）。
-    int Step() const { return m_hot.nStep.load(); }
+    int Step() const
+    {
+        return m_hot.nStep.load();
+    }
 
     /// @brief await 一条 promise（CO_AWAIT 用）：挂起，promise settled 后恢复。
     ///
@@ -230,21 +247,36 @@ class CCoroutine
     }
 
     /// @brief 本协程是否已终止（await 到拒绝）。
-    bool IsTerminated() const { return m_hot.bTerminated.load(); }
+    bool IsTerminated() const
+    {
+        return m_hot.bTerminated.load();
+    }
 
     /// @brief 终止拒绝码（IsTerminated() 为 true 时有效）。
-    int TerminateCode() const { return m_hot.nCode.load(); }
+    int TerminateCode() const
+    {
+        return m_hot.nCode.load();
+    }
 
     /// @brief 协程以指定结果结束（CO_RETURN 用）。
     ///
     /// @param result 最终结果（兑现 / 拒绝）。
-    void CompleteResult(const CPromiseResult& result) { m_pSegment->Settle(result); }
+    void CompleteResult(const CPromiseResult& result)
+    {
+        m_pSegment->Settle(result);
+    }
 
     /// @brief 协程正常结束（兑现）：CO_RETURN_VOID / CO_END 用。
-    void CompleteDone() { m_pSegment->Settle(CPromiseResult::Resolve()); }
+    void CompleteDone()
+    {
+        m_pSegment->Settle(CPromiseResult::Resolve());
+    }
 
     /// @brief 协程以终止拒绝码结束（await 到拒绝后的统一出口）。
-    void CompleteTerminated() { m_pSegment->Settle(CPromiseResult::Reject(TerminateCode())); }
+    void CompleteTerminated()
+    {
+        m_pSegment->Settle(CPromiseResult::Reject(TerminateCode()));
+    }
 
    private:
     /// @brief 协程热状态：步号 / 终止标志 / 拒绝码（紧邻打包，减少跨线程迁移的 cache line 数）。
@@ -254,7 +286,8 @@ class CCoroutine
         std::atomic<bool> bTerminated;  ///< await 到拒绝 → 终止。
         std::atomic<int> nCode;         ///< 终止拒绝码。
 
-        CHotState() : nStep(0), bTerminated(false), nCode(kRejected) {}
+        CHotState() : nStep(0), bTerminated(false), nCode(kRejected)
+        {}
     };
 
     /// @brief 绑定执行器（Start 调用）。
@@ -295,7 +328,10 @@ class CCoroutine
             Terminate(CPromiseResult::Reject(kStopped));  // 无强引用（理论不应发生）。
             return;
         }
-        if (!m_pExec->Post([spSelf, this]() { Resume(); }))
+        if (!m_pExec->Post([spSelf, this]()
+        {
+            Resume();
+        }))
         {
             Terminate(CPromiseResult::Reject(kStopped));  // 执行器已停止 / 不可用。
         }
@@ -328,7 +364,10 @@ class CCoroutine
     ///
     /// 终止判定由协程体宏完成（case 处 IsTerminated() → CompleteTerminated()），
     /// 此处不拦截，保证被终止的协程也能走到完成（Await() 不阻塞）。
-    void Resume() { Run(); }
+    void Resume()
+    {
+        Run();
+    }
 
     /// @brief 标记终止（不 settle；等待协程体走到统一出口）。
     void MarkTerminated(const CPromiseResult& result)
@@ -345,7 +384,8 @@ class CCoroutine
     }
 
     /// @brief 并行 await：递归展开等待列表。
-    void AwaitEach(const std::shared_ptr<detail::CAwaitAllGroup>& /*pGroup*/) {}
+    void AwaitEach(const std::shared_ptr<detail::CAwaitAllGroup>& /*pGroup*/)
+    {}
 
     /// @brief 并行 await：递归展开等待列表（注册一条 promise 的 settled 通知）。
     ///
@@ -359,8 +399,10 @@ class CCoroutine
                    TRest&&... rest)
     {
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        const bool bOk =
-            promise.OnSettled([pGroup, spSelf, this](CPromiseResult result) { OnAwaitDone(pGroup, result); });
+        const bool bOk = promise.OnSettled([pGroup, spSelf, this](CPromiseResult result)
+        {
+            OnAwaitDone(pGroup, result);
+        });
         if (!bOk)
         {
             OnAwaitDone(pGroup, CPromiseResult::Reject(kStopped));  // 无法注册 → 该 promise 计为拒绝。

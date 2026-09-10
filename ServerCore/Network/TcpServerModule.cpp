@@ -11,8 +11,7 @@ namespace sc {
 ///
 /// @param nPort   监听端口。
 /// @param strName 模块名（默认 "network"）。
-CTcpServerModule::CTcpServerModule(std::uint16_t nPort, const char* strName)
-    : CModule(strName), m_nPort(nPort)
+CTcpServerModule::CTcpServerModule(std::uint16_t nPort, const char* strName) : CModule(strName), m_nPort(nPort)
 {
     // 硬依赖 + 顺序约束：
     //  - INetwork：Start 时要调用 StartTcpServer，必须先启动；
@@ -24,8 +23,7 @@ CTcpServerModule::CTcpServerModule(std::uint16_t nPort, const char* strName)
 
 /// @brief 销毁 TCP 服务器装配模块。
 CTcpServerModule::~CTcpServerModule()
-{
-}
+{}
 
 /// @brief 从初始化上下文获取网络接口并建立关联。
 ///
@@ -139,4 +137,4 @@ INetwork* CTcpServerModule::Network() const
     return m_pNetwork.Get();
 }
 
-} // namespace sc
+}  // namespace sc

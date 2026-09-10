@@ -9,13 +9,12 @@
 
 #include "Infra/ConfigModule.h"
 #include "Infra/LoggerModule.h"
-#include "Observability/MetricsModule.h"
 #include "Log/Logger.h"
+#include "Observability/MetricsModule.h"
 
 namespace sc {
 
-namespace
-{
+namespace {
 /// 全局停止请求标记，信号处理程序写入。
 std::atomic<bool> g_stopRequested(false);
 
@@ -24,17 +23,15 @@ std::atomic<bool> g_statusRequested(false);
 
 /// 当前应用程序实例，信号处理程序使用。
 CMyApplication* g_instance = nullptr;
-} // namespace
+}  // namespace
 
 /// @brief 创建服务器应用程序。
 CMyApplication::CMyApplication() : m_bRunning(false), m_nShutdownTimeoutMs(0)
-{
-}
+{}
 
 /// @brief 销毁服务器应用程序。
 CMyApplication::~CMyApplication()
-{
-}
+{}
 
 /// @brief 初始化服务器应用程序。
 ///
@@ -182,10 +179,8 @@ bool CMyApplication::IsRunning() const
 /// Run 启动后开始计时（含已结束的运行），供状态查询与退出时统计。
 uint64_t CMyApplication::UptimeSeconds() const
 {
-    std::chrono::steady_clock::duration elapsed =
-        std::chrono::steady_clock::now() - m_startTime;
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
+    std::chrono::steady_clock::duration elapsed = std::chrono::steady_clock::now() - m_startTime;
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
 }
 
 /// @brief 设置优雅关闭总超时。
@@ -277,13 +272,11 @@ int CMyApplication::OnRun()
 
 /// @brief 停止钩子。
 void CMyApplication::OnStop()
-{
-}
+{}
 
 /// @brief 关闭钩子。
 void CMyApplication::OnShutdown()
-{
-}
+{}
 
 /// @brief 信号处理入口。
 ///
@@ -303,4 +296,4 @@ void CMyApplication::HandleSignal(int signo)
     }
 }
 
-} // namespace sc
+}  // namespace sc

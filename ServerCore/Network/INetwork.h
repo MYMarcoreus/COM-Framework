@@ -4,9 +4,9 @@
 #include <cstdint>
 #include <string>
 
-#include "Network/ConnectionId.h"
 #include "Module/IUnknown.h"
 #include "Module/InterfaceDecl.h"
+#include "Network/ConnectionId.h"
 #include "Network/INetworkHandler.h"
 
 namespace sc {
@@ -17,9 +17,9 @@ namespace sc {
 /// 只提供通信基础设施，不包含具体通信协议。
 SC_INTERFACE(INetwork, "sc::INetwork", "74d3ba11-ac29-4ade-8cb7-f7bffa45df3f")
 {
-public:
+   public:
     // 启动 TCP 服务器并监听指定端口。
-    virtual bool StartTcpServer(uint16_t nPort, INetworkHandler* pHandler) = 0;
+    virtual bool StartTcpServer(uint16_t nPort, INetworkHandler * pHandler) = 0;
 
     // 停止服务器并释放连接。
     virtual void Stop() = 0;
@@ -66,4 +66,4 @@ public:
     virtual void SetMaxConnections(size_t nMax) = 0;
 };
 
-} // namespace sc
+}  // namespace sc

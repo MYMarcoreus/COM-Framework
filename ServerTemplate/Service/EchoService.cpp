@@ -11,8 +11,7 @@ namespace servertemplate {
 SC_DEFINE_INTERFACE_MAP(CEchoService, sc::CModule, sc::INetworkHandler)
 
 /// @brief 创建回显服务。
-CEchoService::CEchoService()
-    : sc::CModule("echo")
+CEchoService::CEchoService() : sc::CModule("echo")
 {
     // 声明依赖网络接口模块：生命周期拓扑排序保证其先初始化 / 启动。
     AddDependency(sc::IID_INetwork());
@@ -20,8 +19,7 @@ CEchoService::CEchoService()
 
 /// @brief 销毁回显服务。
 CEchoService::~CEchoService()
-{
-}
+{}
 
 /// @brief 模块启动（网络收发由网络模块驱动，服务无独立启动资源）。
 bool CEchoService::Start()
@@ -31,13 +29,11 @@ bool CEchoService::Start()
 
 /// @brief 模块停止（服务无独立资源，无需处理）。
 void CEchoService::Stop()
-{
-}
+{}
 
 /// @brief 模块关闭（服务无独立资源，无需处理）。
 void CEchoService::Shutdown()
-{
-}
+{}
 
 /// @brief 从初始化上下文获取网络接口。
 ///
@@ -82,4 +78,4 @@ void CEchoService::Log(const std::string& message)
     common::log::CLogger::Instance().Info("[CEchoService] " + message);
 }
 
-} // namespace servertemplate
+}  // namespace servertemplate

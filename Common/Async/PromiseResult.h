@@ -65,39 +65,62 @@ class CPromiseResult
 {
    public:
     /// @brief 默认构造：已兑现。
-    CPromiseResult() : m_nCode(kFulfilled) {}
+    CPromiseResult() : m_nCode(kFulfilled)
+    {}
 
     /// @brief 从错误码构造（kFulfilled 即兑现）。
     ///
     /// @param nCode 错误码（kFulfilled 表示兑现）。
-    explicit CPromiseResult(int nCode) : m_nCode(nCode) {}
+    explicit CPromiseResult(int nCode) : m_nCode(nCode)
+    {}
 
     /// @brief 已兑现（JS: resolve）。
-    static CPromiseResult Resolve() { return CPromiseResult(kFulfilled); }
+    static CPromiseResult Resolve()
+    {
+        return CPromiseResult(kFulfilled);
+    }
 
     /// @brief 已拒绝（JS: reject(reason)，reason 用错误码表达）。
     ///
     /// @param nCode 错误码（默认为 kRejected；业务码建议从 kBusinessBase 起取）。
-    static CPromiseResult Reject(int nCode = kRejected) { return CPromiseResult(nCode); }
+    static CPromiseResult Reject(int nCode = kRejected)
+    {
+        return CPromiseResult(nCode);
+    }
 
     /// @brief 是否已兑现。
-    bool IsFulfilled() const { return m_nCode == kFulfilled; }
+    bool IsFulfilled() const
+    {
+        return m_nCode == kFulfilled;
+    }
 
     /// @brief 是否已拒绝（IsFulfilled() 取反）。
-    bool IsRejected() const { return m_nCode != kFulfilled; }
+    bool IsRejected() const
+    {
+        return m_nCode != kFulfilled;
+    }
 
     /// @brief 错误码（kFulfilled 表示兑现）。
-    int Code() const { return m_nCode; }
+    int Code() const
+    {
+        return m_nCode;
+    }
 
     /// @brief 相等比较（按错误码）。
     ///
     /// @param other 另一结果。
-    bool operator==(const CPromiseResult& other) const { return m_nCode == other.m_nCode; }
+    bool operator==(const CPromiseResult& other) const
+    {
+        return m_nCode == other.m_nCode;
+    }
 
     /// @brief 不等比较（按错误码）。
     ///
     /// @param other 另一结果。
-    bool operator!=(const CPromiseResult& other) const { return m_nCode != other.m_nCode; }
+    bool operator!=(const CPromiseResult& other) const
+    {
+        return m_nCode != other.m_nCode;
+    }
 
    private:
     int m_nCode;  ///< 错误码（kFulfilled = 已兑现）。

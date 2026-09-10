@@ -11,13 +11,11 @@ namespace serverexample {
 /// @param config 应用配置，用于读取日志级别与文件。
 CExampleLoggerModule::CExampleLoggerModule(const common::config::CConfig& config)
     : sc::CModule("logger"), m_config(config)
-{
-}
+{}
 
 /// @brief 销毁日志模块。
 CExampleLoggerModule::~CExampleLoggerModule()
-{
-}
+{}
 
 /// @brief 模块启动（日志器由全局单例管理，无独立启动资源）。
 bool CExampleLoggerModule::Start()
@@ -27,13 +25,11 @@ bool CExampleLoggerModule::Start()
 
 /// @brief 模块停止（全局日志单例持续运行，无需处理）。
 void CExampleLoggerModule::Stop()
-{
-}
+{}
 
 /// @brief 模块关闭（全局日志单例由全局管理，无需处理）。
 void CExampleLoggerModule::Shutdown()
-{
-}
+{}
 
 /// @brief 根据配置初始化日志器。
 ///
@@ -76,4 +72,4 @@ bool CExampleLoggerModule::Initialize(const sc::CResolveContext& /*ctx*/)
     return true;
 }
 
-} // namespace serverexample
+}  // namespace serverexample

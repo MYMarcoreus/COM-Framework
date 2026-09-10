@@ -1,8 +1,9 @@
 #include "Observability/MetricsModule.h"
 
-#include "Module/InterfaceMap.h"
 #include <cstdio>
 #include <string>
+
+#include "Module/InterfaceMap.h"
 
 namespace sc {
 
@@ -11,13 +12,11 @@ SC_DEFINE_INTERFACE_MAP(CMetricsModule, CModule, IMetrics)
 
 /// @brief 创建指标注册表模块。
 CMetricsModule::CMetricsModule() : CModule("metrics")
-{
-}
+{}
 
 /// @brief 销毁指标注册表模块。
 CMetricsModule::~CMetricsModule()
-{
-}
+{}
 
 /// @brief 初始化模块（无配置依赖，直接成功）。
 bool CMetricsModule::Initialize(const CResolveContext& /*ctx*/)
@@ -33,13 +32,11 @@ bool CMetricsModule::Start()
 
 /// @brief 模块停止（指标数据保留，供状态报告）。
 void CMetricsModule::Stop()
-{
-}
+{}
 
 /// @brief 模块关闭（指标数据由析构释放）。
 void CMetricsModule::Shutdown()
-{
-}
+{}
 
 /// @brief 获取或创建指标条目（调用方持锁）。
 ///
@@ -95,8 +92,7 @@ std::vector<MetricSnapshot> CMetricsModule::Snapshot() const
     std::vector<MetricSnapshot> vecResult;
     std::lock_guard<std::mutex> lock(m_mutex);
     vecResult.reserve(m_mapMetrics.size());
-    for (std::map<std::string, Entry>::const_iterator it = m_mapMetrics.begin();
-         it != m_mapMetrics.end(); ++it)
+    for (std::map<std::string, Entry>::const_iterator it = m_mapMetrics.begin(); it != m_mapMetrics.end(); ++it)
     {
         vecResult.push_back(MetricSnapshot(it->first, it->second.kind, it->second.value));
     }
@@ -125,4 +121,4 @@ std::string CMetricsModule::GetStatus() const
     return strStatus;
 }
 
-} // namespace sc
+}  // namespace sc

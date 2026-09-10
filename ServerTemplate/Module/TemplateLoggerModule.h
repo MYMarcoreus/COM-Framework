@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Module/ModuleManager.h"
 #include "Module/Module.h"
+#include "Module/ModuleManager.h"
 
 namespace servertemplate {
 
@@ -12,7 +12,7 @@ namespace servertemplate {
 /// 模块名 "logger"，应在依赖日志的模块之前注册。
 class CTemplateLoggerModule : public sc::CModule
 {
-public:
+   public:
     CTemplateLoggerModule();
 
     virtual ~CTemplateLoggerModule();
@@ -26,4 +26,4 @@ public:
     void Shutdown() override;
 };
 
-} // namespace servertemplate
+}  // namespace servertemplate

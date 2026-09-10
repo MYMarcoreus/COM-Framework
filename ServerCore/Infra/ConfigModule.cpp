@@ -1,7 +1,8 @@
 #include "Infra/ConfigModule.h"
 
-#include "Module/InterfaceMap.h"
 #include <string>
+
+#include "Module/InterfaceMap.h"
 
 namespace sc {
 
@@ -10,13 +11,11 @@ SC_DEFINE_INTERFACE_MAP(CConfigModule, CModule, IConfig)
 
 /// @brief 创建配置模块。
 CConfigModule::CConfigModule() : CModule("config")
-{
-}
+{}
 
 /// @brief 销毁配置模块。
 CConfigModule::~CConfigModule()
-{
-}
+{}
 
 /// @brief 初始化模块（配置由外部 LoadFile 加载，此处无动作）。
 bool CConfigModule::Initialize(const CResolveContext& /*ctx*/)
@@ -32,13 +31,11 @@ bool CConfigModule::Start()
 
 /// @brief 模块停止（配置数据保留）。
 void CConfigModule::Stop()
-{
-}
+{}
 
 /// @brief 模块关闭（配置数据由析构释放）。
 void CConfigModule::Shutdown()
-{
-}
+{}
 
 /// @brief 从文件加载配置。
 ///
@@ -80,4 +77,4 @@ bool CConfigModule::ReloadIfChanged()
     return m_config.ReloadIfChanged();
 }
 
-} // namespace sc
+}  // namespace sc

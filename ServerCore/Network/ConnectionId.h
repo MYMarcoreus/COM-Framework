@@ -10,4 +10,4 @@ using ConnectionId = common::network::ConnectionId;
 /// @brief 无效连接标识。
 static const ConnectionId kInvalidConnectionId = common::network::kInvalidConnectionId;
 
-} // namespace sc
+}  // namespace sc

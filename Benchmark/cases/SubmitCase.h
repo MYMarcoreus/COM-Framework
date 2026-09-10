@@ -10,4 +10,4 @@
 /// 运行「任务提交」基准。
 void RunSubmitCases();
 
-#endif // COM_BENCHMARK_CASES_SUBMITCASE_H
+#endif  // COM_BENCHMARK_CASES_SUBMITCASE_H

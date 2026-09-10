@@ -1,6 +1,7 @@
 #include "Protocol/ExampleProtocol.h"
 
 #include <arpa/inet.h>
+
 #include <cstring>
 
 namespace serverexample {
@@ -24,7 +25,7 @@ ParseResult CExampleProtocol::ParsePacket(const std::string& data, size_t* consu
     *consumed = 0;
     if (data.size() < kHeaderSize)
     {
-        return ParseResult::kNeedMore; // 头部不完整
+        return ParseResult::kNeedMore;  // 头部不完整
     }
     // ① 读取长度字段（网络字节序）
     std::uint32_t len = 0;
@@ -32,17 +33,17 @@ ParseResult CExampleProtocol::ParsePacket(const std::string& data, size_t* consu
     len = ntohl(len);
     if (len < 1)
     {
-        return ParseResult::kInvalid; // 非法长度（至少包含 Command）
+        return ParseResult::kInvalid;  // 非法长度（至少包含 Command）
     }
     if (len > kMaxPacketSize)
     {
-        return ParseResult::kInvalid; // 超长报文，拒绝
+        return ParseResult::kInvalid;  // 超长报文，拒绝
     }
     // ② 检查完整报文是否到达
     size_t total = kHeaderSize + len;
     if (data.size() < total)
     {
-        return ParseResult::kNeedMore; // 半包
+        return ParseResult::kNeedMore;  // 半包
     }
     // ③ 解析命令与负载
     packet->command = static_cast<std::uint8_t>(data[kHeaderSize]);
@@ -98,7 +99,7 @@ sc::MessageExtractor CExampleProtocol::MakeMessageExtractor()
         result.payloadSize = 0;
         if (pData == nullptr || nLen < kHeaderSize)
         {
-            return result; // 头部不完整，等待更多数据
+            return result;  // 头部不完整，等待更多数据
         }
         // ① 读取长度字段（网络字节序）
         std::uint32_t nLenField = 0;
@@ -106,14 +107,14 @@ sc::MessageExtractor CExampleProtocol::MakeMessageExtractor()
         nLenField = ntohl(nLenField);
         if (nLenField < 1 || nLenField > kMaxPacketSize)
         {
-            result.result = sc::MessageParseResult::kInvalid; // 非法长度
+            result.result = sc::MessageParseResult::kInvalid;  // 非法长度
             return result;
         }
         // ② 检查完整报文是否到达
         size_t nTotal = kHeaderSize + nLenField;
         if (nLen < nTotal)
         {
-            return result; // 半包，等待更多数据
+            return result;  // 半包，等待更多数据
         }
         // ③ 借用输入缓冲内部指针返回负载
         result.result = sc::MessageParseResult::kOk;
@@ -125,4 +126,4 @@ sc::MessageExtractor CExampleProtocol::MakeMessageExtractor()
     };
 }
 
-} // namespace serverexample
+}  // namespace serverexample

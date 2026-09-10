@@ -3,9 +3,9 @@
 #include <cstddef>
 #include <string>
 
-#include "Network/ConnectionId.h"
 #include "Module/IUnknown.h"
 #include "Module/InterfaceDecl.h"
+#include "Network/ConnectionId.h"
 
 namespace sc {
 
@@ -15,7 +15,7 @@ namespace sc {
 /// 本接口只处理连接与原始字节流，不涉及具体协议。
 SC_INTERFACE(INetworkHandler, "sc::INetworkHandler", "5ee84f83-1e83-4708-9e12-2621199de5c2")
 {
-public:
+   public:
     // 新连接建立。
     virtual void OnAccept(ConnectionId nId, const std::string& strPeer) = 0;
 
@@ -26,4 +26,4 @@ public:
     virtual void OnClose(ConnectionId nId) = 0;
 };
 
-} // namespace sc
+}  // namespace sc

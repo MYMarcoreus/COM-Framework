@@ -14,10 +14,10 @@ namespace sc {
 /// @brief 模块快照（供健康检查 / 日志 / 管理接口使用）。
 struct ModuleSnapshot
 {
-    std::string strName;   // 模块名称（可为空）
-    std::string strIid;    // 接口标识可读名（按接口注册时非空）
-    ModuleState state;     // 当前生命周期状态
-    std::string strStatus; // 状态描述（GetStatus）
+    std::string strName;    // 模块名称（可为空）
+    std::string strIid;     // 接口标识可读名（按接口注册时非空）
+    ModuleState state;      // 当前生命周期状态
+    std::string strStatus;  // 状态描述（GetStatus）
 };
 
 /// @brief 模块管理器（COM 思想：注册即持有引用，生命周期统一编排）。
@@ -29,7 +29,7 @@ struct ModuleSnapshot
 /// 某一步失败时逆序回滚已完成的模块，保证状态一致。
 class CModuleManager
 {
-public:
+   public:
     CModuleManager();
 
     ~CModuleManager();
@@ -113,7 +113,7 @@ public:
     // 带超时地统一关闭所有模块；返回 true 表示在超时前完成。
     bool ShutdownAllWithTimeout(uint32_t nTimeoutMs);
 
-private:
+   private:
     // 设置模块生命周期状态（friend 访问 CModule::SetState）。
     static void SetModuleState(IModule* pModule, ModuleState state);
 
@@ -122,10 +122,10 @@ private:
     struct Entry
     {
         IModule* module;
-        InterfaceId iid; // 接口标识注册键（无效表示按名字注册）
+        InterfaceId iid;  // 接口标识注册键（无效表示按名字注册）
 
-        explicit Entry(IModule* m, const InterfaceId& interfaceId = InterfaceId())
-            : module(m), iid(interfaceId) {}
+        explicit Entry(IModule* m, const InterfaceId& interfaceId = InterfaceId()) : module(m), iid(interfaceId)
+        {}
     };
 
     // 按依赖拓扑排序计算生命周期启动顺序（依赖在前，同层保持注册顺序）。
@@ -147,4 +147,4 @@ private:
     mutable std::recursive_mutex m_mutex;
 };
 
-} // namespace sc
+}  // namespace sc

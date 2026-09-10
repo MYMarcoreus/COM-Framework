@@ -11,8 +11,7 @@ namespace serverexample {
 SC_DEFINE_INTERFACE_MAP(CExampleService, sc::CModule, sc::INetworkHandler)
 
 /// @brief 创建 Example 协议处理服务。
-CExampleService::CExampleService()
-    : sc::CModule("service")
+CExampleService::CExampleService() : sc::CModule("service")
 {
     // 声明依赖网络接口与消息路由模块：生命周期拓扑排序保证其先初始化 / 启动。
     AddDependency(sc::IID_INetwork());
@@ -21,8 +20,7 @@ CExampleService::CExampleService()
 
 /// @brief 销毁 Example 协议处理服务。
 CExampleService::~CExampleService()
-{
-}
+{}
 
 /// @brief 模块启动（网络收发由网络模块驱动，服务无独立启动资源）。
 bool CExampleService::Start()
@@ -32,13 +30,11 @@ bool CExampleService::Start()
 
 /// @brief 模块停止（服务无独立资源，无需处理）。
 void CExampleService::Stop()
-{
-}
+{}
 
 /// @brief 模块关闭（服务无独立资源，无需处理）。
 void CExampleService::Shutdown()
-{
-}
+{}
 
 /// @brief 从初始化上下文获取网络 / 消息路由 / 异步执行器 / 指标接口。
 ///
@@ -63,11 +59,14 @@ bool CExampleService::Initialize(const sc::CResolveContext& ctx)
         return false;
     }
     m_pRouter->SetExtractor(CExampleProtocol::MakeMessageExtractor());
-    m_pRouter->RegisterHandler(kCmdPing,
-        [this](sc::ConnectionId id, int, const char*, size_t) { HandlePing(id); });
-    m_pRouter->RegisterHandler(kCmdEcho,
-        [this](sc::ConnectionId id, int, const char* payload, size_t payloadSize)
-        { HandleEcho(id, payload, payloadSize); });
+    m_pRouter->RegisterHandler(kCmdPing, [this](sc::ConnectionId id, int, const char*, size_t)
+    {
+        HandlePing(id);
+    });
+    m_pRouter->RegisterHandler(kCmdEcho, [this](sc::ConnectionId id, int, const char* payload, size_t payloadSize)
+    {
+        HandleEcho(id, payload, payloadSize);
+    });
 
     // ③ 异步执行器（可选，重活投递）
     m_pExecutor.Reset(ctx.Resolve<sc::IAsyncExecutor>());
@@ -127,8 +126,8 @@ void CExampleService::OnClose(sc::ConnectionId id)
         ConnContext* pCtx = static_cast<ConnContext*>(m_pNetwork->Detach(id));
         if (pCtx != nullptr)
         {
-            Log("连接关闭: id=" + std::to_string(id) + " peer=" + pCtx->strPeer +
-                " 共接收 " + std::to_string(pCtx->nBytesReceived) + " 字节");
+            Log("连接关闭: id=" + std::to_string(id) + " peer=" + pCtx->strPeer + " 共接收 " +
+                std::to_string(pCtx->nBytesReceived) + " 字节");
             delete pCtx;
         }
     }
@@ -143,20 +142,19 @@ void CExampleService::HandlePing(sc::ConnectionId id)
     if (m_pExecutor != nullptr)
     {
         auto spSelf = Self<CExampleService>();
-        m_pExecutor->Post(
-            [spSelf, id]()
+        m_pExecutor->Post([spSelf, id]()
+        {
+            if (!spSelf)
             {
-                if (!spSelf)
-                {
-                    return;
-                }
-                std::string response = CExampleProtocol::BuildPong();
-                if (spSelf->m_pNetwork != nullptr)
-                {
-                    spSelf->m_pNetwork->Send(id, response.data(), response.size());
-                }
-                spSelf->Log("异步处理 PING，返回 PONG: id=" + std::to_string(id));
-            });
+                return;
+            }
+            std::string response = CExampleProtocol::BuildPong();
+            if (spSelf->m_pNetwork != nullptr)
+            {
+                spSelf->m_pNetwork->Send(id, response.data(), response.size());
+            }
+            spSelf->Log("异步处理 PING，返回 PONG: id=" + std::to_string(id));
+        });
         return;
     }
     std::string response = CExampleProtocol::BuildPong();
@@ -176,25 +174,23 @@ void CExampleService::HandleEcho(sc::ConnectionId id, const char* payload, size_
     if (m_pExecutor != nullptr)
     {
         auto spSelf = Self<CExampleService>();
-        m_pExecutor->Post(
-            [spSelf, id, strPayload]()
+        m_pExecutor->Post([spSelf, id, strPayload]()
+        {
+            if (!spSelf)
             {
-                if (!spSelf)
-                {
-                    return;
-                }
-                std::string response = CExampleProtocol::BuildPacket(kCmdEcho, strPayload);
-                if (spSelf->m_pNetwork != nullptr)
-                {
-                    spSelf->m_pNetwork->Send(id, response.data(), response.size());
-                }
-                if (spSelf->m_pMetrics != nullptr)
-                {
-                    spSelf->m_pMetrics->Inc("example.echo");
-                }
-                spSelf->Log("异步处理 ECHO: id=" + std::to_string(id) +
-                    " len=" + std::to_string(strPayload.size()));
-            });
+                return;
+            }
+            std::string response = CExampleProtocol::BuildPacket(kCmdEcho, strPayload);
+            if (spSelf->m_pNetwork != nullptr)
+            {
+                spSelf->m_pNetwork->Send(id, response.data(), response.size());
+            }
+            if (spSelf->m_pMetrics != nullptr)
+            {
+                spSelf->m_pMetrics->Inc("example.echo");
+            }
+            spSelf->Log("异步处理 ECHO: id=" + std::to_string(id) + " len=" + std::to_string(strPayload.size()));
+        });
         return;
     }
     std::string response = CExampleProtocol::BuildPacket(kCmdEcho, strPayload);
@@ -217,4 +213,4 @@ void CExampleService::Log(const std::string& message)
     common::log::CLogger::Instance().Info("[CExampleService] " + message);
 }
 
-} // namespace serverexample
+}  // namespace serverexample

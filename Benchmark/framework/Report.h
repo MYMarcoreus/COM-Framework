@@ -11,7 +11,9 @@
 #ifndef COM_BENCHMARK_FRAMEWORK_REPORT_H
 #define COM_BENCHMARK_FRAMEWORK_REPORT_H
 
-#include "framework/Bench.h"
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <ctime>
@@ -20,10 +22,9 @@
 #include <iostream>
 #include <sstream>
 #include <string>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
 #include <vector>
+
+#include "framework/Bench.h"
 
 namespace benchmark {
 
@@ -48,8 +49,7 @@ inline std::string CpuModel()
         if (line.compare(0, 10, "model name") == 0)
         {
             size_t pos = line.find(':');
-            if (pos != std::string::npos)
-                return line.substr(pos + 2);
+            if (pos != std::string::npos) return line.substr(pos + 2);
         }
     }
     return "unknown";
@@ -72,22 +72,17 @@ inline std::string FmtDouble(double v, int prec)
 /// 时间格式自适应（③）：自动选 ns / μs / ms。
 inline std::string FmtNs(double v)
 {
-    if (v >= 1e6)
-        return FmtDouble(v / 1e6, 2) + " ms";
-    if (v >= 1e3)
-        return FmtDouble(v / 1e3, 2) + " μs";
+    if (v >= 1e6) return FmtDouble(v / 1e6, 2) + " ms";
+    if (v >= 1e3) return FmtDouble(v / 1e3, 2) + " μs";
     return FmtDouble(v, 1) + " ns";
 }
 
 /// 吞吐量格式化（K / M / G 单位）。
 inline std::string FmtOps(double ops)
 {
-    if (ops >= 1e9)
-        return FmtDouble(ops / 1e9, 2) + " G";
-    if (ops >= 1e6)
-        return FmtDouble(ops / 1e6, 2) + " M";
-    if (ops >= 1e3)
-        return FmtDouble(ops / 1e3, 2) + " K";
+    if (ops >= 1e9) return FmtDouble(ops / 1e9, 2) + " G";
+    if (ops >= 1e6) return FmtDouble(ops / 1e6, 2) + " M";
+    if (ops >= 1e3) return FmtDouble(ops / 1e3, 2) + " K";
     return FmtDouble(ops, 2);
 }
 
@@ -98,17 +93,15 @@ inline double GroupBaseline(const std::vector<Result>& results, const std::strin
     {
         const Result& r = results[i];
         if (r.group == group &&
-            (r.name.find("baseline") != std::string::npos ||
-             r.name.find("direct") != std::string::npos))
+            (r.name.find("baseline") != std::string::npos || r.name.find("direct") != std::string::npos))
         {
-            if (r.mean_ns > 0.0)
-                return r.mean_ns;
+            if (r.mean_ns > 0.0) return r.mean_ns;
         }
     }
     return 0.0;
 }
 
-} // namespace
+}  // namespace
 
 /// 渲染全部结果为 markdown 字符串。
 inline std::string BuildMarkdown()
@@ -156,32 +149,21 @@ inline std::string BuildMarkdown()
         {
             if (r.ops_per_sec > 0.0)
             {
-                os << "| " << r.name
-                   << " | " << FmtOps(r.ops_per_sec)
-                   << " | " << FmtDouble(r.mean_ns / 1e3, 2)
+                os << "| " << r.name << " | " << FmtOps(r.ops_per_sec) << " | " << FmtDouble(r.mean_ns / 1e3, 2)
                    << " | " << r.note << " |\n";
             }
             else
             {
-                os << "| " << r.name
-                   << " | " << FmtDouble(r.mean_ns / 1e6, 3)
-                   << " | " << r.note << " |\n";
+                os << "| " << r.name << " | " << FmtDouble(r.mean_ns / 1e6, 3) << " | " << r.note << " |\n";
             }
         }
         else
         {
             double base = GroupBaseline(results, r.group);
             std::string rel = "-";
-            if (base > 0.0)
-                rel = FmtDouble(r.mean_ns / base, 1) + "×";
-            os << "| " << r.name
-               << " | " << FmtNs(r.mean_ns)
-               << " | " << FmtNs(r.p50_ns)
-               << " | " << FmtNs(r.p90_ns)
-               << " | " << FmtNs(r.p99_ns)
-               << " | " << FmtNs(r.mad_ns)
-               << " | " << FmtOps(r.ops_per_sec)
-               << " | " << rel
+            if (base > 0.0) rel = FmtDouble(r.mean_ns / base, 1) + "×";
+            os << "| " << r.name << " | " << FmtNs(r.mean_ns) << " | " << FmtNs(r.p50_ns) << " | " << FmtNs(r.p90_ns)
+               << " | " << FmtNs(r.p99_ns) << " | " << FmtNs(r.mad_ns) << " | " << FmtOps(r.ops_per_sec) << " | " << rel
                << " | " << r.note << " |\n";
         }
     }
@@ -195,10 +177,10 @@ inline int ReportToFiles()
     std::cout << md;
 
 #ifndef BENCHMARK_RESULT_DIR
-#define BENCHMARK_RESULT_DIR "."
+    #define BENCHMARK_RESULT_DIR "."
 #endif
     const std::string dir = BENCHMARK_RESULT_DIR;
-    ::mkdir(dir.c_str(), 0755); // 目录不存在则创建。
+    ::mkdir(dir.c_str(), 0755);  // 目录不存在则创建。
     const std::string path = dir + "/benchmark-report.md";
     std::ofstream ofs(path.c_str());
     if (ofs)
@@ -211,6 +193,6 @@ inline int ReportToFiles()
     return 1;
 }
 
-} // namespace benchmark
+}  // namespace benchmark
 
-#endif // COM_BENCHMARK_FRAMEWORK_REPORT_H
+#endif  // COM_BENCHMARK_FRAMEWORK_REPORT_H

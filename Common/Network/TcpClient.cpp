@@ -7,8 +7,7 @@ namespace network {
 
 /// @brief 创建 TCP 客户端。
 CTcpClient::CTcpClient()
-    : m_socket(m_io), m_resolver(m_io), m_nPort(0), m_bRunning(false),
-      m_bConnected(false), m_bCloseNotified(false)
+    : m_socket(m_io), m_resolver(m_io), m_nPort(0), m_bRunning(false), m_bConnected(false), m_bCloseNotified(false)
 {
     m_vecReadBuffer.resize(8192);
 }
@@ -28,13 +27,12 @@ CTcpClient::~CTcpClient()
 /// @param closeCb 连接关闭回调。
 ///
 /// @return 成功发起连接返回 true。
-bool CTcpClient::Connect(const std::string& strHost, uint16_t nPort,
-                        const ConnectCallback& fnConnect, const DataCallback& fnData,
-                        const CloseCallback& fnClose)
+bool CTcpClient::Connect(const std::string& strHost, uint16_t nPort, const ConnectCallback& fnConnect,
+                         const DataCallback& fnData, const CloseCallback& fnClose)
 {
     if (m_bRunning.load())
     {
-        return false; // 已在连接中
+        return false;  // 已在连接中
     }
     m_strHost = strHost;
     m_nPort = nPort;
@@ -60,7 +58,10 @@ bool CTcpClient::Send(const char* pData, size_t nLen)
         return false;
     }
     std::string strPayload(pData, nLen);
-    asio::post(m_io, [this, strPayload]() { AppendWrite(strPayload); });
+    asio::post(m_io, [this, strPayload]()
+    {
+        AppendWrite(strPayload);
+    });
     return true;
 }
 
@@ -73,7 +74,10 @@ void CTcpClient::Close()
     {
         return;
     }
-    asio::post(m_io, [this]() { CloseOnIoThread(); });
+    asio::post(m_io, [this]()
+    {
+        CloseOnIoThread();
+    });
 }
 
 /// @brief 停止客户端。
@@ -85,7 +89,10 @@ void CTcpClient::Stop()
     if (m_bRunning.load())
     {
         m_bRunning.store(false);
-        asio::post(m_io, [this]() { CloseOnIoThread(); });
+        asio::post(m_io, [this]()
+        {
+            CloseOnIoThread();
+        });
     }
     if (m_thread.joinable())
     {
@@ -119,25 +126,24 @@ void CTcpClient::ThreadMain()
 void CTcpClient::StartConnect()
 {
     m_resolver.async_resolve(m_strHost, std::to_string(m_nPort),
-        [this](const asio::error_code& ec, asio::ip::tcp::resolver::results_type results)
+                             [this](const asio::error_code& ec, asio::ip::tcp::resolver::results_type results)
+    {
+        if (ec)
         {
-            if (ec)
+            // 解析失败：通知连接失败
+            if (m_fnConnect)
             {
-                // 解析失败：通知连接失败
-                if (m_fnConnect)
-                {
-                    m_fnConnect(false, "");
-                }
-                NotifyClose();
-                return;
+                m_fnConnect(false, "");
             }
-            asio::async_connect(m_socket, results,
-                [this](const asio::error_code& cerr,
-                       const asio::ip::tcp::endpoint& endpoint)
-                {
-                    HandleConnect(cerr, endpoint);
-                });
+            NotifyClose();
+            return;
+        }
+        asio::async_connect(m_socket, results,
+                            [this](const asio::error_code& cerr, const asio::ip::tcp::endpoint& endpoint)
+        {
+            HandleConnect(cerr, endpoint);
         });
+    });
 }
 
 /// @brief 处理连接完成。
@@ -164,11 +170,10 @@ void CTcpClient::HandleConnect(const asio::error_code& ec, const asio::ip::tcp::
 /// @brief 发起一次异步读。
 void CTcpClient::DoRead()
 {
-    m_socket.async_read_some(asio::buffer(m_vecReadBuffer),
-        [this](const asio::error_code& ec, size_t bytes)
-        {
-            HandleRead(ec, bytes);
-        });
+    m_socket.async_read_some(asio::buffer(m_vecReadBuffer), [this](const asio::error_code& ec, size_t bytes)
+    {
+        HandleRead(ec, bytes);
+    });
 }
 
 /// @brief 处理读完成。
@@ -213,11 +218,10 @@ void CTcpClient::AppendWrite(const std::string& strData)
 /// @brief 发起一次异步写。
 void CTcpClient::DoWrite()
 {
-    m_socket.async_write_some(asio::buffer(m_strPendingOutput),
-        [this](const asio::error_code& ec, size_t nBytes)
-        {
-            HandleWrite(ec, nBytes);
-        });
+    m_socket.async_write_some(asio::buffer(m_strPendingOutput), [this](const asio::error_code& ec, size_t nBytes)
+    {
+        HandleWrite(ec, nBytes);
+    });
 }
 
 /// @brief 处理写完成。
@@ -263,5 +267,5 @@ void CTcpClient::NotifyClose()
     }
 }
 
-} // namespace network
-} // namespace common
+}  // namespace network
+}  // namespace common

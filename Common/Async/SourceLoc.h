@@ -30,7 +30,8 @@ struct CSourceLoc
     int nLine;               ///< __LINE__（注册点行号）。
 
     /// @brief 默认：空位置。
-    CSourceLoc() : szFunction(NULL), szFile(NULL), nLine(0) {}
+    CSourceLoc() : szFunction(NULL), szFile(NULL), nLine(0)
+    {}
 
     /// @brief 完整位置。
     ///

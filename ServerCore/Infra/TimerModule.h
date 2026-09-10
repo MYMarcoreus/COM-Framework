@@ -14,15 +14,14 @@ namespace sc {
 /// 内部持有 common::timer::CTimerManager 实例。
 class CTimerModule : public CModule, public ITimer
 {
-public:
+   public:
     CTimerModule();
 
     virtual ~CTimerModule();
 
     bool Initialize(const CResolveContext& ctx) override;
     bool Start() override;
-    common::timer::TimerId AddTimer(std::int64_t delayMs,
-                                    const common::timer::TimerCallback& callback) override;
+    common::timer::TimerId AddTimer(std::int64_t delayMs, const common::timer::TimerCallback& callback) override;
     common::timer::TimerId AddPeriodicTimer(std::int64_t intervalMs,
                                             const common::timer::TimerCallback& callback) override;
     bool Cancel(common::timer::TimerId id) override;
@@ -31,8 +30,8 @@ public:
 
     SC_DECLARE_INTERFACE_MAP();
 
-private:
+   private:
     common::timer::CTimerManager m_timer;
 };
 
-} // namespace sc
+}  // namespace sc

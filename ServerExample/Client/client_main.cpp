@@ -1,17 +1,17 @@
 #include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <netinet/in.h>
 #include <string>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include "Protocol/ExampleProtocol.h"
 
-namespace
-{
+namespace {
 // 读取指定字节数。
 bool ReadFull(int fd, char* buffer, size_t len);
 
@@ -20,7 +20,7 @@ bool WriteFull(int fd, const char* data, size_t len);
 
 // 发送请求并读取响应。
 void DoRequest(int fd, const std::string& request, const char* label);
-} // namespace
+}  // namespace
 
 /// @brief ServerExample 测试客户端入口。
 ///
@@ -74,8 +74,7 @@ int main(int argc, char* argv[])
     return 0;
 }
 
-namespace
-{
+namespace {
 
 /// @brief 读取指定字节数。
 bool ReadFull(int fd, char* buffer, size_t len)
@@ -143,4 +142,4 @@ void DoRequest(int fd, const std::string& request, const char* label)
     std::printf("[%s] 命令=%u 负载=\"%s\"\n", label, static_cast<unsigned>(command), payload.c_str());
 }
 
-} // namespace
+}  // namespace

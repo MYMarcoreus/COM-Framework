@@ -17,7 +17,7 @@ namespace thread {
 /// 基于 C++11 标准库自实现，不依赖第三方库。
 class CThreadPool
 {
-public:
+   public:
     /// @brief 任务类型。
     using CTask = std::function<void()>;
 
@@ -47,14 +47,14 @@ public:
     // 待处理任务数（队列中未取出的）。
     size_t PendingCount() const;
 
-private:
+   private:
     // 工作线程循环。
     void WorkerLoop();
 
     std::vector<std::thread> m_vecWorkers;
     std::deque<CTask> m_dequeTasks;
-    std::atomic<long> m_nPending;        // 待处理任务数（Submit +1，WorkerLoop 取出 -1）。
-    size_t m_nIdleWorkers;               // 空闲工作线程数（WorkerLoop 维护，Submit 用于按需唤醒）。
+    std::atomic<long> m_nPending;  // 待处理任务数（Submit +1，WorkerLoop 取出 -1）。
+    size_t m_nIdleWorkers;         // 空闲工作线程数（WorkerLoop 维护，Submit 用于按需唤醒）。
     mutable std::mutex m_mutex;
     std::condition_variable m_condition;
     size_t m_nThreadCount;
@@ -62,5 +62,5 @@ private:
     bool m_bStopping;
 };
 
-} // namespace thread
-} // namespace common
+}  // namespace thread
+}  // namespace common

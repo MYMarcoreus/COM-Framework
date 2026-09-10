@@ -122,7 +122,8 @@ class CPromiseState
     using Handler = std::function<void(const CPromiseResult&)>;
 
     /// @brief 创建状态（pending）。
-    CPromiseState() : m_bSettled(false), m_result() {}
+    CPromiseState() : m_bSettled(false), m_result()
+    {}
 
     /// @brief settle 本状态并触发处理器（锁外调用处理器，防重入死锁）。
     ///
@@ -179,7 +180,10 @@ class CPromiseState
         if (bFireNow && fnHandler)
         {
             // 已 settled：投递到执行器异步执行（与 JS 一致），保持调用方不阻塞。
-            std::function<void()> fnRun = [fnHandler, result]() { fnHandler(result); };
+            std::function<void()> fnRun = [fnHandler, result]()
+            {
+                fnHandler(result);
+            };
             if (PostToHandle(pHandle, std::move(fnRun)))
             {
                 return true;
@@ -202,12 +206,18 @@ class CPromiseState
         }
 
         std::unique_lock<std::mutex> lock(m_mutex);
-        m_cv.wait(lock, [this]() { return m_bSettled.load(std::memory_order_relaxed); });
+        m_cv.wait(lock, [this]()
+        {
+            return m_bSettled.load(std::memory_order_relaxed);
+        });
         return m_result;
     }
 
     /// @brief 本状态是否已 settled（兑现或拒绝）。
-    bool IsSettled() const { return m_bSettled.load(std::memory_order_relaxed); }
+    bool IsSettled() const
+    {
+        return m_bSettled.load(std::memory_order_relaxed);
+    }
 
     /// @brief 设置本层的注册点源码位置（调试用；发布构建为空操作）。
     ///
@@ -272,12 +282,18 @@ class CPromiseCore
     }
 
     /// @brief 执行器句柄（投递用）。
-    const std::shared_ptr<CExecutorHandle>& Handle() const { return m_pHandle; }
+    const std::shared_ptr<CExecutorHandle>& Handle() const
+    {
+        return m_pHandle;
+    }
 
     /// @brief 绑定执行器句柄（协程 Start 时注入）。
     ///
     /// @param pHandle 执行器句柄。
-    void SetHandle(const std::shared_ptr<CExecutorHandle>& pHandle) { m_pHandle = pHandle; }
+    void SetHandle(const std::shared_ptr<CExecutorHandle>& pHandle)
+    {
+        m_pHandle = pHandle;
+    }
 
    private:
     mutable std::mutex m_mutex;                     ///< 保护上下文懒创建。
@@ -419,7 +435,8 @@ class CPromise
     /// @brief 创建无效 promise（未绑定执行器；供成员声明 / 后续赋值用）。
     ///
     /// 无效 promise 上 Then / Catch / Finally 为空操作，Await() 返回被拒绝（kStopped）。
-    CPromise() : m_pCore(), m_pState() {}
+    CPromise() : m_pCore(), m_pState()
+    {}
 
     /// @brief 创建 promise（未起链；上下文由本 promise 在首次取用时创建）。
     ///
@@ -465,7 +482,10 @@ class CPromise
     }
 
     /// @brief 是否有效（已绑定执行器）。
-    bool IsValid() const { return m_pCore != nullptr && m_pState != nullptr; }
+    bool IsValid() const
+    {
+        return m_pCore != nullptr && m_pState != nullptr;
+    }
 
     /// @brief 创建「由外部兑现 / 拒绝」的 promise（等价 JS `new Promise((resolve, reject) => ...)`）。
     ///
@@ -488,8 +508,14 @@ class CPromise
         promise.m_pState->SetLoc(loc);
 
         const std::shared_ptr<detail::CPromiseState> pState = promise.m_pState;
-        ResolveFn fnResolve = [pState]() { pState->Settle(CPromiseResult::Resolve()); };
-        RejectFn fnReject = [pState](int nCode) { pState->Settle(CPromiseResult::Reject(nCode)); };
+        ResolveFn fnResolve = [pState]()
+        {
+            pState->Settle(CPromiseResult::Resolve());
+        };
+        RejectFn fnReject = [pState](int nCode)
+        {
+            pState->Settle(CPromiseResult::Reject(nCode));
+        };
         try
         {
             if (fnExecutor)
@@ -580,7 +606,10 @@ class CPromise
             m_pState = std::make_shared<detail::CPromiseState>();
             m_pState->SetLoc(loc);
             const std::shared_ptr<detail::CPromiseState> pState = m_pState;
-            std::function<void()> fnAdopt = [pCore, pState, fnFactory]() { Adopt(pCore, pState, fnFactory); };
+            std::function<void()> fnAdopt = [pCore, pState, fnFactory]()
+            {
+                Adopt(pCore, pState, fnFactory);
+            };
             if (!detail::PostToHandle(pCore->Handle(), std::move(fnAdopt)))
             {
                 pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用。
@@ -659,7 +688,10 @@ class CPromise
     }
 
     /// @brief 本层是否已 settled（兑现或拒绝）。
-    bool IsSettled() const { return m_pState != nullptr && m_pState->IsSettled(); }
+    bool IsSettled() const
+    {
+        return m_pState != nullptr && m_pState->IsSettled();
+    }
 
     /// @brief 共享上下文（懒创建，有效 promise 上恒非空）。
     ///
@@ -674,7 +706,10 @@ class CPromise
     }
 
     /// @brief 本层的注册点源码位置（调试用；发布构建恒为空）。
-    CSourceLoc Loc() const { return m_pState != nullptr ? m_pState->Loc() : CSourceLoc(); }
+    CSourceLoc Loc() const
+    {
+        return m_pState != nullptr ? m_pState->Loc() : CSourceLoc();
+    }
 
    private:
     /// @brief 内部：执行 promise 工厂并 adopt 子 promise（ThenPromise 的收口逻辑）。
@@ -707,7 +742,10 @@ class CPromise
             return;
         }
 
-        const bool bOk = promiseChild.OnSettled([pState](CPromiseResult childResult) { pState->Settle(childResult); });
+        const bool bOk = promiseChild.OnSettled([pState](CPromiseResult childResult)
+        {
+            pState->Settle(childResult);
+        });
         if (!bOk)
         {
             pState->Settle(CPromiseResult::Reject(kStopped));  // 子 promise 已 settled 但执行器不可用。

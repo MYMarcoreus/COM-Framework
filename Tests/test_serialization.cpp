@@ -4,10 +4,9 @@
 #include <cstdint>
 #include <string>
 
-#include "TestFramework.h"
-
 #include "Serialization/BinaryReader.h"
 #include "Serialization/BinaryWriter.h"
+#include "TestFramework.h"
 
 namespace {
 
@@ -69,7 +68,7 @@ TEST(Serialization_LittleEndian)
 TEST(Serialization_BoundaryCheck)
 {
     // 只有 2 字节，读 U32 应失败
-    const char szData[2] = { '\x01', '\x02' };
+    const char szData[2] = {'\x01', '\x02'};
     common::serialization::CBinaryReader reader(szData, 2);
     std::uint32_t u32 = 0;
     ASSERT_TRUE(!reader.ReadU32(&u32));
@@ -93,4 +92,4 @@ TEST(Serialization_EmptyString)
     ASSERT_TRUE(bytes.empty());
 }
 
-} // namespace
+}  // namespace

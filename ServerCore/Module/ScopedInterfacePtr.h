@@ -16,11 +16,11 @@ namespace sc {
 template <typename T>
 class ScopedInterfacePtr
 {
-    static_assert(std::is_base_of<IUnknown, T>::value,
-                  "ScopedInterfacePtr<T> 要求 T 必须是 IUnknown 派生接口");
+    static_assert(std::is_base_of<IUnknown, T>::value, "ScopedInterfacePtr<T> 要求 T 必须是 IUnknown 派生接口");
 
-public:
-    ScopedInterfacePtr() : m_ptr(nullptr) {}
+   public:
+    ScopedInterfacePtr() : m_ptr(nullptr)
+    {}
 
     explicit ScopedInterfacePtr(T* ptr) : m_ptr(ptr)
     {
@@ -95,7 +95,10 @@ public:
     }
 
     // 返回裸指针（借用，不转移所有权）。
-    T* Get() const { return m_ptr; }
+    T* Get() const
+    {
+        return m_ptr;
+    }
 
     // 接管已持有的引用（不额外 AddRef）。
     // 仅内部使用：调用方必须保证 ptr 已具有有效引用（如 CWeakPtr::Lock 已 AddRef）。
@@ -107,37 +110,67 @@ public:
     }
 
     // 指针访问运算符。
-    T* operator->() const { return m_ptr; }
+    T* operator->() const
+    {
+        return m_ptr;
+    }
 
     // 解引用运算符。
-    T& operator*() const { return *m_ptr; }
+    T& operator*() const
+    {
+        return *m_ptr;
+    }
 
     // 判断是否持有有效指针。
-    explicit operator bool() const { return m_ptr != nullptr; }
+    explicit operator bool() const
+    {
+        return m_ptr != nullptr;
+    }
 
     // 判断是否为空。
-    bool operator!() const { return m_ptr == nullptr; }
+    bool operator!() const
+    {
+        return m_ptr == nullptr;
+    }
 
     // 与另一个智能指针比较。
-    bool operator==(const ScopedInterfacePtr& other) const { return m_ptr == other.m_ptr; }
+    bool operator==(const ScopedInterfacePtr& other) const
+    {
+        return m_ptr == other.m_ptr;
+    }
 
     // 与另一个智能指针比较。
-    bool operator!=(const ScopedInterfacePtr& other) const { return m_ptr != other.m_ptr; }
+    bool operator!=(const ScopedInterfacePtr& other) const
+    {
+        return m_ptr != other.m_ptr;
+    }
 
     // 与裸指针比较。
-    bool operator==(T* ptr) const { return m_ptr == ptr; }
+    bool operator==(T* ptr) const
+    {
+        return m_ptr == ptr;
+    }
 
     // 与裸指针比较。
-    bool operator!=(T* ptr) const { return m_ptr != ptr; }
+    bool operator!=(T* ptr) const
+    {
+        return m_ptr != ptr;
+    }
 
     // 与 nullptr 比较。
-    bool operator==(std::nullptr_t) const { return m_ptr == nullptr; }
+    bool operator==(std::nullptr_t) const
+    {
+        return m_ptr == nullptr;
+    }
 
     // 与 nullptr 比较。
-    bool operator!=(std::nullptr_t) const { return m_ptr != nullptr; }
+    bool operator!=(std::nullptr_t) const
+    {
+        return m_ptr != nullptr;
+    }
 
-private:
+   private:
     T* m_ptr;
 };
 
-} // namespace sc
+}  // namespace sc

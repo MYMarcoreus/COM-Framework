@@ -12,7 +12,7 @@ namespace sc {
 /// @note 接口查询返回借用的指针，不增加引用计数。
 class IUnknown
 {
-public:
+   public:
     // 查询指定接口。
     // 返回借用的接口指针（不增加引用计数）；未找到返回 nullptr。
     virtual void* QueryInterface(const InterfaceId& iid) = 0;
@@ -23,8 +23,9 @@ public:
     // 减少引用计数，归零时销毁模块。
     virtual unsigned int Release() = 0;
 
-protected:
-    virtual ~IUnknown() {}
+   protected:
+    virtual ~IUnknown()
+    {}
 };
 
-} // namespace sc
+}  // namespace sc

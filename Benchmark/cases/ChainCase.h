@@ -9,4 +9,4 @@
 /// 运行「任务链」基准。
 void RunChainCases();
 
-#endif // COM_BENCHMARK_CASES_CHAINCASE_H
+#endif  // COM_BENCHMARK_CASES_CHAINCASE_H

@@ -1,7 +1,8 @@
 #include "Infra/AsyncExecutorModule.h"
 
-#include "Module/InterfaceMap.h"
 #include <string>
+
+#include "Module/InterfaceMap.h"
 
 namespace sc {
 
@@ -13,8 +14,7 @@ SC_DEFINE_INTERFACE_MAP(CAsyncExecutorModule, CModule, IAsyncExecutor)
 /// @param nThreadCount 工作线程数量。
 CAsyncExecutorModule::CAsyncExecutorModule(size_t nThreadCount)
     : CModule("async-executor"), m_nThreadCount(nThreadCount)
-{
-}
+{}
 
 /// @brief 销毁异步执行器模块。
 CAsyncExecutorModule::~CAsyncExecutorModule()
@@ -67,7 +67,6 @@ void CAsyncExecutorModule::Stop()
 
 /// @brief 关闭模块（执行器资源由 Stop / 析构释放，无需额外处理）。
 void CAsyncExecutorModule::Shutdown()
-{
-}
+{}
 
-} // namespace sc
+}  // namespace sc

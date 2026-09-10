@@ -433,7 +433,9 @@ common::async::CPromiseResult CExampleDbModule::StepReleaseConn(common::async::C
 CExampleDbModule::Handler CExampleDbModule::BindHandler(HandlerMemberFn pfnHandler)
 {
     return [this, pfnHandler](common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp)
-    { return (this->*pfnHandler)(upResult, spOp); };
+    {
+        return (this->*pfnHandler)(upResult, spOp);
+    };
 }
 
 /// @brief 创建无效 promise（调用方 Await() 得到 kStopped，不会静默丢结果）。

@@ -14,11 +14,11 @@ namespace sc {
 /// kCreated → kInitialized → kStarted → kStopped → kShutdown。
 enum class ModuleState
 {
-    kCreated,     // 已创建，尚未初始化
-    kInitialized, // 已初始化，尚未启动
-    kStarted,     // 已启动
-    kStopped,     // 已停止，尚未关闭
-    kShutdown     // 已关闭
+    kCreated,      // 已创建，尚未初始化
+    kInitialized,  // 已初始化，尚未启动
+    kStarted,      // 已启动
+    kStopped,      // 已停止，尚未关闭
+    kShutdown      // 已关闭
 };
 
 /// @brief 模块接口（COM 风格：继承 IUnknown）。
@@ -30,8 +30,9 @@ class CResolveContext;
 
 SC_INTERFACE(IModule, "sc::IModule", "fe293bce-4c0e-443b-8ce8-953c4806c6fa")
 {
-public:
-    virtual ~IModule() {}
+   public:
+    virtual ~IModule()
+    {}
 
     // 模块名称（进程内唯一标识，用于管理与日志）。
     virtual const char* GetName() const = 0;
@@ -63,4 +64,4 @@ public:
     }
 };
 
-} // namespace sc
+}  // namespace sc

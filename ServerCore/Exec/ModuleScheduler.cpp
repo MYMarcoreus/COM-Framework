@@ -20,8 +20,7 @@ void LogCaughtException(const char* szWhere)
     }
     catch (const std::exception& e)
     {
-        common::log::CLogger::Instance().Error(
-            std::string(szWhere) + " 子任务异常: " + e.what());
+        common::log::CLogger::Instance().Error(std::string(szWhere) + " 子任务异常: " + e.what());
     }
     catch (...)
     {
@@ -29,21 +28,18 @@ void LogCaughtException(const char* szWhere)
     }
 }
 
-} // namespace
+}  // namespace
 
 /// @brief 创建模块级调度器。
 ///
 /// @param pPool 全局线程池（仅执行不调度；生命周期由调用方管理）。
 /// @param nMaxReaders 最大并发读线程数（0 = 不设上限）。
 CModuleScheduler::CModuleScheduler(common::thread::CThreadPool* pPool, size_t nMaxReaders)
-    : m_pPool(pPool), m_nMaxReaders(nMaxReaders),
-      m_nActiveReaders(0), m_bWriterActive(false)
-{
-}
+    : m_pPool(pPool), m_nMaxReaders(nMaxReaders), m_nActiveReaders(0), m_bWriterActive(false)
+{}
 
 CModuleScheduler::~CModuleScheduler()
-{
-}
+{}
 
 /// @brief 提交读/写子任务（线程安全，严格按提交顺序入队）。
 ///
@@ -61,8 +57,8 @@ bool CModuleScheduler::Submit(ETaskKind eKind, const std::function<void()>& fnTa
         CDispatchEntry entry;
         entry.eKind = eKind;
         entry.fnTask = fnTask;
-        m_dequeTasks.push_back(entry); // 统一入队（严格按提交顺序）。
-        PumpLocked(vecDispatch);       // 队首可准入则放行。
+        m_dequeTasks.push_back(entry);  // 统一入队（严格按提交顺序）。
+        PumpLocked(vecDispatch);        // 队首可准入则放行。
     }
     DispatchToPool(vecDispatch);
     return true;
@@ -83,7 +79,7 @@ void CModuleScheduler::OnTaskExit(ETaskKind eKind)
             m_bWriterActive.store(false);
         }
         PumpLocked(vecDispatch);
-        m_condition.notify_all(); // 唤醒 Drain()
+        m_condition.notify_all();  // 唤醒 Drain()
     }
     DispatchToPool(vecDispatch);
 }
@@ -103,12 +99,11 @@ void CModuleScheduler::PumpLocked(std::vector<CDispatchEntry>& vecDispatch)
         {
             if (m_bWriterActive.load())
             {
-                break; // 写者独占中。
+                break;  // 写者独占中。
             }
-            if (m_nMaxReaders > 0 &&
-                m_nActiveReaders.load() >= static_cast<int>(m_nMaxReaders))
+            if (m_nMaxReaders > 0 && m_nActiveReaders.load() >= static_cast<int>(m_nMaxReaders))
             {
-                break; // 读槽位已满。
+                break;  // 读槽位已满。
             }
             // 先移出再 pop，避免移动已销毁元素。
             CDispatchEntry entry = std::move(m_dequeTasks.front());
@@ -116,7 +111,7 @@ void CModuleScheduler::PumpLocked(std::vector<CDispatchEntry>& vecDispatch)
             m_nActiveReaders.fetch_add(1);
             vecDispatch.push_back(std::move(entry));
         }
-        else // kWrite
+        else  // kWrite
         {
             if (m_bWriterActive.load())
             {
@@ -124,13 +119,13 @@ void CModuleScheduler::PumpLocked(std::vector<CDispatchEntry>& vecDispatch)
             }
             if (m_nActiveReaders.load() > 0)
             {
-                break; // 等先前读者排空（其后的任务一并等待，不越过该写）。
+                break;  // 等先前读者排空（其后的任务一并等待，不越过该写）。
             }
             CDispatchEntry entry = std::move(m_dequeTasks.front());
             m_dequeTasks.pop_front();
             m_bWriterActive.store(true);
             vecDispatch.push_back(std::move(entry));
-            break; // 写者独占，其后任务待写完成。
+            break;  // 写者独占，其后任务待写完成。
         }
     }
 }
@@ -139,8 +134,7 @@ void CModuleScheduler::PumpLocked(std::vector<CDispatchEntry>& vecDispatch)
 void CModuleScheduler::DispatchToPool(std::vector<CDispatchEntry>& vecDispatch)
 {
     std::vector<CDispatchEntry> vecFailed;
-    for (std::vector<CDispatchEntry>::iterator it = vecDispatch.begin();
-         it != vecDispatch.end(); ++it)
+    for (std::vector<CDispatchEntry>::iterator it = vecDispatch.begin(); it != vecDispatch.end(); ++it)
     {
         ETaskKind eKind = it->eKind;
         std::function<void()> fnTask = std::move(it->fnTask);
@@ -171,8 +165,7 @@ void CModuleScheduler::DispatchToPool(std::vector<CDispatchEntry>& vecDispatch)
     if (!vecFailed.empty())
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        for (std::vector<CDispatchEntry>::iterator it = vecFailed.begin();
-             it != vecFailed.end(); ++it)
+        for (std::vector<CDispatchEntry>::iterator it = vecFailed.begin(); it != vecFailed.end(); ++it)
         {
             if (it->eKind == ETaskKind::kRead)
             {
@@ -184,8 +177,7 @@ void CModuleScheduler::DispatchToPool(std::vector<CDispatchEntry>& vecDispatch)
             }
         }
         // 逆序 push_front，保持与队首一致的原始顺序。
-        for (std::vector<CDispatchEntry>::reverse_iterator it = vecFailed.rbegin();
-             it != vecFailed.rend(); ++it)
+        for (std::vector<CDispatchEntry>::reverse_iterator it = vecFailed.rbegin(); it != vecFailed.rend(); ++it)
         {
             m_dequeTasks.push_front(std::move(*it));
         }
@@ -205,8 +197,7 @@ size_t CModuleScheduler::PendingCount() const
 bool CModuleScheduler::IsIdle() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_nActiveReaders.load() == 0 && !m_bWriterActive.load() &&
-           m_dequeTasks.empty();
+    return m_nActiveReaders.load() == 0 && !m_bWriterActive.load() && m_dequeTasks.empty();
 }
 
 /// @brief 等待排空（Stop/Shutdown 时由编排线程调用；不阻止新提交）。
@@ -215,9 +206,8 @@ void CModuleScheduler::Drain()
     std::unique_lock<std::mutex> lock(m_mutex);
     m_condition.wait(lock, [this]()
     {
-        return m_nActiveReaders.load() == 0 && !m_bWriterActive.load() &&
-               m_dequeTasks.empty();
+        return m_nActiveReaders.load() == 0 && !m_bWriterActive.load() && m_dequeTasks.empty();
     });
 }
 
-} // namespace sc
+}  // namespace sc

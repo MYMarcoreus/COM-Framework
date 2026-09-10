@@ -6,9 +6,9 @@
 #include <string>
 #include <vector>
 
+#include "Message/IMessageRouter.h"
 #include "Module/InterfaceMap.h"
 #include "Module/Module.h"
-#include "Message/IMessageRouter.h"
 
 namespace sc {
 
@@ -20,7 +20,7 @@ namespace sc {
 ///       SetExtractor/RegisterHandler 可跨线程安全调用。
 class CMessageRouter : public CModule, public IMessageRouter
 {
-public:
+   public:
     CMessageRouter();
 
     virtual ~CMessageRouter();
@@ -48,13 +48,14 @@ public:
 
     SC_DECLARE_INTERFACE_MAP();
 
-private:
+   private:
     struct HandlerEntry
     {
         int type;
         MessageHandler handler;
 
-        HandlerEntry() : type(0) {}
+        HandlerEntry() : type(0)
+        {}
     };
 
     // 按类型分发一条消息。
@@ -68,4 +69,4 @@ private:
     SubscriptionId m_nNextId;
 };
 
-} // namespace sc
+}  // namespace sc

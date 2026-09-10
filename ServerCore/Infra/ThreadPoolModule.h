@@ -16,7 +16,7 @@ namespace sc {
 /// 内部持有 common::thread::CThreadPool 实例。
 class CThreadPoolModule : public CModule, public IThreadPool
 {
-public:
+   public:
     explicit CThreadPoolModule(size_t nThreadCount = 1);
 
     virtual ~CThreadPoolModule();
@@ -29,9 +29,9 @@ public:
 
     SC_DECLARE_INTERFACE_MAP();
 
-private:
+   private:
     std::unique_ptr<common::thread::CThreadPool> m_pPool;
     size_t m_nThreadCount;
 };
 
-} // namespace sc
+}  // namespace sc

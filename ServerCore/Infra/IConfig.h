@@ -12,8 +12,9 @@ namespace sc {
 /// 使模块通过模块管理器按接口读取配置，而非直接持有 CConfig 实例。
 SC_INTERFACE(IConfig, "sc::IConfig", "cfaa634b-1064-40d3-94eb-b8518776bd7e")
 {
-public:
-    virtual ~IConfig() {}
+   public:
+    virtual ~IConfig()
+    {}
 
     // 从文件加载配置（追加合并）。
     virtual bool LoadFile(const std::string& strPath) = 0;
@@ -31,4 +32,4 @@ public:
     virtual bool ReloadIfChanged() = 0;
 };
 
-} // namespace sc
+}  // namespace sc

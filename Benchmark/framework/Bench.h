@@ -43,17 +43,17 @@ using Clock = std::chrono::steady_clock;
 // ====================================================================
 struct Result
 {
-    std::string group;      // 分组（表格 section 标题）。
-    std::string name;       // 实现 / 用例名。
-    double mean_ns = 0.0;   // 均值 ns/op（压力模式下为 平均窗口耗时 ns）。
-    double p50_ns = 0.0;    // P50（中位数）ns——抗环境噪声的主指标。
-    double p90_ns = 0.0;    // P90 ns。
-    double p99_ns = 0.0;    // P99 ns（长尾）。
-    double stddev_ns = 0.0; // 标准差 ns（剔除离群后）。
-    double mad_ns = 0.0;    // 中位数绝对偏差（鲁棒稳定性，抗离群）。
-    double ops_per_sec = 0.0; // 吞吐（ops/s）。
-    std::string note;       // 说明（参数 / 环境）。
-    bool is_stress = false; // true：压力结果（表格按压力列渲染）。
+    std::string group;         // 分组（表格 section 标题）。
+    std::string name;          // 实现 / 用例名。
+    double mean_ns = 0.0;      // 均值 ns/op（压力模式下为 平均窗口耗时 ns）。
+    double p50_ns = 0.0;       // P50（中位数）ns——抗环境噪声的主指标。
+    double p90_ns = 0.0;       // P90 ns。
+    double p99_ns = 0.0;       // P99 ns（长尾）。
+    double stddev_ns = 0.0;    // 标准差 ns（剔除离群后）。
+    double mad_ns = 0.0;       // 中位数绝对偏差（鲁棒稳定性，抗离群）。
+    double ops_per_sec = 0.0;  // 吞吐（ops/s）。
+    std::string note;          // 说明（参数 / 环境）。
+    bool is_stress = false;    // true：压力结果（表格按压力列渲染）。
 };
 
 // ====================================================================
@@ -61,21 +61,31 @@ struct Result
 // ====================================================================
 class Registry
 {
-public:
+   public:
     static Registry& Instance()
     {
         static Registry s_instance;
         return s_instance;
     }
 
-    void Add(const Result& r) { m_results.push_back(r); }
+    void Add(const Result& r)
+    {
+        m_results.push_back(r);
+    }
 
-    const std::vector<Result>& Results() const { return m_results; }
+    const std::vector<Result>& Results() const
+    {
+        return m_results;
+    }
 
-    void Clear() { m_results.clear(); }
+    void Clear()
+    {
+        m_results.clear();
+    }
 
-private:
-    Registry() {}
+   private:
+    Registry()
+    {}
     std::vector<Result> m_results;
 };
 
@@ -103,32 +113,26 @@ inline double NowNs()
 // @param reps     采样轮数（默认 7；每轮自适应迭代，总时长 ~20ms）。
 // @param note     说明文字。
 // ====================================================================
-inline void BenchOp(const std::string& group, const std::string& name,
-                    std::function<void()> fn, int reps = 7,
+inline void BenchOp(const std::string& group, const std::string& name, std::function<void()> fn, int reps = 7,
                     const std::string& note = std::string())
 {
     // 1) 预热（丢弃：让缓存、线程、分配器就绪；异步操作含唤醒休眠工作线程）。
-    for (int i = 0; i < 30; ++i)
-        fn();
+    for (int i = 0; i < 30; ++i) fn();
 
     // 2) 探测单次耗时（整块计时取平均）→ 决定自适应迭代次数。
     const int kProbe = 300;
     double t0 = NowNs();
-    for (int i = 0; i < kProbe; ++i)
-        fn();
+    for (int i = 0; i < kProbe; ++i) fn();
     double t1 = NowNs();
     double nsPerOp = (t1 - t0) / kProbe;
-    if (nsPerOp <= 0.0)
-        nsPerOp = 1.0;
+    if (nsPerOp <= 0.0) nsPerOp = 1.0;
 
     // 3) 自适应迭代：每轮总时长 ~2ms（保证短/长操作统计充分；旧调用处显式
     //    传入的 41/21 轮 × 2ms 总时长仍可接受）。
-    const double kTargetNs = 2.0 * 1e6; // 2ms / 轮。
+    const double kTargetNs = 2.0 * 1e6;  // 2ms / 轮。
     long iterations = static_cast<long>(kTargetNs / nsPerOp);
-    if (iterations < 1)
-        iterations = 1;
-    if (iterations > 50000000L)
-        iterations = 50000000L;
+    if (iterations < 1) iterations = 1;
+    if (iterations > 50000000L) iterations = 50000000L;
 
     // 4) 多轮采样：每轮均值（ns/op），reps 轮取统计（抗环境噪声）。
     std::vector<double> vec;
@@ -136,8 +140,7 @@ inline void BenchOp(const std::string& group, const std::string& name,
     for (int r = 0; r < reps; ++r)
     {
         double a = NowNs();
-        for (long i = 0; i < iterations; ++i)
-            fn();
+        for (long i = 0; i < iterations; ++i) fn();
         double b = NowNs();
         vec.push_back((b - a) / iterations);
     }
@@ -146,19 +149,16 @@ inline void BenchOp(const std::string& group, const std::string& name,
     std::sort(vec.begin(), vec.end());
     double p50 = vec[vec.size() / 2];
     size_t idx90 = static_cast<size_t>(vec.size() * 0.90);
-    if (idx90 >= vec.size())
-        idx90 = vec.size() - 1;
+    if (idx90 >= vec.size()) idx90 = vec.size() - 1;
     size_t idx99 = static_cast<size_t>(vec.size() * 0.99);
-    if (idx99 >= vec.size())
-        idx99 = vec.size() - 1;
+    if (idx99 >= vec.size()) idx99 = vec.size() - 1;
     double p90 = vec[idx90];
     double p99 = vec[idx99];
 
     // MAD（中位数绝对偏差）：鲁棒稳定性指标。
     std::vector<double> absDev;
     absDev.reserve(vec.size());
-    for (size_t i = 0; i < vec.size(); ++i)
-        absDev.push_back(std::fabs(vec[i] - p50));
+    for (size_t i = 0; i < vec.size(); ++i) absDev.push_back(std::fabs(vec[i] - p50));
     std::sort(absDev.begin(), absDev.end());
     double mad = absDev[absDev.size() / 2];
 
@@ -169,14 +169,11 @@ inline void BenchOp(const std::string& group, const std::string& name,
     {
         const double kThreshold = 3.0 * mad;
         for (size_t i = 0; i < vec.size(); ++i)
-            if (std::fabs(vec[i] - p50) <= kThreshold)
-                clean.push_back(vec[i]);
+            if (std::fabs(vec[i] - p50) <= kThreshold) clean.push_back(vec[i]);
     }
-    if (clean.empty())
-        clean = vec;
+    if (clean.empty()) clean = vec;
     double sum = 0.0;
-    for (size_t i = 0; i < clean.size(); ++i)
-        sum += clean[i];
+    for (size_t i = 0; i < clean.size(); ++i) sum += clean[i];
     double mean = sum / clean.size();
     double var = 0.0;
     for (size_t i = 0; i < clean.size(); ++i)
@@ -205,8 +202,7 @@ inline void BenchOp(const std::string& group, const std::string& name,
 // ====================================================================
 inline void WaitDone(const std::atomic<uint64_t>& done, uint64_t target)
 {
-    while (done.load(std::memory_order_acquire) < target)
-        std::this_thread::yield();
+    while (done.load(std::memory_order_acquire) < target) std::this_thread::yield();
 }
 
 // ====================================================================
@@ -215,8 +211,7 @@ inline void WaitDone(const std::atomic<uint64_t>& done, uint64_t target)
 // ====================================================================
 inline bool SanityCheck(const std::string& group, const std::string& name, bool ok)
 {
-    if (!ok)
-        std::printf("  [CHECK-FAIL] %s / %s\n", group.c_str(), name.c_str());
+    if (!ok) std::printf("  [CHECK-FAIL] %s / %s\n", group.c_str(), name.c_str());
     return ok;
 }
 
@@ -232,21 +227,18 @@ inline bool SanityCheck(const std::string& group, const std::string& name, bool 
 // @param done         共享完成计数器（每窗口开始前框架会清零）。
 // @param note         说明。
 // ====================================================================
-inline void StressWindow(const std::string& group, const std::string& name,
-                         int window, int duration_ms,
-                         const std::function<void()>& submit,
-                         std::atomic<uint64_t>& done,
+inline void StressWindow(const std::string& group, const std::string& name, int window, int duration_ms,
+                         const std::function<void()>& submit, std::atomic<uint64_t>& done,
                          const std::string& note = std::string())
 {
-    const int kWarmup = 2; // 丢弃的预热窗口数。
+    const int kWarmup = 2;  // 丢弃的预热窗口数。
     const double tEndNs = NowNs() + duration_ms * 1e6;
 
     // 预热窗口（丢弃）。
     for (int w = 0; w < kWarmup; ++w)
     {
         done.store(0, std::memory_order_relaxed);
-        for (int i = 0; i < window; ++i)
-            submit();
+        for (int i = 0; i < window; ++i) submit();
         WaitDone(done, static_cast<uint64_t>(window));
     }
 
@@ -256,18 +248,15 @@ inline void StressWindow(const std::string& group, const std::string& name,
     {
         done.store(0, std::memory_order_relaxed);
         double a = NowNs();
-        for (int i = 0; i < window; ++i)
-            submit();
+        for (int i = 0; i < window; ++i) submit();
         WaitDone(done, static_cast<uint64_t>(window));
         double b = NowNs();
         winSec.push_back((b - a) / 1e9);
     }
-    if (winSec.empty())
-        winSec.push_back(0.000001); // 兜底，避免除零。
+    if (winSec.empty()) winSec.push_back(0.000001);  // 兜底，避免除零。
 
     double sum = 0.0;
-    for (size_t i = 0; i < winSec.size(); ++i)
-        sum += winSec[i];
+    for (size_t i = 0; i < winSec.size(); ++i) sum += winSec[i];
     double avgSec = sum / winSec.size();
     double ops = (avgSec > 0.0) ? window / avgSec : 0.0;
 
@@ -283,6 +272,6 @@ inline void StressWindow(const std::string& group, const std::string& name,
     Registry::Instance().Add(r);
 }
 
-} // namespace benchmark
+}  // namespace benchmark
 
-#endif // COM_BENCHMARK_FRAMEWORK_BENCH_H
+#endif  // COM_BENCHMARK_FRAMEWORK_BENCH_H

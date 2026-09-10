@@ -45,7 +45,8 @@ struct CExecutorHandle
     std::shared_ptr<common::thread::CThreadPool> m_pPool;  ///< 工作线程池。
     std::atomic<bool> m_bStopped;                          ///< 是否已停止（拒绝新投递）。
 
-    CExecutorHandle() : m_bStopped(false) {}
+    CExecutorHandle() : m_bStopped(false)
+    {}
 };
 
 /// @brief 向执行器句柄投递任务（句柄不可用时返回 false，不抛异常）。
@@ -136,7 +137,10 @@ class CAsyncExecutor
     std::shared_ptr<TCoroutine> CoStart(TArgs&&... args);
 
     /// @brief 内部：执行器句柄（promise / 协程持有，生命周期加固用）。
-    const std::shared_ptr<detail::CExecutorHandle>& Handle() const { return m_pHandle; }
+    const std::shared_ptr<detail::CExecutorHandle>& Handle() const
+    {
+        return m_pHandle;
+    }
 
    private:
     std::shared_ptr<detail::CExecutorHandle> m_pHandle;  ///< 执行器句柄（promise / 协程共享）。

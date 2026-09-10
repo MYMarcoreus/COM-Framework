@@ -14,8 +14,9 @@ namespace sc {
 /// common::async::CAsyncExecutor（模板接口无法进虚函数表）。
 SC_INTERFACE(IAsyncExecutor, "sc::IAsyncExecutor", "c71a0b68-66ef-47b2-8a52-64404059daf0")
 {
-public:
-    virtual ~IAsyncExecutor() {}
+   public:
+    virtual ~IAsyncExecutor()
+    {}
 
     // 启动工作线程。
     virtual bool Start() = 0;
@@ -27,4 +28,4 @@ public:
     virtual void Stop() = 0;
 };
 
-} // namespace sc
+}  // namespace sc

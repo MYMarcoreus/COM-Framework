@@ -21,16 +21,16 @@ using EventType = std::string;
 /// data / size 为借用指针，仅在本次事件分发期间有效，处理器不应长期持有。
 struct Event
 {
-    EventType type;   // 事件类型
-    const void* data; // 事件负载（借用指针）
-    size_t size;      // 负载字节数
+    EventType type;    // 事件类型
+    const void* data;  // 事件负载（借用指针）
+    size_t size;       // 负载字节数
 
-    Event() : type(), data(nullptr), size(0) {}
+    Event() : type(), data(nullptr), size(0)
+    {}
 
     Event(const EventType& eventType, const void* payload, size_t payloadSize)
         : type(eventType), data(payload), size(payloadSize)
-    {
-    }
+    {}
 };
 
 /// @brief 事件处理器。
@@ -48,6 +48,6 @@ constexpr const char* const kNetworkStopped = "network.stopped";
 // 配置热加载事件（由 CConfigReloadModule 发布）。
 constexpr const char* const kConfigReloaded = "config.reloaded";
 
-} // namespace events
+}  // namespace events
 
-} // namespace sc
+}  // namespace sc

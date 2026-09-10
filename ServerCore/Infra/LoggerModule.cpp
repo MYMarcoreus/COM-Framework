@@ -1,9 +1,9 @@
 #include "Infra/LoggerModule.h"
 
-#include "Module/InterfaceMap.h"
 #include <string>
 
 #include "Log/Logger.h"
+#include "Module/InterfaceMap.h"
 
 namespace sc {
 
@@ -12,13 +12,11 @@ SC_DEFINE_INTERFACE_MAP(CLoggerModule, CModule, ILogger)
 
 /// @brief 创建日志模块。
 CLoggerModule::CLoggerModule() : CModule("logger")
-{
-}
+{}
 
 /// @brief 销毁日志模块。
 CLoggerModule::~CLoggerModule()
-{
-}
+{}
 
 /// @brief 初始化模块（代理全局日志单例，无配置依赖）。
 bool CLoggerModule::Initialize(const CResolveContext& /*ctx*/)
@@ -34,13 +32,11 @@ bool CLoggerModule::Start()
 
 /// @brief 模块停止（日志单例持续运行，无需处理）。
 void CLoggerModule::Stop()
-{
-}
+{}
 
 /// @brief 模块关闭（日志单例由全局管理，无需处理）。
 void CLoggerModule::Shutdown()
-{
-}
+{}
 
 /// @brief 设置日志级别。
 ///
@@ -94,4 +90,4 @@ void CLoggerModule::Error(const std::string& message)
     common::log::CLogger::Instance().Error(message);
 }
 
-} // namespace sc
+}  // namespace sc

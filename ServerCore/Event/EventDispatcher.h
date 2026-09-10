@@ -6,11 +6,11 @@
 #include <string>
 #include <vector>
 
-#include "Module/ScopedInterfacePtr.h"
-#include "Infra/IAsyncExecutor.h"
-#include "Module/Module.h"
-#include "Module/InterfaceMap.h"
 #include "Event/IEventDispatcher.h"
+#include "Infra/IAsyncExecutor.h"
+#include "Module/InterfaceMap.h"
+#include "Module/Module.h"
+#include "Module/ScopedInterfacePtr.h"
 
 namespace sc {
 
@@ -24,7 +24,7 @@ namespace sc {
 /// 可作为模块注册到 CModuleManager（IID_EventDispatcher）。
 class CEventDispatcher : public CModule, public IEventDispatcher
 {
-public:
+   public:
     CEventDispatcher();
 
     virtual ~CEventDispatcher();
@@ -54,13 +54,14 @@ public:
 
     SC_DECLARE_INTERFACE_MAP();
 
-private:
+   private:
     struct Subscription
     {
         EventType type;
         EventHandler handler;
 
-        Subscription() : type() {}
+        Subscription() : type()
+        {}
     };
 
     std::map<SubscriptionId, Subscription> m_mapSubscriptions;
@@ -70,4 +71,4 @@ private:
     SubscriptionId m_nNextId;
 };
 
-} // namespace sc
+}  // namespace sc

@@ -28,7 +28,8 @@ struct CUserOpContext
     std::string strTrace;                  ///< 业务层执行轨迹。
     std::string strError;                  ///< 失败描述（与拒绝码对应，便于排障）。
 
-    CUserOpContext() : nUserId(0), spDbOp(new CUserTableOp()), bExists(false), nAttempt(0) {}
+    CUserOpContext() : nUserId(0), spDbOp(new CUserTableOp()), bExists(false), nAttempt(0)
+    {}
 };
 
 /// @brief 用户业务错误码（业务错误码从 kBusinessBase 起取）。
@@ -59,7 +60,8 @@ inline const sc::InterfaceId& IID_IUserService()
 class IUserService : public virtual sc::IUnknown
 {
    public:
-    virtual ~IUserService() {}
+    virtual ~IUserService()
+    {}
 
     // 异步查询用户信息（读）。
     virtual common::async::CPromise<CUserOpContext> QueryUserAsync(std::uint64_t nUserId) = 0;

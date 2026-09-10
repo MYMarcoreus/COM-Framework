@@ -6,8 +6,7 @@ namespace common {
 namespace network {
 
 /// @brief 创建 UDP Socket。
-CUdpSocket::CUdpSocket()
-    : m_socket(m_io), m_resolver(m_io), m_nPort(0), m_bRunning(false)
+CUdpSocket::CUdpSocket() : m_socket(m_io), m_resolver(m_io), m_nPort(0), m_bRunning(false)
 {
     m_vecRecvBuffer.resize(65536);
 }
@@ -65,26 +64,25 @@ bool CUdpSocket::SendTo(const std::string& strHost, uint16_t nPort, const char* 
         return false;
     }
     std::string strPayload(pData, nLen);
-    m_resolver.async_resolve(strHost, std::to_string(nPort),
-        [this, strPayload](const asio::error_code& ec,
-                           asio::ip::udp::resolver::results_type results)
+    m_resolver.async_resolve(
+        strHost, std::to_string(nPort),
+        [this, strPayload](const asio::error_code& ec, asio::ip::udp::resolver::results_type results)
+    {
+        if (ec || results.empty())
         {
-            if (ec || results.empty())
+            return;
+        }
+        asio::ip::udp::endpoint endpointTarget = *results.begin();
+        asio::post(m_io, [this, strPayload, endpointTarget]()
+        {
+            if (!m_socket.is_open())
             {
                 return;
             }
-            asio::ip::udp::endpoint endpointTarget = *results.begin();
-            asio::post(m_io,
-                [this, strPayload, endpointTarget]()
-                {
-                    if (!m_socket.is_open())
-                    {
-                        return;
-                    }
-                    asio::error_code ignored;
-                    static_cast<void>(m_socket.send_to(asio::buffer(strPayload), endpointTarget, 0, ignored));
-                });
+            asio::error_code ignored;
+            static_cast<void>(m_socket.send_to(asio::buffer(strPayload), endpointTarget, 0, ignored));
         });
+    });
     return true;
 }
 
@@ -133,10 +131,10 @@ void CUdpSocket::StartReceive()
         return;
     }
     m_socket.async_receive_from(asio::buffer(m_vecRecvBuffer), m_remoteEndpoint,
-        [this](const asio::error_code& ec, size_t nBytes)
-        {
-            HandleReceive(ec, nBytes);
-        });
+                                [this](const asio::error_code& ec, size_t nBytes)
+    {
+        HandleReceive(ec, nBytes);
+    });
 }
 
 /// @brief 处理接收完成。
@@ -146,14 +144,13 @@ void CUdpSocket::HandleReceive(const asio::error_code& ec, size_t nBytes)
     {
         if (ec != asio::error::operation_aborted && m_socket.is_open())
         {
-            StartReceive(); // 瞬时错误，继续接收
+            StartReceive();  // 瞬时错误，继续接收
         }
         return;
     }
     if (m_fnData)
     {
-        std::string strFrom = m_remoteEndpoint.address().to_string() + ":" +
-                              std::to_string(m_remoteEndpoint.port());
+        std::string strFrom = m_remoteEndpoint.address().to_string() + ":" + std::to_string(m_remoteEndpoint.port());
         m_fnData(m_vecRecvBuffer.data(), nBytes, strFrom);
     }
     if (m_bRunning.load() && m_socket.is_open())
@@ -162,5 +159,5 @@ void CUdpSocket::HandleReceive(const asio::error_code& ec, size_t nBytes)
     }
 }
 
-} // namespace network
-} // namespace common
+}  // namespace network
+}  // namespace common

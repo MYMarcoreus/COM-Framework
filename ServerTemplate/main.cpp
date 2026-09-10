@@ -1,8 +1,8 @@
 #include <cstdint>
 #include <cstdlib>
 
-#include "Log/Logger.h"
 #include "Application/TemplateApplication.h"
+#include "Log/Logger.h"
 
 /// @brief ServerTemplate 服务器入口。
 ///
@@ -38,7 +38,6 @@ int main(int argc, char* argv[])
     int result = app.Run();
 
     app.Shutdown();
-    common::log::CLogger::Instance().Info(
-        "ServerTemplate 已退出，运行 " + std::to_string(app.UptimeSeconds()) + " 秒");
+    common::log::CLogger::Instance().Info("ServerTemplate 已退出，运行 " + std::to_string(app.UptimeSeconds()) + " 秒");
     return result;
 }

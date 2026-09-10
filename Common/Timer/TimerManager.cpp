@@ -4,10 +4,8 @@ namespace common {
 namespace timer {
 
 /// @brief 创建定时器管理器。
-CTimerManager::CTimerManager()
-    : m_nNextId(1), m_bRunning(false)
-{
-}
+CTimerManager::CTimerManager() : m_nNextId(1), m_bRunning(false)
+{}
 
 /// @brief 销毁定时器管理器。
 CTimerManager::~CTimerManager()
@@ -24,10 +22,12 @@ bool CTimerManager::Start()
         return false;
     }
     m_io.restart();
-    m_pWork.reset(new asio::executor_work_guard<asio::io_context::executor_type>(
-        asio::make_work_guard(m_io)));
+    m_pWork.reset(new asio::executor_work_guard<asio::io_context::executor_type>(asio::make_work_guard(m_io)));
     m_bRunning.store(true);
-    m_thread = std::thread([this]() { m_io.run(); });
+    m_thread = std::thread([this]()
+    {
+        m_io.run();
+    });
     return true;
 }
 
@@ -63,7 +63,7 @@ bool CTimerManager::Cancel(TimerId nId)
         return false;
     }
     static_cast<void>(it->second->cancel());
-    m_mapTimers.erase(it); // 到期处理函数稍后以 operation_aborted 触发（幂等）
+    m_mapTimers.erase(it);  // 到期处理函数稍后以 operation_aborted 触发（幂等）
     return true;
 }
 
@@ -77,7 +77,7 @@ bool CTimerManager::Cancel(TimerId nId)
 ///
 /// @return 定时器标识；失败返回 kInvalidTimerId。
 TimerId CTimerManager::AddNamedTimer(const std::string& strName, std::int64_t nIntervalMs,
-                                    const TimerCallback& fnCallback)
+                                     const TimerCallback& fnCallback)
 {
     TimerId nId = AddTimerInternal(0, nIntervalMs, fnCallback);
     if (nId != kInvalidTimerId)
@@ -147,7 +147,7 @@ bool CTimerManager::IsRunning() const
 /// @param intervalMs 周期（大于 0 时表示周期性定时器）。
 /// @param callback 回调。
 TimerId CTimerManager::AddTimerInternal(std::int64_t nDelayMs, std::int64_t nIntervalMs,
-                                       const TimerCallback& fnCallback)
+                                        const TimerCallback& fnCallback)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_bRunning.load())
@@ -164,44 +164,42 @@ TimerId CTimerManager::AddTimerInternal(std::int64_t nDelayMs, std::int64_t nInt
 }
 
 /// @brief 调度一次异步等待。
-void CTimerManager::Schedule(std::shared_ptr<asio::steady_timer> pTimer, TimerId nId,
-                            std::int64_t nIntervalMs, const TimerCallback& fnCallback)
+void CTimerManager::Schedule(std::shared_ptr<asio::steady_timer> pTimer, TimerId nId, std::int64_t nIntervalMs,
+                             const TimerCallback& fnCallback)
 {
-    pTimer->async_wait(
-        [this, pTimer, nId, nIntervalMs, fnCallback](const asio::error_code& ec)
+    pTimer->async_wait([this, pTimer, nId, nIntervalMs, fnCallback](const asio::error_code& ec)
+    {
+        // ① 取消或错误：清理定时器
+        if (ec)
         {
-            // ① 取消或错误：清理定时器
-            if (ec)
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_mapTimers.erase(nId);
+            return;
+        }
+        // ② 触发回调
+        if (fnCallback)
+        {
+            fnCallback();
+        }
+        // ③ 周期性定时器重新调度（若仍被管理）
+        if (nIntervalMs > 0)
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            std::map<TimerId, std::shared_ptr<asio::steady_timer> >::iterator it = m_mapTimers.find(nId);
+            if (it == m_mapTimers.end() || it->second != pTimer)
             {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_mapTimers.erase(nId);
-                return;
+                return;  // 已被取消
             }
-            // ② 触发回调
-            if (fnCallback)
-            {
-                fnCallback();
-            }
-            // ③ 周期性定时器重新调度（若仍被管理）
-            if (nIntervalMs > 0)
-            {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                std::map<TimerId, std::shared_ptr<asio::steady_timer> >::iterator it =
-                    m_mapTimers.find(nId);
-                if (it == m_mapTimers.end() || it->second != pTimer)
-                {
-                    return; // 已被取消
-                }
-                pTimer->expires_after(std::chrono::milliseconds(nIntervalMs));
-                Schedule(pTimer, nId, nIntervalMs, fnCallback);
-            }
-            else
-            {
-                std::lock_guard<std::mutex> lock(m_mutex);
-                m_mapTimers.erase(nId);
-            }
-        });
+            pTimer->expires_after(std::chrono::milliseconds(nIntervalMs));
+            Schedule(pTimer, nId, nIntervalMs, fnCallback);
+        }
+        else
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_mapTimers.erase(nId);
+        }
+    });
 }
 
-} // namespace timer
-} // namespace common
+}  // namespace timer
+}  // namespace common

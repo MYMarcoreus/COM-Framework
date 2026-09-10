@@ -123,16 +123,17 @@ void* InterfaceGetter(void* pThis)
     SC_INTERFACE_ENTRY(I1) SC_INTERFACE_ENTRY(I2) SC_INTERFACE_ENTRY(I3) SC_INTERFACE_ENTRY(I4) SC_INTERFACE_ENTRY(I5)
 
 /// @brief 内部辅助：展开 7 个接口条目。
-#define SC_IMAP_ENTRIES_7(I0, I1, I2, I3, I4, I5, I6)                                                                  \
-    SC_INTERFACE_ENTRY(I0)                                                                                             \
-    SC_INTERFACE_ENTRY(I1) SC_INTERFACE_ENTRY(I2) SC_INTERFACE_ENTRY(I3) SC_INTERFACE_ENTRY(I4) SC_INTERFACE_ENTRY(I5) \
-        SC_INTERFACE_ENTRY(I6)
+#define SC_IMAP_ENTRIES_7(I0, I1, I2, I3, I4, I5, I6) \
+    SC_INTERFACE_ENTRY(I0)                            \
+    SC_INTERFACE_ENTRY(I1)                            \
+    SC_INTERFACE_ENTRY(I2) SC_INTERFACE_ENTRY(I3) SC_INTERFACE_ENTRY(I4) SC_INTERFACE_ENTRY(I5) SC_INTERFACE_ENTRY(I6)
 
 /// @brief 内部辅助：展开 8 个接口条目。
-#define SC_IMAP_ENTRIES_8(I0, I1, I2, I3, I4, I5, I6, I7)                                                              \
-    SC_INTERFACE_ENTRY(I0)                                                                                             \
-    SC_INTERFACE_ENTRY(I1) SC_INTERFACE_ENTRY(I2) SC_INTERFACE_ENTRY(I3) SC_INTERFACE_ENTRY(I4) SC_INTERFACE_ENTRY(I5) \
-        SC_INTERFACE_ENTRY(I6) SC_INTERFACE_ENTRY(I7)
+#define SC_IMAP_ENTRIES_8(I0, I1, I2, I3, I4, I5, I6, I7) \
+    SC_INTERFACE_ENTRY(I0)                                \
+    SC_INTERFACE_ENTRY(I1)                                \
+    SC_INTERFACE_ENTRY(I2)                                \
+    SC_INTERFACE_ENTRY(I3) SC_INTERFACE_ENTRY(I4) SC_INTERFACE_ENTRY(I5) SC_INTERFACE_ENTRY(I6) SC_INTERFACE_ENTRY(I7)
 
 /// @brief 内部辅助：统计可变参数个数（0~8）。
 #define SC_IMAP_NARG(...) SC_IMAP_NARG_(__VA_ARGS__, SC_IMAP_RSEQ())

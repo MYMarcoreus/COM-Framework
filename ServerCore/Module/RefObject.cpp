@@ -7,11 +7,8 @@ namespace sc {
 /// @brief 创建引用对象。
 ///
 /// 初始引用计数为 1，并创建堆上存活状态（供弱引用判断）。
-CRefObject::CRefObject()
-    : m_pLifetime(std::make_shared<detail::CLifetime>()),
-      m_nRefCount(1)
-{
-}
+CRefObject::CRefObject() : m_pLifetime(std::make_shared<detail::CLifetime>()), m_nRefCount(1)
+{}
 
 /// @brief 销毁引用对象。
 ///
@@ -87,4 +84,4 @@ void* CRefObject::QueryInterfaceImpl(const InterfaceId& /*iid*/)
     return nullptr;
 }
 
-} // namespace sc
+}  // namespace sc

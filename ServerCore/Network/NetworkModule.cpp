@@ -3,8 +3,8 @@
 #include <cstdio>
 #include <string>
 
-#include "Module/ResolveContext.h"
 #include "Module/InterfaceMap.h"
+#include "Module/ResolveContext.h"
 #include "Network/TcpServer.h"
 
 namespace sc {
@@ -14,8 +14,7 @@ SC_DEFINE_INTERFACE_MAP(CNetworkModule, CModule, INetwork)
 
 /// @brief 创建网络模块。
 CNetworkModule::CNetworkModule() : CModule("network"), m_nPort(0)
-{
-}
+{}
 
 /// @brief 销毁网络模块。
 CNetworkModule::~CNetworkModule()
@@ -62,44 +61,43 @@ bool CNetworkModule::StartTcpServer(uint16_t nPort, INetworkHandler* pHandler)
     std::unique_ptr<common::network::CTcpServer> pNewServer(new common::network::CTcpServer());
     common::network::CTcpServer::AcceptCallback fnAccept =
         [this](common::network::ConnectionId nId, const std::string& strPeer)
+    {
+        if (m_pMetrics != nullptr)
         {
-            if (m_pMetrics != nullptr)
-            {
-                m_pMetrics->Inc("network.accepted");
-                m_pMetrics->SetGauge("network.conns",
-                    static_cast<double>(m_pServer != nullptr ? m_pServer->ConnectionCount() : 0));
-            }
-            if (m_pHandler != nullptr)
-            {
-                m_pHandler->OnAccept(nId, strPeer);
-            }
-        };
+            m_pMetrics->Inc("network.accepted");
+            m_pMetrics->SetGauge("network.conns",
+                                 static_cast<double>(m_pServer != nullptr ? m_pServer->ConnectionCount() : 0));
+        }
+        if (m_pHandler != nullptr)
+        {
+            m_pHandler->OnAccept(nId, strPeer);
+        }
+    };
     common::network::CTcpServer::DataCallback fnData =
         [this](common::network::ConnectionId nId, const char* pData, size_t nLen)
+    {
+        if (m_pMetrics != nullptr)
         {
-            if (m_pMetrics != nullptr)
-            {
-                m_pMetrics->Inc("network.msgs");
-            }
-            if (m_pHandler != nullptr)
-            {
-                m_pHandler->OnData(nId, pData, nLen);
-            }
-        };
-    common::network::CTcpServer::CloseCallback fnClose =
-        [this](common::network::ConnectionId nId)
+            m_pMetrics->Inc("network.msgs");
+        }
+        if (m_pHandler != nullptr)
         {
-            if (m_pMetrics != nullptr)
-            {
-                m_pMetrics->Inc("network.closed");
-                m_pMetrics->SetGauge("network.conns",
-                    static_cast<double>(m_pServer != nullptr ? m_pServer->ConnectionCount() : 0));
-            }
-            if (m_pHandler != nullptr)
-            {
-                m_pHandler->OnClose(nId);
-            }
-        };
+            m_pHandler->OnData(nId, pData, nLen);
+        }
+    };
+    common::network::CTcpServer::CloseCallback fnClose = [this](common::network::ConnectionId nId)
+    {
+        if (m_pMetrics != nullptr)
+        {
+            m_pMetrics->Inc("network.closed");
+            m_pMetrics->SetGauge("network.conns",
+                                 static_cast<double>(m_pServer != nullptr ? m_pServer->ConnectionCount() : 0));
+        }
+        if (m_pHandler != nullptr)
+        {
+            m_pHandler->OnClose(nId);
+        }
+    };
     if (!pNewServer->Start(nPort, fnAccept, fnData, fnClose))
     {
         m_pHandler.Reset();
@@ -126,7 +124,7 @@ void CNetworkModule::Stop()
     }
     if (pServer != nullptr)
     {
-        pServer->Stop(); // 等待事件循环线程退出（不持有本模块锁）
+        pServer->Stop();  // 等待事件循环线程退出（不持有本模块锁）
         delete pServer;
     }
     m_pHandler.Reset();
@@ -266,9 +264,8 @@ std::string CNetworkModule::GetStatus() const
     char szBuffer[128];
     std::snprintf(szBuffer, sizeof(szBuffer), "network:port=%u conns=%zu accepted=%llu closed=%llu",
                   static_cast<unsigned int>(ListeningPort()), ConnectionCount(),
-                  static_cast<unsigned long long>(TotalAccepted()),
-                  static_cast<unsigned long long>(TotalClosed()));
+                  static_cast<unsigned long long>(TotalAccepted()), static_cast<unsigned long long>(TotalClosed()));
     return std::string(szBuffer);
 }
 
-} // namespace sc
+}  // namespace sc

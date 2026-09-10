@@ -13,8 +13,9 @@ namespace sc {
 /// 使模块通过模块管理器按接口获取日志能力，而非直接访问全局单例。
 SC_INTERFACE(ILogger, "sc::ILogger", "7f70d36c-e774-49c0-9f0e-0d59b5c0adf8")
 {
-public:
-    virtual ~ILogger() {}
+   public:
+    virtual ~ILogger()
+    {}
 
     // 设置日志级别（取值对应 common::log::LogLevel）。
     virtual void SetLevel(int level) = 0;
@@ -41,4 +42,4 @@ public:
     virtual void Error(const std::string& message) = 0;
 };
 
-} // namespace sc
+}  // namespace sc

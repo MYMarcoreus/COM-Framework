@@ -1,12 +1,12 @@
 #include "Process/Process.h"
 
-#include <cstdio>
-#include <cstdlib>
-
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include <cstdio>
+#include <cstdlib>
 
 namespace sc {
 
@@ -26,7 +26,7 @@ bool CProcess::Daemonize()
     }
     if (nPid > 0)
     {
-        ::exit(0); // 父进程退出
+        ::exit(0);  // 父进程退出
     }
 
     // ② 新会话，脱离控制终端
@@ -73,17 +73,14 @@ bool CProcess::Daemonize()
 /// @return 写入成功返回 true。
 bool CProcess::WritePidFile(const std::string& strPath, pid_t nPid)
 {
-    int nFd = ::open(strPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC,
-                     static_cast<mode_t>(0644));
+    int nFd = ::open(strPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, static_cast<mode_t>(0644));
     if (nFd < 0)
     {
         return false;
     }
     char szBuffer[32];
-    int nLen = std::snprintf(szBuffer, sizeof(szBuffer), "%ld\n",
-                             static_cast<long>(nPid));
-    bool bOk = (nLen > 0) &&
-               (::write(nFd, szBuffer, static_cast<size_t>(nLen)) == nLen);
+    int nLen = std::snprintf(szBuffer, sizeof(szBuffer), "%ld\n", static_cast<long>(nPid));
+    bool bOk = (nLen > 0) && (::write(nFd, szBuffer, static_cast<size_t>(nLen)) == nLen);
     static_cast<void>(::close(nFd));
     return bOk;
 }
@@ -125,8 +122,7 @@ bool CProcess::RemovePidFile(const std::string& strPath)
 }
 
 /// @brief 创建 pid 文件并写入当前进程 pid。
-CPidFile::CPidFile(const std::string& strPath)
-    : m_strPath(strPath), m_pid(::getpid()), m_bValid(false)
+CPidFile::CPidFile(const std::string& strPath) : m_strPath(strPath), m_pid(::getpid()), m_bValid(false)
 {
     m_bValid = CProcess::WritePidFile(m_strPath, m_pid);
 }
@@ -149,4 +145,4 @@ pid_t CPidFile::Pid() const
     return m_pid;
 }
 
-} // namespace sc
+}  // namespace sc

@@ -7,8 +7,7 @@ namespace serialization {
 
 /// @brief 创建二进制写入器。
 CBinaryWriter::CBinaryWriter()
-{
-}
+{}
 
 /// @brief 写入一个字节。
 void CBinaryWriter::WriteU8(std::uint8_t nValue)
@@ -101,5 +100,5 @@ void CBinaryWriter::Clear()
     m_buffer.clear();
 }
 
-} // namespace serialization
-} // namespace common
+}  // namespace serialization
+}  // namespace common

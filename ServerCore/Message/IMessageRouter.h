@@ -4,19 +4,19 @@
 #include <cstdint>
 #include <functional>
 
-#include "Network/ConnectionId.h"
+#include "Event/EventTypes.h"
 #include "Module/IUnknown.h"
 #include "Module/InterfaceDecl.h"
-#include "Event/EventTypes.h"
+#include "Network/ConnectionId.h"
 
 namespace sc {
 
 /// @brief 消息解析结果。
 enum class MessageParseResult
 {
-    kNeedMore, // 数据不足，等待更多
-    kOk,       // 提取出一条完整消息
-    kInvalid   // 数据非法
+    kNeedMore,  // 数据不足，等待更多
+    kOk,        // 提取出一条完整消息
+    kInvalid    // 数据非法
 };
 
 /// @brief 单条消息提取结果。
@@ -26,11 +26,11 @@ enum class MessageParseResult
 /// payload 为借用指针，指向输入缓冲内部，本次提取后即失效，不得长期保存。
 struct ExtractedMessage
 {
-    MessageParseResult result; // 解析结果
-    size_t step;               // 消耗字节数（kOk 时有效）
-    int type;                  // 消息类型（kOk 时有效）
-    const char* payload;       // 消息负载（借用指针，不含消息头，kOk 时有效）
-    size_t payloadSize;        // 负载字节数（kOk 时有效）
+    MessageParseResult result;  // 解析结果
+    size_t step;                // 消耗字节数（kOk 时有效）
+    int type;                   // 消息类型（kOk 时有效）
+    const char* payload;        // 消息负载（借用指针，不含消息头，kOk 时有效）
+    size_t payloadSize;         // 负载字节数（kOk 时有效）
 };
 
 /// @brief 消息提取器（协议相关，由业务提供）。
@@ -48,8 +48,7 @@ using MessageExtractor = std::function<ExtractedMessage(const char* data, size_t
 /// @param type       消息类型。
 /// @param payload    消息负载（借用指针，回调期间有效）。
 /// @param payloadSize 负载字节数。
-using MessageHandler = std::function<void(ConnectionId id, int type,
-                                          const char* payload, size_t payloadSize)>;
+using MessageHandler = std::function<void(ConnectionId id, int type, const char* payload, size_t payloadSize)>;
 
 /// @brief 基础消息分发接口（COM 风格：继承 IUnknown）。
 ///
@@ -58,8 +57,9 @@ using MessageHandler = std::function<void(ConnectionId id, int type,
 /// 与具体协议解耦（提取器属于业务层）。
 SC_INTERFACE(IMessageRouter, "sc::IMessageRouter", "8085dca6-f19e-4bb1-a52f-6c12bc85b5c9")
 {
-public:
-    virtual ~IMessageRouter() {}
+   public:
+    virtual ~IMessageRouter()
+    {}
 
     // 设置消息提取器（协议相关，业务提供）。
     virtual void SetExtractor(const MessageExtractor& fnExtractor) = 0;
@@ -77,4 +77,4 @@ public:
     virtual void OnClose(ConnectionId nId) = 0;
 };
 
-} // namespace sc
+}  // namespace sc

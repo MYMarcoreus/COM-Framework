@@ -14,7 +14,7 @@ namespace sc {
 /// 内部代理 common::log::CLogger 全局单例。
 class CLoggerModule : public CModule, public ILogger
 {
-public:
+   public:
     CLoggerModule();
 
     virtual ~CLoggerModule();
@@ -37,4 +37,4 @@ public:
     SC_DECLARE_INTERFACE_MAP();
 };
 
-} // namespace sc
+}  // namespace sc

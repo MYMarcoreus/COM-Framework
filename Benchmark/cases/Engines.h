@@ -35,7 +35,10 @@ struct PoolEngine
         pool->Start();
     }
 
-    void Submit(const std::function<void()>& f) { pool->Submit(f); }
+    void Submit(const std::function<void()>& f)
+    {
+        pool->Submit(f);
+    }
 
     void Stop()
     {
@@ -55,7 +58,10 @@ struct AsyncEngine
         exec->Start();
     }
 
-    void Submit(const std::function<void()>& f) { exec->Post(f); }
+    void Submit(const std::function<void()>& f)
+    {
+        exec->Post(f);
+    }
 
     void Stop()
     {
@@ -76,10 +82,17 @@ struct AsioEngine
         io.reset(new asio::io_context());
         work.reset(new asio::executor_work_guard<asio::io_context::executor_type>(io->get_executor()));
         workers.clear();
-        for (int i = 0; i < n; ++i) workers.emplace_back([this]() { io->run(); });
+        for (int i = 0; i < n; ++i)
+            workers.emplace_back([this]()
+            {
+                io->run();
+            });
     }
 
-    void Submit(const std::function<void()>& f) { asio::post(*io, f); }
+    void Submit(const std::function<void()>& f)
+    {
+        asio::post(*io, f);
+    }
 
     void Stop()
     {

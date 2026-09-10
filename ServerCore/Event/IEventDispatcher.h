@@ -2,9 +2,9 @@
 
 #include <cstddef>
 
+#include "Event/EventTypes.h"
 #include "Module/IUnknown.h"
 #include "Module/InterfaceDecl.h"
-#include "Event/EventTypes.h"
 
 namespace sc {
 
@@ -14,8 +14,9 @@ namespace sc {
 /// 发布者与订阅者互不依赖，仅通过事件类型耦合。
 SC_INTERFACE(IEventDispatcher, "sc::IEventDispatcher", "3da6cfa3-000a-49cd-9510-0df2984983e0")
 {
-public:
-    virtual ~IEventDispatcher() {}
+   public:
+    virtual ~IEventDispatcher()
+    {}
 
     // 订阅事件，返回订阅标识（用于取消订阅）；失败返回 kInvalidSubscriptionId。
     virtual SubscriptionId Subscribe(const EventType& strType, const EventHandler& fnHandler) = 0;
@@ -34,4 +35,4 @@ public:
     virtual size_t SubscriberCount(const EventType& strType) const = 0;
 };
 
-} // namespace sc
+}  // namespace sc

@@ -1,7 +1,8 @@
 #include "Infra/ThreadPoolModule.h"
 
-#include "Module/InterfaceMap.h"
 #include <string>
+
+#include "Module/InterfaceMap.h"
 
 namespace sc {
 
@@ -11,10 +12,8 @@ SC_DEFINE_INTERFACE_MAP(CThreadPoolModule, CModule, IThreadPool)
 /// @brief 创建线程池模块。
 ///
 /// @param nThreadCount 工作线程数量。
-CThreadPoolModule::CThreadPoolModule(size_t nThreadCount)
-    : CModule("thread-pool"), m_nThreadCount(nThreadCount)
-{
-}
+CThreadPoolModule::CThreadPoolModule(size_t nThreadCount) : CModule("thread-pool"), m_nThreadCount(nThreadCount)
+{}
 
 /// @brief 销毁线程池模块。
 CThreadPoolModule::~CThreadPoolModule()
@@ -67,7 +66,6 @@ void CThreadPoolModule::Stop()
 
 /// @brief 关闭模块（线程池资源由 Stop / 析构释放，无需额外处理）。
 void CThreadPoolModule::Shutdown()
-{
-}
+{}
 
-} // namespace sc
+}  // namespace sc

@@ -28,7 +28,7 @@ namespace sc {
 /// 依赖全局线程池（common::thread::CThreadPool）只执行、不调度。
 class CModuleScheduler
 {
-public:
+   public:
     /// @brief 子任务类型。
     enum class ETaskKind
     {
@@ -54,10 +54,16 @@ public:
     bool Submit(ETaskKind eKind, const std::function<void()>& fnTask);
 
     /// @brief 当前活跃读线程数（原子读，近似值，仅诊断用）。
-    int ActiveReaders() const { return m_nActiveReaders.load(); }
+    int ActiveReaders() const
+    {
+        return m_nActiveReaders.load();
+    }
 
     /// @brief 当前是否有写线程在执行（原子读，近似值，仅诊断用）。
-    bool HasActiveWriter() const { return m_bWriterActive.load(); }
+    bool HasActiveWriter() const
+    {
+        return m_bWriterActive.load();
+    }
 
     /// @brief 排队中的子任务数（持锁统计）。
     size_t PendingCount() const;
@@ -68,7 +74,7 @@ public:
     /// @brief 等待排空（Stop/Shutdown 时由编排线程调用；不阻止新提交）。
     void Drain();
 
-private:
+   private:
     /// @brief 待调度条目：子任务类型 + 子任务逻辑（统一 FIFO 队列）。
     struct CDispatchEntry
     {
@@ -86,14 +92,14 @@ private:
     void DispatchToPool(std::vector<CDispatchEntry>& vecDispatch);
 
     common::thread::CThreadPool* m_pPool;  // 全局线程池（生命周期由调用方管理）。
-    size_t m_nMaxReaders;                   // 最大并发读线程数（0 = 不设上限）。
+    size_t m_nMaxReaders;                  // 最大并发读线程数（0 = 不设上限）。
 
-    std::deque<CDispatchEntry> m_dequeTasks; // 统一 FIFO 队列（队首最先准入）。
-    std::atomic<int> m_nActiveReaders;    // 当前活跃读线程数。
-    std::atomic<bool> m_bWriterActive;    // 当前是否有写线程在执行。
+    std::deque<CDispatchEntry> m_dequeTasks;  // 统一 FIFO 队列（队首最先准入）。
+    std::atomic<int> m_nActiveReaders;        // 当前活跃读线程数。
+    std::atomic<bool> m_bWriterActive;        // 当前是否有写线程在执行。
 
     mutable std::mutex m_mutex;
-    std::condition_variable m_condition; // 供 Drain() 等待排空。
+    std::condition_variable m_condition;  // 供 Drain() 等待排空。
 };
 
-} // namespace sc
+}  // namespace sc

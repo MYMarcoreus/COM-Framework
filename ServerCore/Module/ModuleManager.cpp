@@ -3,8 +3,8 @@
 #include <chrono>
 #include <deque>
 
-#include "Module/ResolveContext.h"
 #include "Module/Module.h"
+#include "Module/ResolveContext.h"
 
 namespace sc {
 
@@ -23,8 +23,7 @@ void CModuleManager::SetModuleState(IModule* pModule, ModuleState state)
 
 /// @brief 创建模块管理器。
 CModuleManager::CModuleManager()
-{
-}
+{}
 
 /// @brief 销毁模块管理器，释放所有已注册模块。
 CModuleManager::~CModuleManager()
@@ -56,11 +55,11 @@ bool CModuleManager::RegisterModule(IModule* pModule)
     }
     if (m_mapIndexByName.find(strName) != m_mapIndexByName.end())
     {
-        pModule->Release(); // 名称重复：释放
+        pModule->Release();  // 名称重复：释放
         return false;
     }
     m_mapIndexByName[strName] = m_vecModules.size();
-    m_vecModules.push_back(Entry(pModule)); // 接管引用（不 AddRef）
+    m_vecModules.push_back(Entry(pModule));  // 接管引用（不 AddRef）
     return true;
 }
 
@@ -83,7 +82,7 @@ bool CModuleManager::RegisterModule(const InterfaceId& iid, IModule* pModule)
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
     // 同一接口支持多实例：直接插入（不覆盖已有实例）。
     m_mapIndexByIid.insert(std::make_pair(iid, m_vecModules.size()));
-    m_vecModules.push_back(Entry(pModule, iid)); // 接管引用（不 AddRef）
+    m_vecModules.push_back(Entry(pModule, iid));  // 接管引用（不 AddRef）
     return true;
 }
 
@@ -137,11 +136,9 @@ std::vector<IModule*> CModuleManager::GetModulesByIid(const InterfaceId& iid) co
         return vecResult;
     }
     std::lock_guard<std::recursive_mutex> lock(m_mutex);
-    std::pair<std::multimap<InterfaceId, size_t>::const_iterator,
-              std::multimap<InterfaceId, size_t>::const_iterator> range =
-        m_mapIndexByIid.equal_range(iid);
-    for (std::multimap<InterfaceId, size_t>::const_iterator it = range.first;
-         it != range.second; ++it)
+    std::pair<std::multimap<InterfaceId, size_t>::const_iterator, std::multimap<InterfaceId, size_t>::const_iterator>
+        range = m_mapIndexByIid.equal_range(iid);
+    for (std::multimap<InterfaceId, size_t>::const_iterator it = range.first; it != range.second; ++it)
     {
         vecResult.push_back(m_vecModules[it->second].module);
     }
@@ -309,7 +306,7 @@ bool CModuleManager::InitializeAll()
         Entry& e = m_vecModules[vecOrder[k]];
         if (e.module->GetState() != ModuleState::kCreated)
         {
-            continue; // 幂等：跳过非初始状态
+            continue;  // 幂等：跳过非初始状态
         }
         if (!e.module->Initialize(context))
         {
@@ -336,7 +333,7 @@ bool CModuleManager::StartAll()
         Entry& e = m_vecModules[vecOrder[k]];
         if (e.module->GetState() != ModuleState::kInitialized)
         {
-            continue; // 只启动已初始化的模块
+            continue;  // 只启动已初始化的模块
         }
         if (!e.module->Start())
         {
@@ -370,8 +367,7 @@ void CModuleManager::ShutdownAll()
     for (size_t i = m_vecModules.size(); i > 0; --i)
     {
         Entry& e = m_vecModules[i - 1];
-        if (e.module->GetState() != ModuleState::kCreated &&
-            e.module->GetState() != ModuleState::kShutdown)
+        if (e.module->GetState() != ModuleState::kCreated && e.module->GetState() != ModuleState::kShutdown)
         {
             e.module->Shutdown();
             SetModuleState(e.module, ModuleState::kShutdown);
@@ -484,8 +480,8 @@ bool CModuleManager::StopAllWithTimeout(uint32_t nTimeoutMs)
     bool bComplete = true;
     for (size_t i = vecModules.size(); i > 0; --i)
     {
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - tpBegin).count() >= static_cast<int64_t>(nTimeoutMs))
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - tpBegin).count() >=
+            static_cast<int64_t>(nTimeoutMs))
         {
             bComplete = false;
             break;
@@ -508,8 +504,8 @@ bool CModuleManager::ShutdownAllWithTimeout(uint32_t nTimeoutMs)
     bool bComplete = true;
     for (size_t i = vecModules.size(); i > 0; --i)
     {
-        if (std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - tpBegin).count() >= static_cast<int64_t>(nTimeoutMs))
+        if (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - tpBegin).count() >=
+            static_cast<int64_t>(nTimeoutMs))
         {
             bComplete = false;
             break;
@@ -533,8 +529,7 @@ std::vector<size_t> CModuleManager::ComputeStartOrder() const
     std::map<InterfaceId, size_t> mapProvider;
     for (size_t i = 0; i < n; ++i)
     {
-        if (m_vecModules[i].iid.IsValid() &&
-            mapProvider.find(m_vecModules[i].iid) == mapProvider.end())
+        if (m_vecModules[i].iid.IsValid() && mapProvider.find(m_vecModules[i].iid) == mapProvider.end())
         {
             mapProvider[m_vecModules[i].iid] = i;
         }
@@ -550,7 +545,7 @@ std::vector<size_t> CModuleManager::ComputeStartOrder() const
             std::map<InterfaceId, size_t>::const_iterator it = mapProvider.find(vecDeps[k]);
             if (it == mapProvider.end() || it->second == i)
             {
-                continue; // 依赖接口未注册或自依赖：忽略
+                continue;  // 依赖接口未注册或自依赖：忽略
             }
             vecSucc[it->second].push_back(i);
             ++vecInDegree[i];
@@ -612,4 +607,4 @@ void CModuleManager::CollectModules(std::vector<IModule*>& vecOut) const
     }
 }
 
-} // namespace sc
+}  // namespace sc

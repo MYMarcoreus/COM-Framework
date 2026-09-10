@@ -1,33 +1,30 @@
 #include "Config/Config.h"
 
-#include <cstdlib>
-
 #include <sys/stat.h>
+
+#include <cstdlib>
 
 #include "ini.h"
 
 namespace common {
 namespace config {
 
-namespace
-{
+namespace {
 /// inih 解析回调：将 (section, name, value) 扁平化为 "section.name" 存入 map。
 int IniHandler(void* pUser, const char* pSection, const char* pName, const char* pValue)
 {
-    std::map<std::string, std::string>* pValues =
-        static_cast<std::map<std::string, std::string>*>(pUser);
+    std::map<std::string, std::string>* pValues = static_cast<std::map<std::string, std::string>*>(pUser);
     std::string strKey = (pSection != nullptr && pSection[0] != '\0')
-                          ? (std::string(pSection) + "." + std::string(pName))
-                          : std::string(pName);
+                             ? (std::string(pSection) + "." + std::string(pName))
+                             : std::string(pName);
     (*pValues)[strKey] = (pValue != nullptr) ? pValue : "";
     return 1;
 }
-} // namespace
+}  // namespace
 
 /// @brief 创建配置管理器。
 CConfig::CConfig()
-{
-}
+{}
 
 /// @brief 从文件加载配置（基于 inih）。
 bool CConfig::LoadFile(const std::string& strPath)
@@ -134,5 +131,5 @@ std::time_t CConfig::FileMtime(const std::string& strPath)
     return st.st_mtime;
 }
 
-} // namespace config
-} // namespace common
+}  // namespace config
+}  // namespace common

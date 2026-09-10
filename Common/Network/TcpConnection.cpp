@@ -5,11 +5,10 @@
 namespace common {
 namespace network {
 
-namespace
-{
+namespace {
 /// 单次读取缓冲大小。
 const size_t kReadSize = 4096;
-} // namespace
+}  // namespace
 
 /// @brief 创建 TCP 连接。
 ///
@@ -30,8 +29,7 @@ CTcpConnection::CTcpConnection(asio::io_context& io, ConnectionId nId, asio::ip:
     asio::ip::tcp::endpoint endpointPeer = m_socket.remote_endpoint(ec);
     if (!ec)
     {
-        m_strPeerAddress = endpointPeer.address().to_string() + ":" +
-                           std::to_string(endpointPeer.port());
+        m_strPeerAddress = endpointPeer.address().to_string() + ":" + std::to_string(endpointPeer.port());
     }
 }
 
@@ -84,7 +82,10 @@ void CTcpConnection::Send(const char* pData, size_t nLen)
     }
     std::string strPayload(pData, nLen);
     Ptr self = shared_from_this();
-    asio::post(m_io, [self, strPayload]() { self->AppendWrite(strPayload); });
+    asio::post(m_io, [self, strPayload]()
+    {
+        self->AppendWrite(strPayload);
+    });
 }
 
 /// @brief 关闭连接。
@@ -97,7 +98,10 @@ void CTcpConnection::Close()
         return;
     }
     Ptr self = shared_from_this();
-    asio::post(m_io, [self]() { self->CloseOnIoThread(); });
+    asio::post(m_io, [self]()
+    {
+        self->CloseOnIoThread();
+    });
 }
 
 /// @brief 是否已关闭。
@@ -114,11 +118,10 @@ void CTcpConnection::DoRead()
         return;
     }
     Ptr self = shared_from_this();
-    m_socket.async_read_some(asio::buffer(m_vecReadBuffer),
-        [self](const asio::error_code& ec, size_t nBytes)
-        {
-            self->HandleRead(ec, nBytes);
-        });
+    m_socket.async_read_some(asio::buffer(m_vecReadBuffer), [self](const asio::error_code& ec, size_t nBytes)
+    {
+        self->HandleRead(ec, nBytes);
+    });
 }
 
 /// @brief 处理读完成。
@@ -159,10 +162,8 @@ void CTcpConnection::SetIdleTimeout(uint32_t nSeconds)
 /// @return 空闲秒数。
 uint64_t CTcpConnection::IdleSeconds() const
 {
-    std::chrono::steady_clock::duration elapsed =
-        std::chrono::steady_clock::now() - m_lastActive;
-    return static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
+    std::chrono::steady_clock::duration elapsed = std::chrono::steady_clock::now() - m_lastActive;
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(elapsed).count());
 }
 
 /// @brief 追加待发送数据并启动写。
@@ -184,11 +185,10 @@ void CTcpConnection::DoWrite()
 {
     m_bWriting.store(true);
     Ptr self = shared_from_this();
-    m_socket.async_write_some(asio::buffer(m_strPendingOutput),
-        [self](const asio::error_code& ec, size_t nBytes)
-        {
-            self->HandleWrite(ec, nBytes);
-        });
+    m_socket.async_write_some(asio::buffer(m_strPendingOutput), [self](const asio::error_code& ec, size_t nBytes)
+    {
+        self->HandleWrite(ec, nBytes);
+    });
 }
 
 /// @brief 处理写完成。
@@ -239,5 +239,5 @@ void CTcpConnection::HandleError(const asio::error_code& ec)
     }
 }
 
-} // namespace network
-} // namespace common
+}  // namespace network
+}  // namespace common

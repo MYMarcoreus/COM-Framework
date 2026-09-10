@@ -10,15 +10,12 @@
 namespace servertemplate {
 
 /// @brief 创建日志模块。
-CTemplateLoggerModule::CTemplateLoggerModule()
-    : sc::CModule("logger")
-{
-}
+CTemplateLoggerModule::CTemplateLoggerModule() : sc::CModule("logger")
+{}
 
 /// @brief 销毁日志模块。
 CTemplateLoggerModule::~CTemplateLoggerModule()
-{
-}
+{}
 
 /// @brief 模块启动（日志器由全局单例管理，无独立启动资源）。
 bool CTemplateLoggerModule::Start()
@@ -28,13 +25,11 @@ bool CTemplateLoggerModule::Start()
 
 /// @brief 模块停止（全局日志单例持续运行，无需处理）。
 void CTemplateLoggerModule::Stop()
-{
-}
+{}
 
 /// @brief 模块关闭（全局日志单例由全局管理，无需处理）。
 void CTemplateLoggerModule::Shutdown()
-{
-}
+{}
 
 /// @brief 初始化日志器。
 ///
@@ -85,4 +80,4 @@ bool CTemplateLoggerModule::Initialize(const sc::CResolveContext& ctx)
     return true;
 }
 
-} // namespace servertemplate
+}  // namespace servertemplate

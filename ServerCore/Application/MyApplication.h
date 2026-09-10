@@ -18,7 +18,7 @@ namespace sc {
 /// @note 派生类通过重写虚函数扩展服务器生命周期与模块/模块装配。
 class CMyApplication
 {
-public:
+   public:
     CMyApplication();
 
     virtual ~CMyApplication();
@@ -62,7 +62,7 @@ public:
     // 当前优雅关闭超时（毫秒）。
     uint32_t ShutdownTimeout() const;
 
-protected:
+   protected:
     // 注册应用程序需要的模块（默认装配 IConfig/ILogger，派生类重写并先调用本实现）。
     virtual bool RegisterModules();
 
@@ -83,7 +83,7 @@ protected:
 
     CModuleManager m_moduleManager;
 
-private:
+   private:
     // 信号处理入口。
     static void HandleSignal(int signo);
 
@@ -93,4 +93,4 @@ private:
     uint32_t m_nShutdownTimeoutMs;
 };
 
-} // namespace sc
+}  // namespace sc

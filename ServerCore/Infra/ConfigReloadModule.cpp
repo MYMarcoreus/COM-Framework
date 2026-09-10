@@ -12,8 +12,7 @@ namespace sc {
 ///
 /// @param nIntervalMs 重载检测周期（毫秒，<100 按 100 处理）。
 CConfigReloadModule::CConfigReloadModule(std::int64_t nIntervalMs)
-    : CModule("config-reload"),
-      m_nIntervalMs(nIntervalMs), m_tTimerId(common::timer::kInvalidTimerId)
+    : CModule("config-reload"), m_nIntervalMs(nIntervalMs), m_tTimerId(common::timer::kInvalidTimerId)
 {
     // 依赖配置接口模块：拓扑排序保证其先初始化 / 启动。
     AddDependency(IID_IConfig());
@@ -57,12 +56,11 @@ bool CConfigReloadModule::Start()
     }
     // 周期定时任务：用模板守卫函数统一处理弱引用生命周期，
     // 回调参数为具体类型强引用（无需转换）。
-    m_tTimerId = sc::AddGuardedPeriodicTimer(&m_timer, m_nIntervalMs,
-        WeakSelf<CConfigReloadModule>(),
-        [](const sc::ScopedInterfacePtr<CConfigReloadModule>& sp)
-        {
-            sp->CheckReload();
-        });
+    m_tTimerId = sc::AddGuardedPeriodicTimer(&m_timer, m_nIntervalMs, WeakSelf<CConfigReloadModule>(),
+                                             [](const sc::ScopedInterfacePtr<CConfigReloadModule>& sp)
+    {
+        sp->CheckReload();
+    });
     return true;
 }
 
@@ -104,4 +102,4 @@ void CConfigReloadModule::CheckReload()
     }
 }
 
-} // namespace sc
+}  // namespace sc

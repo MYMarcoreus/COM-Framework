@@ -11,12 +11,12 @@ namespace log {
 /// @brief 日志级别。
 enum class LogLevel
 {
-    kTrace = 0, // 跟踪
-    kDebug = 1, // 调试
-    kInfo = 2,  // 信息
-    kWarn = 3,  // 警告
-    kError = 4, // 错误
-    kOff = 5,   // 关闭
+    kTrace = 0,  // 跟踪
+    kDebug = 1,  // 调试
+    kInfo = 2,   // 信息
+    kWarn = 3,   // 警告
+    kError = 4,  // 错误
+    kOff = 5,    // 关闭
 };
 
 /// @brief 日志器。
@@ -25,7 +25,7 @@ enum class LogLevel
 /// 提供等级过滤与时间戳格式化；可配置单文件按大小滚动（保留备份）。
 class CLogger
 {
-public:
+   public:
     // 获取全局单例。
     static CLogger& Instance();
 
@@ -52,7 +52,7 @@ public:
     void Warn(const std::string& strMessage);
     void Error(const std::string& strMessage);
 
-private:
+   private:
     CLogger();
     ~CLogger();
 
@@ -76,11 +76,11 @@ private:
     std::ofstream m_file;
     bool m_bFileEnabled;
     std::string m_strFilePath;
-    std::uint64_t m_nMaxFileBytes; // 0 = 不滚动
+    std::uint64_t m_nMaxFileBytes;  // 0 = 不滚动
 
     // 保留的滚动备份文件个数（xxx.log.1 .. xxx.log.kMaxBackupCount）。
     static const int kMaxBackupCount = 5;
 };
 
-} // namespace log
-} // namespace common
+}  // namespace log
+}  // namespace common

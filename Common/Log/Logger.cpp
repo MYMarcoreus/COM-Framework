@@ -1,9 +1,10 @@
 #include "Log/Logger.h"
 
+#include <sys/stat.h>
+
 #include <chrono>
 #include <cstdio>
 #include <ctime>
-#include <sys/stat.h>
 
 namespace common {
 namespace log {
@@ -17,8 +18,7 @@ CLogger& CLogger::Instance()
 
 /// @brief 创建日志器。
 CLogger::CLogger() : m_level(LogLevel::kInfo), m_bFileEnabled(false), m_nMaxFileBytes(0)
-{
-}
+{}
 
 /// @brief 销毁日志器。
 CLogger::~CLogger()
@@ -147,12 +147,18 @@ const char* CLogger::LevelName(LogLevel level)
 {
     switch (level)
     {
-    case LogLevel::kTrace: return "TRACE";
-    case LogLevel::kDebug: return "DEBUG";
-    case LogLevel::kInfo:  return "INFO";
-    case LogLevel::kWarn:  return "WARN";
-    case LogLevel::kError: return "ERROR";
-    default:               return "?";
+        case LogLevel::kTrace:
+            return "TRACE";
+        case LogLevel::kDebug:
+            return "DEBUG";
+        case LogLevel::kInfo:
+            return "INFO";
+        case LogLevel::kWarn:
+            return "WARN";
+        case LogLevel::kError:
+            return "ERROR";
+        default:
+            return "?";
     }
 }
 
@@ -176,7 +182,7 @@ void CLogger::RotateIfNeeded()
     {
         std::string strSrc = m_strFilePath + "." + std::to_string(i);
         std::string strDst = m_strFilePath + "." + std::to_string(i + 1);
-        std::remove(strDst.c_str()); // 移除最旧的备份（若存在）
+        std::remove(strDst.c_str());  // 移除最旧的备份（若存在）
         std::rename(strSrc.c_str(), strDst.c_str());
     }
     std::string strBackup = m_strFilePath + ".1";
@@ -201,5 +207,5 @@ std::uint64_t CLogger::FileSize(const std::string& strPath)
     return static_cast<std::uint64_t>(st.st_size);
 }
 
-} // namespace log
-} // namespace common
+}  // namespace log
+}  // namespace common

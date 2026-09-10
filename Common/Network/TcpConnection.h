@@ -8,10 +8,9 @@
 #include <string>
 #include <vector>
 
-#include "asio.hpp"
-
-#include "Network/NetworkTypes.h"
 #include "Network/Buffer.h"
+#include "Network/NetworkTypes.h"
+#include "asio.hpp"
 
 namespace common {
 namespace network {
@@ -23,7 +22,7 @@ namespace network {
 /// 所有读写回调都在事件循环线程执行；Send/Close 通过投递保证线程安全。
 class CTcpConnection : public std::enable_shared_from_this<CTcpConnection>
 {
-public:
+   public:
     /// @brief 连接指针。
     using Ptr = std::shared_ptr<CTcpConnection>;
 
@@ -65,7 +64,7 @@ public:
     // 距上次活跃（收到数据）已空闲的秒数。
     uint64_t IdleSeconds() const;
 
-private:
+   private:
     // 发起一次异步读。
     void DoRead();
 
@@ -102,5 +101,5 @@ private:
     std::chrono::steady_clock::time_point m_lastActive;
 };
 
-} // namespace network
-} // namespace common
+}  // namespace network
+}  // namespace common

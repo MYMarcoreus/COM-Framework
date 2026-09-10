@@ -80,7 +80,10 @@ struct CFlowDeps
     sc::ScopedInterfacePtr<IUserTable> spTable;  ///< 数据访问模块接口。
 
     /// @brief 依赖是否齐备。
-    bool IsReady() const { return spExec != nullptr && spTable != nullptr; }
+    bool IsReady() const
+    {
+        return spExec != nullptr && spTable != nullptr;
+    }
 };
 
 // ====================================================================
@@ -360,7 +363,9 @@ void UpdateUserAttempt(const CFlowDeps& deps, const std::shared_ptr<CUserOpConte
 CUserPromise BridgeUpdateUser(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     CUserPromise::PromiseExecutor fnExecutor = [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
-    { UpdateUserAttempt(deps, spCtx, fnResolve, fnReject, 1); };
+    {
+        UpdateUserAttempt(deps, spCtx, fnResolve, fnReject, 1);
+    };
     return CUserPromise::New(*deps.spExec, spCtx, fnExecutor, ASYNC_LOC);
 }
 
@@ -414,7 +419,9 @@ CUserPromise LoadUserAsync(const CFlowDeps& deps, const std::shared_ptr<CUserOpC
 {
     return deps.spExec->NewPromise(spCtx, &StepValidateUserId, ASYNC_LOC)
         .ThenPromise([deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
-    { return BridgeQueryUser(deps, spCtxSelf); }, ASYNC_LOC);
+    {
+        return BridgeQueryUser(deps, spCtxSelf);
+    }, ASYNC_LOC);
 }
 
 /// @brief 流程：查询用户（读）。
@@ -441,11 +448,17 @@ CUserPromise BuildQueryFlow(const CFlowDeps& deps, const std::shared_ptr<CUserOp
 CUserPromise BuildRegisterFlow(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     return deps.spExec->NewPromise(spCtx, &StepValidateRecord, ASYNC_LOC)
-        .ThenPromise([deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
-    { return BridgeQueryUser(deps, spCtxSelf); }, ASYNC_LOC)
+        .ThenPromise(
+            [deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
+    {
+        return BridgeQueryUser(deps, spCtxSelf);
+    }, ASYNC_LOC)
         .Then(&StepRejectIfExists, ASYNC_LOC)  // 查重：已存在则拒绝（失败即停）
-        .ThenPromise([deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
-    { return BridgeInsertUser(deps, spCtxSelf); }, ASYNC_LOC)
+        .ThenPromise(
+            [deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
+    {
+        return BridgeInsertUser(deps, spCtxSelf);
+    }, ASYNC_LOC)
         .Finally(&StepAudit, ASYNC_LOC);
 }
 
@@ -462,8 +475,11 @@ CUserPromise BuildRenameFlow(const CFlowDeps& deps, const std::shared_ptr<CUserO
     return LoadUserAsync(deps, spCtx)
         .Then(&StepRejectIfAbsent, ASYNC_LOC)
         .Then(&StepPrepareRename, ASYNC_LOC)
-        .ThenPromise([deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
-    { return BridgeUpdateUser(deps, spCtxSelf); }, ASYNC_LOC)
+        .ThenPromise(
+            [deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
+    {
+        return BridgeUpdateUser(deps, spCtxSelf);
+    }, ASYNC_LOC)
         .Finally(&StepAudit, ASYNC_LOC);
 }
 
@@ -479,8 +495,11 @@ CUserPromise BuildRemoveFlow(const CFlowDeps& deps, const std::shared_ptr<CUserO
 {
     return LoadUserAsync(deps, spCtx)
         .Then(&StepRejectIfAbsent, ASYNC_LOC)
-        .ThenPromise([deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
-    { return BridgeDeleteUser(deps, spCtxSelf); }, ASYNC_LOC)
+        .ThenPromise(
+            [deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
+    {
+        return BridgeDeleteUser(deps, spCtxSelf);
+    }, ASYNC_LOC)
         .Finally(&StepAudit, ASYNC_LOC);
 }
 
@@ -775,7 +794,9 @@ bool CExampleAsyncModule::Start()
     // 周期演示：弱引用守卫，模块停止 / 销毁后回调自动跳过。
     m_tTimerId = sc::AddGuardedPeriodicTimer(m_pTimer.Get(), m_nIntervalMs, WeakSelf<CExampleAsyncModule>(),
                                              [](const sc::ScopedInterfacePtr<CExampleAsyncModule>& sp)
-    { sp->ScheduleExample(); });
+    {
+        sp->ScheduleExample();
+    });
     return true;
 }
 
@@ -957,7 +978,10 @@ void CExampleAsyncModule::ScheduleExample()
     }
     // 驱动持有接口自持引用（Self<IUserService>()）：回调期间模块存活。
     std::shared_ptr<CDemoDriver> spDriver(new CDemoDriver(Self<IUserService>(), m_pUserTable));
-    if (!m_spExecutor->Post([spDriver]() { spDriver->Run(); }))
+    if (!m_spExecutor->Post([spDriver]()
+    {
+        spDriver->Run();
+    }))
     {
         common::log::CLogger::Instance().Warn("[演示] 演示任务投递失败（执行器已停止）");
     }

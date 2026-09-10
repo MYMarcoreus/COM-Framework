@@ -101,7 +101,8 @@ struct CDemoContext
     std::string strTrace;        ///< 层执行轨迹。
     std::atomic<int> nForkDone;  ///< 分叉演示：两条分支各 +1（原子，并行安全）。
 
-    CDemoContext() : nBase(10), nScaled(0), bFailParam(false), bFailStore(false), bRolledBack(false), nForkDone(0) {}
+    CDemoContext() : nBase(10), nScaled(0), bFailParam(false), bFailStore(false), bRolledBack(false), nForkDone(0)
+    {}
 };
 
 /// 层：读参数。
@@ -178,7 +179,8 @@ struct CSubContext
     int nRows;             ///< 查询到的行数。
     std::string strTrace;  ///< 子流程轨迹。
 
-    CSubContext() : nRows(0) {}
+    CSubContext() : nRows(0)
+    {}
 };
 
 /// 处理器（子流程）：模拟一次查询（3 行，耗时 5ms）。
@@ -200,7 +202,8 @@ struct CBranchContext
     int nId;     ///< 分支编号。
     int nValue;  ///< 分支结果。
 
-    CBranchContext() : nId(0), nValue(0) {}
+    CBranchContext() : nId(0), nValue(0)
+    {}
 };
 
 /// 处理器（分支第一步）：载入（+10，耗时 10ms）。
@@ -403,8 +406,14 @@ void DemoFork()
     std::atomic<int> nDone(0);
     no::CPromise<CDemoContext> branchA = head.Then(&StepScale, ASYNC_LOC);
     no::CPromise<CDemoContext> branchB = head.Then(&StepStore, ASYNC_LOC);
-    branchA.OnSettled([&nDone](no::CPromiseResult) { nDone.fetch_add(1); });
-    branchB.OnSettled([&nDone](no::CPromiseResult) { nDone.fetch_add(1); });
+    branchA.OnSettled([&nDone](no::CPromiseResult)
+    {
+        nDone.fetch_add(1);
+    });
+    branchB.OnSettled([&nDone](no::CPromiseResult)
+    {
+        nDone.fetch_add(1);
+    });
 
     ASSERT(branchA.Await().IsFulfilled());
     ASSERT(branchB.Await().IsFulfilled());
@@ -446,14 +455,22 @@ void DemoContextCreation()
 void DemoPost()
 {
     no::CAsyncExecutor exec(2);
-    ASSERT(!exec.Post([]() {}));  // 未启动：拒绝
+    ASSERT(!exec.Post([]()
+    {
+    }));  // 未启动：拒绝
 
     ASSERT(exec.Start());
     std::atomic<int> nDone(0);
-    ASSERT(exec.Post([&nDone]() { nDone.fetch_add(1); }));
+    ASSERT(exec.Post([&nDone]()
+    {
+        nDone.fetch_add(1);
+    }));
     exec.Stop();  // 等待任务完成
     ASSERT(nDone.load() == 1);
-    ASSERT(!exec.Post([&nDone]() { nDone.fetch_add(1); }));  // 已停止：拒绝
+    ASSERT(!exec.Post([&nDone]()
+    {
+        nDone.fetch_add(1);
+    }));  // 已停止：拒绝
     std::printf("⑩ Post: 完成=%d（未启动 / 已停止均被拒绝）\n", nDone.load());
 }
 
@@ -1073,8 +1090,11 @@ void DemoBridgeOtherModule()
     // ① 成功路径：本模块层 → 桥接（别的模块）→ 本模块层继续跑
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     const no::CPromiseResult r = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC)
-                                     .ThenPromise([&exec](const std::shared_ptr<CDemoContext>& sp)
-    { return BridgeQueryOther(exec, sp, false); }, ASYNC_LOC)
+                                     .ThenPromise(
+                                         [&exec](const std::shared_ptr<CDemoContext>& sp)
+    {
+        return BridgeQueryOther(exec, sp, false);
+    }, ASYNC_LOC)
                                      .Then(&StepStore, ASYNC_LOC)  // 子流程结束后本模块的层继续
                                      .Await();
     ASSERT(r.IsFulfilled());
@@ -1085,8 +1105,11 @@ void DemoBridgeOtherModule()
     // ② 拒绝路径：别的模块拒绝 → 本流程 then 层不执行，catch 仍可见，拒绝码透传
     std::shared_ptr<CDemoContext> spCtx2 = std::make_shared<CDemoContext>();
     const no::CPromiseResult r2 = exec.NewPromise(spCtx2, &StepReadParam, ASYNC_LOC)
-                                      .ThenPromise([&exec](const std::shared_ptr<CDemoContext>& sp)
-    { return BridgeQueryOther(exec, sp, true); }, ASYNC_LOC)
+                                      .ThenPromise(
+                                          [&exec](const std::shared_ptr<CDemoContext>& sp)
+    {
+        return BridgeQueryOther(exec, sp, true);
+    }, ASYNC_LOC)
                                       .Then(&StepStore, ASYNC_LOC)      // 子流程被拒绝 → 不执行
                                       .Catch(&StepRollback, ASYNC_LOC)  // catch 仍执行（回滚）
                                       .Await();

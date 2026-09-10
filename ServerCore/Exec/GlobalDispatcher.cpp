@@ -10,18 +10,14 @@ namespace sc {
 /// @brief 创建全局业务调度器。
 ///
 /// @param pPool 全局线程池（仅执行不调度；生命周期由调用方管理）。
-CGlobalDispatcher::CGlobalDispatcher(common::thread::CThreadPool* pPool)
-    : m_pPool(pPool)
-{
-}
+CGlobalDispatcher::CGlobalDispatcher(common::thread::CThreadPool* pPool) : m_pPool(pPool)
+{}
 
 CGlobalDispatcher::~CGlobalDispatcher()
-{
-}
+{}
 
 /// @brief 注册模块调度器（模块 Start 时调用）。
-bool CGlobalDispatcher::RegisterScheduler(const std::string& strModule,
-                                          CModuleScheduler* pScheduler)
+bool CGlobalDispatcher::RegisterScheduler(const std::string& strModule, CModuleScheduler* pScheduler)
 {
     if (pScheduler == nullptr)
     {
@@ -43,14 +39,12 @@ void CGlobalDispatcher::UnregisterScheduler(const std::string& strModule)
 CModuleScheduler* CGlobalDispatcher::FindScheduler(const std::string& strModule) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
-    std::unordered_map<std::string, CModuleScheduler*>::const_iterator it =
-        m_mapSchedulers.find(strModule);
+    std::unordered_map<std::string, CModuleScheduler*>::const_iterator it = m_mapSchedulers.find(strModule);
     return it == m_mapSchedulers.end() ? nullptr : it->second;
 }
 
 /// @brief 投递一个完整业务流程（线程安全）。
-bool CGlobalDispatcher::Dispatch(
-    const std::function<void(const std::shared_ptr<CBusinessFlow>&)>& fnBody)
+bool CGlobalDispatcher::Dispatch(const std::function<void(const std::shared_ptr<CBusinessFlow>&)>& fnBody)
 {
     if (m_pPool == nullptr || !m_pPool->IsRunning() || !fnBody)
     {
@@ -61,7 +55,7 @@ bool CGlobalDispatcher::Dispatch(
     {
         try
         {
-            fnBody(spFlow); // 主体在线程池线程执行，投递子任务
+            fnBody(spFlow);  // 主体在线程池线程执行，投递子任务
         }
         catch (const std::exception& e)
         {
@@ -71,7 +65,7 @@ bool CGlobalDispatcher::Dispatch(
         {
             common::log::CLogger::Instance().Error("CGlobalDispatcher::Dispatch 主体未知异常");
         }
-        spFlow->Complete(); // 主体结束；全部子任务排空后回放回调栈
+        spFlow->Complete();  // 主体结束；全部子任务排空后回放回调栈
     });
 }
 
@@ -98,4 +92,4 @@ void CGlobalDispatcher::DrainAll()
     }
 }
 
-} // namespace sc
+}  // namespace sc

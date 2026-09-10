@@ -4,9 +4,9 @@
 #include <string>
 
 #include "Module/InterfaceMap.h"
-#include "Module/ScopedInterfacePtr.h"
 #include "Module/Module.h"
 #include "Module/ModuleManager.h"
+#include "Module/ScopedInterfacePtr.h"
 #include "Network/INetwork.h"
 #include "Network/INetworkHandler.h"
 
@@ -19,7 +19,7 @@ namespace servertemplate {
 /// 在 Initialize 中通过模块管理器按接口获取网络模块，用于发送响应。
 class CEchoService : public sc::CModule, public sc::INetworkHandler
 {
-public:
+   public:
     CEchoService();
 
     virtual ~CEchoService();
@@ -41,15 +41,15 @@ public:
     // 连接关闭。
     void OnClose(sc::ConnectionId id) override;
 
-protected:
+   protected:
     // 接口查询实现（接口映射宏生成，暴露 INetworkHandler）。
     SC_DECLARE_INTERFACE_MAP();
 
-private:
+   private:
     // 记录日志。
     void Log(const std::string& message);
 
     sc::ScopedInterfacePtr<sc::INetwork> m_pNetwork;
 };
 
-} // namespace servertemplate
+}  // namespace servertemplate

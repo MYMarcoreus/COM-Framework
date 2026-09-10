@@ -8,21 +8,21 @@
 #include <thread>
 #include <vector>
 
-#include "TestFramework.h"
-
 #include "Event/EventDispatcher.h"
 #include "Message/MessageRouter.h"
 #include "Module/Module.h"
 #include "Module/ModuleManager.h"
+#include "TestFramework.h"
 
 namespace {
 
 /// @brief 用于记录生命周期调用序的测试模块。
 class CTestModule : public sc::CModule
 {
-public:
+   public:
     explicit CTestModule(const char* strName = "test")
-        : sc::CModule(strName), m_nInit(0), m_nStart(0), m_nStop(0), m_nShutdown(0) {}
+        : sc::CModule(strName), m_nInit(0), m_nStart(0), m_nStop(0), m_nShutdown(0)
+    {}
 
     bool Initialize(const sc::CResolveContext& /*ctx*/) override
     {
@@ -74,18 +74,23 @@ inline const sc::InterfaceId& IID_ITestRefObj()
 /// @brief 测试接口（普通对象使用 CRefObject 的接口视图 Self<T>）。
 class ITestRefObj : public virtual sc::IUnknown
 {
-public:
-    virtual ~ITestRefObj() {}
+   public:
+    virtual ~ITestRefObj()
+    {}
     virtual int GetValue() const = 0;
 };
 
 /// @brief 普通对象（非模块）：继承 CRefObject 复用引用 / 弱引用能力。
 class CTestRefObj : public sc::CRefObject, public ITestRefObj
 {
-public:
-    CTestRefObj() : m_nValue(42) {}
+   public:
+    CTestRefObj() : m_nValue(42)
+    {}
 
-    int GetValue() const override { return m_nValue; }
+    int GetValue() const override
+    {
+        return m_nValue;
+    }
 
     void* QueryInterfaceImpl(const sc::InterfaceId& iid) override
     {
@@ -99,18 +104,18 @@ public:
     int m_nValue;
 };
 
-} // namespace
+}  // namespace
 
 /// @brief 引用计数与接口查询。
 TEST(Module_RefCountAndQuery)
 {
     sc::CModule* pModule = new CTestModule();
-    ASSERT_EQ(pModule->AddRef(), 2u); // 创建时 1，AddRef 后 2
+    ASSERT_EQ(pModule->AddRef(), 2u);  // 创建时 1，AddRef 后 2
     ASSERT_EQ(pModule->Release(), 1u);
 
     void* ppv = pModule->QueryInterface(sc::IID_IUnknown());
     ASSERT_TRUE(ppv != nullptr);
-    ASSERT_EQ(pModule->Release(), 0u); // 归零销毁
+    ASSERT_EQ(pModule->Release(), 0u);  // 归零销毁
 }
 
 /// @brief 弱引用：模块存活时可升级为强引用，销毁后失效。
@@ -142,7 +147,7 @@ TEST(WeakRef_ExpiredAfterDestroy)
     sc::CWeakPtr<sc::IModule> wp = pModule->WeakSelf();
     ASSERT_TRUE(!wp.Expired());
 
-    pModule->Release(); // 计数 1→0，delete this
+    pModule->Release();  // 计数 1→0，delete this
     ASSERT_TRUE(wp.Expired());
     ASSERT_TRUE(!wp.Lock());
 }
@@ -192,7 +197,7 @@ TEST(WeakRef_ConcurrentLockAndRelease)
 
     // 模块仍存活（spMain 持有），弱引用有效，Lock 期间对象必然有效
     ASSERT_TRUE(!wp.Expired());
-    ASSERT_EQ(nBadNames.load(), 0); // Lock 成功后对象必然有效
+    ASSERT_EQ(nBadNames.load(), 0);  // Lock 成功后对象必然有效
     ASSERT_TRUE(nLocks.load() > 0);
 
     // 工作线程全部退出后，主线程释放最后强引用 → 唯一归零点（单线程销毁）
@@ -218,12 +223,12 @@ TEST(RefObject_GenericObject)
     ASSERT_EQ(spI->GetValue(), 42);
 
     // 计数：sp(2) + spI(3)；释放初始引用后仍存活
-    pObj->Release();    // 3→2
+    pObj->Release();  // 3→2
     ASSERT_TRUE(!wp.Expired());
 
-    spI.Reset();        // 2→1
+    spI.Reset();  // 2→1
     ASSERT_TRUE(!wp.Expired());
-    sp.Reset();         // 1→0 → 销毁
+    sp.Reset();  // 1→0 → 销毁
     ASSERT_TRUE(wp.Expired());
     ASSERT_TRUE(!wp.Lock());
 }
@@ -233,7 +238,7 @@ TEST(ModuleManager_Lifecycle)
 {
     sc::CModuleManager manager;
     CTestModule* pModule = new CTestModule();
-    ASSERT_TRUE(manager.RegisterModule(IID_TestModule(), pModule)); // 接管
+    ASSERT_TRUE(manager.RegisterModule(IID_TestModule(), pModule));  // 接管
 
     ASSERT_EQ(manager.Size(), static_cast<size_t>(1));
     ASSERT_TRUE(manager.GetModuleByIid(IID_TestModule()) != nullptr);
@@ -256,8 +261,10 @@ TEST(EventDispatcher_SubscribePublish)
 {
     sc::CEventDispatcher dispatcher;
     std::atomic<int> nCount(0);
-    sc::SubscriptionId nId = dispatcher.Subscribe(
-        "evt.test", [&nCount](const sc::Event&) { nCount.fetch_add(1); });
+    sc::SubscriptionId nId = dispatcher.Subscribe("evt.test", [&nCount](const sc::Event&)
+    {
+        nCount.fetch_add(1);
+    });
     ASSERT_TRUE(nId != sc::kInvalidSubscriptionId);
 
     dispatcher.Publish("evt.test", nullptr, 0);
@@ -266,7 +273,7 @@ TEST(EventDispatcher_SubscribePublish)
 
     ASSERT_TRUE(dispatcher.Unsubscribe(nId));
     dispatcher.Publish("evt.test", nullptr, 0);
-    ASSERT_EQ(nCount.load(), 2); // 取消订阅后不再触发
+    ASSERT_EQ(nCount.load(), 2);  // 取消订阅后不再触发
 }
 
 /// @brief 模块状态随生命周期变化（状态查询下沉到模块）。
@@ -274,7 +281,7 @@ TEST(Module_StateQuery)
 {
     sc::CModuleManager manager;
     CTestModule* pModule = new CTestModule();
-    ASSERT_TRUE(manager.RegisterModule(pModule)); // 按名字 "test" 注册（接管）
+    ASSERT_TRUE(manager.RegisterModule(pModule));  // 按名字 "test" 注册（接管）
 
     sc::IModule* pIface = manager.GetModule("test");
     ASSERT_TRUE(pIface != nullptr);
@@ -296,10 +303,10 @@ TEST(ModuleManager_DualRegister)
 {
     sc::CModuleManager manager;
     CTestModule* pByName = new CTestModule();
-    ASSERT_TRUE(manager.RegisterModule(pByName)); // 按名字 "test"（接管）
+    ASSERT_TRUE(manager.RegisterModule(pByName));  // 按名字 "test"（接管）
 
     CTestModule* pByIid = new CTestModule();
-    ASSERT_TRUE(manager.RegisterModule(IID_TestModule(), pByIid)); // 按接口（接管）
+    ASSERT_TRUE(manager.RegisterModule(IID_TestModule(), pByIid));  // 按接口（接管）
 
     ASSERT_EQ(manager.Size(), static_cast<size_t>(2));
     ASSERT_TRUE(manager.HasModule("test"));
@@ -313,7 +320,7 @@ TEST(ModuleManager_Snapshot)
 {
     sc::CModuleManager manager;
     CTestModule* pModule = new CTestModule();
-    ASSERT_TRUE(manager.RegisterModule(IID_TestModule(), pModule)); // 接管
+    ASSERT_TRUE(manager.RegisterModule(IID_TestModule(), pModule));  // 接管
     ASSERT_TRUE(manager.InitializeAll());
     ASSERT_TRUE(manager.StartAll());
 
@@ -339,7 +346,7 @@ TEST(Module_SelfReference)
     // spSelf 析构 → 引用计数回到 1，模块仍存活
     void* ppv = pModule->QueryInterface(sc::IID_IUnknown());
     ASSERT_TRUE(ppv != nullptr);
-    ASSERT_EQ(pModule->Release(), 0u); // 归零销毁
+    ASSERT_EQ(pModule->Release(), 0u);  // 归零销毁
 }
 
 /// @brief 消息路由器：结构体返回的提取器 + 粘包/跨包重组。
@@ -348,46 +355,42 @@ TEST(Module_SelfReference)
 TEST(MessageRouter_Dispatch)
 {
     sc::CMessageRouter* pRouter = new sc::CMessageRouter();
-    pRouter->SetExtractor(
-        [](const char* pData, size_t nLen) -> sc::ExtractedMessage
+    pRouter->SetExtractor([](const char* pData, size_t nLen) -> sc::ExtractedMessage
+    {
+        sc::ExtractedMessage msg;
+        msg.result = sc::MessageParseResult::kNeedMore;
+        msg.step = 0;
+        msg.type = 0;
+        msg.payload = nullptr;
+        msg.payloadSize = 0;
+        if (nLen < 8)
         {
-            sc::ExtractedMessage msg;
-            msg.result = sc::MessageParseResult::kNeedMore;
-            msg.step = 0;
-            msg.type = 0;
-            msg.payload = nullptr;
-            msg.payloadSize = 0;
-            if (nLen < 8)
-            {
-                return msg;
-            }
-            uint32_t nLength = 0;
-            uint32_t nType = 0;
-            for (int i = 0; i < 4; ++i)
-            {
-                nLength |= static_cast<uint32_t>(
-                    static_cast<unsigned char>(pData[i])) << (8 * i);
-                nType |= static_cast<uint32_t>(
-                    static_cast<unsigned char>(pData[4 + i])) << (8 * i);
-            }
-            if (nLength > nLen - 8)
-            {
-                return msg; // 数据不足，等待更多
-            }
-            msg.result = sc::MessageParseResult::kOk;
-            msg.step = 8 + nLength;
-            msg.type = static_cast<int>(nType);
-            msg.payload = pData + 8;
-            msg.payloadSize = nLength;
             return msg;
-        });
+        }
+        uint32_t nLength = 0;
+        uint32_t nType = 0;
+        for (int i = 0; i < 4; ++i)
+        {
+            nLength |= static_cast<uint32_t>(static_cast<unsigned char>(pData[i])) << (8 * i);
+            nType |= static_cast<uint32_t>(static_cast<unsigned char>(pData[4 + i])) << (8 * i);
+        }
+        if (nLength > nLen - 8)
+        {
+            return msg;  // 数据不足，等待更多
+        }
+        msg.result = sc::MessageParseResult::kOk;
+        msg.step = 8 + nLength;
+        msg.type = static_cast<int>(nType);
+        msg.payload = pData + 8;
+        msg.payloadSize = nLength;
+        return msg;
+    });
 
     std::vector<std::string> vecReceived;
-    pRouter->RegisterHandler(
-        1, [&vecReceived](sc::ConnectionId, int, const char* pPayload, size_t nLen)
-        {
-            vecReceived.push_back(std::string(pPayload, nLen));
-        });
+    pRouter->RegisterHandler(1, [&vecReceived](sc::ConnectionId, int, const char* pPayload, size_t nLen)
+    {
+        vecReceived.push_back(std::string(pPayload, nLen));
+    });
 
     // 构造两条消息（type=1, payload="hello"/"world"），每条 13 字节
     unsigned char buf[26];

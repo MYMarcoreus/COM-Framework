@@ -14,7 +14,7 @@ namespace serialization {
 /// 与 CBinaryReader 配套；不做网络序转换（小端机器占主导，统一约定小端）。
 class CBinaryWriter
 {
-public:
+   public:
     CBinaryWriter();
 
     // 写入一个字节。
@@ -53,9 +53,9 @@ public:
     // 清空缓冲。
     void Clear();
 
-private:
+   private:
     std::string m_buffer;
 };
 
-} // namespace serialization
-} // namespace common
+}  // namespace serialization
+}  // namespace common

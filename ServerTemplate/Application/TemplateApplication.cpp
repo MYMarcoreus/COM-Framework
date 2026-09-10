@@ -15,15 +15,12 @@ namespace servertemplate {
 ///
 /// @param port 监听端口。
 CTemplateApplication::CTemplateApplication(std::uint16_t port)
-    : m_nPort(port),
-      m_tEventStartId(sc::kInvalidSubscriptionId), m_tEventStopId(sc::kInvalidSubscriptionId)
-{
-}
+    : m_nPort(port), m_tEventStartId(sc::kInvalidSubscriptionId), m_tEventStopId(sc::kInvalidSubscriptionId)
+{}
 
 /// @brief 销毁 ServerTemplate 应用程序。
 CTemplateApplication::~CTemplateApplication()
-{
-}
+{}
 
 /// @brief 注册模块。
 ///
@@ -50,8 +47,7 @@ bool CTemplateApplication::RegisterModules()
     }
 
     // ④ 回显服务（按接口注册，供网络装配模块获取）
-    if (!m_moduleManager.RegisterModule(
-            sc::IID_INetworkHandler(), new CEchoService()))
+    if (!m_moduleManager.RegisterModule(sc::IID_INetworkHandler(), new CEchoService()))
     {
         return false;
     }
@@ -83,21 +79,18 @@ bool CTemplateApplication::OnInitialize()
         return false;
     }
 
-    m_tEventStartId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStarted,
-        [](const sc::Event& event)
+    m_tEventStartId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStarted, [](const sc::Event& event)
+    {
+        if (event.data != nullptr && event.size == sizeof(std::uint16_t))
         {
-            if (event.data != nullptr && event.size == sizeof(std::uint16_t))
-            {
-                std::uint16_t port = *static_cast<const std::uint16_t*>(event.data);
-                common::log::CLogger::Instance().Info(
-                    "[Event] ServerTemplate 网络已启动，端口 " + std::to_string(port));
-            }
-        });
-    m_tEventStopId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStopped,
-        [](const sc::Event&)
-        {
-            common::log::CLogger::Instance().Info("[Event] ServerTemplate 网络已停止");
-        });
+            std::uint16_t port = *static_cast<const std::uint16_t*>(event.data);
+            common::log::CLogger::Instance().Info("[Event] ServerTemplate 网络已启动，端口 " + std::to_string(port));
+        }
+    });
+    m_tEventStopId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStopped, [](const sc::Event&)
+    {
+        common::log::CLogger::Instance().Info("[Event] ServerTemplate 网络已停止");
+    });
     return true;
 }
 
@@ -128,4 +121,4 @@ void CTemplateApplication::OnShutdown()
     }
 }
 
-} // namespace servertemplate
+}  // namespace servertemplate

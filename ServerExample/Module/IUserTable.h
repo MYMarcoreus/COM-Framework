@@ -20,7 +20,8 @@ struct CUserRecord
     int nLevel;             ///< 用户等级。
     int nVersion;           ///< 乐观锁版本号（每次更新 +1）。
 
-    CUserRecord() : nUserId(0), nLevel(1), nVersion(1) {}
+    CUserRecord() : nUserId(0), nLevel(1), nVersion(1)
+    {}
 };
 
 /// @brief 数据访问操作上下文（查询 / 插入 / 更新 / 删除共用一个实例）。
@@ -38,7 +39,8 @@ struct CUserTableOp
     bool bSimulateDbError;  ///< 演示开关：true 时读表层抛出异常（模拟数据库驱动故障）。
     std::string strTrace;   ///< 层执行轨迹（观察流程走向与排障用）。
 
-    CUserTableOp() : nUserId(0), bFound(false), bSimulateDbError(false) {}
+    CUserTableOp() : nUserId(0), bFound(false), bSimulateDbError(false)
+    {}
 };
 
 /// @brief 用户信息表错误码（业务错误码从 kBusinessBase 起取）。
@@ -71,7 +73,8 @@ inline const sc::InterfaceId& IID_IUserTable()
 class IUserTable : public virtual sc::IUnknown
 {
    public:
-    virtual ~IUserTable() {}
+    virtual ~IUserTable()
+    {}
 
     // 异步查询用户（未命中的拒绝码为 kDbRowNotFound）。
     virtual common::async::CPromise<CUserTableOp> QueryUserAsync(const std::shared_ptr<CUserTableOp>& spOp) = 0;

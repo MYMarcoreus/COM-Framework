@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Module/ModuleManager.h"
 #include "Module/InterfaceId.h"
+#include "Module/ModuleManager.h"
 
 namespace sc {
 
@@ -15,8 +15,9 @@ namespace sc {
 ///  - 自定义接口（无 InterfaceIdOf 特化）仍可用显式 iid 版本 Resolve<T>(iid)。
 class CResolveContext
 {
-public:
-    explicit CResolveContext(CModuleManager& manager) : m_manager(manager) {}
+   public:
+    explicit CResolveContext(CModuleManager& manager) : m_manager(manager)
+    {}
 
     // 按类型自动绑定接口标识解析模块（借用指针，不增加引用计数）。
     template <typename T>
@@ -32,8 +33,8 @@ public:
         return m_manager.Resolve<T>(iid);
     }
 
-private:
+   private:
     CModuleManager& m_manager;
 };
 
-} // namespace sc
+}  // namespace sc

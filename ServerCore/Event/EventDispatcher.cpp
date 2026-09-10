@@ -1,7 +1,7 @@
 #include "Event/EventDispatcher.h"
 
-#include "Module/ResolveContext.h"
 #include "Module/InterfaceMap.h"
+#include "Module/ResolveContext.h"
 
 namespace sc {
 
@@ -10,13 +10,11 @@ SC_DEFINE_INTERFACE_MAP(CEventDispatcher, CModule, IEventDispatcher)
 
 /// @brief 创建事件分发器。
 CEventDispatcher::CEventDispatcher() : CModule("event"), m_nNextId(1)
-{
-}
+{}
 
 /// @brief 销毁事件分发器。
 CEventDispatcher::~CEventDispatcher()
-{
-}
+{}
 
 /// @brief 从初始化上下文解析可选的 IAsyncExecutor。
 ///
@@ -37,13 +35,11 @@ bool CEventDispatcher::Start()
 
 /// @brief 模块停止（事件分发器无生命周期资源，无需处理）。
 void CEventDispatcher::Stop()
-{
-}
+{}
 
 /// @brief 模块关闭（事件分发器无生命周期资源，无需处理）。
 void CEventDispatcher::Shutdown()
-{
-}
+{}
 
 /// @brief 订阅事件。
 ///
@@ -158,8 +154,7 @@ size_t CEventDispatcher::PublishAsync(const EventType& strType, const void* pDat
     size_t nCount = 0;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        std::map<EventType, std::vector<SubscriptionId> >::const_iterator it =
-            m_mapByType.find(strType);
+        std::map<EventType, std::vector<SubscriptionId> >::const_iterator it = m_mapByType.find(strType);
         if (it != m_mapByType.end())
         {
             nCount = it->second.size();
@@ -182,15 +177,13 @@ size_t CEventDispatcher::PublishAsync(const EventType& strType, const void* pDat
 
     // ④ 投递到执行器；捕获模块自持引用保证回调期间模块存活
     auto spSelf = Self<CEventDispatcher>();
-    bool bPosted = m_pExecutor->Post(
-        [spSelf, strType, vecPayload]()
+    bool bPosted = m_pExecutor->Post([spSelf, strType, vecPayload]()
+    {
+        if (spSelf)
         {
-            if (spSelf)
-            {
-                spSelf->Publish(strType, vecPayload.empty() ? nullptr : vecPayload.data(),
-                                vecPayload.size());
-            }
-        });
+            spSelf->Publish(strType, vecPayload.empty() ? nullptr : vecPayload.data(), vecPayload.size());
+        }
+    });
     return bPosted ? nCount : 0;
 }
 
@@ -210,4 +203,4 @@ size_t CEventDispatcher::SubscriberCount(const EventType& strType) const
     return it->second.size();
 }
 
-} // namespace sc
+}  // namespace sc

@@ -36,9 +36,15 @@ struct OrderRecorder
 {
     static std::vector<std::string> s_order;
 
-    static void Record(const std::string& strName) { s_order.push_back(strName); }
+    static void Record(const std::string& strName)
+    {
+        s_order.push_back(strName);
+    }
 
-    static void Clear() { s_order.clear(); }
+    static void Clear()
+    {
+        s_order.clear();
+    }
 };
 std::vector<std::string> OrderRecorder::s_order;
 
@@ -61,11 +67,16 @@ class COrderModule : public sc::CModule
     }
 
     // 生命周期：拓扑排序测试只关注初始化顺序，其余阶段空实现。
-    bool Start() override { return true; }
+    bool Start() override
+    {
+        return true;
+    }
 
-    void Stop() override {}
+    void Stop() override
+    {}
 
-    void Shutdown() override {}
+    void Shutdown() override
+    {}
 };
 
 /// @brief 建立到本机端口的 TCP 连接；失败返回 -1。
@@ -187,8 +198,16 @@ TEST(Network_ConnectionLimit)
     std::uint16_t nPort = static_cast<std::uint16_t>(20000 + (::getpid() % 5000));
 
     std::atomic<int> nAccept(0);
-    if (!server.Start(nPort, [&nAccept](common::network::ConnectionId, const std::string&) { nAccept.fetch_add(1); },
-                      [](common::network::ConnectionId, const char*, size_t) {}, [](common::network::ConnectionId) {}))
+    if (!server.Start(nPort,
+                      [&nAccept](common::network::ConnectionId, const std::string&)
+    {
+        nAccept.fetch_add(1);
+    },
+                      [](common::network::ConnectionId, const char*, size_t)
+    {
+    }, [](common::network::ConnectionId)
+    {
+    }))
     {
         ASSERT_TRUE(false);  // 端口被占用（测试环境偶然冲突）
     }
@@ -235,8 +254,10 @@ TEST(ConfigReloadModule_Broadcast)
     sc::IEventDispatcher* pIface = manager.Resolve<sc::IEventDispatcher>(sc::IID_IEventDispatcher());
     ASSERT_TRUE(pIface != nullptr);
     std::atomic<int> nEvents(0);
-    sc::SubscriptionId nSubId =
-        pIface->Subscribe(sc::events::kConfigReloaded, [&nEvents](const sc::Event&) { nEvents.fetch_add(1); });
+    sc::SubscriptionId nSubId = pIface->Subscribe(sc::events::kConfigReloaded, [&nEvents](const sc::Event&)
+    {
+        nEvents.fetch_add(1);
+    });
     ASSERT_TRUE(nSubId != sc::kInvalidSubscriptionId);
 
     ASSERT_TRUE(manager.InitializeAll());
@@ -323,8 +344,14 @@ TEST(EventDispatcher_PublishAsync)
 
     std::atomic<int> nAsync(0);
     std::atomic<int> nSync(0);
-    pIface->Subscribe("async.test", [&nAsync](const sc::Event&) { nAsync.fetch_add(1); });
-    pIface->Subscribe("sync.test", [&nSync](const sc::Event&) { nSync.fetch_add(1); });
+    pIface->Subscribe("async.test", [&nAsync](const sc::Event&)
+    {
+        nAsync.fetch_add(1);
+    });
+    pIface->Subscribe("sync.test", [&nSync](const sc::Event&)
+    {
+        nSync.fetch_add(1);
+    });
 
     ASSERT_TRUE(manager.InitializeAll());
     ASSERT_TRUE(manager.StartAll());

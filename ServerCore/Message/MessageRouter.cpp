@@ -1,7 +1,8 @@
 #include "Message/MessageRouter.h"
 
-#include "Module/InterfaceMap.h"
 #include <string>
+
+#include "Module/InterfaceMap.h"
 
 namespace sc {
 
@@ -10,13 +11,11 @@ SC_DEFINE_INTERFACE_MAP(CMessageRouter, CModule, IMessageRouter)
 
 /// @brief 创建消息路由器。
 CMessageRouter::CMessageRouter() : CModule("message-router"), m_nNextId(1)
-{
-}
+{}
 
 /// @brief 销毁消息路由器。
 CMessageRouter::~CMessageRouter()
-{
-}
+{}
 
 /// @brief 初始化模块（无配置依赖，直接成功）。
 bool CMessageRouter::Initialize(const CResolveContext& /*ctx*/)
@@ -32,13 +31,11 @@ bool CMessageRouter::Start()
 
 /// @brief 模块停止（消息缓冲由各连接 OnClose 清理）。
 void CMessageRouter::Stop()
-{
-}
+{}
 
 /// @brief 模块关闭（消息缓冲由析构释放）。
 void CMessageRouter::Shutdown()
-{
-}
+{}
 
 /// @brief 设置消息提取器。
 ///
@@ -174,8 +171,7 @@ void CMessageRouter::OnClose(ConnectionId nId)
 /// @brief 按类型分发一条消息。
 ///
 /// 在锁外调用处理器，避免处理器内再次调用本模块时死锁。
-void CMessageRouter::Dispatch(ConnectionId nId, int nType,
-                             const char* pPayload, size_t nPayloadSize)
+void CMessageRouter::Dispatch(ConnectionId nId, int nType, const char* pPayload, size_t nPayloadSize)
 {
     std::vector<MessageHandler> vecTargets;
     {
@@ -205,4 +201,4 @@ void CMessageRouter::Dispatch(ConnectionId nId, int nType,
     }
 }
 
-} // namespace sc
+}  // namespace sc

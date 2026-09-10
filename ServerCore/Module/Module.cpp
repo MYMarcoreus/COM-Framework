@@ -9,18 +9,14 @@ namespace sc {
 /// 引用计数与存活状态由 CRefObject 基类管理，初始引用计数为 1。
 ///
 /// @param strName 模块名称（进程内唯一，用于管理与日志；可为空）。
-CModule::CModule(const char* strName)
-    : m_state(ModuleState::kCreated),
-      m_strName(strName != nullptr ? strName : "")
-{
-}
+CModule::CModule(const char* strName) : m_state(ModuleState::kCreated), m_strName(strName != nullptr ? strName : "")
+{}
 
 /// @brief 销毁模块。
 ///
 /// 引用计数与存活状态由 CRefObject 基类管理（析构时自动标记死亡）。
 CModule::~CModule()
-{
-}
+{}
 
 /// @brief 获取模块名称。
 const char* CModule::GetName() const
@@ -109,4 +105,4 @@ void* CModule::QueryInterfaceImpl(const InterfaceId& iid)
     return nullptr;
 }
 
-} // namespace sc
+}  // namespace sc

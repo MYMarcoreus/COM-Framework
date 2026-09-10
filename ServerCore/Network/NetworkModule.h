@@ -7,13 +7,17 @@
 #include <mutex>
 #include <string>
 
-#include "Module/ScopedInterfacePtr.h"
 #include "Module/InterfaceMap.h"
 #include "Module/Module.h"
+#include "Module/ScopedInterfacePtr.h"
 #include "Network/INetwork.h"
 #include "Observability/IMetrics.h"
 
-namespace common { namespace network { class CTcpServer; } }
+namespace common {
+namespace network {
+class CTcpServer;
+}
+}  // namespace common
 
 namespace sc {
 
@@ -27,7 +31,7 @@ namespace sc {
 /// network.closed / network.msgs。
 class CNetworkModule : public CModule, public INetwork
 {
-public:
+   public:
     CNetworkModule();
 
     virtual ~CNetworkModule();
@@ -89,7 +93,7 @@ public:
 
     SC_DECLARE_INTERFACE_MAP();
 
-private:
+   private:
     std::unique_ptr<common::network::CTcpServer> m_pServer;
     ScopedInterfacePtr<INetworkHandler> m_pHandler;
     ScopedInterfacePtr<IMetrics> m_pMetrics;
@@ -98,4 +102,4 @@ private:
     uint16_t m_nPort;
 };
 
-} // namespace sc
+}  // namespace sc

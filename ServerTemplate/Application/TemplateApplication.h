@@ -3,8 +3,8 @@
 #include <cstdint>
 
 #include "Application/MyApplication.h"
-#include "Module/ScopedInterfacePtr.h"
 #include "Event/IEventDispatcher.h"
+#include "Module/ScopedInterfacePtr.h"
 
 namespace servertemplate {
 
@@ -17,12 +17,12 @@ namespace servertemplate {
 /// 不含具体业务（规范：第一阶段不做业务认证 / 权限 / 数据库等）。
 class CTemplateApplication : public sc::CMyApplication
 {
-public:
+   public:
     explicit CTemplateApplication(std::uint16_t port);
 
     virtual ~CTemplateApplication();
 
-protected:
+   protected:
     // 注册模块：接口模块（网络/事件/配置/日志/回显）+ 业务模块（日志/网络）。
     bool RegisterModules() override;
 
@@ -35,11 +35,11 @@ protected:
     // 关闭钩子：取消订阅并释放引用。
     void OnShutdown() override;
 
-private:
+   private:
     std::uint16_t m_nPort;
     sc::ScopedInterfacePtr<sc::IEventDispatcher> m_pEventDispatcher;
     sc::SubscriptionId m_tEventStartId;
     sc::SubscriptionId m_tEventStopId;
 };
 
-} // namespace servertemplate
+}  // namespace servertemplate

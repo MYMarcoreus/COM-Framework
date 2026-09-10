@@ -19,7 +19,8 @@ struct CChainContext
     long long nValue;  ///< 逐层累加值（防优化：结果被读回校验）。
     int nSteps;        ///< 已执行层数。
 
-    CChainContext() : nValue(0), nSteps(0) {}
+    CChainContext() : nValue(0), nSteps(0)
+    {}
 };
 
 /// 层：值 +1（固定签名：上一层结果 + 共享上下文 → 本层结果）。

@@ -3,11 +3,11 @@
 #include <cstddef>
 #include <string>
 
-#include "Module/InterfaceMap.h"
-#include "Module/ScopedInterfacePtr.h"
-#include "Module/Module.h"
 #include "Infra/IAsyncExecutor.h"
 #include "Message/IMessageRouter.h"
+#include "Module/InterfaceMap.h"
+#include "Module/Module.h"
+#include "Module/ScopedInterfacePtr.h"
 #include "Network/INetwork.h"
 #include "Network/INetworkHandler.h"
 #include "Observability/IMetrics.h"
@@ -21,11 +21,11 @@ namespace serverexample {
 /// 连接关闭时由 OnClose Detach 并释放。
 struct ConnContext
 {
-    std::string strPeer;   // 对端地址
-    size_t nBytesReceived; // 累计接收字节数
+    std::string strPeer;    // 对端地址
+    size_t nBytesReceived;  // 累计接收字节数
 
-    explicit ConnContext(const std::string& peer)
-        : strPeer(peer), nBytesReceived(0) {}
+    explicit ConnContext(const std::string& peer) : strPeer(peer), nBytesReceived(0)
+    {}
 };
 
 /// @brief Example 协议处理服务。
@@ -39,7 +39,7 @@ struct ConnContext
 ///  - 指标上报（IMetrics）。
 class CExampleService : public sc::CModule, public sc::INetworkHandler
 {
-public:
+   public:
     CExampleService();
 
     virtual ~CExampleService();
@@ -64,11 +64,11 @@ public:
     // 状态报告。
     std::string GetStatus() const override;
 
-protected:
+   protected:
     // 接口查询实现（接口映射宏生成，暴露 INetworkHandler）。
     SC_DECLARE_INTERFACE_MAP();
 
-private:
+   private:
     // 处理 PING 命令（异步返回 PONG）。
     void HandlePing(sc::ConnectionId id);
 
@@ -84,4 +84,4 @@ private:
     sc::ScopedInterfacePtr<sc::IMetrics> m_pMetrics;
 };
 
-} // namespace serverexample
+}  // namespace serverexample

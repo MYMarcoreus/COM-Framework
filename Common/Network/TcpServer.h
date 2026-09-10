@@ -9,10 +9,9 @@
 #include <string>
 #include <thread>
 
-#include "asio.hpp"
-
 #include "Network/NetworkTypes.h"
 #include "Network/TcpConnection.h"
+#include "asio.hpp"
 
 namespace common {
 namespace network {
@@ -24,7 +23,7 @@ namespace network {
 /// 通过回调向上层报告 accept / data / close 事件，不依赖具体业务接口。
 class CTcpServer
 {
-public:
+   public:
     // 新连接回调。
     using AcceptCallback = std::function<void(ConnectionId id, const std::string& peer)>;
 
@@ -39,8 +38,8 @@ public:
     ~CTcpServer();
 
     // 启动服务器并监听端口。
-    bool Start(uint16_t nPort, const AcceptCallback& fnAccept,
-               const DataCallback& fnData, const CloseCallback& fnClose);
+    bool Start(uint16_t nPort, const AcceptCallback& fnAccept, const DataCallback& fnData,
+               const CloseCallback& fnClose);
 
     // 停止服务器，等待事件循环线程退出。
     void Stop();
@@ -78,7 +77,7 @@ public:
     // 设置最大连接数上限（0 表示不限制）；达到上限时新连接被直接关闭。
     void SetMaxConnections(size_t nMax);
 
-private:
+   private:
     // 启动空闲检测定时器（事件循环线程内调用）。
     void StartIdleTimer();
 
@@ -122,5 +121,5 @@ private:
     std::unique_ptr<asio::steady_timer> m_pIdleTimer;
 };
 
-} // namespace network
-} // namespace common
+}  // namespace network
+}  // namespace common

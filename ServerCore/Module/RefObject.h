@@ -22,15 +22,11 @@ namespace detail {
 template <typename T>
 struct IsSelfable
 {
-    static const bool value =
-        std::is_base_of<IUnknown, T>::value &&
-        !std::is_pointer<T>::value &&
-        !std::is_reference<T>::value &&
-        !std::is_const<T>::value &&
-        !std::is_volatile<T>::value;
+    static const bool value = std::is_base_of<IUnknown, T>::value && !std::is_pointer<T>::value &&
+                              !std::is_reference<T>::value && !std::is_const<T>::value && !std::is_volatile<T>::value;
 };
 
-} // namespace detail
+}  // namespace detail
 
 /// @brief 可被强引用 / 弱引用的基础对象。
 ///
@@ -44,7 +40,7 @@ struct IsSelfable
 ///  - WeakSelf().Lock() 保证绝不访问已销毁的对象。
 class CRefObject : public virtual IUnknown
 {
-public:
+   public:
     CRefObject();
 
     virtual ~CRefObject();
@@ -79,15 +75,15 @@ public:
         return CWeakPtr<T>(dynamic_cast<T*>(this), m_pLifetime);
     }
 
-protected:
+   protected:
     // 子类重写以返回自身实现的接口。
     virtual void* QueryInterfaceImpl(const InterfaceId& iid);
 
     // 堆上共享的存活状态（供弱引用判断对象是否已销毁）。
     std::shared_ptr<detail::CLifetime> m_pLifetime;
 
-private:
+   private:
     std::atomic<unsigned int> m_nRefCount;
 };
 
-} // namespace sc
+}  // namespace sc

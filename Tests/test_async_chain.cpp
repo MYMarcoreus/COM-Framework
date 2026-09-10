@@ -39,7 +39,8 @@ struct CTestContext
     std::thread::id workerId;  ///< 最后一个执行层的工作线程 id。
     std::string strTrace;      ///< 层执行轨迹（每层一个字符）。
 
-    CTestContext() : nValue(0), nSteps(0), nCatchRuns(0), nSeenOk(0), nSeenFailed(0), nFailCode(0) {}
+    CTestContext() : nValue(0), nSteps(0), nCatchRuns(0), nSeenOk(0), nSeenFailed(0), nFailCode(0)
+    {}
 };
 
 /// 层：值 +1（上一层失败则透传，属防御性写法）。
@@ -131,7 +132,9 @@ TEST(Promise_ThenHandlerContract)
     ASSERT_TRUE(static_cast<bool>(fnStep));
 
     // settled 通知：void(CPromiseResult)。
-    no::SettledHandler fnSettled = [](no::CPromiseResult) {};
+    no::SettledHandler fnSettled = [](no::CPromiseResult)
+    {
+    };
     ASSERT_TRUE(static_cast<bool>(fnSettled));
 
     // 层结果码：框架保留区间 + 业务码起始值。
@@ -347,8 +350,14 @@ TEST(Promise_Fork)
     std::atomic<int> nDone(0);
     no::CPromise<CTestContext> branchA = head.Then(&StepAdd1, ASYNC_LOC);
     no::CPromise<CTestContext> branchB = head.Then(&StepAdd10, ASYNC_LOC);
-    branchA.OnSettled([&nDone](no::CPromiseResult) { nDone.fetch_add(1); });
-    branchB.OnSettled([&nDone](no::CPromiseResult) { nDone.fetch_add(1); });
+    branchA.OnSettled([&nDone](no::CPromiseResult)
+    {
+        nDone.fetch_add(1);
+    });
+    branchB.OnSettled([&nDone](no::CPromiseResult)
+    {
+        nDone.fetch_add(1);
+    });
 
     ASSERT_TRUE(branchA.Await().IsFulfilled());
     ASSERT_TRUE(branchB.Await().IsFulfilled());
@@ -372,7 +381,10 @@ TEST(Promise_ThenAfterSettled)
 
     std::atomic<bool> bDone(false);
     no::CPromise<CTestContext> tail = chain.Then(&StepAdd10, ASYNC_LOC);
-    tail.OnSettled([&bDone](no::CPromiseResult) { bDone.store(true); });
+    tail.OnSettled([&bDone](no::CPromiseResult)
+    {
+        bDone.store(true);
+    });
 
     ASSERT_TRUE(tail.Await().IsFulfilled());
     while (!bDone.load())
@@ -591,7 +603,10 @@ TEST(Promise_PostBehavior)
 {
     no::CAsyncExecutor exec(2);
     std::atomic<int> nDone(0);
-    ASSERT_TRUE(!exec.Post([&nDone]() { nDone.fetch_add(1); }));  // 未启动
+    ASSERT_TRUE(!exec.Post([&nDone]()
+    {
+        nDone.fetch_add(1);
+    }));  // 未启动
 
     ASSERT_TRUE(exec.Start());
     const std::thread::id mainId = std::this_thread::get_id();
@@ -606,7 +621,10 @@ TEST(Promise_PostBehavior)
     ASSERT_EQ(nDone.load(), 1);
     ASSERT_TRUE(workerId != mainId);
 
-    ASSERT_TRUE(!exec.Post([&nDone]() { nDone.fetch_add(1); }));  // 已停止
+    ASSERT_TRUE(!exec.Post([&nDone]()
+    {
+        nDone.fetch_add(1);
+    }));  // 已停止
     ASSERT_EQ(nDone.load(), 1);
 }
 
@@ -829,7 +847,10 @@ TEST(Coro_OnSettledCallback)
     std::shared_ptr<CSequentialCoro> pCoro = exec.CoStart<CSequentialCoro>(spCtx);
 
     std::atomic<int> nCode(-1);
-    ASSERT_TRUE(pCoro->AsPromise().OnSettled([&nCode](no::CPromiseResult r) { nCode.store(r.Code()); }));
+    ASSERT_TRUE(pCoro->AsPromise().OnSettled([&nCode](no::CPromiseResult r)
+    {
+        nCode.store(r.Code());
+    }));
     while (nCode.load() < 0)
     {
         std::this_thread::yield();
@@ -919,7 +940,8 @@ struct COtherContext
 {
     int nRows;  ///< 子流程查询到的行数。
 
-    COtherContext() : nRows(0) {}
+    COtherContext() : nRows(0)
+    {}
 };
 
 /// 处理器（子流程）：置 nRows = 3。

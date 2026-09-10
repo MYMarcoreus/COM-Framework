@@ -49,4 +49,4 @@ int RunAll()
     return nFail;
 }
 
-} // namespace testfw
+}  // namespace testfw

@@ -13,10 +13,12 @@ namespace storage {
 static const char* const kIdChars = "23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz";
 
 /// @brief 创建存储组件（默认短码长度 6）。
-CFileStore::CFileStore() : m_nIdLen(6) {}
+CFileStore::CFileStore() : m_nIdLen(6)
+{}
 
 /// @brief 创建存储组件（自定义短码长度）。
-CFileStore::CFileStore(std::size_t nIdLen) : m_nIdLen(nIdLen > 0 ? nIdLen : 6) {}
+CFileStore::CFileStore(std::size_t nIdLen) : m_nIdLen(nIdLen > 0 ? nIdLen : 6)
+{}
 
 /// @brief 生成随机字符。
 char CFileStore::RandomChar() const
@@ -199,8 +201,10 @@ std::vector<StoreItemInfo> CFileStore::List(const std::string& strTenant) const
         vecResult.push_back(info);
     }
     // 按创建时间倒序（新的在前）。
-    std::sort(vecResult.begin(), vecResult.end(),
-              [](const StoreItemInfo& a, const StoreItemInfo& b) { return a.nCreateMs > b.nCreateMs; });
+    std::sort(vecResult.begin(), vecResult.end(), [](const StoreItemInfo& a, const StoreItemInfo& b)
+    {
+        return a.nCreateMs > b.nCreateMs;
+    });
     return vecResult;
 }
 
@@ -228,8 +232,10 @@ std::vector<StoreItemInfo> CFileStore::ListSince(const std::string& strTenant, s
         vecResult.push_back(info);
     }
     // 按序号升序（旧→新），便于客户端按顺序追加渲染。
-    std::sort(vecResult.begin(), vecResult.end(),
-              [](const StoreItemInfo& a, const StoreItemInfo& b) { return a.nSeq < b.nSeq; });
+    std::sort(vecResult.begin(), vecResult.end(), [](const StoreItemInfo& a, const StoreItemInfo& b)
+    {
+        return a.nSeq < b.nSeq;
+    });
     return vecResult;
 }
 
