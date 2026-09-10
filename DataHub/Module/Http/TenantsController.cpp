@@ -44,9 +44,9 @@ const char* RoleName(TenantRole role)
 // 当前时间（毫秒）。
 std::int64_t NowMs()
 {
-    return static_cast<std::int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                         std::chrono::system_clock::now().time_since_epoch())
-                                         .count());
+    return static_cast<std::int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count());
 }
 // 审计：设备侧租户操作落日志（op / target / actor）。
 void AuditRecord(const std::string& strOp, const std::string& strTarget, const std::string& strActor)

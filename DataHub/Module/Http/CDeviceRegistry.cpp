@@ -10,8 +10,8 @@ namespace {
 // 生成随机十六进制令牌（32 字符，128 位熵）。
 std::string MakeToken()
 {
-    static std::mt19937_64 rng(static_cast<std::uint64_t>(
-        std::chrono::high_resolution_clock::now().time_since_epoch().count()));
+    static std::mt19937_64 rng(
+        static_cast<std::uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count()));
     static const char* const kHex = "0123456789abcdef";
     std::string strToken;
     strToken.reserve(32);

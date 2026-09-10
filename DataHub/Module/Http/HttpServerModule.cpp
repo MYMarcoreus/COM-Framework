@@ -257,8 +257,8 @@ void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
         else if (bIsApi && !bDeviceRegPath)
         {
             const std::string strClientId = req.Header("X-Client-Id");
-            const bool bAuth = m_pDevices != nullptr && !strClientId.empty() &&
-                               m_pDevices->Verify(strClientId, req.Header("X-Token"));
+            const bool bAuth =
+                m_pDevices != nullptr && !strClientId.empty() && m_pDevices->Verify(strClientId, req.Header("X-Token"));
             if (!bAuth)
             {
                 resp.WriteJson("{\"error\":\"unauthorized device\"}", "401");
@@ -276,8 +276,7 @@ void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
                 }
                 else
                 {
-                    const std::string strCode =
-                        strHeaderTenant.empty() ? m_pTenants->DefaultCode() : strHeaderTenant;
+                    const std::string strCode = strHeaderTenant.empty() ? m_pTenants->DefaultCode() : strHeaderTenant;
                     ctx.bResolved = m_pTenants != nullptr && m_pTenants->FindTenant(strCode, ctx.tenant);
                     if (!ctx.bResolved)
                     {
@@ -304,9 +303,8 @@ void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
                     {
                         const bool bPublic = ctx.tenant.strCode == m_pTenants->DefaultCode();
                         sc::TenantRole role = sc::TenantRole::kMember;
-                        const bool bAllowed =
-                            bPublic || bTenantMgmtPath ||
-                            m_pTenants->TenantRoleOf(ctx.tenant.strCode, ctx.strAccountId, role);
+                        const bool bAllowed = bPublic || bTenantMgmtPath ||
+                                              m_pTenants->TenantRoleOf(ctx.tenant.strCode, ctx.strAccountId, role);
                         if (!bAllowed)
                         {
                             resp.WriteJson("{\"error\":\"not a tenant member\"}", "403");
@@ -319,7 +317,8 @@ void CHttpServerModule::OnRequest(WFHttpTask* pServerTask)
                             }
                             if (m_pMetrics != nullptr)
                             {
-                                m_pMetrics->SetGauge("http.members",
+                                m_pMetrics->SetGauge(
+                                    "http.members",
                                     static_cast<double>(m_pMembers != nullptr ? m_pMembers->Count(ctx.tenant) : 0));
                                 m_pMetrics->Inc("http." + ctx.tenant.strCode + ".requests");
                             }
