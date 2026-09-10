@@ -38,7 +38,7 @@
 
 | 文档 | 内容 |
 |---|---|
-| [async-mixed-then-example.md](common/async-mixed-then-example.md) | 精简单文件示例：一条链里混用多种 then（具名函数 / lambda / 跨模块异步 / 内层链 / 旁支 / catch / finally） |
+| [async-mixed-then-example.md](common/async-mixed-then-example.md) | 单文件示例：一条链里混用多种 then（具名函数 / lambda / 跨模块异步 / 内层链 / 旁支 / catch / finally） |
 
 ## 其他
 

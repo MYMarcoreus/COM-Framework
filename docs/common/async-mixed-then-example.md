@@ -1,26 +1,11 @@
-# 精简示例：一条 promise 链里混用多种 then
+# 示例：一条 promise 链里混用多种 then
 
-> 完整版（4 条路径 + 执行器隔离自校验）：[`examples/cases/ThenMixCase.cpp`](../../examples/cases/ThenMixCase.cpp)
-> 语义与 API 速查：[async-usage.md](async-usage.md)
+单文件，直接编译可跑。链上一行一个 then，注释里的编号与实现它的函数一一对应。
 
-## 这个例子教什么
-
-一条**下单流程**串起 then 的全部常见写法，全程零阻塞、不用协程：
-
-| 层 | 写法（本示例里的名字） | 一句话语义 |
-|---|---|---|
-| ① | 具名异步函数 `StepLoad` | 复用 / 可单测的逻辑；模拟一次 IO |
-| ② | lambda `fnValidate` | 只此一处用的小逻辑，就地写 |
-| ③ | 工厂 `fnQueryStock` + 桥接 `BridgeQuery`（模块内部 `StepConnect` / `StepRead`） | **调用别的模块**的异步函数，并**等它**（跨上下文） |
-| ④ | 工厂 `fnReserve` + 内层链步骤 `StepReserve` | **内部现搭一条链**，并**等它**（同上下文，直接 adopt） |
-| ⑤ | lambda `fnBilling` | **旁支 / fire-and-forget**：主链不等它 |
-| catch | `fnCompensate` | 只在上游**被拒绝**时执行（返回 `upResult` = 透传拒绝） |
-| finally | `fnAudit` | 成败都执行、返回值被忽略、原样透传结果 |
-
-## 代码（单文件，可直接编译）
+## 代码
 
 ```cpp
-// 精简版：一条 promise 链里混用多种 then（下单流程）
+// 一条 promise 链里混用多种 then（下单流程）
 #include <chrono>
 #include <cstdio>
 #include <memory>
@@ -45,7 +30,7 @@ struct CStockCtx
     int nAvail = 0;  ///< 可售量。
 };
 
-/// ③-1 库存模块内部：建连（调用方不关心它是几步、跑在哪个线程）
+/// ③-1 库存模块内部：建连
 static no::CPromiseResult StepConnect(no::CPromiseResult /*up*/, const std::shared_ptr<CStockCtx>& /*sp*/)
 {
     std::this_thread::sleep_for(std::chrono::milliseconds(2));  // 模拟握手
@@ -67,7 +52,7 @@ class CStockModule
         m_exec.Start();
     }
 
-    /// @brief 异步查库存：在**自己的**执行器上跑两步，调用方只拿 promise。
+    /// @brief 异步查库存：在模块自己的执行器上跑两步。
     no::CPromise<CStockCtx> QueryAsync()
     {
         auto spStock = std::make_shared<CStockCtx>();
@@ -117,7 +102,7 @@ static COrderP BridgeQuery(no::CAsyncExecutor& exec, const std::shared_ptr<CStoc
         auto spStockCtx = pStock.GetContext();  // 对方的上下文
         pStock.OnSettled([sp, spStockCtx, fnResolve, fnReject](no::CPromiseResult result)
         {
-            // 本回调跑在**库存模块的线程**上：只做语义转换 + 改上下文 + settle 本层
+            // 本回调在库存模块的线程上：只做语义转换 + 改上下文 + settle
             if (result.IsRejected())
             {
                 fnReject(result.Code());  // 跨模块拒绝码 → 本流程拒绝
@@ -131,7 +116,7 @@ static COrderP BridgeQuery(no::CAsyncExecutor& exec, const std::shared_ptr<CStoc
     return COrderP::New(exec, sp, fnExecutor, ASYNC_LOC);
 }
 
-/// 组装下单流程：把 ①~⑤ + catch + finally 串起来（一行一个 then，与编号一一对应）
+/// 组装下单流程：①~⑤ + catch + finally（每行一个 then，编号与上面的处理器对应）
 ///
 /// @param exec 下单流程自己的执行器。
 /// @param sp 下单流程上下文。
@@ -141,7 +126,7 @@ static COrderP BridgeQuery(no::CAsyncExecutor& exec, const std::shared_ptr<CStoc
 static COrderP BuildOrderFlow(no::CAsyncExecutor& exec, const std::shared_ptr<COrderCtx>& sp,
                               const std::shared_ptr<CStockModule>& spStockModule)
 {
-    // ② lambda：只此一处用的小逻辑（校验）—— 先赋给具名变量再串链，排版稳定
+    // ② 校验（lambda）
     COrderP::ThenHandler fnValidate = [](no::CPromiseResult, const std::shared_ptr<COrderCtx>& spSelf)
     {
         if (spSelf->nQty <= 0 || spSelf->nQty > 10)
@@ -152,33 +137,33 @@ static COrderP BuildOrderFlow(no::CAsyncExecutor& exec, const std::shared_ptr<CO
         return no::CPromiseResult::Resolve();
     };
 
-    // ③ 工厂：调库存模块的异步函数（跨上下文，经 BridgeQuery 桥接）
+    // ③ 调库存模块（跨上下文，经 BridgeQuery 桥接）
     COrderP::PromiseFactory fnQueryStock = [&exec, spStockModule](const std::shared_ptr<COrderCtx>& spSelf)
     {
         return BridgeQuery(exec, spStockModule, spSelf);
     };
 
-    // ④ 工厂：现搭一条内层链，让它参与当前链（同上下文，直接 adopt）
+    // ④ 内层链（同上下文，直接 adopt）
     COrderP::PromiseFactory fnReserve = [&exec](const std::shared_ptr<COrderCtx>& spSelf)
     {
         return exec.NewPromise(spSelf, &StepReserve, ASYNC_LOC);
     };
 
-    // ⑤ lambda：旁支 —— 只要**不返回**新链，主链就不等它（fire-and-forget）
+    // ⑤ 旁支（不返回新链 → 主链不等它）
     COrderP::ThenHandler fnBilling = [](no::CPromiseResult, const std::shared_ptr<COrderCtx>& spSelf)
     {
         spSelf->strLog += "记账已发起(不等);";
         return no::CPromiseResult::Resolve();
     };
 
-    // catch 处理器：只在上游被拒绝时执行（返回 up = 透传拒绝；返回 Resolve() 则吞掉拒绝继续）
+    // catch：只在上游被拒绝时执行（返回 up 即透传拒绝）
     COrderP::ThenHandler fnCompensate = [](no::CPromiseResult up, const std::shared_ptr<COrderCtx>& spSelf)
     {
         spSelf->strLog += "补偿;";
         return up;
     };
 
-    // finally 处理器：成败都执行、返回值被忽略（原样透传上一层结果）
+    // finally：成败都执行，返回值被忽略
     COrderP::ThenHandler fnAudit = [](no::CPromiseResult up, const std::shared_ptr<COrderCtx>& spSelf)
     {
         spSelf->strLog += "审计;";
@@ -202,7 +187,7 @@ int main()
     auto sp = std::make_shared<COrderCtx>();
     exec.Start();
 
-    // 仅 main 取结果用；业务代码请用 OnSettled 回调（不阻塞）
+    // main 只取结果；业务代码用 OnSettled 回调
     const no::CPromiseResult result = BuildOrderFlow(exec, sp, spStockModule).Await();
 
     std::printf("结果=%s 合计=%d 库存=%d 轨迹=%s\n", result.IsFulfilled() ? "兑现" : "拒绝", sp->nTotal, sp->nStock,
@@ -219,49 +204,22 @@ int main()
 g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon min_then.cpp build/debug/libCommon.a -o /tmp/min_then && /tmp/min_then
 ```
 
-> **排版**：上面代码按项目 `.clang-format` 写（4 空格缩进、Allman 大括号、≤ 120 列）。
-> 若把代码另存到工作区**之外**（如 `/tmp/x.cpp`），编辑器找不到项目 `.clang-format`，
-> clangd 会退化成默认 LLVM/Google 风格（2 空格、大括号同行、`& ` 空格）——
-> 要么把文件放进工作区，要么把 `.clang-format` 一并拷到同目录。
-
-## 运行结果
-
-正常路径（`nQty = 5`）：
+输出：
 
 ```text
 结果=兑现 合计=60 库存=5 轨迹=读订单;校验;查库存(5);预占;记账已发起(不等);审计;
-```
-
-② 拒绝路径（把 `COrderCtx::nQty` 改成 `50`）：
-
-```text
 结果=拒绝 合计=600 库存=0 轨迹=读订单;补偿;审计;
 ```
 
-第二条说明「失败即停」：② 拒绝后 ③④⑤ 全部不执行（没有 `查库存`、`预占`、`记账已发起`），
-`Catch` 与 `Finally` 仍然执行 —— 且轨迹里的 `补偿;` 在 `审计;` 之前。
+第二行是把 `COrderCtx::nQty` 改成 `50` 后的结果：② 拒绝，③④⑤ 都不执行，catch / finally 照跑。
 
-## 四个要点
+几点说明（代码注释里也标了）：
 
-1. **顺序由「依赖边」保证，不靠共享线程。**
-   ③ 的链在库存模块的线程上跑，④/⑤ 由 `OnSettled → fnResolve() → 本层 settle → 下一层` 串起来，
-   步骤之间有 happens-before，所以 `查库存(5);` 必然排在 `预占;` 前面。
-   唯一**不保证**先后的是旁支（⑤，故意不等它）。
-2. **执行器是模块的私有资源，不跨模块传递。**
-   库存模块自持 `exec(1)`，只对外给「自己上下文的 promise」；调用方拿不到也无需知道它有几个 worker。
-   （续跑线程通常就是「结算它的那条线程」，所以跨模块回调里只做轻活；要回到本模块线程就显式 `exec.Post(...)`。）
-3. **then 里不用判断上一层结果。** 上游被拒绝时框架直接跳过本层；要看拒绝用 `Catch`，
-   要成败都收尾用 `Finally`（返回值被忽略）。
-4. **要「等」就返回 promise（`ThenPromise`）；不返回就只是旁支。**
-   普通 `Then` 的处理器只能返回 `CPromiseResult`，所以里面起的链主链一概不等。
+- ③ 的链跑在库存模块自己的线程池上，先后顺序靠 `OnSettled → fnResolve → 本层 settle → 下一层`
+  这条依赖边保证，不靠共享线程；唯一不保证先后的是旁支 ⑤。
+- 执行器是模块私有资源，不跨模块传；调用方只拿对方的 promise（跨上下文用 `CPromise::New` 桥接）。
+- then 里不用判断上一层：上游被拒绝时框架直接跳过本层。要看拒绝用 `Catch`，成败都收尾用 `Finally`。
+- 要「等」子链就返回它（`ThenPromise`）；普通 `Then` 的处理器只能返回 `CPromiseResult`，里面起的链主链一概不等。
 
-## 与 JS 的对应
-
-| JS | 本示例 |
-|---|---|
-| `p.then(v => f(v))` | `.Then(handler)` |
-| `p.then(v => inner())`（返回 promise → 自动等待） | `.ThenPromise(factory)` |
-| `new Promise((resolve, reject) => {...})` | `CPromise::New(exec, spCtx, executor, ASYNC_LOC)` |
-| `p.catch(e => {...})` / `p.finally(() => {...})` | `.Catch(handler)` / `.Finally(handler)` |
-| `p.finally(() => audit())`（旁路观察） | `.OnSettled(cb)`（不在链上、不改结果） |
-| 在 `then` 里调用内部异步但不 `return` | `.Then` 里起链、不返回（fire-and-forget 旁支） |
+完整版（正常 / 库存不足 / 参数非法 / 内层链拒绝 四条路径 + 自校验）见
+[`examples/cases/ThenMixCase.cpp`](../../examples/cases/ThenMixCase.cpp)；API 与语义速查见 [async-usage.md](async-usage.md)。
