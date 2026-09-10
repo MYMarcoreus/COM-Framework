@@ -1,169 +1,202 @@
 # 无栈协程 CCoroutine — 实现文档
 
-> 配套使用文档：[coroutine-usage.md](coroutine-usage.md)
-> 源码：`Common/Async/Coroutine.h`（673 行，头文件实现）
+> 对应文件：`Common/Async/Coroutine.h`
+> 使用方式见：[coroutine-usage.md](coroutine-usage.md) ｜ 链实现见：[async-impl.md](async-impl.md)
 
 ## 1. 原理：Duff's device 状态机
 
-无栈协程的挂起 = **`return` 让出线程**（栈弹出），恢复 = 重新调用 `Run()` 从上次挂起点继续。
-为了记住「上次挂起点」，宏把协程体展开成 `switch (Step()) { case 0: ... case __LINE__: ... }`，
-用 `__LINE__` 作为恢复点标签，步号存于成员 `m_hot.nStep`。
+无栈协程把「函数体」编译成一个带恢复点的状态机：每个 `CO_AWAIT` 处保存恢复点
+（`__LINE__`）并 `return` 让出线程，任务完成后从该 `case` 继续执行。
 
 ```cpp
-// 协程体写：
-CO_BEGIN();
-CO_AWAIT_INTO(m_a, task1);
-CO_RETURN(m_a);
-CO_END();
+#define CO_BEGIN()  switch (Step()) { case 0:;
 
-// 宏展开后（示意）：
-switch (Step()) { case 0:;
-    AwaitInto(__LINE__, (task1), &m_a);   // 记录步号=该行 → 挂起 return
-    return;
-    case __LINE__:                        // 恢复：跳回这里
-    if (IsTerminated()) { CompleteNone(Reason()); return; }
-    CompleteResult(m_a); return;          // CO_RETURN
-    }
-    CompleteNone(); return;               // CO_END 兜底
+#define CO_AWAIT(expr) \
+    AwaitWait(__LINE__, (expr)); \                 // 注册完成回调（挂起）
+    return; \                                      // 让出线程
+    case __LINE__: \                               // ← 恢复点
+    if (IsTerminated()) { CompleteTerminated(); return; }
 ```
 
-- **跨 await 的局部变量必须放成员（帧）**：因为挂起时栈弹出、恢复时重入新建栈，只有成员跨重入存活；
-- **每个宏独占一行**：`__LINE__` 作唯一恢复点标签，同行两个宏会冲突；
-- `CO_BEGIN/CO_END` 必须保留：它们是 `switch` 骨架的开闭花括号。
+要点：
 
-## 2. CCoroutine 内部结构
+- `switch (Step())` 让状态机回到上次的恢复点；
+- `case 0` 是首次进入（`CO_BEGIN`）；
+- 每个 `CO_AWAIT` 独占一行，因为 `__LINE__` 就是它的标签；
+- 恢复时若已终止（等待的链失败），统一走 `CompleteTerminated()`。
 
-```cpp
-std::shared_ptr<detail::CTaskState<TValue> > m_pState; // 协程最终结果状态（复用异步库 CTaskState）
-CAsyncExecutor* m_pExec;                               // 执行器指针（自动 Submit / Resume 调度）
-std::weak_ptr<void> m_wpSelf;                          // 自持弱引用（生命周期加固）
-CHotState m_hot;                                       // 热状态：nStep / bTerminated / reason 打包
-```
-
-`CHotState` 把 `step / terminated / reason` 三个原子打包在一起，减少跨线程迁移时的 cache line 数。
-
-## 3. 生命周期加固（m_wpSelf）
+## 2. 内部结构
 
 ```cpp
-// CoStart：注入自持弱引用
-pCoro->SetSelf(pCoro);            // m_wpSelf = pCoro（weak_ptr）
-
-// PostResume：投递的 Resume 捕获自持强引用
-std::shared_ptr<void> spSelf = m_wpSelf.lock();
-m_pExec->Post([spSelf, this]() { Resume(); });   // 持有强引用 → 调用方提前释放 shared_ptr 也不悬垂
-```
-
-即：只要还有 Resume/回调在队列或执行中，协程对象就存活；全部执行完，最后一个强引用释放后析构。
-
-## 4. 启动流程（CoStart → Start → PostResume）
-
-```cpp
-template <typename TCoroutine, typename... TArgs>
-std::shared_ptr<TCoroutine> CAsyncExecutor::CoStart(TArgs&&... args)
+template <typename TContext>
+class CCoroutine
 {
-    auto pCoro = std::make_shared<TCoroutine>(std::forward<TArgs>(args)...);
-    pCoro->SetSelf(pCoro);   // 自持弱引用
-    pCoro->Start(this);      // 绑定 + 复位 + 投递首次执行
-    return pCoro;
-}
-
-void Start(CAsyncExecutor* pExec) { BindExecutor(pExec); Reset(); PostResume(); }
-```
-
-- `Reset`：重建结果状态、步号归 0、终止标志复位（**同一协程对象可重新 CoStart**）；
-- `PostResume`：若执行器为空 / 无强引用 / 投递失败 → `Terminate(kStopped)`（安全终止，不悬垂）。
-
-## 5. 任务规整：MakeTask
-
-`CO_AWAIT*` 的 `expr` 三种传法经 `MakeTask` 统一成 `CTask<U>`：
-
-```cpp
-// 已提交 CTask<U>（TaskTraits::Kind == 1）→ 直接用
-// 裸 lambda / 函数对象 → m_pExec->Submit(expr)（自动投递，免写 exec.Submit）
-```
-
-## 6. 顺序 await：RegisterTask + ResumeInline
-
-`AwaitInto` / `AwaitWait` 先记录步号，再：
-
-```cpp
-template <typename U, typename TOnSuccess>
-void RegisterTask(CTask<U> task, TOnSuccess onSuccess)
-{
-    std::shared_ptr<void> spSelf = m_wpSelf.lock();      // 强引用保活
-    bool bOk = task.OnResult([spSelf, onSuccess, this](const CTaskResult<U>& result) {
-        if (result.HasValue()) onSuccess(result.Value()); // 有值：落地(CWriteTarget) / 忽略(CIgnoreValue)
-        else MarkTerminated(result.Reason());             // 无值 → 标记终止（原因透传）
-        ResumeInline();                                   // 负载感知恢复
-    });
-    if (!bOk) Terminate(kStopped);                        // 任务已就绪但执行器不可用
-}
-```
-
-**恢复路径（负载感知内联 ResumeInline）**：
-
-```cpp
-static thread_local int s_inlineDepth = 0;
-if (m_pExec 有效 && !IsStopped() && m_pExec->IsIdle() && s_inlineDepth < 64)
-{ ++s_inlineDepth; Resume(); --s_inlineDepth; return; }  // 线程池空闲 → 当前线程直接继续（省一次入队+唤醒）
-PostResume();                                            // 有积压/深度超限 → 投递（保并行/防爆栈）
-```
-
-- 任务完成回调已运行在工作线程上，若线程池无积压（队列空）则**直接在此线程继续**协程体，
-  减少「完成→入队→唤醒→恢复」的一次往返；有积压则投递保任务级并行度；
-- `thread_local` 深度计数限制连续内联层数（防爆栈），超限回退投递（语义不变）。
-
-## 7. 并行 await：CAwaitAllGroup
-
-```cpp
-struct CAwaitAllGroup {
-    std::atomic<int> nPending; // 剩余未完成任务数
-    std::atomic<int> bNone;    // 是否有任务无值
-    std::atomic<int> nReason;  // 首个无值原因
+    std::shared_ptr<detail::CChainCore<TContext> > m_pCore;  // 执行器句柄 + 共享上下文
+    std::shared_ptr<detail::CChainSegment> m_pSegment;       // 协程完成状态（AsChain 暴露）
+    CAsyncExecutor* m_pExec;                                 // 调度（Resume + 子链投递）
+    std::weak_ptr<void> m_wpSelf;                            // 自持弱引用（生命周期加固）
+    CHotState m_hot;                                         // 步号 / 终止标志 / 终止码
 };
 ```
 
-- `AwaitAll`：`nPending = 任务数`，递归 `RegisterAllTask(pGroup, MakeTask(expr), CIgnoreValue())`；
-- `AwaitAllInto`：参数成对 `(目标, 任务)`，递归 `RegisterAllTask(..., CWriteTarget<TDst>(&target))`；
-- `RegisterAllTask`：`OnResult` 合并 OnSuccess/OnNone——有值落地/忽略、无值 `RecordNone`（CAS 记录**首个**原因），
-  然后 `AllDone(pGroup)`；
-- `AllDone`：`nPending.fetch_sub(1) == 1`（全部完成）→ 若 `bNone` 则 `MarkTerminated(原因)`，再 `ResumeInline()`。
-
-`void` 任务在 `CO_AWAIT_ALL` 可用；`CO_AWAIT_ALL_INTO` 用 `static_assert` 要求参数成对，void 不支持（并行 void 请用 `CO_AWAIT_ALL`）。
-
-## 8. Resume 与终止
+`CHotState` 把三个热字段打包相邻，减少跨线程迁移时的 cache line 数：
 
 ```cpp
-void Resume() { Run(); }   // 当前线程继续执行协程体，状态机从 m_nStep 恢复
+struct CHotState
+{
+    std::atomic<int> nStep;         // 状态机步号（恢复点）
+    std::atomic<bool> bTerminated;  // await 到失败 → 终止
+    std::atomic<int> nCode;         // 终止失败码
+};
 ```
 
-- **终止判定由协程体宏完成**（`case` 处 `IsTerminated()` → `CompleteNone(Reason())`）：
-  `Resume()` 不拦截，保证终止协程也能走到 `Complete`（`Get()` 不阻塞）；
-- `Terminate(reason)` = `MarkTerminated + CompleteNone`（无值完成）；
-- 执行器 `Stop` 后：`PostResume` 投递失败 → `Terminate(kStopped)`，已挂起协程安全终止。
+协程的**完成状态直接复用链段**（`detail::CChainSegment`）—— 这样 `AsChain()`
+只要把 `(m_pCore, m_pSegment)` 包成链句柄，协程就自然成为一个可 await 的对象，
+不需要第二套「完成通知」实现。
 
-## 9. AsTask：协程作为可 await 任务
+## 3. 生命周期加固（m_wpSelf）
+
+所有会「稍后回来」的地方都先 `m_wpSelf.lock()` 取强引用，再捕获进回调：
 
 ```cpp
-CTask<TValue> AsTask() { return m_pExec->AdoptState<TValue>(m_pState); }
+std::shared_ptr<void> spSelf = m_wpSelf.lock();
+chain.OnCompleted([spSelf, this](CStepResult r) { ... });   // 回调期间对象保活
+m_pExec->Post([spSelf, this]() { Resume(); });
 ```
 
-复用本协程的结果状态，返回绑定执行器句柄的 `CTask`——外层协程 `CO_AWAIT(m_r, child.AsTask())`
-即可 await 子协程；子协程完成（`CO_RETURN`/终止）后外层恢复。须先 `CoStart` 绑定执行器。
+因此调用方即使提前释放 `CoStart` 返回的 `shared_ptr`，协程对象也会存活到
+最后一个 Resume / await 回调执行完毕（不悬垂）。
 
-## 10. 与异步库的关系
+## 4. 启动流程
 
-| 能力 | 提供方 |
-|---|---|
-| 任务状态 / 完成 / 续接 / Wait | `CTaskState`（AsyncExecutor.h） |
-| 提交 / 执行器句柄 / 生命周期 | `CAsyncExecutor` / `CExecutorHandle` |
-| 顺序代码 ↔ 状态机 | `CCoroutine` 宏（Coroutine.h） |
+```text
+exec.CoStart<TCoroutine>(args...)
+    ├── make_shared<TCoroutine>(args...)     创建（构造时建 m_pCore 与初始 m_pSegment）
+    ├── pCoro->SetSelf(pCoro)                注入自持弱引用
+    └── pCoro->Start(this)
+             ├── BindExecutor(pExec)         m_pExec = pExec；把执行器句柄写入 m_pCore
+             ├── Reset()                    新建 m_pSegment；步号 / 终止标志复位
+             └── PostResume()               投递首次 Resume（执行器不可用 → 立即以 kStepStopped 完成）
+```
 
-协程不重造线程调度：挂起与恢复都通过 `CAsyncExecutor::Post` 投递到同一线程池；`CTaskState` 复用，
-保证 `Get()` 语义、并发 Get、终止原因与 `CTask` 完全一致。
+`Reset()` 让同一协程对象可以重新 `Start`（重复使用）。
 
-## 11. 测试覆盖
+## 5. 顺序 await（AwaitWait）
 
-`Tests/test_coroutine.cpp`：顺序 await、值传递、终止（异常/None）、并行 await、嵌套、
-生命周期（Stop 后安全终止）、复用（同一对象二次 CoStart）、并发、压力（万级协程 RSS）；
-`Tests/test_perf.cpp`：性能基准（基线 / 顺序 / 并行 / 嵌套对比）。
+```cpp
+void AwaitWait(int nLine, const CAsyncChain<TContext>& chain)
+{
+    m_hot.nStep.store(nLine);                          // 记恢复点
+    std::shared_ptr<void> spSelf = m_wpSelf.lock();
+    bool bOk = chain.OnCompleted([spSelf, this](CStepResult r)
+    {
+        if (r.IsFailed()) { MarkTerminated(r); }        // 被等待的链失败 → 标记终止（码透传）
+        ResumeInline();                                 // 负载感知：内联或投递
+    });
+    if (!bOk) { Terminate(CStepResult::Failed(kStepStopped)); }  // 注册失败：同步终止并完成
+}
+```
+
+- 注册成功后宏 `return`，协程让出线程；
+- 链完成（可能很快，可能已完成的链走投递）→ 回调恢复协程；
+- 恢复时若 `IsTerminated()`，宏在恢复点统一 `CompleteTerminated()` 结束。
+
+### ResumeInline：负载感知的内联续接
+
+```cpp
+if (m_pExec->IsIdle() && detail::InlineDepth() < detail::kMaxInlineDepth)
+{
+    ++detail::InlineDepth();
+    Resume();                 // 当前线程直接继续（省一次入队 + 唤醒）
+    --detail::InlineDepth();
+    return;
+}
+PostResume();                 // 队列有积压 / 深度超限：投递，保并行度 / 防爆栈
+```
+
+内联深度计数与**链的级联共用**（`detail::InlineDepth()`），因此链与协程互相嵌套时
+仍受同一上限（64）保护。
+
+## 6. 并行 await（CO_AWAIT_ALL）
+
+```cpp
+struct CAwaitAllGroup
+{
+    std::atomic<int> nPending;   // 剩余未完成链数
+    std::atomic<int> bFailed;    // 是否已有链失败
+    std::atomic<int> nCode;      // 首个失败码
+};
+```
+
+`AwaitAll(nLine, chains...)` → `AwaitEach(pGroup, chains...)` 递归展开：
+
+1. 每条链注册完成回调（回调捕获组状态与自持强引用）；
+2. `OnAwaitDone`：失败时用 CAS 记录**首个失败码**，`nPending` 减 1；
+3. `nPending` 归零 → 若组内有失败则标记终止 → `ResumeInline()` 恢复协程。
+
+设计取舍：**等全部结束再恢复**（而不是首个失败立即恢复），避免提前释放仍在等待的
+对象，也让失败码确定（首个失败）。
+
+## 7. 终止与结束
+
+| 函数 | 用途 |
+| --- | --- |
+| `MarkTerminated(r)` | 只标记（异步失败路径：等协程体走到恢复点统一出口） |
+| `Terminate(r)` | 标记 + 立即 `Complete`（同步失败路径：协程体不会再被恢复） |
+| `CompleteTerminated()` | 宏里的统一出口：以终止码完成协程 |
+| `CompleteResult(r)` | `CO_RETURN(r)`：以指定结果完成 |
+| `CompleteDone()` | `CO_RETURN_VOID()` / `CO_END()`：以成功完成 |
+
+区分「标记」与「立即完成」的原因：异步失败发生在工作线程回调里，此时协程帧**没有被执行**，
+必须先 `MarkTerminated` 再 `Resume`（让宏在恢复点处理）；而同步失败（注册不上 / 执行器停了）
+发生在 `AwaitWait` 内部，直接 `Complete` 才能保证 `Get()` 不永久阻塞。
+
+## 8. AsChain / Chain：复用链的核心
+
+```cpp
+CAsyncChain<TContext> AsChain() const
+{ return CAsyncChain<TContext>::Make(m_pCore, m_pSegment); }
+
+CAsyncChain<TContext> Chain(const StepFn& fnStep, const CSourceLoc& loc) const
+{
+    CAsyncChain<TContext> chain = CAsyncChain<TContext>::Make(m_pCore, nullptr);
+    chain.Submit(fnStep, loc);          // 用协程的执行器与上下文起子链
+    return chain;
+}
+```
+
+- `Make` 是 `CAsyncChain` 的私有工厂，`CCoroutine<TContext>` 是其友元；
+- 子链与协程共用 `m_pCore`（同一上下文 + 同一执行器句柄），因此
+  「协程里看到的数据」与「子链写的数据」是同一份；
+- 协程的 `m_pSegment` 同时是「协程完成状态」与「AsChain 的当前段」。
+
+## 9. 与链的关系
+
+```text
+        CChainCore<TContext>（执行器句柄 + 共享上下文）
+                 ▲                          ▲
+                 │                          │
+        CAsyncChain<TContext>        CCoroutine<TContext>
+        （一层 = 一个段）              （完成状态 = 一个段）
+                 │                          │
+                 └──── chain.OnCompleted ←──┘（AsChain）
+```
+
+- 协程不引入独立的完成通知机制，也不引入值通道；
+- 一次 await 的代价 = 起一条子链（投递首层）+ 一次完成回调 + 一次 Resume，
+  基准见 `Benchmark/cases/CoroutineCase.cpp`（单层链约 0.6μs，协程一次 await 约 0.9μs）。
+
+## 10. 测试覆盖
+
+`Tests/test_async_chain.cpp` 的 `AsyncChainCoro_*` 用例：
+
+| 用例 | 覆盖点 |
+| --- | --- |
+| `AsyncChainCoro_Sequential` | 顺序 await、上下文共享、轨迹顺序确定 |
+| `AsyncChainCoro_Parallel` | `CO_AWAIT_ALL` 并行等待 |
+| `AsyncChainCoro_AwaitFailed` | await 失败 → 终止，失败码透传，后续不执行 |
+| `AsyncChainCoro_ReturnFailed` | `CO_RETURN(Failed(...))` 主动失败 |
+| `AsyncChainCoro_Nested` | 子协程 `AsChain()` 嵌套 await |
+| `AsyncChainCoro_NotStarted` | 未启动执行器 → `kStepStopped`，`Get()` 不阻塞 |
+| `AsyncChainCoro_Restart` | 同一对象二次 `Start` 复用 |
+| `AsyncChainCoro_CompletedCallback` | `AsChain().OnCompleted` 外部观察协程完成 |

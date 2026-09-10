@@ -1,313 +1,235 @@
-# 异步库 CAsyncExecutor / CTask — 实现文档
+# 异步链 CAsyncChain — 实现文档
 
-> 配套使用文档：[async-usage.md](async-usage.md)
-> 源码：`Common/Async/AsyncExecutor.h`（985 行）+ `AsyncExecutor.cpp`（123 行）
+> 对应目录：`Common/Async`（命名空间 `common::async`）
+> 使用方式见：[async-usage.md](async-usage.md) ｜ 协程见：[coroutine-impl.md](coroutine-impl.md)
 
 ## 1. 总体架构
 
-```mermaid
-classDiagram
-    direction LR
-    class CAsyncExecutor {
-        -m_pHandle : shared_ptr~CExecutorHandle~
-        +Submit(f) CTask
-        +Post(fn) bool
-        +CoStart~TCoroutine~() shared_ptr
-    }
-    class CExecutorHandle {
-        -m_pPool : shared_ptr~CThreadPool~
-        -m_bStopped : atomic_bool
-    }
-    class CTaskBase~TValue~ {
-        -m_pExecutor : shared_ptr~CExecutorHandle~
-        -m_pState : shared_ptr~CTaskState~
-        +Get() CTaskResult
-    }
-    class CTaskState~TValue~ {
-        -m_result : CTaskResult
-        -m_vecContinuations : vector
-        -m_bReady : atomic_bool
-        -m_mutex / m_cv
-        +Complete(r)
-        +AddContinuation(exec, cb)
-        +Wait() CTaskResult
-    }
-    CTaskBase --> CExecutorHandle
-    CTaskBase --> CTaskState
-    CAsyncExecutor --> CExecutorHandle
-    CExecutorHandle --> CThreadPool
+```text
+CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start/Stop/Post）
+    │  Handle()（shared_ptr<CExecutorHandle>）
+    ├── CAsyncChain<TContext>  编排层：链段（每层一段）+ 共享上下文
+    │        │
+    │        └── CStepResult   层结果（层间唯一传递的信息）
+    └── CCoroutine<TContext>   顺序层：用顺序代码 await 多条链（见 coroutine-impl）
 ```
 
-## 2. CExecutorHandle：生命周期加固的核心
+文件划分（`Common/Async/`）：
+
+| 文件 | 内容 |
+| --- | --- |
+| `StepResult.h` | `CStepResult`（层结果：成功 / 失败 + 错误码）、`StepCode` 常量 |
+| `AsyncTypes.h` | `CCompletedFn`、`detail::StepFn<TContext>`（层函数固定签名） |
+| `SourceLoc.h` | `CSourceLoc` + `ASYNC_LOC`（注册点调试信息，发布构建零开销） |
+| `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle` |
+| `AsyncChain.h` | `detail::CChainSegment`、`detail::CChainCore<TContext>`、`CAsyncChain<TContext>` |
+| `Coroutine.h` | `CCoroutine<TContext>` + `CO_*` 宏 |
+
+## 2. 为什么固定签名 + 共享上下文
+
+传值版任务链（`CTask<TValue>`）要求框架为每层保存一个 `CTaskResult<TValue>`，
+并做类型萃取 / 分派（`TaskTraits` / `RunTransform` 一整套）——链的类型随层数变化，
+编译期开销与实现复杂度都不小。
+
+本版把「值」移出层间通道：
+
+```text
+层间只传：CStepResult（int 错误码，双向零分配、可平凡拷贝）
+数据通道：shared_ptr<TContext>（一次流程一个实例，整条链共用）
+```
+
+收益：
+
+- 链只有一种类型 `CAsyncChain<TContext>`，`Then` 返回同类型 → 无需类型萃取与分派；
+- 层的签名统一 → 自由函数 / 静态成员 / `bind` / lambda 都能直接注册；
+- 跨层数据不再需要拷贝（上下文是引用语义），大对象（报文、连接、DB 句柄）不再层层复制；
+- 失败与成功都是同一枚 `CStepResult`，语义简单可预测。
+
+代价：
+
+- 层与层之间没有「类型安全的显式数据通道」，数据约定靠 `TContext` 的字段约束；
+- 层之间不再能传递一次性临时值（必须落到上下文里）。
+
+## 3. CExecutorHandle：生命周期加固
 
 ```cpp
-struct CExecutorHandle {
-    std::shared_ptr<common::thread::CThreadPool> m_pPool; // 线程池对象（任务链持有时不释放）
-    std::atomic<bool> m_bStopped;                          // 停止后拒绝新投递
+struct CExecutorHandle
+{
+    std::shared_ptr<common::thread::CThreadPool> m_pPool; // 线程池（共享持有）
+    std::atomic<bool> m_bStopped;                         // 是否已停止（拒绝新投递）
 };
 ```
 
-**为什么需要它（防悬垂）**：任务链和线程池之间夹一层共享句柄，解决「工厂倒闭了、任务单还在等结果」的悬垂指针问题：
+- `CAsyncExecutor` 持有该句柄；链 / 协程各自持一份 `shared_ptr`；
+- 执行器析构 → `Stop()` → 置 `m_bStopped` 并 `pool->Stop()`（等待已投递任务完成）；
+  由于句柄仍被链持有，线程池对象**不会悬垂**，已起的链照常跑完；
+- 之后的新投递被 `m_bStopped` 拒绝 → 对应层以 `kStepStopped` 失败。
 
-- `Submit` 创建的任务通过 `shared_ptr<CExecutorHandle>` 引用执行器 → **任务链持有时线程池不被销毁**，
-  即使执行器对象先析构，已投递/已链式任务仍安全完成；
-- 执行器析构 → 只把执照标记 `m_bStopped=true`，**线程池仍被任务链保住**；已投递任务继续跑完，
-  新投递被拒 → 无值（`kStopped`）；
-- `Stop()` 置 `m_bStopped=true` + `m_pPool->Stop()`，保留句柄与线程池对象（未启动状态）。
+`detail::PostToHandle(handle, fn)` 是唯一投递入口：句柄为空 / 已停止 / 池拒绝都返回 `false`，
+调用方据此把结果置为 `kStepStopped`（不抛异常）。
 
-## 3. CTaskState：任务共享状态（核心）
+## 4. CChainSegment：一段的状态机
 
-```cpp
-std::mutex m_mutex;                   // 保护状态与续接列表
-std::condition_variable m_cv;         // 通知 Wait 等待者
-std::vector<Continuation> m_vecContinuations; // 未完成时的续接列表
-std::atomic<bool> m_bReady;           // 是否已完成
-CTaskResult<TValue> m_result;         // 最终结果
-```
-
-### Complete：完成并触发续接（锁外调用，防重入死锁）
+一道链由若干**链段**串成，一层对应一段。段是单向开关：
 
 ```cpp
-void Complete(const CTaskResult<TValue>& result)
+class CChainSegment
 {
-    std::vector<Continuation> vecCbs;
-    {
-        lock;
-        if (m_bReady) return;         // 仅首次生效
-        m_bReady = true; m_result = result;
-        vecCbs.swap(m_vecContinuations);  // 取出全部续接
-    }
-    m_cv.notify_all();                // 多线程 Get 同一任务：唤醒所有等待者
-    for (cb : vecCbs) cb(result);     // 锁外按注册顺序调用续接（续接内再 Complete/Wait 不死锁）
-}
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
+    std::vector<Continuation> m_vecContinuations; // 未完成时登记
+    std::atomic<bool> m_bReady;                   // 自旋读 + 等待谓词
+    CStepResult m_result;                         // 完成后有效
+    CSourceLoc m_loc;                             // 注册点（仅调试构建）
+};
 ```
 
-### AddContinuation：未就绪登记 / 已就绪投递
+| 成员 | 语义 |
+| --- | --- |
+| `Complete(result)` | 首次生效：锁内置结果与 `m_bReady`，换出续接列表，`notify_all` 后在**锁外**按序调用续接 |
+| `AddContinuation(handle, cb)` | 未完成 → 登记返回 true；已完成 → 投递 `cb` 到执行器异步触发；已完成且执行器不可用 → 返回 false |
+| `Wait()` | 先自旋 50μs（宽松提示），再在条件变量上阻塞；`notify_all` 支持多线程等待同一段 |
+| `SetLoc/Loc` | 注册点源码位置（发布构建空实现） |
 
-- 未就绪：登记到 `m_vecContinuations`，任务完成时触发；
-- 已就绪：**投递到执行器线程池异步执行**（与 JS/C# 一致，回调不在注册线程执行）；
-  执行器不可用（停止）→ 返回 `false`（回调不执行）。
+两个关键设计：
 
-### Wait：阻塞取结果
+1. **续接在锁外调用**：层函数可能在续接里执行（级联），若持锁调用会因重入造成死锁；
+2. **已完成再注册走投递**：与 JS / C# 的 promise 一致 —— 注册方（可能是业务线程）
+   不会被回调阻塞，回调在工作线程上跑。
 
-```cpp
-// 先短自旋（~50µs，relaxed 读），超时再 m_cv.wait(pred: m_bReady)
-// 支持多线程并发 Get 同一任务（Complete 用 notify_all）
-```
+## 5. 一次链的完整生命周期
 
-## 4. 一次任务的完整生命周期（含 Then 链）
-
-以 `exec.Submit(f0).Then(f1).Then(f2).Get()` 为例，完整链路：
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Main as 主线程
-    participant Exec as CAsyncExecutor
-    participant P as 线程池工作线程
-    participant S0 as CTaskState#0
-    participant S1 as CTaskState#1
-    participant S2 as CTaskState#2
-
-    Note over Main,S2: ① 提交与链式注册（全部非阻塞、不执行任何变换函数）
-    Main->>Exec: Submit(f0)
-    Exec->>P: 投递 fnRun0（f0 包一层）★ 返回前已投递（点火）
-    Exec-->>Main: 返回 task0（绑定 S0）
-    Main->>Exec: task0.Then(f1)
-    Note over S0: S0.AddContinuation(续接1) 登记，不执行
-    Exec-->>Main: 返回 task1（绑定 S1）
-    Main->>Exec: task1.Then(f2)
-    Note over S1: S1.AddContinuation(续接2) 登记，不执行
-    Exec-->>Main: 返回 task2（绑定 S2）
-    Main->>S2: task2.Get() → Wait()（阻塞挂起）
-
-    Note over P,S2: ② 链条由完成事件自动接力（eager）
-    P->>P: 执行 fnRun0 → f0() = 3
-    P->>S0: S0.Complete(result0=3)：锁内就绪+存值 → 解锁 → notify_all + 锁外调续接1
-    P->>P: 续接1：valueCopied=3（拷贝）→ 投递 fnRun1
-    P->>P: 执行 fnRun1 → f1(3) = 6
-    P->>S1: S1.Complete(result1=6) → 触发续接2
-    P->>P: 续接2：valueCopied=6 → 投递 fnRun2
-    P->>P: 执行 fnRun2 → f2(6) = 7
-    P->>S2: S2.Complete(result2=7)
-    S2-->>Main: Wait 被唤醒，返回 result2
-    Main->>Main: r.HasValue() → r.Value() == 7
-```
-
-**要点**：
-- `Submit` 在返回 `CTask` **之前就已投递**（`Submit` 本身就是执行入口，链条在此「点火」）；
-- `Then` 只做两件事：**算下游类型 + 往上游 `AddContinuation` 挂续接**，返回下一个任务（未点火），不执行任何函数；
-- **接力靠 `Complete` 自动触发**：上游任务跑完 → `CTaskState::Complete` → 锁外依次调用所有续接 →
-  `Then` 的续接里再把下一个变换投递进线程池 → 以此类推，直到最后一个任务完成唤醒 `Get`；
-- 每个任务对应一个 `CTaskState`，值在链中「移动存结果 → 续接拷贝 → 变换」逐级传递（见 §6 值传递路径）。
-
-### 为什么不会乱序：f1 必然在 f0 完成后才开始
-
-很多人误以为 `f0` 和 `f1` 一开始都被丢进线程池赛跑——那样确实无法保证顺序。
-**关键：`Then(f1)` 不提交 f1，它只挂一个「f0 完成时才执行的续接」；f1 是在 f0 的完成路径里才被提交的。**
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Main as 主线程
-    participant W1 as 工作线程 W1
-    participant S0 as S0（f0 状态）
-    participant Q as 线程池队列
-    participant W2 as 工作线程 W2（可与 W1 相同）
-
-    Note over Main: ① 提交 + 挂续接（f1 未入队）
-    Main->>Main: Submit(f0) → fnRun0 入队，返回 task0
-    Main->>S0: task0.Then(f1) → 仅 AddContinuation 挂续接
-
-    Note over W1,S0: ② f0 完成 → 触发续接（此刻才提交 f1）
-    W1->>W1: 执行 fnRun0 → f0() 得到 result0
-    W1->>S0: S0.Complete(result0)
-    Note over S0: 锁内 存值+置就绪 → 解锁 → 锁外 调用续接1
-    S0->>W1: 续接1：valueCopied = result0
-    W1->>Q: Submit(fnRun1)  ← f1 此刻才入队
-
-    Note over Q,W2: ③ f1 出队执行（必然晚于 f0 完成）
-    Q->>W2: 出队 fnRun1
-    W2->>W2: 执行 f1(valueCopied)
-```
-
-**happens-before 链：**
+以 `exec.Submit(spCtx, f0).Then(f1).Then(f2)` 为例：
 
 ```text
-f0() 返回 → S0.Complete（存值+置就绪） → 续接1 读值 + Submit(fnRun1)
-         → fnRun1 入队 → W2 出队 → f1() 开始
+① Submit：建核心（spCtx + 句柄）+ 建段 s0 → PostStep（投递 f0，起点结果 Ok）
+                       ↓（工作线程 W）
+② f0(Ok, spCtx) 执行 → s0.Complete(r0)
+       ├─ 已登记续接（f1 那段 s1）：r0 失败？→ s1.Complete(r0)（短路）；否则 RunStep 执行 f1
+       └─ 已登记的完成回调（若有）
+                       ↓（仍是线程 W，级联）
+③ f1(r0, spCtx) → s1.Complete(r1) → 同路径推进 f2
+                       ↓
+④ f2 → s2.Complete(r2) → Get() 被唤醒 / OnCompleted 触发
 ```
 
-因为 `f1` 的开始 ⟸ `fnRun1` 出队 ⟸ `fnRun1` 入队 ⟸ 续接1 ⟸ `f0()` 返回，
-所以 **f1 连「开始」都必然晚于 f0 的完成，更不可能先完成**。
+要点：
 
-**锁/原子在这里保护什么？** 保护的是「单个 `CTaskState` 内部的数据一致」（如多线程同时 `Complete`、
-注册续接与完成竞争），**不是**「跨整条链持锁」——链条顺序靠的是**因果依赖**（f1 的入队代码就写在
-f0 的完成回调里）；线程调度不参与顺序判定，只决定谁执行。
+- **首层必须投递**（`PostStep`）：起链线程不执行任何业务代码；
+- **后续层在同一线程级联**（`RunStep` 内联）：一层链只花一次入队 + 唤醒，
+  而不是每层一次；
+- **失败短路不调用层函数**：`Then` 的续接里 `upStep.IsFailed()` 直接
+  `s_next.Complete(upStep)`，层函数不被调用（层函数里的 `if (upStep.IsFailed()) return upStep;`
+  是防御性写法）；
+- **`ThenAlways` 走同一续接，但跳过失败短路分支**，因此层函数会以失败状态的
+  `upStep` 被调用。
 
-## 5. Submit：任务投递
+### 级联内联与深度限制
 
 ```cpp
-template <typename TFn>
-auto CAsyncExecutor::Submit(TFn f, const CSourceLoc& loc = CSourceLoc()) -> CTask<Result>
+std::function<void()> fnRun = MakeStepRunner(...);   // 执行层函数 + 完成本段
+if (InlineDepth() < kMaxInlineDepth)   // 线程局部深度计数（64）
 {
-    CTask<TResult> task;
-    task.m_pExecutor = m_pHandle;        // 共享执行器句柄
-    task.m_pState->SetLoc(loc);
-    auto fnRun = [pState, f]() {
-        try { detail::CompleteSuccess(pState, f); }   // f 抛异常？
-        catch (...) { pState->Complete(CTaskResult<TResult>::MakeNone(kException)); }
-    };
-    if (m_pHandle->m_bStopped || !m_pHandle->m_pPool->Submit(fnRun))
-        pState->Complete(CTaskResult<TResult>::MakeNone(kNotStarted)); // 未启动 → 立即无值
-    return task;
+    ++InlineDepth(); fnRun(); --InlineDepth();       // 直接执行（省一次投递 + 唤醒）
+}
+else
+{
+    PostToHandle(pCore->Handle(), std::move(fnRun)); // 超限改投递，防递归爆栈
 }
 ```
 
-- 任务异常 → 转为 `kException` 无值终止（**Option 风格，无异常外溢**）；
-- 执行器不可用 → 任务立即以 `kNotStarted` 完成（`Get()` 不阻塞）。
+`InlineDepth()` 是线程局部计数器，链的级联与协程的内联续接**共用**它，
+因此「链 + 协程」混合递归也被同一上限保护。
 
-## 6. Then：链式续接 + 类型分派
+## 6. 两种注册时机
 
-### 类型萃取
+| 注册时刻 | 路径 | 执行线程 |
+| --- | --- | --- |
+| 上游**未完成** | 登记到 `m_vecContinuations`，上游 `Complete` 时被调用 | 上游完成所在的工作线程（级联内联） |
+| 上游**已完成** | `AddContinuation` 检测到 `m_bReady` → 投递回调 | 执行器工作线程 |
+
+两者都不阻塞调用方，且都保证「本层只执行一次」。差别只在执行时机与落点线程 ——
+业务侧无需关心（框架把顺序保证放在链段上，而不是调用线程上）。
+
+## 7. 失败语义的实现
 
 ```cpp
-template <typename T> struct TaskTraits { static const int Kind = 0; using ValueType = T; };
-// CTask<U>          → Kind = 1（flatMap）
-// CTaskResult<U>    → Kind = 2（原样转发）
-template <typename TFn, typename... TArgs> struct TInvokeResult { using type = decltype(...); };
+[pCore, pNextSegment, fnStep, bAlways](const CStepResult& upStep)
+{
+    if (upStep.IsFailed() && !bAlways)      // Then：失败即停
+    {
+        pNextSegment->Complete(upStep);     // 不执行层函数，原样透传失败码
+        return;
+    }
+    detail::RunStep(pCore, pNextSegment, fnStep, upStep); // upStep 可能携带失败（ThenAlways）
+}
 ```
 
-### Then 流程（以非 void 上游为例）
+- 短路只做一次 `Complete`，代价极小 → 失败链的层数越多，反而越省（基准中
+  `CAsyncChain fail-fast x20` 与成功链同量级）；
+- 失败码全程**原样透传**，框架不改写业务码；框架自身错误码仅 4 个（见 `StepCode`）；
+- `RunStep` 内 `try/catch(...)` 把层内异常转 `kStepException`，保证 `Get()` 不抛。
+
+## 8. 线程模型与不变量
+
+| 不变量 | 保证方式 |
+| --- | --- |
+| 一条链的层不并发 | 段的续接只在 `Complete` 时按序触发一次，级联在同一线程推进 |
+| 同一段只完成一次 | `Complete` 锁内 `m_bReady` 判定（CAS 语义），后续调用直接返回 |
+| 层函数不在起链线程执行 | `Submit` 固定走 `PostStep` |
+| 回调不持锁 | `Complete` 先换出续接列表，再锁外调用 |
+| 无悬垂 | 句柄 / 段 / 上下文均为 `shared_ptr`，被续接与句柄共同持有 |
+| 深链不爆栈 | `kMaxInlineDepth` 上限 + 改投递 |
+
+分叉（同一段注册多个 `Then`）时，各支线是独立段：它们由上游 `Complete` 依次触发，
+若走的是「已完成再注册」路径则各自投递 → 可能在**不同线程并行**，各自持有同一上下文，
+业务需自行保证上下文字段访问安全。
+
+## 9. 源码位置调试（ASYNC_LOC）
 
 ```cpp
-using TResult = 变换原始返回类型; using TOut = TaskTraits<TResult>::ValueType;
-CTask<TOut> taskNext; taskNext.m_pExecutor = 上游句柄; taskNext.m_pState->SetLoc(loc);
-上游->AddContinuation(exec, [exec, pNextState, f](upResult) {
-    ① 上游无值 → pNextState->Complete(MakeNone(upResult.Reason()));  // 终止传播
-    ② TValue valueCopied = upResult.Value();   // 拷贝值，供异步续接安全使用（不引用上游状态）
-    ③ fnRun = [pNextState, f, valueCopied]{ detail::RunTransform(pNextState, f, valueCopied,
-             TaskKind<TResult>()); };          // 按 Kind 分派
-    ④ 执行器投递 fnRun；不可用 → Complete(MakeNone(kStopped));
-});
+#if defined(__linux__) && !defined(__OPTIMIZE__)
+    #define ASYNC_DEBUG_TRACE 1
+#endif
+#define ASYNC_LOC common::async::CSourceLoc(__PRETTY_FUNCTION__, __FILE__, __LINE__)
 ```
 
-### RunTransform 三种分派（Kind 0/1/2）
+- 调试构建（`-O0`）：每段保存注册点的函数名 / 文件 / 行号 → 调试器 watch 段对象的
+  `m_loc` 即可定位「这一层是谁注册的」；
+- 发布构建（`-O2`）：`CSourceLoc` 为空、**不保存**，`SetLoc/Loc` 退化为空操作（零开销）；
+- 固定签名层的注册点往往是一串 lambda，注册点信息是定位「哪一层失败」的最直接手段。
 
-| Kind | 变换返回 | 行为 |
-|---|---|---|
-| 0 | 普通值 / void | `CompleteSuccess`（有值传播 / void 完成）；异常 → `kException` |
-| 1 | `CTask<TNew>` | flatMap：执行 f 得内部任务，`FlatMapForward` 用 `OnResult` 把内部结果原样转发到下游 |
-| 2 | `CTaskResult<TOut>` | 原样转发 `pNextState->Complete(f(...))` |
+## 10. 设计取舍
 
-`CTask<void>` 特化走 `RunTransformVoid`（变换无参），逻辑同构。
+1. **eager（起链即投递）**：`Submit` 立即投递首层，不做惰性计划 —— 语义简单，
+   与 `Post` 一致；代价是无法在起链前再改链结构（要改就多注册一层）。
+2. **句柄指向某一层**（而非整条链）：`Then` 返回新句柄，`Get/OnCompleted` 作用于
+   句柄所指的段。这样天然支持分叉、支持「链跑完后追加层」，也不必维护「链尾」指针
+   （分叉时链尾不唯一）。
+3. **失败即停 + ThenAlways**：默认安全（忘写判断也不会误执行后续业务），
+   同时给回滚 / 补偿留了显式出口（`ThenAlways` 里 `return upStep;` 即传统透传，
+   `return Ok();` 即吞掉失败恢复链）。
+4. **不做重复完成 / 取消**：段是单向开关，没有取消 API。需要超时或取消时，
+   在业务层用 `IEventDispatcher` / 定时器唤醒后检查标志位。
+5. **上下文不进层签名之外**：不提供「向上下文追加任意类型」的容器（如 `std::any`），
+   以保证 `TContext` 的字段在编译期可查、无堆分配、无类型擦除开销。
 
-### 值在链中的传递（共享状态信箱 + 拷贝）
+## 11. 测试与基准
 
-以 `Submit(f0) → Then(f1) → Then(f2)` 为例：
-
-| 环节 | 值在哪 | 动作 |
-|---|---|---|
-| `f0()` 返回 | 临时右值 `3` | **移动**存入 `CTaskState#0.m_result` |
-| 续接回调触发 | 参数引用 `m_result` | `upResult.Value()` 读出 `3` |
-| `valueCopied` | 续接回调局部变量 | **拷贝**一份（解耦上游生命周期） |
-| `fnRun` lambda | 捕获 `valueCopied` | 投递到线程池 |
-| `f1(valueCopied)` | 实参 | `const T&` 形参不拷贝；按值形参再拷贝 |
-| `f1()` 返回 | `6` | **移动**存入 `CTaskState#1.m_result` |
-
-**为什么续接里要拷贝 `valueCopied`？** 上游任务可同时挂多个续接（多个 `Then`/`OnSuccess`），
-且续接在别的线程异步执行。若 lambda 捕获 `m_result` 的引用，上游对象析构后即悬垂；拷贝后
-lambda 自己持有值，与上游完全解耦。
-
-**约束**：链式传值要求 `TValue` 可拷贝（每次 `Then` 至少 1 拷贝 + 1 移动）；大对象建议用
-`std::shared_ptr<T>` 作为链中 `TValue`（拷指针不拷内容）。
-
-## 7. 线程模型
-
-- 任务与续接都在**工作线程**执行（`Submit`/`Then` 注册的工作会投递到线程池）；
-- **不同的 `Then` 步不固定在同一线程**：每个变换函数执行完会重新 `Submit` 回线程池，
-  由**任意空闲工作线程**取走执行（无线程亲和）——可能是同一线程，也可能不同，不确定；
-  框架保证的是**链式顺序**（f1 在 f0 完成后、f2 在 f1 完成后），不保证执行线程；
-- 任务**已完成**时注册回调 → 投递到执行器**异步触发**（不占用注册线程）；
-- 执行器未启动/已停止 → 注册视为失败（回调不执行 / `kStopped` 完成）。
-
-## 8. 其他成员
-
-- `Post`：fire-and-forget，直接 `m_pPool->Submit`（`m_bStopped` 时返回 false）；
-- `Stop`：置 `m_bStopped` + `m_pPool->Stop()`（保留句柄，已创建任务仍绑定）；
-- `Start`：若曾 Stop 过则**重建句柄与线程池**（隔离旧任务），再 `Start()`；
-- `IsStopped` / `IsIdle`：轻量原子读（供协程内联续接负载感知）；
-- `AdoptState(pState)`：用已有任务状态构造 CTask（协程 `AsTask` 用）；
-- `CoStart`：见 [coroutine-impl.md](coroutine-impl.md)。
-
-## 9. 源码位置调试（NOTHROW_LOC）
-
-调试构建（`-O0`）下 `Submit/Then` 可传 `NOTHROW_LOC`，把注册点 `__PRETTY_FUNCTION__/__FILE__/__LINE__`
-存入 `CTaskState::m_loc`，watch 中定位「当前任务是哪里注册的」；发布构建零开销（空位置）。
-
-## 10. 设计取舍：为什么 eager（即时执行）而非惰性/手动触发
-
-| 模型 | 语义 | 触发点 | 代表 |
-|---|---|---|---|
-| **eager 即时** | 接上即跑，链条是自动流水线 | `Submit` 调用那一刻 | JS Promise、C# `Task.Run`、Boost.Asio、Go goroutine、**本项目** |
-| **lazy 惰性** | 构建与运行分离 | 额外 `subscribe()`/`spawn()` | Rust Future、Python asyncio、Rx 冷 Observable |
-| **手动触发** | 显式 `Execute()`/`Start()` 点燃 | 用户手动调用 | C# `new Task(...).Start()` |
-
-**本项目选 eager 的原因**：
-1. **消灭「忘记启动」这类错误**——手动触发漏调 = 任务永挂起、`Get()` 死等，最难排查；
-2. **与 continuation 模型天然契合**——执行时机内嵌在「完成事件流」里（`Complete` 触发续接）；
-3. **`Submit` 本身就是启动**——`Then` 不触发，因为它只是接上一步，接力由完成事件自动进行。
-
-**关键洞察**：基于「完成回调自动接力」的框架基本都是 eager（Promise、Asio、本项目）。本项目的定位是
-**一次性流水线 + 线程池执行器**，不是可重放的数据流（那是 Rx 的领域），eager 是正确选择。
-如果将来真要惰性：优先在框架外实现（把整条链封装成 `std::function` 工厂，需要时再 `Submit`），
-而不是给核心引擎加惰性模式。
+- 单元测试：`Tests/test_async_chain.cpp`（31 个用例：契约、顺序、上下文、失败即停、
+  `ThenAlways` 观察 / 恢复、异常、完成回调、分叉、完成后追加、未启动 / 停止 / 重启、
+  工作线程、析构后完成、并发 Get、多链并行、深链 300 层、400 链压力、协程 9 例）；
+- 基准：`Benchmark/cases/ChainCase.cpp`（层数 1/5/20/100、深链 256、失败即停）、
+  `CoroutineCase.cpp`、`ResumableCase.cpp`、`StressCase.cpp`；
+- 示例：`examples/main.cpp`；业务侧用法见 `ServerExample/Module/ExampleAsyncModule.cpp`。
 
 ## 附：代码阅读顺序
 
-1. `CTaskResult<T>` → 先懂「结果」长什么样（有值/无值）；
-2. `CAsyncExecutor::Submit` → 懂任务怎么被投递；
-3. `CTaskState::Complete` → **重点**：线程安全核心，锁外调续接；
-4. `CTask<T>::Then` → 懂链式怎么串起来；
-5. `detail::RunTransform` / `RunTransformVoid` → 懂 flatMap 分派与 void 链；
-6. `CExecutorHandle` → 懂生命周期安全。
+```text
+1. Common/Async/StepResult.h        层结果（层间唯一信息）
+2. Common/Async/AsyncTypes.h        固定签名（StepFn）
+3. Common/Async/AsyncExecutor.h     调度层与执行器句柄
+4. Common/Async/AsyncChain.h        链段 + 核心 + 链（重点看 Complete / AddContinuation / RunStep）
+5. Common/Async/Coroutine.h         顺序化（Duff's device 状态机）
+6. Tests/test_async_chain.cpp       行为契约
+```

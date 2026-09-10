@@ -66,4 +66,4 @@ m_moduleManager.RegisterModule(sc::IID_IEventDispatcher(), new sc::CEventDispatc
 ## 6. 参考实现
 
 - `ServerExample/Application/ExampleApplication.cpp`：订阅 network 事件 + `PublishAsync("example.hello")` 示范
-- `LogServer/Application/LogServerApplication.cpp`：订阅 network + config.reloaded 事件
+- `ServerExample/Application/ExampleApplication.cpp`：订阅网络模块发布的启动 / 停止事件

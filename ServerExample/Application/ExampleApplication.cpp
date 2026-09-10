@@ -8,9 +8,8 @@
 #include "Infra/TimerModule.h"
 #include "Log/Logger.h"
 #include "Message/MessageRouter.h"
-#include "Module/ExampleLoggerModule.h"
 #include "Module/ExampleAsyncModule.h"
-#include "Module/ExampleLogReporterModule.h"
+#include "Module/ExampleLoggerModule.h"
 #include "Module/ExampleTimerModule.h"
 #include "Network/NetworkModule.h"
 #include "Network/TcpServerModule.h"
@@ -22,8 +21,7 @@ namespace serverexample {
 ///
 /// @param port 监听端口；0 表示从配置文件读取。
 CExampleApplication::CExampleApplication(std::uint16_t port)
-    : m_nPort(port),
-      m_tEventStartId(sc::kInvalidSubscriptionId), m_tEventStopId(sc::kInvalidSubscriptionId)
+    : m_nPort(port), m_tEventStartId(sc::kInvalidSubscriptionId), m_tEventStopId(sc::kInvalidSubscriptionId)
 {
     // 加载配置文件（可选，best-effort）
     m_config.LoadFile("example.ini");
@@ -42,9 +40,7 @@ CExampleApplication::CExampleApplication(std::uint16_t port)
 }
 
 /// @brief 销毁 ServerExample 服务器应用程序。
-CExampleApplication::~CExampleApplication()
-{
-}
+CExampleApplication::~CExampleApplication() {}
 
 /// @brief 注册模块。
 ///
@@ -61,8 +57,7 @@ bool CExampleApplication::RegisterModules()
     }
 
     // ② 异步执行器模块（供事件异步分发 / 业务重活投递；须先于事件与服务注册）
-    if (!m_moduleManager.RegisterModule(
-            sc::IID_IAsyncExecutor(), new sc::CAsyncExecutorModule(2)))
+    if (!m_moduleManager.RegisterModule(sc::IID_IAsyncExecutor(), new sc::CAsyncExecutorModule(2)))
     {
         return false;
     }
@@ -92,8 +87,7 @@ bool CExampleApplication::RegisterModules()
     }
 
     // ⑦ 协议处理服务（按接口注册，供网络装配模块获取）
-    if (!m_moduleManager.RegisterModule(
-            sc::IID_INetworkHandler(), new CExampleService()))
+    if (!m_moduleManager.RegisterModule(sc::IID_INetworkHandler(), new CExampleService()))
     {
         return false;
     }
@@ -117,13 +111,7 @@ bool CExampleApplication::RegisterModules()
         return false;
     }
 
-    // ⑪ 日志上报模块：将运行状态周期上报到 LogServer
-    if (!m_moduleManager.RegisterModule(new CExampleLogReporterModule(m_config)))
-    {
-        return false;
-    }
-
-    // ⑫ 异步框架演示模块：周期性演示 CTask 链式 / 多回调 / 异常传播
+    // ⑪ 异步框架演示模块：周期性演示异步链式步骤 / 共享上下文 / 失败终止
     int asyncIntervalMs = m_config.GetInt("async.interval_ms", 5000);
     if (!m_moduleManager.RegisterModule(new CExampleAsyncModule(asyncIntervalMs)))
     {
@@ -146,28 +134,20 @@ bool CExampleApplication::OnInitialize()
     }
 
     // 订阅网络启动事件：从事件负载读取监听端口
-    m_tEventStartId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStarted,
-        [](const sc::Event& event)
+    m_tEventStartId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStarted, [](const sc::Event& event)
+    {
+        if (event.data != nullptr && event.size == sizeof(std::uint16_t))
         {
-            if (event.data != nullptr && event.size == sizeof(std::uint16_t))
-            {
-                std::uint16_t port = *static_cast<const std::uint16_t*>(event.data);
-                common::log::CLogger::Instance().Info(
-                    "[Event] 收到 network.started，端口 " + std::to_string(port));
-            }
-        });
+            std::uint16_t port = *static_cast<const std::uint16_t*>(event.data);
+            common::log::CLogger::Instance().Info("[Event] 收到 network.started，端口 " + std::to_string(port));
+        }
+    });
     // 订阅网络停止事件
-    m_tEventStopId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStopped,
-        [](const sc::Event&)
-        {
-            common::log::CLogger::Instance().Info("[Event] 收到 network.stopped");
-        });
+    m_tEventStopId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStopped, [](const sc::Event&)
+    { common::log::CLogger::Instance().Info("[Event] 收到 network.stopped"); });
     // 订阅自定义事件（由 OnStart 中 PublishAsync 异步发布，工作线程处理）
-    m_tExampleEventId = m_pEventDispatcher->Subscribe("example.hello",
-        [](const sc::Event&)
-        {
-            common::log::CLogger::Instance().Info("[Event] 收到 example.hello（异步分发）");
-        });
+    m_tExampleEventId = m_pEventDispatcher->Subscribe("example.hello", [](const sc::Event&)
+    { common::log::CLogger::Instance().Info("[Event] 收到 example.hello（异步分发）"); });
     return true;
 }
 
@@ -211,4 +191,4 @@ void CExampleApplication::OnShutdown()
     }
 }
 
-} // namespace serverexample
+}  // namespace serverexample

@@ -26,11 +26,11 @@ make -C Tests/Linux run   # 或通过 Makefile
 
 | 文件 | 覆盖 |
 |---|---|
-| `test_common.cpp` | Common 基础库（缓冲、线程池、定时器、配置、异步等） |
+| `test_common.cpp` | Common 基础库（缓冲、线程池、定时器、配置） |
 | `test_exec.cpp` | Exec 并发调度框架（读写调度、公平 FIFO、压力、负载模拟） |
 | `test_servercore.cpp` | 模块生命周期 / 管理器编排 / 事件 / 消息路由 / 自持引用 |
 | `test_infra.cpp` | 拓扑排序 / 多实例注册 / 配置热加载 / 指标 / 连接上下文 / 异步事件 |
-| `test_logserver.cpp` | 日志协议 / 存储 |
+| `test_async_chain.cpp` | 异步链与协程（层契约、失败语义、ThenAlways、生命周期、并发、深链） |
 | `test_serialization.cpp` | 二进制序列化 |
 
 ## 2. 测试模块的依赖注入
@@ -58,15 +58,13 @@ manager.ShutdownAll();
 
 ## 4. 端到端验证（e2e）
 
-以 ServerExample ↔ LogServer 为例：
+以 ServerExample 服务器 ↔ 客户端为例：
 
 ```bash
-# 终端 1：LogServer（日志收集）
-cd LogServer && ../build/logserver
-# 终端 2：ServerExample（日志生产者 + 回显服务器）
-cd ServerExample && ../build/example
-# 终端 3：客户端验证回显
-./build/example_client 9000     # 期望：PING→PONG，ECHO→"Hello ServerCore"
+# 终端 1：ServerExample 服务器
+./build/debug/example 9000
+# 终端 2：客户端验证回显
+./build/debug/example_client 9000   # 期望：PING→PONG，ECHO→"Hello ServerCore"
 # 状态报告（含指标聚合）
 kill -USR1 $(pgrep -f build/example)
 tail -25 ServerExample/example.log

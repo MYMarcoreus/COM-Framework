@@ -1,9 +1,9 @@
 // ====================================================================
-// 用例：协程（Common::async::CCoroutine 无栈协程）
+// 用例：协程（common::async::CCoroutine，基于异步链的顺序化写法）
 //   微基准：
-//     - 简单协程「启动 + 一次挂起/恢复 + 完成」vs 等价单任务 vs 直接调用
-//     - 10 级链：协程 10 次 CO_AWAIT vs CAsyncExecutor 10 级 Then vs 直接链
-//   观察：协程启动 / 挂起 / 恢复相比「直接调用」与「任务框架」的开销。
+//     - 单层链（起链 + 执行 + Get）vs 协程「CoStart + 1 次 await」vs 直接调用；
+//     - 10 层链 vs 协程 10 次顺序 await vs 协程并行 await（CO_AWAIT_ALL）。
+//   观察：协程挂起 / 恢复相对直接调用与链式编排的开销。
 // ====================================================================
 #ifndef COM_BENCHMARK_CASES_COROUTINECASE_H
 #define COM_BENCHMARK_CASES_COROUTINECASE_H
@@ -11,4 +11,4 @@
 /// 运行「协程」基准。
 void RunCoroutineCases();
 
-#endif // COM_BENCHMARK_CASES_COROUTINECASE_H
+#endif  // COM_BENCHMARK_CASES_COROUTINECASE_H

@@ -1,191 +1,284 @@
-# 异步库 CAsyncExecutor / CTask — 使用文档
+# 异步链 CAsyncChain — 使用文档
 
 > 对应目录：`Common/Async`（命名空间 `common::async`）
-> 实现细节见：[async-impl.md](async-impl.md)
+> 实现细节见：[async-impl.md](async-impl.md) ｜ 协程见：[coroutine-usage.md](coroutine-usage.md)
 
 ## 1. 这是什么
 
-`CAsyncExecutor` + `CTask` 是**无异常版（Option 风格）异步任务框架**：提交任务 → 链式变换 → 取结果，
-全程**不需要 try/catch**。语义对标 Rust `Option`：
+`CAsyncExecutor` + `CAsyncChain` 是**异步链特化版**框架：把一段业务流程写成若干「层」，
+层按注册顺序执行，**层与层之间只传递「本层成功 / 失败」**，数据统一放在**共享上下文**里。
 
-- **有值（Some）**：任务算出结果，沿链传播，下游继续；
-- **无值（None）**：链终止（正常提前结束），下游全部跳过。
+与「层间传任意值」的通用任务链（`Then([](int n) { ... })`）相比，本版的取舍是：
+
+| 维度 | 通用任务链（传值） | 异步链（本框架） |
+| --- | --- | --- |
+| 层间传什么 | 上一层返回的任意值（类型可变） | 只有成败（`CStepResult`） |
+| 数据怎么传 | 返回值逐层往下递 | 共享上下文（`std::shared_ptr<TContext>`） |
+| 层函数签名 | 每层不同 | 全部固定 |
+| 链的类型 | 随层变化（`CTask<A>` → `CTask<B>`） | 恒为 `CAsyncChain<TContext>` |
+| 失败怎么处理 | 无值终止（Option 风格） | 失败即停 + 失败码透传（`ThenAlways` 可回滚） |
+
+固定签名：
 
 ```cpp
+CStepResult fn(CStepResult upStep,                        // 上一层的结果
+               const std::shared_ptr<TContext>& spCtx);   // 共享上下文
+```
+
+- `upStep`：上一层回调的结果（第一层恒为成功）。下一层据此判断上一层成败；
+- `spCtx`：整条链**共用同一个实例**的数据载体（链持有，恒非空）；
+- 返回：本层结果。成功继续下一层，失败终止链（后续 `Then` 层不再执行）。
+
+## 2. 最小示例
+
+```cpp
+#include "Async/AsyncChain.h"
+
 namespace no = common::async;
 
-no::CAsyncExecutor exec(2);   // 2 线程执行器
+// ① 定义一次流程的共享数据（TContext）：各层读写它。
+struct CLoginContext
+{
+    std::string strAccount;
+    std::string strToken;
+    std::string strError;
+};
+
+// ② 定义层：签名固定，数据从 spCtx 走。
+no::CStepResult StepReadParam(no::CStepResult upStep, const std::shared_ptr<CLoginContext>& spCtx)
+{
+    if (upStep.IsFailed())
+    {
+        return upStep;                       // 防御写法（失败即停时本层不会被调用）
+    }
+    spCtx->strAccount = ReadAccount();
+    return spCtx->strAccount.empty() ? no::CStepResult::Failed(kCodeNoAccount)
+                                     : no::CStepResult::Ok();
+}
+
+no::CStepResult StepVerify(no::CStepResult upStep, const std::shared_ptr<CLoginContext>& spCtx)
+{
+    if (upStep.IsFailed())
+    {
+        return upStep;
+    }
+    spCtx->strToken = IssueToken(spCtx->strAccount);
+    return no::CStepResult::Ok();
+}
+
+// ③ 起链：数据在上下文里，层间只传成败。
+no::CAsyncExecutor exec(2);
 exec.Start();
 
-no::CTaskResult<int> r = exec.Submit([]() { return 3; })
-                             .Then([](int n) { return n * 2; })
-                             .Then([](int n) { return n + 1; })
-                             .Get();
-// r.HasValue() == true，r.Value() == 7
+std::shared_ptr<CLoginContext> spCtx = std::make_shared<CLoginContext>();
+no::CAsyncChain<CLoginContext> chain =
+    exec.Submit(spCtx, &StepReadParam, ASYNC_LOC)      // 首层（起点结果视为成功）
+        .Then(&StepVerify, ASYNC_LOC)                  // 第二层
+        .Then(&StepWriteDb, ASYNC_LOC);                // 第三层
+chain.OnCompleted([](no::CStepResult finalStep) { /* 收尾（成功 / 失败都触发） */ });
+
+no::CStepResult r = chain.Get();                       // 阻塞取最终成败
+if (r.IsOk())
+{
+    Use(spCtx->strToken);                              // 数据从上下文取
+}
 ```
 
-> 错误不再是框架概念：**错误码是普通值**，由业务解释；框架只负责「有没有值」。
-> 任务内抛异常被捕获并转为**无值终止**（原因 `kException`）。
+要点：
 
-## 2. 核心类型
+- `exec.Submit(spCtx, 首层)` 起链并**立即投递首层**（异步执行，不在调用线程上跑层函数）；
+- `.Then(...)` 追加一层，返回**指向新层的句柄**；
+- 只有最后一层的句柄取结果才有意义 —— 写成 `auto tail = exec.Submit(...).Then(...)` 后 `tail.Get()`；
+  若丢弃 `Then` 的返回值，`chain.Get()` 等到的只是首层。
 
-| 类型 | 职责 |
-|---|---|
-| `CAsyncExecutor` | 执行器：`Start` / `Submit` / `Post` / `Stop` / `CoStart` |
-| `CTask<TValue>` | 异步任务：`Then` / `Get` / `OnSuccess` / `OnNone` / `OnResult` |
-| `CTaskResult<TValue>` | 任务结果：`HasValue` / `Value` / `ValueOr` / `Reason` |
-| `CNoneTag` / `None` | 无值哨兵（`return no::None;` 终止链） |
+## 3. 起链与追加层
 
-### CTaskResult<T>：一张「有值或无值」的结果单
+| 接口 | 语义 |
+| --- | --- |
+| `exec.Submit(spCtx, fnStep, loc)` | 起链：创建链并投递首层，返回指向首层的句柄 |
+| `CAsyncChain<TContext> chain(exec, spCtx)` | 手工建链（尚未起链），随后 `chain.Submit(fnStep)` |
+| `CAsyncChain<TContext> chain(exec)` | 同上，上下文由链**懒创建** |
+| `chain.Then(fnStep, loc)` | 追加一层（**失败即停**：上一层失败时本层不执行） |
+| `chain.ThenAlways(fnStep, loc)` | 追加一层（**失败也执行**：回滚 / 补偿 / 清理用） |
+| `chain.Get()` | 阻塞等待本层结果（不抛异常） |
+| `chain.OnCompleted(fnCompleted)` | 注册完成回调（成功 / 失败都触发一次），返回是否注册成功 |
+| `chain.GetContext()` | 共享上下文（懒创建，有效链上恒非空） |
+| `chain.IsValid()` / `chain.IsCompleted()` | 是否有效 / 本层是否已完成 |
+| `chain.Loc()` | 本层注册点源码位置（调试构建有效） |
 
-- `HasValue()`：有值用 `Value()` 取；无值 = 链终止，只有终止原因 `Reason()`（仅调试）；
-- 构造：`CTaskResult<int> ok(42);`（有值，隐式）、`CTaskResult<int> none;`（默认 = 无值）、
-  `CTaskResult<int>(no::None);`（显式无值）；
-- 便捷：`if (r)`（`operator bool`）、`r.ValueOr(-1)`（无值给默认值）；
-- **实现**：值**内联存储**（对标 `std::optional` / Rust `Option`）——无堆分配、无引用计数；
-  结果是深拷贝，需「默认构造 + 可拷贝」；move-only 类型（如 `std::unique_ptr`）不支持，
-  可改用 `std::shared_ptr` 包裹。
-
-### 终止原因 CTaskEndReason（仅调试）
-
-| 值 | 含义 |
-|---|---|
-| `kEndCompleted=0` | 有值（正常完成） |
-| `kEndNone=1` | 业务返回 `no::None`（正常提前终止） |
-| `kNotStarted=2` | 执行器没 `Start` 就 Submit |
-| `kStopped=3` | 执行器已停止，再投递被拒 |
-| `kException=4` | 任务 / 变换抛异常（框架捕获转无值） |
-
-> `Reason()` 不是错误码，只是诊断标签。业务想区分「为什么终止」，请自己在链里传值
-> （如返回 `CTaskResult<enum>`），框架不替你做业务判断。
-
-## 3. 提交与链式
+层函数可以是自由函数、静态成员函数、`std::bind` 结果或 lambda —— 只要签名匹配即可：
 
 ```cpp
-no::CTask<int> t = exec.Submit([]() { return 10; });
-
-t.Then([](int n) { return n * 3; })
- .Then([](int n) -> no::CTaskResult<int> { if (n < 0) return no::None; return n + 1; })
- .Then([](int n) { return n; });   // 上游终止 → 此步被跳过
+flow.Submit(lambdaStep, ASYNC_LOC);                                  // lambda
+flow.Submit(std::bind(&CService::OnStep, this, std::placeholders::_1,
+                      std::placeholders::_2));                       // 成员函数
 ```
 
-### Then 变换函数的三种返回
+## 4. 共享上下文（唯一数据通道）
 
-| 返回类型 | 语义 |
-|---|---|
-| 普通值 `TNew` | 有值传播（`Then → Then → Get`） |
-| `CTaskResult<TNew>` | 有值传播 / `return no::None` 终止 |
-| `CTask<TNew>` | **扁平化 flatMap**：内部任务完成后转发其结果 |
+上下文是**整条链共用**的一个对象，`shared_ptr` 持有，生命周期与链一致：
 
 ```cpp
-// flatMap：变换本身也是异步（如查数据库）
-exec.Submit([]() { return 3; })
-    .Then([&exec](int n) { return exec.Submit([n]() { return n * n; }); })  // 返回任务 → 自动平铺
-    .Then([](int n) { return "平方 = " + std::to_string(n); })
-    .Get();
+// 方式 A：外部准备数据后注入（已有请求对象 / 连接上下文等）
+std::shared_ptr<CMyContext> spCtx = std::make_shared<CMyContext>();
+spCtx->strRequestId = GetRequestId();
+no::CAsyncChain<CMyContext> chain(exec, spCtx);
+
+// 方式 B：链内部懒创建（首次 GetContext() 时构造，恒非空）
+no::CAsyncChain<CMyContext> chain2(exec);
+chain2.GetContext()->nRetry = 3;      // 起链前先填初始数据
+chain2.Submit(StepA).Then(StepB);
 ```
 
-### CTask<void> 也支持 Then（变换无参）
+约束与建议：
+
+- `TContext` 只在**真正懒创建**时才要求可默认构造（即 `GetContext()` 被实例化时）；
+- 层函数拿到的是 `const std::shared_ptr<TContext>&`（借用引用，不增加引用计数）；
+  若要留给**异步回调**使用，自行拷贝该 `shared_ptr` 保活；
+- 同一链的层顺序执行，**不会并发**；跨链共享同一上下文时并发安全由业务负责。
+
+## 5. 失败语义
+
+### 5.1 失败即停（`Then`）
+
+某层返回失败后，后续 `Then` 层**不再执行**，失败码沿链透传到最后一层、`Get()` 与
+`OnCompleted`。框架保证「忘记写判断也不会误执行后续业务」。
 
 ```cpp
-no::CTaskResult<int> r =
-    exec.Submit([]() { /* 干点事 */ })  // CTask<void>
-        .Then([]() { return 42; })        // void → int（无参数）
-        .Then([](int n) { return n + 8; }) // 继续正常链
-        .Get();
-// r.Value() == 50
+// 第 2 层失败 → 第 3、4 层不执行
+auto r = exec.Submit(spCtx, &StepReadParam)   // 失败（参数非法）
+             .Then(&StepVerify)               // 不执行
+             .Then(&StepWriteDb)              // 不执行
+             .Get();
+// r.IsFailed() == true，r.Code() == 业务错误码
 ```
 
-- `CTaskResult<void>::HasValue()` = 是否完成（无值 → 终止）；
-- `OnSuccess` 回调无参；`OnNone` 回调收 `Reason()`；void 上游返回 `no::None` 同样终止下游。
+### 5.2 失败也执行（`ThenAlways`）
 
-## 4. 取结果与回调
+需要「无论成败都要跑」的层（回滚 / 补偿 / 清理 / 审计）用 `ThenAlways`：
+它**总会执行**，`upStep` 就是上一层的结果（可能是失败）。
 
 ```cpp
-// 阻塞取结果（不抛异常，线程安全；多线程可同时 Get 同一任务）
-no::CTaskResult<int> r = t.Get();
-if (r.HasValue()) { int v = r.Value(); }
-else { /* r.Reason() 区分 kEndNone / kException / kStopped ... */ }
+no::CStepResult StepRollback(no::CStepResult upStep, const std::shared_ptr<Ctx>& spCtx)
+{
+    spCtx->strTrace += "回滚;";
+    return upStep;                 // 透传失败：后续 Then 层仍不执行
+}
 
-// 回调（任务完成时在执行器线程异步触发）
-t.OnSuccess([](const int& v) { /* 有值 */ });
-t.OnNone([](no::detail::CTaskEndReason reason) { /* 终止 */ });
-t.OnResult([](const no::CTaskResult<int>& result) { /* 有值/无值统一触发一次 */ });
+no::CStepResult StepRecover(no::CStepResult upStep, const std::shared_ptr<Ctx>& spCtx)
+{
+    (void)upStep;
+    spCtx->strTrace += "恢复;";
+    return no::CStepResult::Ok();  // 吞掉失败：链从本层之后继续执行
+}
 ```
 
-- `Post(fn)`：提交无返回值任务（fire-and-forget）；
-- 任务**已完成**时注册的回调同样投递到执行器**异步执行**（执行器不可用 → 回调不执行，不退回同步）。
-
-## 5. 无值终止模型
-
-| 无值来源 | 表现 |
-|---|---|
-| 任务函数 `throw` | 框架捕获 → 无值（`kException`） |
-| 业务主动终止 | `return no::None;`（`kEndNone`） |
-| 执行器未启动 | 无值（`kNotStarted`） |
-| 执行器已停止 | 无值（`kStopped`） |
-
-> 框架不保留异常文本、不定义错误码；具体原因业务自己在任务函数里记录日志或返回值传递。
-
-## 6. 线程模型
-
-1. **任务函数和续接在工作线程执行**——别在工作线程碰主线程的私有数据（要加锁或用弱引用）；
-2. **任务已完成时再注册回调** → 回调**投递到执行器异步执行**（与 JS/C# 一致）——回调在哪个线程不固定，别做线程假设；
-3. **各 `Then` 步不固定在同一线程**：每个变换会重新投递到线程池，由任意空闲工作线程执行；
-   保证的是链式顺序（后一步在前一步完成后），不保证执行线程（无线程亲和）。
-
-## 7. 生命周期
-
-- **执行器析构 / Stop 后**：已投递、已链式任务仍安全完成（任务链通过**共享句柄**引用线程池）；
-  新投递以无值（`kStopped` / `kNotStarted`）完成；
-- 执行器未 `Start` 就 `Submit` → 任务立即以 `kNotStarted` 完成；
-- `Stop()` 优雅关闭：置 `m_bStopped` 后等线程池任务排空。
-
-## 8. 协程（CCoroutine）
-
-`exec.CoStart<T>()` 启动无栈协程（见 [coroutine-usage.md](coroutine-usage.md)）。
-
-## 9. 常见用法速查
+### 5.3 错误码约定
 
 ```cpp
-// ① 简单提交
-no::CAsyncExecutor exec(2); exec.Start();
-no::CTaskResult<int> r = exec.Submit([]() { return 42; }).Get();
-
-// ② 链式
-auto r2 = exec.Submit([]() { return 3; })
-              .Then([](int n) { return n * 2; })
-              .Then([](int n) { return n + 1; }).Get();
-
-// ③ flatMap（变换返回任务）
-auto r3 = exec.Submit([]() { return 3; })
-              .Then([&exec](int n) { return exec.Submit([n]() { return n * n; }); }).Get();
-
-// ④ 回调（fire-and-forget）
-no::CTask<int> t = exec.Submit([]() { return 7; });
-t.OnSuccess([](const int& v) { /* 有值 */ });
-t.OnNone([](no::detail::CTaskEndReason) { /* 无值终止 */ });
-
-// ⑤ void 任务（也支持 Then）
-exec.Submit([]() { /* 干点事 */ }).Then([]() { return 1; }).Get();
-
-// ⑥ 手动构造结果
-auto ok   = no::CTaskResult<int>(1);   // 有值
-auto none = no::CTaskResult<int>();    // 无值
-
-// ⑦ 中途终止（Option 风格）
-exec.Submit([]() { return -5; })
-    .Then([](int n) -> no::CTaskResult<int> {
-        if (n < 0) return no::None;    // 终止
-        return n * 2;                  // 传播
-    })
-    .Then([](int n) { return n + 1; }).Get();
-
-exec.Stop(); // 优雅关闭：等已提交任务完成
+no::kStepOk            = 0   // 成功
+no::kStepFailed        = 1   // 业务失败（未指定码时的默认值）
+no::kStepStopped       = 2   // 执行器已停止 / 投递失败（框架）
+no::kStepException     = 3   // 层函数抛异常（框架捕获，不向调用方抛出）
+no::kStepBusinessBase  = 100 // 业务错误码从 100 起取
 ```
 
-## 10. 测试与更多
+框架只解释 1..99，其余码**原样透传**（错误码语义由业务定义）。
 
-`Tests/test_common.cpp` 覆盖：链式、flatMap、None 传播、异常转无值、未启动/停止、并发 Get、
-生命周期、多回调 fan-out 等；`Tests/test_perf.cpp` 为性能基准。
-完整可运行示例见 `examples/main.cpp`。
+### 5.4 异常
+
+层函数内抛出的异常被框架捕获并转为**本层失败**（`kStepException`），
+`Get()` / `OnCompleted` 不会向调用方抛异常。
+
+## 6. 完成回调与结果
+
+```cpp
+// 完成回调：成功与失败都触发一次；可注册多个（分叉时各自触发）
+chain.OnCompleted([](no::CStepResult finalStep)
+{
+    Log(finalStep.IsOk() ? "成功" : ("失败码=" + std::to_string(finalStep.Code())));
+});
+
+no::CStepResult r = chain.Get();   // 阻塞等待（多线程可同时等待同一链）
+```
+
+注意：`Get()` 返回与完成回调的执行**没有先后保证**（回调在段完成后按注册顺序触发）。
+测试里若依赖「回调已跑完」，请另用标志 / 条件变量同步。
+
+## 7. 执行器
+
+```cpp
+no::CAsyncExecutor exec(4);             // 4 个工作线程
+exec.Start();                           // 启动（未启动时起链立即以 kStepStopped 失败）
+exec.Post([]() { /* 无返回值任务 */ });  // fire-and-forget（返回是否提交成功）
+exec.IsIdle();                          // 队列是否为空（协程内联续接判断用）
+exec.Stop();                            // 停止并等待已投递任务完成
+```
+
+- `Post`：不涉及链的一次性任务（重活下沉 / 事件异步分发）；
+- 未 `Start()` / 已 `Stop()` 时 `Submit`、`Post` 都不抛异常，而是返回失败 / `false`；
+- `Stop()` 之后可再次 `Start()`（重建句柄与线程池，隔离旧任务）。
+
+## 8. 线程模型
+
+| 事实 | 说明 |
+| --- | --- |
+| 首层 | 由 `Submit` 投递到执行器，**在工作线程上执行** |
+| 后续层 | 上游完成时**在同一工作线程上级联执行**（不再逐层入队） |
+| 单链并发度 | 一条链的层**顺序执行**，任意时刻只有一个线程在跑它的层 |
+| 深链 | 连续内联超过 `kMaxInlineDepth`（64）的层改为投递，防递归爆栈 |
+| 分叉 | 同一层可注册多个 `Then`，各自独立延续（可能在不同线程并行） |
+| 多链 | 多条链互不阻塞，线程池有界并行 |
+
+层内要并行时，自行投递重活（`exec.Post`）或起子链（见协程文档）。
+
+## 9. 生命周期
+
+- 链句柄是**浅句柄**（拷贝共享同一链的同一段）：句柄存活期间，段与线程池都被保活；
+- 链通过共享句柄（`shared_ptr<CExecutorHandle>`）引用执行器线程池：
+  **执行器析构后，已起动的链仍安全跑完**，新投递以 `kStepStopped` 失败；
+- 无效链（默认构造、未绑定执行器）上 `Submit` / `Then` 为空操作，`Get()` 返回失败。
+
+## 10. 常见用法速查
+
+```cpp
+// 单层
+no::CStepResult r = exec.Submit(spCtx, StepOne, ASYNC_LOC).Get();
+
+// 多层（失败即停）+ 收尾
+auto tail = exec.Submit(spCtx, StepA, ASYNC_LOC).Then(StepB, ASYNC_LOC).Then(StepC, ASYNC_LOC);
+tail.OnCompleted([](no::CStepResult r) { /* 成功 / 失败 */ });
+no::CStepResult final = tail.Get();
+
+// 回滚（失败也执行）
+auto tail2 = exec.Submit(spCtx, StepA, ASYNC_LOC)
+                 .Then(StepB, ASYNC_LOC)
+                 .ThenAlways(StepRollback, ASYNC_LOC);
+
+// 分叉（同一层两条支线）
+no::CAsyncChain<Ctx> head = exec.Submit(spCtx, StepA, ASYNC_LOC);
+no::CAsyncChain<Ctx> b1 = head.Then(StepB, ASYNC_LOC);
+no::CAsyncChain<Ctx> b2 = head.Then(StepC, ASYNC_LOC);
+
+// 惰性上下文 / 外部注入两种姿势
+no::CAsyncChain<Ctx> c1(exec);            // 链内创建
+no::CAsyncChain<Ctx> c2(exec, spCtx);     // 外部注入
+```
+
+### 与旧版（传值版 `CTask`）的迁移对照
+
+| 旧写法（已移除） | 新写法 |
+| --- | --- |
+| `exec.Submit([]{ return 3; }).Then([](int n){ return n * 2; })` | 数据放上下文：`spCtx->n = 3;`，层内读改写 |
+| `return no::None;`（无值终止） | `return no::CStepResult::Failed(码);` |
+| `r.HasValue() / r.Value()` | `r.IsOk() / r.Code()`，数据从 `GetContext()` 取 |
+| `OnSuccess / OnNone` | `OnCompleted`（统一一个回调，看 `IsOk()`） |
+| `NOTHROW_LOC` | `ASYNC_LOC` |
+| flatMap（层返回 `CTask`） | 层内起子链并用协程 await（见 coroutine 文档） |
+
+## 11. 测试与示例
+
+- 示例程序：`examples/main.cpp`（19 个演示，含失败即停、ThenAlways 回滚、深链、协程）；
+- 单元测试：`Tests/test_async_chain.cpp`（链 + 协程共 31 个用例）；
+- 基准：`Benchmark/cases/ChainCase.cpp`、`CoroutineCase.cpp`、`StressCase.cpp`；
+- 运行：`./build.sh --tests`（或 `./build/debug/tests`）、`./build/debug/examples`。

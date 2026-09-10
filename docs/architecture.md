@@ -5,7 +5,7 @@
 ```mermaid
 graph TD
     subgraph 业务服务器
-        B[ServerExample / ServerTemplate / LogServer]
+        B[ServerExample / ServerTemplate]
         B -->|协议+业务逻辑| S[Service / Module]
     end
     subgraph ServerCore

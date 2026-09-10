@@ -39,21 +39,10 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 │   ├── Timer/                   # TimerManager（基于 asio::steady_timer）
 │   ├── Config/                  # 配置解析（基于 inih）
 │   ├── Thread/                  # ThreadPool（自实现：多线程任务队列）
-│   ├── Async/                   # AsyncExecutor（Task 链式调用：Then / Get）
+│   ├── Async/                   # 异步链（CAsyncChain：固定签名层 + 共享上下文）+ 无栈协程
 │   ├── Serialization/           # 二进制序列化（CBinaryWriter / CBinaryReader，小端 + 边界检查）
 │   ├── Storage/                 # CFileStore（通用文件存储：纯内存、线程安全、短码生成，供任意服务器复用）
 │   └── Linux/Makefile           # 生成 build/libCommon.a
-│
-├── WorkflowDemo/                # Sogou Workflow 使用示例（server / client / parallel / graph）
-│
-├── DataHub/                     # 设备间 HTTP 数据传输服务（ServerCore 骨架 + Workflow HTTP）
-│   ├── datahub.ini              # 示例配置（监听端口）
-│   ├── Application/             # DataHubApplication
-│   ├── Module/                  # DataStoreModule（内存存储）/ HttpServerModule（WFHttpServer 封装）
-│   ├── Web/                     # 前端页面（独立资源 index.html，运行时从磁盘加载）
-│   ├── main.cpp                 # 服务器入口
-│   └── Linux/
-│       └── Makefile             # 生成 build/datahub
 │
 ├── ServerCore/                  # 服务器基础框架（静态库 libServerCore.a，模块自治）
 │   ├── Application/             # MyApplication（生命周期 + 配置注入 + 运行状态 + 默认装配）
@@ -87,25 +76,15 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 │   └── Linux/
 │       └── Makefile             # 生成 build/servertemplate
 │
-├── LogServer/                   # 集中式日志服务器（复用 ServerCore，模块自治）
-│   ├── logserver.ini            # 示例配置（监听端口 / 日志目录）
-│   ├── Application/             # LogServerApplication（含 CConfigReloadModule 配置热加载广播）
-│   ├── Protocol/                # LogProtocol（Length + Command + 文本负载）
-│   ├── Service/                 # LogService / LogStorage（按来源分文件 + 滚动）
-│   ├── Module/                  # 各业务模块
-│   ├── main.cpp                 # 服务器入口
-│   └── Linux/
-│       └── Makefile             # 生成 build/logserver
-│
-├── Tests/                       # 单元测试（轻量框架，链接 Common + ServerCore + LogServer 被测源码）
+├── Tests/                       # 单元测试（轻量框架，链接 Common + ServerCore）
 │   ├── TestFramework.h/.cpp     # TEST / ASSERT_TRUE / ASSERT_EQ 宏
 │   ├── test_common.cpp / test_exec.cpp / test_servercore.cpp
-│   ├── test_logserver.cpp / test_infra.cpp
+│   ├── test_async_chain.cpp / test_infra.cpp / test_serialization.cpp
 │   ├── main.cpp
 │   └── Linux/Makefile           # 生成 build/tests（make run 运行全部用例）
 │
 ├── examples/                    # 示例项目（参考标准项目结构，直接编译所需 Common 源码）
-│   ├── main.cpp                 # 示例入口（AsyncExecutor 完整示例）
+│   ├── main.cpp                 # 示例入口（异步链 / 协程 完整示例）
 │   └── Linux/
 │       └── Makefile             # 生成 build/examples（cd examples/Linux && make run）
 │
@@ -123,7 +102,7 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 - **Timer**：TimerManager（基于 asio::steady_timer，一次性 / 周期性）
 - **Config**：基于 inih 的 INI 解析
 - **Thread**：ThreadPool（自实现多线程任务队列）
-- **Async**：AsyncExecutor（`Submit` → `Then` → `Get` 链式调用，Option 风格）
+- **Async**：异步链（`CAsyncChain`：层间只传成败、数据走共享上下文、失败即停 + `ThenAlways` 回滚）+ 无栈协程 `CCoroutine`
 - **Serialization**：CBinaryWriter / CBinaryReader（小端 + 边界检查）
 
 ### ServerCore（服务器基础框架 `libServerCore.a`）
@@ -134,18 +113,17 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 - **Module**：模块模型（IUnknown / 引用计数 / 接口查询）+ `CModuleManager`（拓扑排序 / 失败回滚）+ 依赖注入
 - **Event / Message / Network / Infra / Observability / Process / Exec**：事件分发、消息流水线、网络层、适配层、指标、进程工具、并发调度
 
-依赖方向：`ServerExample / ServerTemplate / LogServer → ServerCore → Common → 第三方库 / POSIX`。
+依赖方向：`ServerExample / ServerTemplate → ServerCore → Common → 第三方库 / POSIX`。
 
 ### 业务服务器
 
-- **ServerExample**：ServerCore 全功能验证（极简协议 + 回显 + 事件解耦 + 模块化装配 + 日志上报）
+- **ServerExample**：ServerCore 全功能验证（极简协议 + 回显 + 事件解耦 + 模块化装配 + 异步链演示）
 - **ServerTemplate**：最小业务服务器骨架（`EchoService` 验证网络收发链路），可作为新服务器模板
-- **LogServer**：集中式日志服务器（按来源分文件 + 滚动 + 配置热加载）
 
 ### Tests / examples
 
-- **Tests**：单元测试（轻量框架 `TEST` + `ASSERT_TRUE`/`ASSERT_EQ`，覆盖 Common / ServerCore / Exec / LogServer）
-- **examples**：示例项目（AsyncExecutor 完整示例）
+- **Tests**：单元测试（轻量框架 `TEST` + `ASSERT_TRUE`/`ASSERT_EQ`，覆盖 Common / ServerCore / Exec / 异步链与协程）
+- **examples**：示例项目（异步链 / 协程 19 个演示）
 
 ## 文档
 

@@ -1,119 +1,151 @@
 #include "CoroutineCase.h"
 
-#include "Async/AsyncExecutor.h"
-#include "Async/Coroutine.h"
-#include "framework/Bench.h"
-
 #include <memory>
 #include <string>
 
+#include "Async/AsyncChain.h"
+#include "Async/AsyncExecutor.h"
+#include "Async/Coroutine.h"
+#include "cases/ChainContext.h"
+#include "framework/Bench.h"
+
 namespace {
 
-/// 简单协程：启动后一次 CO_AWAIT 落地值，再 CO_RETURN。
-class BenchCoroOnce : public common::async::CCoroutine<int>
+/// 协程：await 一条单层子链后完成。
+class BenchCoroOnce : public common::async::CCoroutine<bench::CChainContext>
 {
-public:
-    int m_value = 0;
+   public:
+    using common::async::CCoroutine<bench::CChainContext>::CCoroutine;
 
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT_INTO(m_value, []() { return 42; });
-        CO_RETURN(m_value);
+        CO_AWAIT(Chain(&bench::StepInc));
+        CO_RETURN_VOID();
         CO_END();
     }
 };
 
-/// 10 级 await 链协程：每级 +1，验证多次挂起 / 恢复。
-class BenchCoroChain10 : public common::async::CCoroutine<int>
+/// 协程：顺序 await 10 条单层子链（10 次挂起 / 恢复）。
+class BenchCoroSeq10 : public common::async::CCoroutine<bench::CChainContext>
 {
-public:
-    int m_v = 0;
+   public:
+    using common::async::CCoroutine<bench::CChainContext>::CCoroutine;
 
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT_INTO(m_v, []() { return 1; });
-        CO_AWAIT_INTO(m_v, [this]() { return m_v + 1; });
-        CO_AWAIT_INTO(m_v, [this]() { return m_v + 1; });
-        CO_AWAIT_INTO(m_v, [this]() { return m_v + 1; });
-        CO_AWAIT_INTO(m_v, [this]() { return m_v + 1; });
-        CO_AWAIT_INTO(m_v, [this]() { return m_v + 1; });
-        CO_AWAIT_INTO(m_v, [this]() { return m_v + 1; });
-        CO_AWAIT_INTO(m_v, [this]() { return m_v + 1; });
-        CO_AWAIT_INTO(m_v, [this]() { return m_v + 1; });
-        CO_AWAIT_INTO(m_v, [this]() { return m_v + 1; });
-        CO_RETURN(m_v);
+        CO_AWAIT(Chain(&bench::StepInc));
+        CO_AWAIT(Chain(&bench::StepInc));
+        CO_AWAIT(Chain(&bench::StepInc));
+        CO_AWAIT(Chain(&bench::StepInc));
+        CO_AWAIT(Chain(&bench::StepInc));
+        CO_AWAIT(Chain(&bench::StepInc));
+        CO_AWAIT(Chain(&bench::StepInc));
+        CO_AWAIT(Chain(&bench::StepInc));
+        CO_AWAIT(Chain(&bench::StepInc));
+        CO_AWAIT(Chain(&bench::StepInc));
+        CO_RETURN_VOID();
         CO_END();
     }
 };
 
-} // namespace
+/// 协程：并行 await 10 条单层子链（CO_AWAIT_ALL）。
+class BenchCoroAll10 : public common::async::CCoroutine<bench::CChainContext>
+{
+   public:
+    using common::async::CCoroutine<bench::CChainContext>::CCoroutine;
+
+    void Run() override
+    {
+        CO_BEGIN();
+        CO_AWAIT_ALL(Chain(&bench::StepInc), Chain(&bench::StepInc), Chain(&bench::StepInc), Chain(&bench::StepInc),
+                     Chain(&bench::StepInc), Chain(&bench::StepInc), Chain(&bench::StepInc), Chain(&bench::StepInc),
+                     Chain(&bench::StepInc), Chain(&bench::StepInc));
+        CO_RETURN_VOID();
+        CO_END();
+    }
+};
+
+}  // namespace
 
 void RunCoroutineCases()
 {
-    const std::string group = "3. 协程（CCoroutine 无栈协程）";
+    const std::string group = "3. 协程（CCoroutine 顺序化）";
     common::async::CAsyncExecutor exec(1);
     exec.Start();
 
-    // 正确性校验（①）：协程结果（简单协程=42、10-await 链=10）。
-    benchmark::SanityCheck(group, "协程 start+await 结果=42",
-        exec.CoStart<BenchCoroOnce>()->Get().Value() == 42);
-    benchmark::SanityCheck(group, "协程 10-await 链结果=10",
-        exec.CoStart<BenchCoroChain10>()->Get().Value() == 10);
+    // 正确性校验：协程与子链共享上下文，结果一致。
+    {
+        std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
+        std::shared_ptr<BenchCoroOnce> pCoro = exec.CoStart<BenchCoroOnce>(spCtx);
+        benchmark::SanityCheck(group, "协程 1 次 await 结果=1", pCoro->Get().IsOk() && spCtx->nValue == 1);
+    }
+    {
+        std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
+        std::shared_ptr<BenchCoroSeq10> pCoro = exec.CoStart<BenchCoroSeq10>(spCtx);
+        benchmark::SanityCheck(group, "协程 10 次 await 结果=10", pCoro->Get().IsOk() && spCtx->nValue == 10);
+    }
+    {
+        std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
+        std::shared_ptr<BenchCoroAll10> pCoro = exec.CoStart<BenchCoroAll10>(spCtx);
+        benchmark::SanityCheck(group, "协程并行 await ×10 结果=10", pCoro->Get().IsOk() && spCtx->nValue == 10);
+    }
 
     // 基线：直接函数调用。
-    benchmark::BenchOp(group, "direct_call (baseline)",
-        []() { volatile int s = 42; (void)s; }, 7, "直接调用");
+    benchmark::BenchOp(group, "direct_call (baseline)", []()
+    {
+        volatile int s = 42;
+        (void)s;
+    }, 7, "直接调用，无调度");
 
-    // 等价单任务：Submit + Get。
-    benchmark::BenchOp(group, "CAsyncExecutor single task",
-        [&exec]() {
-            volatile int s = exec.Submit([]() { return 42; }).Get().Value();
-            (void)s;
-        },
-        7, "提交单个任务并取值");
+    // 单层链：Submit + Get（等价「一个异步步骤」）。
+    benchmark::BenchOp(group, "CAsyncChain single layer", [&exec]()
+    {
+        std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
+        volatile long long s = exec.Submit(spCtx, &bench::StepInc).Get().IsOk() ? spCtx->nValue : -1;
+        (void)s;
+    }, 7, "起链 + 单层执行 + Get");
 
-    // 简单协程：CoStart + 一次 await + 完成。
-    benchmark::BenchOp(group, "CCoroutine start+await+done",
-        [&exec]() {
-            std::shared_ptr<BenchCoroOnce> p = exec.CoStart<BenchCoroOnce>();
-            volatile int s = p->Get().Value();
-            (void)s;
-        },
-        7, "CoStart → 一次 CO_AWAIT → CO_RETURN");
+    // 协程：CoStart + 1 次 await + 完成。
+    benchmark::BenchOp(group, "CCoroutine start+await", [&exec]()
+    {
+        std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
+        std::shared_ptr<BenchCoroOnce> pCoro = exec.CoStart<BenchCoroOnce>(spCtx);
+        volatile int s = pCoro->Get().Code();
+        (void)s;
+    }, 7, "CoStart → 1 次 CO_AWAIT（子链）→ 完成");
 
-    // 10 级链：直接函数。
-    benchmark::BenchOp(group, "direct chain x10",
-        []() {
-            volatile int s;
-            int v = 0;
-            for (int i = 0; i < 10; ++i)
-                v = v + 1;
-            s = v;
-            (void)s;
-        },
-        7, "循环 10 次");
+    // 10 层链：等效工作量（一次链构建）。
+    benchmark::BenchOp(group, "CAsyncChain x10", [&exec]()
+    {
+        std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
+        common::async::CAsyncChain<bench::CChainContext> tail = exec.Submit(spCtx, &bench::StepInc);
+        for (int k = 1; k < 10; ++k)
+        {
+            tail = tail.Then(&bench::StepInc);
+        }
+        volatile long long s = tail.Get().IsOk() ? spCtx->nValue : -1;
+        (void)s;
+    }, 7, "10 层链（构建 + 执行 + Get）");
 
-    // 10 级链：CAsyncExecutor Then。
-    benchmark::BenchOp(group, "CAsyncExecutor chain x10",
-        [&exec]() {
-            auto task = exec.Submit([]() { return 0; });
-            for (int i = 0; i < 10; ++i)
-                task = task.Then([](int x) { return x + 1; });
-            volatile int s = task.Get().Value();
-            (void)s;
-        },
-        5, "10 级 Then 链");
+    // 协程：10 次顺序 await（每条子链 1 层）。
+    benchmark::BenchOp(group, "CCoroutine seq await x10", [&exec]()
+    {
+        std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
+        std::shared_ptr<BenchCoroSeq10> pCoro = exec.CoStart<BenchCoroSeq10>(spCtx);
+        volatile int s = pCoro->Get().Code();
+        (void)s;
+    }, 7, "10 次挂起 / 恢复（每次起一条单层子链）");
 
-    // 10 级链：协程 10 次 await。
-    benchmark::BenchOp(group, "CCoroutine chain x10 (10 await)",
-        [&exec]() {
-            std::shared_ptr<BenchCoroChain10> p = exec.CoStart<BenchCoroChain10>();
-            volatile int s = p->Get().Value();
-            (void)s;
-        },
-        5, "10 次 CO_AWAIT_INTO 挂起/恢复");
+    // 协程：10 次并行 await。
+    benchmark::BenchOp(group, "CCoroutine parallel await x10", [&exec]()
+    {
+        std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
+        std::shared_ptr<BenchCoroAll10> pCoro = exec.CoStart<BenchCoroAll10>(spCtx);
+        volatile int s = pCoro->Get().Code();
+        (void)s;
+    }, 7, "CO_AWAIT_ALL：10 条子链并行等待，一次恢复");
 
     exec.Stop();
 }

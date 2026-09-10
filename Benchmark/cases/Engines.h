@@ -3,24 +3,24 @@
 //
 // 三种 fire-and-forget 引擎，提供一致的 Start / Submit / Stop 接口：
 //   - PoolEngine    : Common::thread::CThreadPool（mutex + condvar）
-//   - AsyncEngine   : Common::async::CAsyncExecutor（任务链框架）
+//   - AsyncEngine   : Common::async::CAsyncExecutor（异步链框架的调度层，Post 投递）
 //   - AsioEngine    : asio::post + io_context（行业标准第三方库，本项目自带）
 //
 // 注意：Submit 只负责投递；任务完成与否由调用方通过共享原子计数
 // （框架的 WaitDone / StressWindow）感知，保证三种引擎语义一致。
+// 链 / 协程用例不走本文件（它们直接使用 CAsyncExecutor::Submit / CoStart）。
 // ====================================================================
 #ifndef COM_BENCHMARK_CASES_ENGINES_H
 #define COM_BENCHMARK_CASES_ENGINES_H
 
-#include "Async/AsyncExecutor.h"
-#include "Thread/ThreadPool.h"
-
 #include <asio.hpp>
-
 #include <functional>
 #include <memory>
 #include <thread>
 #include <vector>
+
+#include "Async/AsyncExecutor.h"
+#include "Thread/ThreadPool.h"
 
 namespace bench {
 
@@ -74,11 +74,9 @@ struct AsioEngine
     void Start(int n)
     {
         io.reset(new asio::io_context());
-        work.reset(new asio::executor_work_guard<asio::io_context::executor_type>(
-            io->get_executor()));
+        work.reset(new asio::executor_work_guard<asio::io_context::executor_type>(io->get_executor()));
         workers.clear();
-        for (int i = 0; i < n; ++i)
-            workers.emplace_back([this]() { io->run(); });
+        for (int i = 0; i < n; ++i) workers.emplace_back([this]() { io->run(); });
     }
 
     void Submit(const std::function<void()>& f) { asio::post(*io, f); }
@@ -86,14 +84,13 @@ struct AsioEngine
     void Stop()
     {
         work->reset();
-        for (size_t i = 0; i < workers.size(); ++i)
-            workers[i].join();
+        for (size_t i = 0; i < workers.size(); ++i) workers[i].join();
         workers.clear();
         io.reset();
         work.reset();
     }
 };
 
-} // namespace bench
+}  // namespace bench
 
-#endif // COM_BENCHMARK_CASES_ENGINES_H
+#endif  // COM_BENCHMARK_CASES_ENGINES_H

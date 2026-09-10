@@ -7,8 +7,9 @@
 | 实现 | 位置 | 说明 |
 |---|---|---|
 | `common::thread::CThreadPool` | `Common/Thread/` | mutex + condition_variable 线程池 |
-| `common::async::CAsyncExecutor` | `Common/Async/` | 无异常任务链框架（Option 风格） |
-| `common::async::CCoroutine` | `Common/Async/Coroutine.h` | 基于任务链的无栈协程 |
+| `common::async::CAsyncExecutor` | `Common/Async/` | 异步链框架的调度层（线程池 + `Post`） |
+| `common::async::CAsyncChain` | `Common/Async/AsyncChain.h` | 异步链（固定签名层 + 共享上下文，失败即停） |
+| `common::async::CCoroutine` | `Common/Async/Coroutine.h` | 基于异步链的无栈协程（await 链） |
 | `asio::post` | `ThirdParty/asio` | 行业标准第三方异步库（对比基线） |
 | `direct_call` | — | 直接函数调用（理论下限） |
 | `std::thread` | 标准库 | 每任务新建线程（最重基线） |
@@ -16,12 +17,13 @@
 ## 测试维度
 
 1. **任务提交**：单任务「提交 → 执行 → 通知 → 唤醒」端到端往返延迟（ns/op、P50、P99、吞吐）。
-2. **任务链**：`CAsyncExecutor::Then` 链（1/5/20 级）构建 + 执行 + 取值成本。
-3. **协程**：`CCoroutine` 启动 + 挂起/恢复 + 完成，以及 10 级 await 链。
-4. **协程创建/切换**（对齐 [librf](https://github.com/tearshark/librf) 的 `resumable_switch` 方法）：
-   CoStart 创建成本与每次 `CO_AWAIT` 挂起/恢复的切换成本**分离计时**，
-   按协程数量梯度（100/1000/10000）扫描扩展性。
-5. **压力测试**：4 线程窗口式稳定吞吐（ops/s）+ 大窗口背压 + Stop 排空延迟。
+2. **异步链**：`CAsyncChain` 链（1/5/20/100 层）构建 + 逐层级联 + 取值成本，
+   含深链（256 层，超过内联深度上限后改投递）与失败即停（短路）链。
+3. **协程**：`CCoroutine` 启动 + 一次 await + 完成，以及 10 次顺序 / 并行 await
+   与等效链的对比。
+4. **协程伸缩**：长协程（单协程 20 次挂起/恢复）与批量协程（200 个 × 3 await）
+   在 1 / 2 / 4 线程执行器下的总成本。
+5. **压力测试**：窗口式稳定吞吐（ops/s）——引擎对比 + 链压力 + 协程压力 + 混合负载。
 
 ## 构建与运行
 
@@ -53,12 +55,13 @@ Benchmark/
 │   ├── Bench.h           # 轻量微基准 + 窗口式压力框架（仅 C++11 标准库）
 │   └── Report.h          # markdown 表格汇总输出
 ├── cases/
-│   ├── Engines.h         # CThreadPool / CAsyncExecutor / asio 引擎封装
+│   ├── Engines.h         # CThreadPool / CAsyncExecutor(Post) / asio 引擎封装
+│   ├── ChainContext.h    # 基准用共享上下文与层函数
 │   ├── SubmitCase.*      # 任务提交往返延迟
-│   ├── ChainCase.*       # 任务链开销（含 100 级深层链）
-│   ├── CoroutineCase.*   # 协程启动 / 挂起 / 链
-│   ├── ResumableCase.*   # 协程创建 / 切换成本（librf 风格，数量梯度）
-│   └── StressCase.*      # 窗口式吞吐（含多线程协程/链）+ 停止延迟
+│   ├── ChainCase.*       # 异步链开销（1/5/20/100 层 + 深链 256 + 失败即停）
+│   ├── CoroutineCase.*   # 协程启动 / 顺序 await / 并行 await
+│   ├── ResumableCase.*   # 长协程挂起恢复 + 批量协程多线程伸缩
+│   └── StressCase.*      # 窗口式吞吐（引擎 / 链 / 协程 / 混合负载）
 └── results/
     └── benchmark-report.md   # 生成的测试报告（运行后出现）
 ```
@@ -73,7 +76,7 @@ Benchmark/
 ## 注意事项
 
 - 性能测试对编译优化敏感：**务必用 `-r`（-O2）跑**，`-d` 仅供调试。
-- 为公平对比，三种异步引擎统一使用「fire-and-forget 提交 + 原子计数等待完成」，
-  `CAsyncExecutor` 的 `Post` 与 `Submit().Get()` 是不同路径，可自行扩展用例对比。
-- 协程用例中的链协程是固定展开的 10 级 `CO_AWAIT`（Duff's device 状态机限制
-  宏不能在同一行重复使用）。
+- 为公平对比，三种 fire-and-forget 引擎统一使用「提交 + 原子计数等待完成」；
+  链 / 协程用例直接使用 `CAsyncExecutor::Submit` / `CoStart`（它们不支持 fire-and-forget）。
+- 协程体内的 await 次数是**源码固定写出**的（Duff's device 状态机用 `__LINE__`
+  作恢复点，宏不能循环展开）；基准里的链程已固定展开 10 / 20 次。

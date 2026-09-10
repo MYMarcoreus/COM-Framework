@@ -4,25 +4,25 @@
 #include <memory>
 
 #include "Async/AsyncExecutor.h"
-#include "Module/ScopedInterfacePtr.h"
 #include "Infra/ITimer.h"
 #include "Module/Module.h"
+#include "Module/ScopedInterfacePtr.h"
 
 namespace serverexample {
 
-/// @brief 异步框架演示模块。
+/// @brief 异步链演示模块。
 ///
-/// 演示 common::async::CAsyncExecutor / CTask 的异步能力：
-///  - 链式调用：Submit → Then → Get（多阶段流水线）；
-///  - 多回调 fan-out：同一任务多个 OnSuccess 消费者；
-///  - 任务异常 → 无值终止（不抛异常）；
-///  - 阻塞获取：Get()。
+/// 演示 common::async 异步链特化版的用法（周期触发一次完整演示）：
+///  - 链 + 共享上下文：层与层之间只传成功 / 失败，数据走 shared_ptr 上下文；
+///  - 失败即停：某层失败后后续 Then 层不再执行，失败码透传；
+///  - ThenAlways：失败也执行的层（回滚 / 补偿 / 清理），可观察上一层失败；
+///  - 层内异常 → 本层失败（kStepException），不向调用方抛出；
+///  - 协程：用顺序代码 await 多条子链（失败则协程终止）。
 ///
-/// 周期性（ITimer + 弱引用守卫）触发一次完整演示。
 /// 模块名 "async-example"。
 class CExampleAsyncModule : public sc::CModule
 {
-public:
+   public:
     explicit CExampleAsyncModule(std::int64_t intervalMs);
 
     virtual ~CExampleAsyncModule();
@@ -39,14 +39,14 @@ public:
     // 停止并释放引用。
     void Shutdown() override;
 
-private:
+   private:
     // 执行一次完整的异步能力演示。
     void RunExample();
 
     std::int64_t m_nIntervalMs;
     sc::ScopedInterfacePtr<sc::ITimer> m_pTimer;
-    std::unique_ptr<common::async::CAsyncExecutor> m_pExecutor; // 异步执行器（Option 风格）
-    common::timer::TimerId m_tTimerId;                                 // 周期演示定时器 id
+    std::unique_ptr<common::async::CAsyncExecutor> m_pExecutor;  // 异步执行器（链 / 协程调度）
+    common::timer::TimerId m_tTimerId;                           // 周期演示定时器 id
 };
 
-} // namespace serverexample
+}  // namespace serverexample

@@ -1,11 +1,11 @@
 #include "SubmitCase.h"
 
-#include "cases/Engines.h"
-#include "framework/Bench.h"
-
 #include <atomic>
 #include <string>
 #include <thread>
+
+#include "cases/Engines.h"
+#include "framework/Bench.h"
 
 namespace {
 
@@ -16,14 +16,15 @@ template <typename TEngine>
 inline void RunOneWithDone(TEngine& eng, const std::function<void()>& work)
 {
     std::atomic<uint64_t> done(0);
-    eng.Submit([&done, &work]() {
+    eng.Submit([&done, &work]()
+    {
         work();
         done.fetch_add(1, std::memory_order_release);
     });
     benchmark::WaitDone(done, 1);
 }
 
-} // namespace
+}  // namespace
 
 void RunSubmitCases()
 {
@@ -31,20 +32,25 @@ void RunSubmitCases()
     const int kThreads = 1;
 
     // 基线：直接函数调用（理论下限）。
-    benchmark::BenchOp(group, "direct_call (baseline)",
-        []() { volatile int s = 42; (void)s; }, 7, "直接调用，无调度");
+    benchmark::BenchOp(group, "direct_call (baseline)", []()
+    {
+        volatile int s = 42;
+        (void)s;
+    }, 7, "直接调用，无调度");
 
     // 最重基线：每任务新建线程 + join（线程创建成本参考）。
-    benchmark::BenchOp(group, "std::thread (per-task)",
-        []() { std::thread t([]() {}); t.join(); }, 5, "每任务创建线程，无复用");
+    benchmark::BenchOp(group, "std::thread (per-task)", []()
+    {
+        std::thread t([]() {});
+        t.join();
+    }, 5, "每任务创建线程，无复用");
 
     // CThreadPool（1 工作线程）。
     {
         bench::PoolEngine eng;
         eng.Start(kThreads);
-        benchmark::BenchOp(group, "CThreadPool (1 thread)",
-            [&eng]() { RunOneWithDone(eng, []() {}); },
-            7, "mutex+condvar 线程池，提交→执行→唤醒");
+        benchmark::BenchOp(group, "CThreadPool (1 thread)", [&eng]() { RunOneWithDone(eng, []() {}); }, 7,
+                           "mutex+condvar 线程池，提交→执行→唤醒");
         eng.Stop();
     }
 
@@ -52,9 +58,8 @@ void RunSubmitCases()
     {
         bench::AsyncEngine eng;
         eng.Start(kThreads);
-        benchmark::BenchOp(group, "CAsyncExecutor (1 thread)",
-            [&eng]() { RunOneWithDone(eng, []() {}); },
-            7, "任务链框架（Option 风格），提交→执行→唤醒");
+        benchmark::BenchOp(group, "CAsyncExecutor Post (1 thread)", [&eng]() { RunOneWithDone(eng, []() {}); }, 7,
+                           "异步执行器 fire-and-forget（与链共用同一线程池）");
         eng.Stop();
     }
 
@@ -62,9 +67,8 @@ void RunSubmitCases()
     {
         bench::AsioEngine eng;
         eng.Start(kThreads);
-        benchmark::BenchOp(group, "asio::post (1 thread)",
-            [&eng]() { RunOneWithDone(eng, []() {}); },
-            7, "行业标准异步库（本项目自带）");
+        benchmark::BenchOp(group, "asio::post (1 thread)", [&eng]() { RunOneWithDone(eng, []() {}); }, 7,
+                           "行业标准异步库（本项目自带）");
         eng.Stop();
     }
 }

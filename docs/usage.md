@@ -11,7 +11,7 @@
 
 ```bash
 ./build.sh --compiledb       # 生成所有项目的 compile_commands.json（供 clangd）
-./build.sh                   # 构建 Common → ServerCore → LogServer → ServerExample → ServerTemplate → Tests
+./build.sh                   # 构建 Common → ServerCore → ServerExample → ServerTemplate → Tests → examples → Benchmark
 ```
 
 > 容器内 clangd 直接使用容器路径（`/workspace/...`）的 `compile_commands.json`，无需路径改写。
@@ -36,7 +36,7 @@
 **构建产物按模式分目录**（debug 与 release 隔离，可同时存在、互不干扰）：
 
 ```text
-build/debug/       —— 调试产物（默认；datahub、example、example_client、logserver、servertemplate、tests、lib*.a、examples/）
+build/debug/       —— 调试产物（默认；example、example_client、servertemplate、tests、benchmark、lib*.a、examples/）
 build/release/     —— 发布产物（-O2，用 -r/--release 构建）
 ```
 
@@ -158,7 +158,5 @@ git commit -m "升级 asio 到 <新标签>"
 | `./build/debug/example 9000` | 运行 ServerExample 服务器（debug） |
 | `./build/debug/example_client 9000` | 运行 ServerExample 客户端（debug） |
 | `./build/release/example 9000` | 运行 ServerExample 服务器（release） |
-| `./build/debug/datahub 8888` | 运行 DataHub 数据传输服务（浏览器访问 http://<IP>:8888/） |
-| `./build/debug/demo_server 8888` | 运行 WorkflowDemo HTTP echo 服务器 |
-| `./build/debug/demo_client http://127.0.0.1:8888/x` | 运行 WorkflowDemo HTTP 客户端 |
-| `./build/debug/demo_parallel <url1> <url2>` | 运行 WorkflowDemo 并行请求示例 |
+| `./build/debug/examples` | 运行异步链 / 协程示例（自校验，全部断言通过则退出码 0） |
+| `./build/release/benchmark` | 运行异步 / 协程性能基准（结果写 Benchmark/results/） |
