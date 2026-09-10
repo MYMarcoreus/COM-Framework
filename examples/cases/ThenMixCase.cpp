@@ -95,13 +95,6 @@ struct CBillingContext
     {}
 };
 
-// ==================== 短别名（上下文定好后立刻起别名，后面到处都用它）
-// ====================
-
-using COrderPromise = no::CPromise<COrderContext>;      ///< 下单流程的 promise。
-using CStockPromise = no::CPromise<CStockContext>;      ///< 库存模块的 promise。
-using CBillingPromise = no::CPromise<CBillingContext>;  ///< 记账模块的 promise。
-
 /// 本用例的业务错误码（业务码从 kBusinessBase 起取）。
 enum ThenMixCode
 {
@@ -144,7 +137,7 @@ class CStockModule
     /// @param nSku 商品编码。
     ///
     /// @return 库存模块自己上下文的 promise（调用方只能等它，拿不到执行器）。
-    CStockPromise QueryStockAsync(int nSku)
+    no::CPromise<CStockContext> QueryStockAsync(int nSku)
     {
         std::shared_ptr<CStockContext> spStock = std::make_shared<CStockContext>();
         spStock->nSku = nSku;
@@ -190,7 +183,7 @@ class CBillingModule
     /// @param nAmount 金额（分）。
     ///
     /// @return 记账模块自己上下文的 promise。
-    CBillingPromise WriteBillingAsync(int nOrderId, int nAmount)
+    no::CPromise<CBillingContext> WriteBillingAsync(int nOrderId, int nAmount)
     {
         std::shared_ptr<CBillingContext> spBill = std::make_shared<CBillingContext>();
         spBill->nOrderId = nOrderId;
@@ -230,29 +223,30 @@ class COrderModule
     /// @param spBillingModule 记账模块（自持执行器；旁支用）。
     ///
     /// @return 指向 finally 层的 promise 句柄。
-    COrderPromise PlaceOrderAsync(const std::shared_ptr<COrderContext>& spCtx,
-                                  const std::shared_ptr<CStockModule>& spStockModule,
-                                  const std::shared_ptr<CBillingModule>& spBillingModule)
+    no::CPromise<COrderContext> PlaceOrderAsync(const std::shared_ptr<COrderContext>& spCtx,
+                                                const std::shared_ptr<CStockModule>& spStockModule,
+                                                const std::shared_ptr<CBillingModule>& spBillingModule)
     {
         // ③ 工厂：then 内部执行其他模块的异步函数，并等它（跨上下文 → 桥接）。
-        COrderPromise::PromiseFactory fnQueryStock =
+        no::CPromise<COrderContext>::PromiseFactory fnQueryStock =
             [this, spStockModule](const std::shared_ptr<COrderContext>& spCtxSelf)
         {
             return BridgeQueryStock(spCtxSelf, spStockModule);
         };
 
         // ④ 工厂：在 lambda 里现搭一条内层 then 链，让它参与当前链（同上下文 → 直接 adopt）。
-        COrderPromise::PromiseFactory fnReserveInner = [this](const std::shared_ptr<COrderContext>& spCtxSelf)
+        no::CPromise<COrderContext>::PromiseFactory fnReserveInner =
+            [this](const std::shared_ptr<COrderContext>& spCtxSelf)
         {
             return m_exec.NewPromise(spCtxSelf, &StepReserveStock, ASYNC_LOC).Then(&StepReserveConfirm, ASYNC_LOC);
         };
 
         // ⑤ 旁支：then 内部执行其他异步函数，但不等它（fire-and-forget）。
-        COrderPromise::ThenHandler fnBillingSideBranch =
+        no::CPromise<COrderContext>::ThenHandler fnBillingSideBranch =
             [spBillingModule](no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtxSelf)
         {
             const int nOrderId = spCtxSelf->nSku * 1000 + spCtxSelf->nQty;
-            CBillingPromise promiseBill = spBillingModule->WriteBillingAsync(nOrderId, spCtxSelf->nTotal);
+            no::CPromise<CBillingContext> promiseBill = spBillingModule->WriteBillingAsync(nOrderId, spCtxSelf->nTotal);
             // 旁支的收尾通知跑在记账模块的线程上 → 只写原子，不做重活。
             promiseBill.OnSettled([spCtxSelf](no::CPromiseResult result)
             {
@@ -312,14 +306,15 @@ class COrderModule
     /// @param spStockModule 库存模块。
     ///
     /// @return 由库存模块的回调 settle 的本流程 promise。
-    COrderPromise BridgeQueryStock(const std::shared_ptr<COrderContext>& spCtx,
-                                   const std::shared_ptr<CStockModule>& spStockModule)
+    no::CPromise<COrderContext> BridgeQueryStock(const std::shared_ptr<COrderContext>& spCtx,
+                                                 const std::shared_ptr<CStockModule>& spStockModule)
     {
-        COrderPromise::PromiseExecutor fnExecutor =
-            [spStockModule, spCtx](const COrderPromise::ResolveFn& fnResolve, const COrderPromise::RejectFn& fnReject)
+        no::CPromise<COrderContext>::PromiseExecutor fnExecutor =
+            [spStockModule, spCtx](const no::CPromise<COrderContext>::ResolveFn& fnResolve,
+                                   const no::CPromise<COrderContext>::RejectFn& fnReject)
         {
             // 发起跨模块调用：拿到的是库存模块上下文的 promise，执行器在模块内部。
-            CStockPromise promiseStock = spStockModule->QueryStockAsync(spCtx->nSku);
+            no::CPromise<CStockContext> promiseStock = spStockModule->QueryStockAsync(spCtx->nSku);
             const std::shared_ptr<CStockContext> spStock = promiseStock.GetContext();
             promiseStock.OnSettled([spCtx, spStock, fnResolve, fnReject](no::CPromiseResult result)
             {
@@ -341,7 +336,7 @@ class COrderModule
                 fnResolve();
             });
         };
-        return COrderPromise::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return no::CPromise<COrderContext>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
     }
 
     /// ④ 算折扣：满 3 件 9 折（模拟业务规则）。

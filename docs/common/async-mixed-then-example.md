@@ -79,8 +79,6 @@ struct COrderCtx
     std::string strLog;  ///< 执行轨迹。
 };
 
-using COrderP = no::CPromise<COrderCtx>;
-
 class COrderModule
 {
    public:
@@ -97,16 +95,18 @@ class COrderModule
     /// @param spStockModule 库存模块（调用方只拿它的 promise，拿不到它的执行器）。
     ///
     /// @return 指向 finally 层的 promise。
-    COrderP PlaceOrderAsync(const std::shared_ptr<COrderCtx>& sp, const std::shared_ptr<CStockModule>& spStockModule)
+    no::CPromise<COrderCtx> PlaceOrderAsync(const std::shared_ptr<COrderCtx>& sp,
+                                            const std::shared_ptr<CStockModule>& spStockModule)
     {
         // ③ 工厂：调库存模块，跨上下文经 BridgeQuery 桥接
-        COrderP::PromiseFactory fnQueryStock = [this, spStockModule](const std::shared_ptr<COrderCtx>& spSelf)
+        no::CPromise<COrderCtx>::PromiseFactory fnQueryStock =
+            [this, spStockModule](const std::shared_ptr<COrderCtx>& spSelf)
         {
             return BridgeQuery(spSelf, spStockModule);
         };
 
         // ④ 工厂：现搭一条内层链，让它参与当前链（同上下文，直接 adopt）
-        COrderP::PromiseFactory fnReserve = [this](const std::shared_ptr<COrderCtx>& spSelf)
+        no::CPromise<COrderCtx>::PromiseFactory fnReserve = [this](const std::shared_ptr<COrderCtx>& spSelf)
         {
             return m_exec.NewPromise(spSelf, &StepReserve, ASYNC_LOC);
         };
@@ -148,10 +148,12 @@ class COrderModule
     /// @param spStockModule 库存模块。
     ///
     /// @return 由库存模块的回调 settle 的本流程 promise。
-    COrderP BridgeQuery(const std::shared_ptr<COrderCtx>& sp, const std::shared_ptr<CStockModule>& spStockModule)
+    no::CPromise<COrderCtx> BridgeQuery(const std::shared_ptr<COrderCtx>& sp,
+                                        const std::shared_ptr<CStockModule>& spStockModule)
     {
-        COrderP::PromiseExecutor fnExecutor =
-            [spStockModule, sp](const COrderP::ResolveFn& fnResolve, const COrderP::RejectFn& fnReject)
+        no::CPromise<COrderCtx>::PromiseExecutor fnExecutor =
+            [spStockModule, sp](const no::CPromise<COrderCtx>::ResolveFn& fnResolve,
+                                const no::CPromise<COrderCtx>::RejectFn& fnReject)
         {
             auto pStock = spStockModule->QueryAsync();  // 发起跨模块调用（不等待）
             auto spStockCtx = pStock.GetContext();
@@ -168,7 +170,7 @@ class COrderModule
                 fnResolve();
             });
         };
-        return COrderP::New(m_exec, sp, fnExecutor, ASYNC_LOC);
+        return no::CPromise<COrderCtx>::New(m_exec, sp, fnExecutor, ASYNC_LOC);
     }
 
     /// ④ 预占（内层链的一步）

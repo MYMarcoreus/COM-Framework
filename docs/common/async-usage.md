@@ -3,7 +3,7 @@
 > 对应目录：`Common/Async`（命名空间 `common::async`）
 > 命名与语义对齐 **JS 的 Promise / async-await**，便于直接套用已有直觉。
 > 实现细节见：[async-impl.md](async-impl.md) ｜ 协程见：[coroutine-usage.md](coroutine-usage.md)
-> 精简单文件示例（混用多种 then + 模块自持执行器）：[async-mixed-then-example.md](async-mixed-then-example.md)
+> 与 JS 的差异对照：[async-vs-js.md](async-vs-js.md) ｜ 单文件示例：[async-mixed-then-example.md](async-mixed-then-example.md)
 
 ## 1. JS 对照速查
 
