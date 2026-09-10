@@ -5,9 +5,9 @@
 #include <string>
 #include <thread>
 
-#include "Async/AsyncChain.h"
 #include "Async/AsyncExecutor.h"
 #include "Async/Coroutine.h"
+#include "Async/Promise.h"
 #include "cases/ChainContext.h"
 #include "framework/Bench.h"
 
@@ -24,9 +24,9 @@ class BenchCoroSeq3 : public no::CCoroutine<bench::CChainContext>
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -41,26 +41,26 @@ class BenchCoroSeq20 : public no::CCoroutine<bench::CChainContext>
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -77,9 +77,9 @@ inline int RunCoroBatch(no::CAsyncExecutor& exec, int nCoros)
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
         std::shared_ptr<BenchCoroSeq3> pCoro = exec.CoStart<BenchCoroSeq3>(spCtx);
-        pCoro->AsChain().OnCompleted([&nDone](no::CStepResult r)
+        pCoro->AsPromise().OnSettled([&nDone](no::CPromiseResult r)
         {
-            if (r.IsOk())
+            if (r.IsFulfilled())
             {
                 nDone.fetch_add(1, std::memory_order_release);
             }
@@ -106,14 +106,15 @@ void RunResumableCases()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
             std::shared_ptr<BenchCoroSeq20> pCoro = exec.CoStart<BenchCoroSeq20>(spCtx);
-            benchmark::SanityCheck(group, "长协程 20 次 await 结果=20", pCoro->Get().IsOk() && spCtx->nValue == 20);
+            benchmark::SanityCheck(group, "长协程 20 次 await 结果=20",
+                                   pCoro->Await().IsFulfilled() && spCtx->nValue == 20);
         }
 
         benchmark::BenchOp(group, "CCoroutine 20 awaits (1 thread)", [&exec]()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
             std::shared_ptr<BenchCoroSeq20> pCoro = exec.CoStart<BenchCoroSeq20>(spCtx);
-            volatile int s = pCoro->Get().Code();
+            volatile int s = pCoro->Await().Code();
             (void)s;
         }, 11, "单协程 20 次挂起 / 恢复（每次 await 一条单层子链）");
 

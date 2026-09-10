@@ -1,7 +1,7 @@
 #include "Async/AsyncExecutor.h"
 
 // ====================================================================
-// 非模板成员定义（模板成员 Submit / CoStart 分别在 AsyncChain.h /
+// 非模板成员定义（模板成员 NewPromise / CoStart 分别在 Promise.h /
 // Coroutine.h 内定义）。非模板类 CAsyncExecutor 的成员定义放本文件，
 // 避免头文件中定义导致多 TU 重复定义（ODR 违规）。
 // ====================================================================
@@ -68,8 +68,8 @@ bool CAsyncExecutor::Post(std::function<void()> fnTask)
 
 /// @brief 停止并等待任务完成（优雅关闭）。
 ///
-/// 保留句柄与线程池对象：已创建的链 / 协程仍绑定本执行器句柄，停止后
-/// 新投递被拒绝（对应层以 kStepStopped 失败），不会访问已销毁对象。
+/// 保留句柄与线程池对象：已创建的 promise / 协程仍绑定本执行器句柄，停止后
+/// 新投递被拒绝（对应层以 kStopped 被拒绝），不会访问已销毁对象。
 void CAsyncExecutor::Stop()
 {
     const std::shared_ptr<detail::CExecutorHandle>& pHandle = m_pHandle;

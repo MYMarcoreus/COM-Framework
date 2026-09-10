@@ -1,3 +1,25 @@
-# clangd 默认会从每个源文件所在目录逐级向上查找最近的 compile_commands.json。
-# 多项目场景下，各项目根目录的编译数据库会被自动识别，无需在此指定单一目录。
+# ====================================================================
+# clangd 配置（VS Code 的 clangd 扩展 / 命令行 clangd 都会读取本文件）
+#
+# 本工作区是多项目工作区（Common / ServerCore / ServerExample / ServerTemplate /
+# Tests / examples / Benchmark），每个项目根目录都有自己的 compile_commands.json，
+# clangd 会**从源文件所在目录逐级向上**找到最近的那份，因此这里不指定单一目录
+# （指定了反而会串项目、头文件路径全错）。
+#
+# 改过 .cpp 集合 / Makefile flags / 构建模式（debug↔release）/ 新增项目后，
+# 需要重刷编译数据库，否则诊断与跳转会失真：
+#     ./build.sh --compiledb [项目...]
+# ====================================================================
 CompileFlags: {}
+
+# 格式化：使用项目根 .clang-format（默认值即 file，这里显式写出来，避免旧版
+# clangd / 其它扩展回落到 Google / LLVM 默认风格 —— 那是「缩进看起来不对」的常见原因）。
+#
+# 注意：.clang-format 里用了 LambdaBodyIndentation（clang-format 13 起支持），
+# 低版本 clangd 会把 lambda 体缩进排错。本仓库要求 clangd >= 13（开发机为 18）。
+FormatStyle: file
+
+# 诊断：不显示「头文件可以省略」这类建议性提示（与 .clang-format / IWYU 的取舍冲突，
+# 只会淹没真正的编译错误）。
+Diagnostics:
+  UnusedIncludes: None

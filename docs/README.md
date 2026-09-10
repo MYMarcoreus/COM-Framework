@@ -31,8 +31,14 @@
 | 组件 | 使用 | 实现 |
 |---|---|---|
 | 序列化 | [serialization-usage.md](common/serialization-usage.md) | [serialization-impl.md](common/serialization-impl.md) |
-| 异步链（CAsyncExecutor/CAsyncChain） | [async-usage.md](common/async-usage.md) | [async-impl.md](common/async-impl.md) |
+| 异步 promise（CAsyncExecutor / CPromise） | [async-usage.md](common/async-usage.md) | [async-impl.md](common/async-impl.md) |
 | 协程库（CCoroutine） | [coroutine-usage.md](common/coroutine-usage.md) | [coroutine-impl.md](common/coroutine-impl.md) |
+
+### 示例（`docs/common/`）
+
+| 文档 | 内容 |
+|---|---|
+| [async-mixed-then-example.md](common/async-mixed-then-example.md) | 精简单文件示例：一条链里混用多种 then（具名函数 / lambda / 跨模块异步 / 内层链 / 旁支 / catch / finally） |
 
 ## 其他
 
@@ -41,6 +47,7 @@
 | [perf-optimization.md](perf-optimization.md) | 性能优化记录 |
 | [vscode-select-dropdown.md](vscode-select-dropdown.md) | VS Code 选择下拉（开发环境备忘） |
 | [vscode-tasks-launch.md](vscode-tasks-launch.md) | VS Code tasks/launch 运行逻辑与字段详解 |
+| [vscode-clangd-format.md](vscode-clangd-format.md) | clangd 格式化 / 缩进约定（.clang-format、.clangd、settings.json；排错与排版建议） |
 
 ## 阅读建议
 

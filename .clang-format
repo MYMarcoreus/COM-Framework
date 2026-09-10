@@ -76,8 +76,8 @@ BreakConstructorInitializers: BeforeColon
 MaxEmptyLinesToKeep: 7
 
 # ---- 短语句 ----
-# 类内单行函数允许单行（bool HasValue() const { return ...; }）。
-AllowShortFunctionsOnASingleLine: Inline
+# 函数体一律不写在单行（含类内定义）：声明与 body 分行更清晰。
+AllowShortFunctionsOnASingleLine: None
 # if 无 else 时允许单行（如 if (n < 0) return no::None;）。
 AllowShortIfStatementsOnASingleLine: WithoutElse
 
@@ -88,6 +88,8 @@ SpaceAfterCStyleCast: false
 # ---- lambda ----
 # lambda 花括号换行（BeforeLambdaBody: true），体按外层作用域缩进。
 LambdaBodyIndentation: OuterScope
+# lambda 体也不写在单行（Google 基准默认 All 会把 { return x; } 压成一行）。
+AllowShortLambdasOnASingleLine: None
 # 短 lambda 允许单行（如 [this]() { return m_bReady; }）
 AllowShortLambdasOnASingleLine: All
 

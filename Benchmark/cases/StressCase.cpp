@@ -8,9 +8,9 @@
 #include <thread>
 #include <vector>
 
-#include "Async/AsyncChain.h"
 #include "Async/AsyncExecutor.h"
 #include "Async/Coroutine.h"
+#include "Async/Promise.h"
 #include "cases/ChainContext.h"
 #include "cases/Engines.h"
 #include "framework/Bench.h"
@@ -30,7 +30,7 @@ inline void RunStressFor(const std::string& group, const std::string& name,
     stop();
 }
 
-/// 链压力：窗口内持续起「nLayers 层链」并等其完成（每完成一条 done+1）。
+/// promise 压力：窗口内持续起「nLayers 层 promise」并等其完成（每完成一条 done+1）。
 inline void RunChainStress(const std::string& group, const std::string& name, int nThreads, int nLayers, int window,
                            int ms, const std::string& note)
 {
@@ -41,18 +41,18 @@ inline void RunChainStress(const std::string& group, const std::string& name, in
     std::function<void()> startOne = [&exec, &done, nLayers]()
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-        no::CAsyncChain<bench::CChainContext> tail = exec.Submit(spCtx, &bench::StepInc);
+        no::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc);
         for (int k = 1; k < nLayers; ++k)
         {
             tail = tail.Then(&bench::StepInc);
         }
-        tail.OnCompleted([&done](no::CStepResult) { done.fetch_add(1, std::memory_order_release); });
+        tail.OnSettled([&done](no::CPromiseResult) { done.fetch_add(1, std::memory_order_release); });
     };
     benchmark::StressWindow(group, name, window, ms, startOne, done, note);
     exec.Stop();
 }
 
-/// 压力协程：2 次 await 后完成（完成时 AsChain().OnCompleted 计数）。
+/// 压力协程：2 次 await 后完成（完成时 AsPromise().OnSettled 计数）。
 class StressCoro : public no::CCoroutine<bench::CChainContext>
 {
    public:
@@ -61,8 +61,8 @@ class StressCoro : public no::CCoroutine<bench::CChainContext>
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(Chain(&bench::StepInc));
-        CO_AWAIT(Chain(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -81,7 +81,8 @@ inline void RunCoroStress(const std::string& group, const std::string& name, int
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
         std::shared_ptr<StressCoro> pCoro = exec.CoStart<StressCoro>(spCtx);
         // 协程对象由框架自持弱引用保活；这里只挂完成通知用于计数。
-        if (!pCoro->AsChain().OnCompleted([&done](no::CStepResult) { done.fetch_add(1, std::memory_order_release); }))
+        if (!pCoro->AsPromise().OnSettled([&done](no::CPromiseResult)
+        { done.fetch_add(1, std::memory_order_release); }))
         {
             done.fetch_add(1, std::memory_order_release);  // 注册失败（不应发生）：按已完成计
         }
@@ -104,7 +105,7 @@ inline void RunMixedLoad(const std::string& group, const std::string& name, int 
         for (int i = 0; i < 500; ++i)
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-            exec.Submit(spCtx, &bench::StepInc).Then(&bench::StepInc).OnCompleted([&done](no::CStepResult) {
+            exec.NewPromise(spCtx, &bench::StepInc).Then(&bench::StepInc).OnSettled([&done](no::CPromiseResult) {
                 done.fetch_add(1);
             });
         }
@@ -124,16 +125,16 @@ inline void RunMixedLoad(const std::string& group, const std::string& name, int 
                 {
                     // 链
                     std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-                    exec.Submit(spCtx, &bench::StepInc).Then(&bench::StepInc).OnCompleted([&done](no::CStepResult) {
-                        done.fetch_add(1);
-                    });
+                    exec.NewPromise(spCtx, &bench::StepInc)
+                        .Then(&bench::StepInc)
+                        .OnSettled([&done](no::CPromiseResult) { done.fetch_add(1); });
                 }
                 else if ((i + static_cast<int>(k)) % 3 == 1)
                 {
                     // 协程
                     std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
                     std::shared_ptr<StressCoro> pCoro = exec.CoStart<StressCoro>(spCtx);
-                    pCoro->AsChain().OnCompleted([&done](no::CStepResult) { done.fetch_add(1); });
+                    pCoro->AsPromise().OnSettled([&done](no::CPromiseResult) { done.fetch_add(1); });
                 }
                 else
                 {
@@ -193,9 +194,9 @@ void RunStressCases()
                      [&eng]() { eng.Stop(); }, kWindow, kMs, "行业标准异步库");
     }
 
-    // 链压力：4 层链 / 8 层链（每条链自带共享上下文，验证分配 + 调度压力）。
-    RunChainStress(group, "CAsyncChain x4 (4 threads)", kThreads, 4, kWindow, kMs, "窗口 1000 条链（各 4 层）");
-    RunChainStress(group, "CAsyncChain x8 (4 threads)", kThreads, 8, kWindow, kMs, "窗口 1000 条链（各 8 层）");
+    // promise 压力：4 层 / 8 层（每条自带共享上下文，验证分配 + 调度压力）。
+    RunChainStress(group, "CPromise x4 (4 threads)", kThreads, 4, kWindow, kMs, "窗口 1000 条 promise（各 4 层）");
+    RunChainStress(group, "CPromise x8 (4 threads)", kThreads, 8, kWindow, kMs, "窗口 1000 条 promise（各 8 层）");
 
     // 协程压力：每个协程 2 次 await。
     RunCoroStress(group, "CCoroutine x2 await (4 threads)", kThreads, kWindow, kMs,

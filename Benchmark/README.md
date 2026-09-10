@@ -8,8 +8,8 @@
 |---|---|---|
 | `common::thread::CThreadPool` | `Common/Thread/` | mutex + condition_variable 线程池 |
 | `common::async::CAsyncExecutor` | `Common/Async/` | 异步链框架的调度层（线程池 + `Post`） |
-| `common::async::CAsyncChain` | `Common/Async/AsyncChain.h` | 异步链（固定签名层 + 共享上下文，失败即停） |
-| `common::async::CCoroutine` | `Common/Async/Coroutine.h` | 基于异步链的无栈协程（await 链） |
+| `common::async::CPromise` | `Common/Async/Promise.h` | 异步 promise（then / catch / finally + 共享上下文） |
+| `common::async::CCoroutine` | `Common/Async/Coroutine.h` | 基于 promise 的无栈协程（await promise） |
 | `asio::post` | `ThirdParty/asio` | 行业标准第三方异步库（对比基线） |
 | `direct_call` | — | 直接函数调用（理论下限） |
 | `std::thread` | 标准库 | 每任务新建线程（最重基线） |
@@ -17,7 +17,7 @@
 ## 测试维度
 
 1. **任务提交**：单任务「提交 → 执行 → 通知 → 唤醒」端到端往返延迟（ns/op、P50、P99、吞吐）。
-2. **异步链**：`CAsyncChain` 链（1/5/20/100 层）构建 + 逐层级联 + 取值成本，
+2. **异步 promise**：`CPromise` 链（1/5/20/100 层）构建 + 逐层级联 + 取值成本，
    含深链（256 层，超过内联深度上限后改投递）与失败即停（短路）链。
 3. **协程**：`CCoroutine` 启动 + 一次 await + 完成，以及 10 次顺序 / 并行 await
    与等效链的对比。

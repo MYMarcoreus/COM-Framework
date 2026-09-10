@@ -1,84 +1,93 @@
-# 异步链 CAsyncChain — 使用文档
+# 异步 promise CPromise — 使用文档
 
 > 对应目录：`Common/Async`（命名空间 `common::async`）
+> 命名与语义对齐 **JS 的 Promise / async-await**，便于直接套用已有直觉。
 > 实现细节见：[async-impl.md](async-impl.md) ｜ 协程见：[coroutine-usage.md](coroutine-usage.md)
+> 精简单文件示例（混用多种 then + 模块自持执行器）：[async-mixed-then-example.md](async-mixed-then-example.md)
 
-## 1. 这是什么
+## 1. JS 对照速查
 
-`CAsyncExecutor` + `CAsyncChain` 是**异步链特化版**框架：把一段业务流程写成若干「层」，
-层按注册顺序执行，**层与层之间只传递「本层成功 / 失败」**，数据统一放在**共享上下文**里。
+| JS | 本框架 |
+| --- | --- |
+| `new Promise((resolve, reject) => {...})` | `exec.NewPromise(spCtx, 首层)` 或 `CPromise<Ctx> p(exec, spCtx, 首层)` |
+| `new Promise` **由外部回调 settle** | `CPromise<Ctx>::New(exec, spCtx, executor)`（executor 里拿到 resolve / reject 句柄） |
+| `promise.then(onFulfilled)` | `p.Then(处理器)` |
+| `then` 的处理器**返回 promise**（flatten） | `p.ThenPromise(子 promise 工厂)` |
+| `promise.catch(onRejected)` | `p.Catch(处理器)` |
+| `promise.finally(onFinally)` | `p.Finally(处理器)` |
+| `await promise` | `p.Await()`（阻塞） |
+| `promise` 已完成 | `p.IsSettled()` |
+| `resolve()` / `reject(reason)` | `CPromiseResult::Resolve()` / `CPromiseResult::Reject(码)` |
+| `fulfilled` / `rejected` | `result.IsFulfilled()` / `result.IsRejected()` |
+| 状态 pending → settled | 每个 then/catch/finally 都返回「指向新一层的 promise」 |
+| `Promise.all([a, b])` | 协程的 `CO_AWAIT_ALL(a, b)` |
 
-与「层间传任意值」的通用任务链（`Then([](int n) { ... })`）相比，本版的取舍是：
+## 2. 与「传值版任务链」的区别
 
-| 维度 | 通用任务链（传值） | 异步链（本框架） |
+本框架**不在层与层之间传递任意值**：
+
+| 维度 | 传值版任务链 | 本框架 |
 | --- | --- | --- |
-| 层间传什么 | 上一层返回的任意值（类型可变） | 只有成败（`CStepResult`） |
-| 数据怎么传 | 返回值逐层往下递 | 共享上下文（`std::shared_ptr<TContext>`） |
-| 层函数签名 | 每层不同 | 全部固定 |
-| 链的类型 | 随层变化（`CTask<A>` → `CTask<B>`） | 恒为 `CAsyncChain<TContext>` |
-| 失败怎么处理 | 无值终止（Option 风格） | 失败即停 + 失败码透传（`ThenAlways` 可回滚） |
+| 层间传什么 | 上一层返回的任意值（类型可变） | 只有兑现 / 拒绝（`CPromiseResult`） |
+| 数据怎么传 | 返回值逐层往下递 | 共享上下文 `std::shared_ptr<TContext>` |
+| 处理器签名 | 每层不同 | 全部固定 |
+| promise 类型 | 随层变化（`CTask<A>` → `CTask<B>`） | 恒为 `CPromise<TContext>` |
 
-固定签名：
+固定签名（`then` / `catch` / `finally` 共用）：
 
 ```cpp
-CStepResult fn(CStepResult upStep,                        // 上一层的结果
-               const std::shared_ptr<TContext>& spCtx);   // 共享上下文
+CPromiseResult handler(CPromiseResult upResult,              // 上一层的结果
+                       const std::shared_ptr<TContext>& spCtx); // 共享上下文
 ```
 
-- `upStep`：上一层回调的结果（第一层恒为成功）。下一层据此判断上一层成败；
-- `spCtx`：整条链**共用同一个实例**的数据载体（链持有，恒非空）；
-- 返回：本层结果。成功继续下一层，失败终止链（后续 `Then` 层不再执行）。
+- `upResult`：上一层的结果（起链时恒为「已兑现」）。下一层据此判断上一层；
+- `spCtx`：整条 promise 链**共用同一个实例**的数据载体（恒非空）；
+- 返回：本层结果。`then` / `catch` 用返回值决定后续走向；`finally` 忽略返回值。
 
-## 2. 最小示例
+## 3. 最小示例
 
 ```cpp
-#include "Async/AsyncChain.h"
+#include "Async/Promise.h"
 
 namespace no = common::async;
 
-// ① 定义一次流程的共享数据（TContext）：各层读写它。
-struct CLoginContext
+struct CLoginContext                        // 一次流程的共享数据（TContext）
 {
     std::string strAccount;
     std::string strToken;
-    std::string strError;
 };
 
-// ② 定义层：签名固定，数据从 spCtx 走。
-no::CStepResult StepReadParam(no::CStepResult upStep, const std::shared_ptr<CLoginContext>& spCtx)
+no::CPromiseResult StepReadParam(no::CPromiseResult upResult, const std::shared_ptr<CLoginContext>& spCtx)
 {
-    if (upStep.IsFailed())
+    if (upResult.IsRejected())
     {
-        return upStep;                       // 防御写法（失败即停时本层不会被调用）
+        return upResult;                    // 上一层被拒绝：原样透传
     }
     spCtx->strAccount = ReadAccount();
-    return spCtx->strAccount.empty() ? no::CStepResult::Failed(kCodeNoAccount)
-                                     : no::CStepResult::Ok();
+    return spCtx->strAccount.empty() ? no::CPromiseResult::Reject(kCodeNoAccount)
+                                     : no::CPromiseResult::Resolve();
 }
 
-no::CStepResult StepVerify(no::CStepResult upStep, const std::shared_ptr<CLoginContext>& spCtx)
+no::CPromiseResult StepRollback(no::CPromiseResult upResult, const std::shared_ptr<CLoginContext>& spCtx)
 {
-    if (upStep.IsFailed())
-    {
-        return upStep;
-    }
-    spCtx->strToken = IssueToken(spCtx->strAccount);
-    return no::CStepResult::Ok();
+    spCtx->strAccount.clear();              // 仅被拒绝时执行（catch）
+    return upResult;                        // 透传拒绝；返回 Resolve() 则表示恢复
 }
 
-// ③ 起链：数据在上下文里，层间只传成败。
 no::CAsyncExecutor exec(2);
 exec.Start();
 
 std::shared_ptr<CLoginContext> spCtx = std::make_shared<CLoginContext>();
-no::CAsyncChain<CLoginContext> chain =
-    exec.Submit(spCtx, &StepReadParam, ASYNC_LOC)      // 首层（起点结果视为成功）
-        .Then(&StepVerify, ASYNC_LOC)                  // 第二层
-        .Then(&StepWriteDb, ASYNC_LOC);                // 第三层
-chain.OnCompleted([](no::CStepResult finalStep) { /* 收尾（成功 / 失败都触发） */ });
+no::CPromise<CLoginContext> p =
+    exec.NewPromise(spCtx, StepReadParam, ASYNC_LOC)   // 起 promise（首层）
+        .Then(StepVerify, ASYNC_LOC)                   // 兑现路径
+        .Catch(StepRollback, ASYNC_LOC)                // 拒绝路径（可恢复）
+        .Finally(StepWriteLog, ASYNC_LOC);             // 收尾（兑现 / 拒绝都跑）
 
-no::CStepResult r = chain.Get();                       // 阻塞取最终成败
-if (r.IsOk())
+p.OnSettled([](no::CPromiseResult result) { /* settled 通知 */ });
+
+no::CPromiseResult r = p.Await();                      // 阻塞取结果
+if (r.IsFulfilled())
 {
     Use(spCtx->strToken);                              // 数据从上下文取
 }
@@ -86,199 +95,301 @@ if (r.IsOk())
 
 要点：
 
-- `exec.Submit(spCtx, 首层)` 起链并**立即投递首层**（异步执行，不在调用线程上跑层函数）；
-- `.Then(...)` 追加一层，返回**指向新层的句柄**；
-- 只有最后一层的句柄取结果才有意义 —— 写成 `auto tail = exec.Submit(...).Then(...)` 后 `tail.Get()`；
-  若丢弃 `Then` 的返回值，`chain.Get()` 等到的只是首层。
+- `exec.NewPromise(spCtx, 首层)` / `CPromise(exec, spCtx, 首层)` **构造即投递**（等价 `new Promise(executor)` 立即执行 executor）；
+- `Then` / `Catch` / `Finally` 各自返回**指向新一层的句柄**；
+- 只有最后一层的句柄取结果才有意义 —— 写成 `auto tail = exec.NewPromise(...).Then(...)` 再 `tail.Await()`；
+  丢弃返回值时 `p.Await()` 等到的只是首层。
 
-## 3. 起链与追加层
+## 4. 三类处理器（then / catch / finally）
 
-| 接口 | 语义 |
-| --- | --- |
-| `exec.Submit(spCtx, fnStep, loc)` | 起链：创建链并投递首层，返回指向首层的句柄 |
-| `CAsyncChain<TContext> chain(exec, spCtx)` | 手工建链（尚未起链），随后 `chain.Submit(fnStep)` |
-| `CAsyncChain<TContext> chain(exec)` | 同上，上下文由链**懒创建** |
-| `chain.Then(fnStep, loc)` | 追加一层（**失败即停**：上一层失败时本层不执行） |
-| `chain.ThenAlways(fnStep, loc)` | 追加一层（**失败也执行**：回滚 / 补偿 / 清理用） |
-| `chain.Get()` | 阻塞等待本层结果（不抛异常） |
-| `chain.OnCompleted(fnCompleted)` | 注册完成回调（成功 / 失败都触发一次），返回是否注册成功 |
-| `chain.GetContext()` | 共享上下文（懒创建，有效链上恒非空） |
-| `chain.IsValid()` / `chain.IsCompleted()` | 是否有效 / 本层是否已完成 |
-| `chain.Loc()` | 本层注册点源码位置（调试构建有效） |
+| 接口 | 何时执行 | 返回值的作用 |
+| --- | --- | --- |
+| `Then(handler)` | 上一层**兑现**时；被拒绝则跳过（失败即停） | 决定本层结果（`Resolve()` / `Reject()` / 原样 `upResult`） |
+| `Catch(handler)` | 上一层**被拒绝**时；已兑现则跳过 | 同上：返回 `Resolve()` 即**吞掉拒绝**，promise 从本层之后继续 |
+| `Finally(handler)` | **无论兑现或拒绝都执行** | **被忽略**，原样透传上一层结果（与 JS `finally` 一致） |
 
-层函数可以是自由函数、静态成员函数、`std::bind` 结果或 lambda —— 只要签名匹配即可：
+> **then 处理器不需要判断 `upResult`**：失败即停由框架保证 —— 上游被拒绝时本层**根本不会被调用**
+> （框架把拒绝结果直接交给下一层）。所以 then 处理器里写
+> `if (upResult.IsRejected()) { return upResult; }` 是**永不触发的防御写法**（写了无害，但容易让人
+> 误以为「失败也会进来」）；要在拒绝时做事请用 `Catch`，要成败都收尾请用 `Finally`
+> —— 这两个处理器的 `upResult` 才有可能是拒绝。
+>
+> 需要「handler 能被 then / catch / finally 复用」或「独立成可测单元」时，再保留那句判断。
 
 ```cpp
-flow.Submit(lambdaStep, ASYNC_LOC);                                  // lambda
-flow.Submit(std::bind(&CService::OnStep, this, std::placeholders::_1,
-                      std::placeholders::_2));                       // 成员函数
+// 失败即停：StepStore 被拒绝 → 后续 then 不执行，拒绝码透传
+auto r = exec.NewPromise(spCtx, StepReadParam).Then(StepStore).Then(StepNotify).Await();
+// r.IsRejected() == true，StepNotify 未执行
+
+// 回滚：catch 看得到拒绝结果
+auto t = exec.NewPromise(spCtx, StepLoad)
+             .Then(StepStore)
+             .Catch(StepRollback)      // 仅被拒绝时执行
+             .Await();
+
+// 收尾：finally 无论成败都执行，且不改结果
+auto t2 = exec.NewPromise(spCtx, StepLoad)
+              .Finally(StepReleaseLock)   // 兑现 / 拒绝都执行
+              .Await();
 ```
 
-## 4. 共享上下文（唯一数据通道）
+同一层可注册多个 `Then`（分叉），各自独立延续。
 
-上下文是**整条链共用**的一个对象，`shared_ptr` 持有，生命周期与链一致：
+## 5. 共享上下文（唯一数据通道）
 
 ```cpp
-// 方式 A：外部准备数据后注入（已有请求对象 / 连接上下文等）
+// 方式 A：外部准备数据后注入
 std::shared_ptr<CMyContext> spCtx = std::make_shared<CMyContext>();
 spCtx->strRequestId = GetRequestId();
-no::CAsyncChain<CMyContext> chain(exec, spCtx);
+no::CPromise<CMyContext> p(exec, spCtx);
 
-// 方式 B：链内部懒创建（首次 GetContext() 时构造，恒非空）
-no::CAsyncChain<CMyContext> chain2(exec);
-chain2.GetContext()->nRetry = 3;      // 起链前先填初始数据
-chain2.Submit(StepA).Then(StepB);
+// 方式 B：promise 内部懒创建（首次 GetContext() 时构造，恒非空）
+no::CPromise<CMyContext> p2(exec);
+p2.GetContext()->nRetry = 3;               // 起 promise 前先填数据
+p2.Then(StepA).Then(StepB);
 ```
 
 约束与建议：
 
-- `TContext` 只在**真正懒创建**时才要求可默认构造（即 `GetContext()` 被实例化时）；
-- 层函数拿到的是 `const std::shared_ptr<TContext>&`（借用引用，不增加引用计数）；
-  若要留给**异步回调**使用，自行拷贝该 `shared_ptr` 保活；
-- 同一链的层顺序执行，**不会并发**；跨链共享同一上下文时并发安全由业务负责。
+- `TContext` 只在真正懒创建（调用 `GetContext()`）时才要求可默认构造；
+- 处理器拿到的是 `const std::shared_ptr<TContext>&`（借用引用，不增加引用计数）；
+  若要留给异步回调使用，自行拷贝该 `shared_ptr` 保活；
+- 同一条链的层顺序执行、**不会并发**；跨链共享上下文时并发安全由业务负责。
 
-## 5. 失败语义
+## 6. 嵌套用法（异步里再起异步）
 
-### 5.1 失败即停（`Then`）
+支持嵌套，写法有六种 —— 选哪种只看一条：**是否允许占住工作线程**。
 
-某层返回失败后，后续 `Then` 层**不再执行**，失败码沿链透传到最后一层、`Get()` 与
-`OnCompleted`。框架保证「忘记写判断也不会误执行后续业务」。
+| 形态 | 写法 | 阻塞？ | 适用 |
+| --- | --- | --- | --- |
+| 协程内 await（**推荐**） | `CO_AWAIT(NewPromise(StepSub))`、`CO_AWAIT(pChild->AsPromise())`、`CO_AWAIT(exec.NewPromise(spOther, StepX))` | 否（挂起让出线程） | 任何「等一段异步再往下走」的场合 |
+| 协程内并行 await | `CO_AWAIT_ALL(a, b, c)` | 否 | 多段异步并行 + 汇聚 |
+| **跨模块组合**（不用协程） | `p.ThenPromise(工厂)` + `CPromise<Ctx>::New(...)` | 否 | 调用**其他模块 / 另一套上下文**的异步函数，且要拿到完整结果 |
+| 层内非阻塞嵌套 | 层里起子 promise，由它的 `OnSettled` 回调接着写上下文 / 起后续 | 否 | 层里「顺手起一段异步」，不关心何时回来 |
+| 层内 Post | `exec.Post(重活)` | 否 | fire-and-forget 重活下沉 |
+| 层内阻塞等待 | 层里 `sub.Await()` | **是**（占住一个 worker） | 仅当线程池还有空闲 worker（**单线程执行器必死锁**） |
+
+### 6.1 协程内 await（推荐）
 
 ```cpp
-// 第 2 层失败 → 第 3、4 层不执行
-auto r = exec.Submit(spCtx, &StepReadParam)   // 失败（参数非法）
-             .Then(&StepVerify)               // 不执行
-             .Then(&StepWriteDb)              // 不执行
-             .Get();
-// r.IsFailed() == true，r.Code() == 业务错误码
+class CFlow : public no::CCoroutine<CDemoContext>
+{
+public:
+    explicit CFlow(const std::shared_ptr<CDemoContext>& spCtx, no::CAsyncExecutor* pExec)
+        : no::CCoroutine<CDemoContext>(spCtx), m_pExec(pExec), m_spSub() {}
+
+    void Run() override
+    {
+        CO_BEGIN();
+        CO_AWAIT(NewPromise(&StepReadParam));                                // 同上下文子 promise
+        m_spSub = std::make_shared<CSubContext>();                           // 跨 await → 成员变量
+        CO_AWAIT(m_pExec->NewPromise(m_spSub, &StepQueryRows, ASYNC_LOC));   // **跨上下文** await
+        CO_AWAIT(NewPromise(&StepScale).Then(&StepStore));                   // 多步子 promise
+        CO_AWAIT_ALL(NewPromise(&StepA), NewPromise(&StepB));                // 并行
+        GetContext()->nScaled += m_spSub->nRows;                             // 恢复后并入
+        CO_RETURN_VOID();
+        CO_END();
+    }
+
+private:
+    no::CAsyncExecutor* m_pExec;
+    std::shared_ptr<CSubContext> m_spSub;   // 跨 await 的变量必须是成员
+};
 ```
 
-### 5.2 失败也执行（`ThenAlways`）
+- `CO_AWAIT` / `CO_AWAIT_ALL` 接受**任意上下文类型**的 promise（跨流程 / 跨模块组合）；
+- 挂起不占线程，**单线程执行器也能跑**。
 
-需要「无论成败都要跑」的层（回滚 / 补偿 / 清理 / 审计）用 `ThenAlways`：
-它**总会执行**，`upStep` 就是上一层的结果（可能是失败）。
+### 6.2 层内非阻塞嵌套（回调驱动）
 
 ```cpp
-no::CStepResult StepRollback(no::CStepResult upStep, const std::shared_ptr<Ctx>& spCtx)
+exec.NewPromise(spCtx, [&exec, spSub](no::CPromiseResult up, const std::shared_ptr<CDemoContext>& sp)
 {
-    spCtx->strTrace += "回滚;";
-    return upStep;                 // 透传失败：后续 Then 层仍不执行
+    if (up.IsRejected()) { return up; }
+    exec.NewPromise(spSub, &StepQueryRows, ASYNC_LOC)   // 起子 promise 但不等待
+        .OnSettled([sp, spSub](no::CPromiseResult sub)  // 子流程结束后接着干活
+        {
+            sp->nScaled = sub.IsFulfilled() ? spSub->nRows : -1;
+        });
+    sp->strTrace += "父层起步;";
+    return no::CPromiseResult::Resolve();               // 外层立刻继续
+}, ASYNC_LOC);
+```
+
+### 6.3 跨模块组合：`ThenPromise` + `CPromise::New`（纯异步、零阻塞、不用协程）
+
+场景：模块 A 的业务流程要调「**模块 B（另一套上下文类型）**」的异步函数，
+且模块 A 的调用方希望拿到的 promise 反映**含 B 在内的完整结果**。
+
+两步写出来就是 JS 的组合方式：
+
+```cpp
+// ① 桥接：new Promise((resolve, reject) => ...) —— 由模块 B 的完成回调 settle
+no::CPromise<CMyContext> BridgeQueryOther(const CDeps& deps, const std::shared_ptr<CMyContext>& spCtx)
+{
+    return no::CPromise<CMyContext>::New(*deps.spExec, spCtx,
+        [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
+        {
+            deps.spOther->QueryAsync(spCtx->spOtherOp)      // 模块 B 的 promise（另一套上下文）
+                .OnSettled([spCtx, fnResolve, fnReject](no::CPromiseResult result)
+                {
+                    if (result.IsRejected()) { fnReject(码); return; }   // 跨模块拒绝码 → 业务码
+                    spCtx->nRows = spCtx->spOtherOp->nRows;             // 取回数据
+                    fnResolve();
+                });
+        }, ASYNC_LOC);
 }
 
-no::CStepResult StepRecover(no::CStepResult upStep, const std::shared_ptr<Ctx>& spCtx)
+// ② 接进本流程：then 的 promise 版（等价 JS 的 then 返回 promise 时自动等待）
+p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
+        .ThenPromise([deps](const std::shared_ptr<CMyContext>& sp) { return BridgeQueryOther(deps, sp); }, ASYNC_LOC)
+        .Then(&StepUseRows, ASYNC_LOC)
+        .Finally(&StepAudit, ASYNC_LOC);
+```
+
+要点：
+
+- **非阻塞**：只登记回调，不占任何 worker（两个模块的线程池互不占用，单线程执行器也安全）；
+- **执行器归属**：执行器是模块的私有资源（随模块 Start / Stop），**不要跨模块传递** ——
+  跨模块接口只交换 promise + 上下文；被调模块在自己的线程池上跑，调用方拿到的只是它的 promise。
+  顺序由「依赖边」保证（内层 settle → 桥接回调 → 本层 settle → 外层下一层，之间有 happens-before），
+  **不依赖共享线程**；唯一不保证先后的是 fire-and-forget 旁支。续跑线程通常就是「结算它的那条线程」
+  （层间同线程级联）→ 回调里只做轻活；需要「必须回到本模块线程」时显式 `exec.Post(...)`。
+  参考 `examples/cases/ThenMixCase.cpp`：库存 / 记账模块各持一个执行器，并自校验线程互不共用；
+- 子 promise 可以是**任意 promise**：同一 `TContext` 的 then 链**直接返回**就会被 adopt（无需桥接）；
+  跨上下文才需要 `CPromise::New` 桥接（本节写法）。内层链被拒绝时，拒绝码会作为本层拒绝
+  沿**外层链**透传（外层后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
+- `ThenPromise` 的语义与 `Then` 一致（上层被拒绝则本层不执行），差别是**本层等子 promise**：
+  子 promise 兑现 → 本层兑现；子 promise 被拒绝 → 本层以**同一拒绝码**被拒绝（`Catch` / `Finally` 仍会执行）；
+- `CPromise::New` 的 executor **立即（同步）执行**（与 JS 一致），只应做「发起 + 登记回调」，
+  由回调调 `fnResolve()` / `fnReject(码)`；
+- 桥接处是**唯一**做「跨模块拒绝码 → 业务码」语义转换的地方（例如把数据访问层的
+  `kDbRowNotFound` 归一化成「兑现 + bFound=false」，把 `kException` 映射成业务码）；
+- 工厂 / 回调请**按值捕获依赖**（执行器 `shared_ptr`、接口 `ScopedInterfacePtr`）与上下文，
+  不要在回调里捕获模块 `this` —— 回调可能在模块停止后、甚至在**另一个模块的线程**上执行。
+  `ServerExample/Module/ExampleAsyncModule.cpp` 是本形态的完整业务示例（业务模块 ↔ 数据访问模块）。
+
+### 6.4 层内阻塞等待（慎用）
+
+```cpp
+const no::CPromiseResult sub = exec.NewPromise(spSub, &StepQueryRows, ASYNC_LOC).Await();  // 占住一个 worker
+```
+
+- `Await()` 是阻塞等待，它占着的 worker 无法去跑别的 promise；
+- 若线程池已无空闲 worker（单线程执行器、或所有 worker 都在嵌套等待）→ **死锁**；
+- 所以只适合「子流程很短 + 并发余量充足」，默认请优先 6.1。
+
+### 6.5 并发写共享上下文
+
+框架只保证「**同一条链**的层顺序执行」。并行 / 嵌套产生的多条链若共用同一份上下文：
+
+- 各分支请只写**不同字段**，或自行加同步；
+- 并行分支尤其别同时写同一个 `std::string` / 容器（那是数据竞争）；
+- 需要「各分支自有数据」时，给每条分支一份自己的上下文（示例 ㉕ 就是这么做的）。
+
+## 7. 结果与通知
+
+```cpp
+no::CPromiseResult r = p.Await();     // 阻塞等待本层结果（不抛异常；多线程可同时等）
+if (r.IsRejected())
 {
-    (void)upStep;
-    spCtx->strTrace += "恢复;";
-    return no::CStepResult::Ok();  // 吞掉失败：链从本层之后继续执行
+    Log(r.Code());                    // 错误码（业务码 / 框架码）
 }
+
+// settled 通知：兑现 / 拒绝都触发一次（不产生新层、不改变结果）
+p.OnSettled([](no::CPromiseResult result) { Log(result.Code()); });
 ```
 
-### 5.3 错误码约定
+错误码约定：
 
 ```cpp
-no::kStepOk            = 0   // 成功
-no::kStepFailed        = 1   // 业务失败（未指定码时的默认值）
-no::kStepStopped       = 2   // 执行器已停止 / 投递失败（框架）
-no::kStepException     = 3   // 层函数抛异常（框架捕获，不向调用方抛出）
-no::kStepBusinessBase  = 100 // 业务错误码从 100 起取
+no::kFulfilled     = 0    // 已兑现
+no::kRejected      = 1    // 已拒绝（未指定码时的默认值）
+no::kStopped       = 2    // 执行器已停止 / 投递失败（框架）
+no::kException     = 3    // 处理器抛异常（框架捕获）
+no::kBusinessBase  = 100  // 业务错误码从 100 起取
 ```
 
-框架只解释 1..99，其余码**原样透传**（错误码语义由业务定义）。
+框架只解释 1..99，其余码**原样透传**（语义由业务定义）。处理器抛出的异常会被框架捕获，
+转为本层被拒绝（`kException`），不会向调用方抛出。
 
-### 5.4 异常
+注意：`Await()` 返回与 `OnSettled` 回调的执行**没有先后保证**，测试里若依赖「回调已跑完」
+请另用标志 / 条件变量同步。
 
-层函数内抛出的异常被框架捕获并转为**本层失败**（`kStepException`），
-`Get()` / `OnCompleted` 不会向调用方抛异常。
-
-## 6. 完成回调与结果
-
-```cpp
-// 完成回调：成功与失败都触发一次；可注册多个（分叉时各自触发）
-chain.OnCompleted([](no::CStepResult finalStep)
-{
-    Log(finalStep.IsOk() ? "成功" : ("失败码=" + std::to_string(finalStep.Code())));
-});
-
-no::CStepResult r = chain.Get();   // 阻塞等待（多线程可同时等待同一链）
-```
-
-注意：`Get()` 返回与完成回调的执行**没有先后保证**（回调在段完成后按注册顺序触发）。
-测试里若依赖「回调已跑完」，请另用标志 / 条件变量同步。
-
-## 7. 执行器
+## 8. 执行器
 
 ```cpp
 no::CAsyncExecutor exec(4);             // 4 个工作线程
-exec.Start();                           // 启动（未启动时起链立即以 kStepStopped 失败）
+exec.Start();                           // 启动（未启动时起 promise 立即被拒绝 kStopped）
 exec.Post([]() { /* 无返回值任务 */ });  // fire-and-forget（返回是否提交成功）
 exec.IsIdle();                          // 队列是否为空（协程内联续接判断用）
 exec.Stop();                            // 停止并等待已投递任务完成
 ```
 
-- `Post`：不涉及链的一次性任务（重活下沉 / 事件异步分发）；
-- 未 `Start()` / 已 `Stop()` 时 `Submit`、`Post` 都不抛异常，而是返回失败 / `false`；
+- `Post`：不涉及 promise 的一次性任务（重活下沉 / 事件异步分发）；
+- 未 `Start()` / 已 `Stop()` 时起 promise、`Post` 都不抛异常，而是被拒绝 / 返回 `false`；
 - `Stop()` 之后可再次 `Start()`（重建句柄与线程池，隔离旧任务）。
 
-## 8. 线程模型
+## 9. 线程模型与生命周期
 
 | 事实 | 说明 |
 | --- | --- |
-| 首层 | 由 `Submit` 投递到执行器，**在工作线程上执行** |
-| 后续层 | 上游完成时**在同一工作线程上级联执行**（不再逐层入队） |
-| 单链并发度 | 一条链的层**顺序执行**，任意时刻只有一个线程在跑它的层 |
-| 深链 | 连续内联超过 `kMaxInlineDepth`（64）的层改为投递，防递归爆栈 |
-| 分叉 | 同一层可注册多个 `Then`，各自独立延续（可能在不同线程并行） |
-| 多链 | 多条链互不阻塞，线程池有界并行 |
-
-层内要并行时，自行投递重活（`exec.Post`）或起子链（见协程文档）。
-
-## 9. 生命周期
-
-- 链句柄是**浅句柄**（拷贝共享同一链的同一段）：句柄存活期间，段与线程池都被保活；
-- 链通过共享句柄（`shared_ptr<CExecutorHandle>`）引用执行器线程池：
-  **执行器析构后，已起动的链仍安全跑完**，新投递以 `kStepStopped` 失败；
-- 无效链（默认构造、未绑定执行器）上 `Submit` / `Then` 为空操作，`Get()` 返回失败。
+| 首层 | 由 `NewPromise` / 构造函数投递到执行器，**在工作线程上执行** |
+| 后续层 | 上一层 settled 时**在同一工作线程上级联执行**（不再逐层入队） |
+| 单链并发度 | 一条链的层**顺序执行** |
+| 深链 | 连续内联超过 `kMaxInlineDepth`（64）改为投递，防递归爆栈 |
+| 分叉 | 同一层可注册多个 `Then`，各自独立延续（可能并行） |
+| 生命周期 | 句柄是浅句柄；promise 通过共享句柄引用线程池，**执行器析构后已起的 promise 仍安全跑完** |
 
 ## 10. 常见用法速查
 
 ```cpp
 // 单层
-no::CStepResult r = exec.Submit(spCtx, StepOne, ASYNC_LOC).Get();
+no::CPromiseResult r = exec.NewPromise(spCtx, StepOne, ASYNC_LOC).Await();
 
-// 多层（失败即停）+ 收尾
-auto tail = exec.Submit(spCtx, StepA, ASYNC_LOC).Then(StepB, ASYNC_LOC).Then(StepC, ASYNC_LOC);
-tail.OnCompleted([](no::CStepResult r) { /* 成功 / 失败 */ });
-no::CStepResult final = tail.Get();
+// 多层（then 失败即停）+ 收尾
+auto tail = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Then(StepB, ASYNC_LOC).Then(StepC, ASYNC_LOC);
+tail.OnSettled([](no::CPromiseResult r) { /* 兑现 / 拒绝 */ });
+no::CPromiseResult final = tail.Await();
 
-// 回滚（失败也执行）
-auto tail2 = exec.Submit(spCtx, StepA, ASYNC_LOC)
-                 .Then(StepB, ASYNC_LOC)
-                 .ThenAlways(StepRollback, ASYNC_LOC);
+// 回滚 / 恢复
+auto t = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Then(StepB, ASYNC_LOC).Catch(StepRollback, ASYNC_LOC);
 
-// 分叉（同一层两条支线）
-no::CAsyncChain<Ctx> head = exec.Submit(spCtx, StepA, ASYNC_LOC);
-no::CAsyncChain<Ctx> b1 = head.Then(StepB, ASYNC_LOC);
-no::CAsyncChain<Ctx> b2 = head.Then(StepC, ASYNC_LOC);
+// 收尾（不改结果）
+auto t2 = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Finally(StepAudit, ASYNC_LOC);
 
-// 惰性上下文 / 外部注入两种姿势
-no::CAsyncChain<Ctx> c1(exec);            // 链内创建
-no::CAsyncChain<Ctx> c2(exec, spCtx);     // 外部注入
+// 分叉
+no::CPromise<Ctx> head = exec.NewPromise(spCtx, StepA, ASYNC_LOC);
+no::CPromise<Ctx> b1 = head.Then(StepB, ASYNC_LOC);
+no::CPromise<Ctx> b2 = head.Then(StepC, ASYNC_LOC);
+
+// 惰性上下文 / 外部注入
+no::CPromise<Ctx> c1(exec);            // 链内创建
+no::CPromise<Ctx> c2(exec, spCtx);     // 外部注入
+
+// 跨模块组合（纯异步、零阻塞）：new Promise 桥接 + then-promise 接入（详见 6.3）
+no::CPromise<Ctx> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC)
+                         .ThenPromise([deps](const std::shared_ptr<Ctx>& sp) { return BridgeOther(deps, sp); }, ASYNC_LOC)
+                         .Then(StepB, ASYNC_LOC);
 ```
 
-### 与旧版（传值版 `CTask`）的迁移对照
+## 11. 与旧版（传值版 `CTask`）的迁移对照
 
 | 旧写法（已移除） | 新写法 |
 | --- | --- |
-| `exec.Submit([]{ return 3; }).Then([](int n){ return n * 2; })` | 数据放上下文：`spCtx->n = 3;`，层内读改写 |
-| `return no::None;`（无值终止） | `return no::CStepResult::Failed(码);` |
-| `r.HasValue() / r.Value()` | `r.IsOk() / r.Code()`，数据从 `GetContext()` 取 |
-| `OnSuccess / OnNone` | `OnCompleted`（统一一个回调，看 `IsOk()`） |
+| `exec.Submit([]{ return 3; }).Then([](int n){ return n * 2; })` | 数据放上下文：`spCtx->n = 3;`，处理器读改写 |
+| `return no::None;`（无值终止） | `return no::CPromiseResult::Reject(码);` |
+| `r.HasValue() / r.Value()` | `r.IsFulfilled() / r.Code()`，数据从 `GetContext()` 取 |
+| `OnSuccess / OnNone` | `Then` / `Catch`（统一用 `CPromiseResult` 判断） |
+| `Get()` | `Await()` |
 | `NOTHROW_LOC` | `ASYNC_LOC` |
-| flatMap（层返回 `CTask`） | 层内起子链并用协程 await（见 coroutine 文档） |
+| flatMap（层返回 `CTask`） | 同上下文：`ThenPromise`（处理器返回 promise，框架自动等）；跨上下文：`CPromise::New` 桥接（见 6.3 / 协程文档） |
 
-## 11. 测试与示例
+## 12. 测试与示例
 
-- 示例程序：`examples/main.cpp`（19 个演示，含失败即停、ThenAlways 回滚、深链、协程）；
-- 单元测试：`Tests/test_async_chain.cpp`（链 + 协程共 31 个用例）；
-- 基准：`Benchmark/cases/ChainCase.cpp`、`CoroutineCase.cpp`、`StressCase.cpp`；
-- 运行：`./build.sh --tests`（或 `./build/debug/tests`）、`./build/debug/examples`。
+- 示例：`examples/main.cpp`（28 个演示：then / catch / finally / 分叉 / 深链 / 协程 / **嵌套** / **跨模块组合** / **多种 then 混用**）；
+- 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
+- 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞）；
+- 单元测试：`Tests/test_async_chain.cpp`（promise 27 例 + 协程 10 例，含跨模块组合 2 例）；
+- 基准：`Benchmark/cases/ChainCase.cpp`、`CoroutineCase.cpp`、`ResumableCase.cpp`、`StressCase.cpp`；
+- 运行：`./build.sh --tests`、`./build/debug/examples`。

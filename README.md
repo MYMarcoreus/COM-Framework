@@ -39,7 +39,7 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 │   ├── Timer/                   # TimerManager（基于 asio::steady_timer）
 │   ├── Config/                  # 配置解析（基于 inih）
 │   ├── Thread/                  # ThreadPool（自实现：多线程任务队列）
-│   ├── Async/                   # 异步链（CAsyncChain：固定签名层 + 共享上下文）+ 无栈协程
+│   ├── Async/                   # 异步 promise（CPromise：then/catch/finally + 共享上下文）+ 无栈协程
 │   ├── Serialization/           # 二进制序列化（CBinaryWriter / CBinaryReader，小端 + 边界检查）
 │   ├── Storage/                 # CFileStore（通用文件存储：纯内存、线程安全、短码生成，供任意服务器复用）
 │   └── Linux/Makefile           # 生成 build/libCommon.a
@@ -102,7 +102,7 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 - **Timer**：TimerManager（基于 asio::steady_timer，一次性 / 周期性）
 - **Config**：基于 inih 的 INI 解析
 - **Thread**：ThreadPool（自实现多线程任务队列）
-- **Async**：异步链（`CAsyncChain`：层间只传成败、数据走共享上下文、失败即停 + `ThenAlways` 回滚）+ 无栈协程 `CCoroutine`
+- **Async**：异步 promise（`CPromise`：then / catch / finally，层间只传兑现 / 拒绝，数据走共享上下文）+ 无栈协程 `CCoroutine`
 - **Serialization**：CBinaryWriter / CBinaryReader（小端 + 边界检查）
 
 ### ServerCore（服务器基础框架 `libServerCore.a`）

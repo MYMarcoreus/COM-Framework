@@ -9,6 +9,17 @@
         "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
         "editor.formatOnSave": true
     },
+    // 缩进与列宽：与 .clang-format（4 空格 / 120 列）保持一致。
+    // detectIndentation 关掉 —— 否则 VS Code 会按文件内容猜缩进，容易"看着缩进不对"。
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "editor.detectIndentation": false,
+    "editor.rulers": [
+        120
+    ],
+    // 保存时去掉行尾空白 / 补齐结尾换行：避免无意义的 diff，也让 clang-format 结果稳定。
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
     // 忽略第三方子模块的 git 仓库：VS Code 的源代码管理面板不再显示
     // 这些子模块内部的任何更改（我们不修改第三方源码；本地产物
     // 如 .cache/、compile_commands.json 也不会再显示为子模块 dirty）。

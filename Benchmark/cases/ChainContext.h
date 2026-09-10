@@ -8,8 +8,8 @@
 
 #include <memory>
 
-#include "Async/AsyncChain.h"
-#include "Async/StepResult.h"
+#include "Async/Promise.h"
+#include "Async/PromiseResult.h"
 
 namespace bench {
 
@@ -23,28 +23,28 @@ struct CChainContext
 };
 
 /// 层：值 +1（固定签名：上一层结果 + 共享上下文 → 本层结果）。
-inline common::async::CStepResult StepInc(common::async::CStepResult upStep,
-                                          const std::shared_ptr<CChainContext>& spCtx)
+inline common::async::CPromiseResult StepInc(common::async::CPromiseResult upResult,
+                                             const std::shared_ptr<CChainContext>& spCtx)
 {
-    if (upStep.IsFailed())
+    if (upResult.IsRejected())
     {
-        return upStep;
+        return upResult;
     }
     spCtx->nValue += 1;
     ++spCtx->nSteps;
-    return common::async::CStepResult::Ok();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// 层：业务失败（用于失败即停链）。
-inline common::async::CStepResult StepFail(common::async::CStepResult upStep,
-                                           const std::shared_ptr<CChainContext>& spCtx)
+inline common::async::CPromiseResult StepFail(common::async::CPromiseResult upResult,
+                                              const std::shared_ptr<CChainContext>& spCtx)
 {
-    if (upStep.IsFailed())
+    if (upResult.IsRejected())
     {
-        return upStep;
+        return upResult;
     }
     ++spCtx->nSteps;
-    return common::async::CStepResult::Failed(common::async::kStepBusinessBase + 1);
+    return common::async::CPromiseResult::Reject(common::async::kBusinessBase + 1);
 }
 
 }  // namespace bench

@@ -4,6 +4,10 @@
 > 系统性性能优化过程：**方法、推理、被证伪的方案与最终结论**，而不仅是结果。
 > 配套基准项目：`Benchmark/`（方法参考 asio / librf / Google Benchmark）。
 >
+> 说明：以下条目是**历史优化记录**（当时为传值版任务链，API 名如 `CTask` / `OnResult` /
+> `Submit` 等）。异步框架后续已整体重命名对齐 JS Promise（`CPromise` / `Then` / `Catch` /
+> `Finally` / `NewPromise`），当前 API 见 [docs/common/async-usage.md](common/async-usage.md)。
+>
 > 所有结论均来自 `Benchmark/` 的前后对照实测 + 单元测试（64/64）验证。
 
 ---

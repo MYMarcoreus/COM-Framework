@@ -1,7 +1,9 @@
 #include "Application/ExampleApplication.h"
 
+#include <memory>
 #include <string>
 
+#include "Async/Promise.h"
 #include "Config/Config.h"
 #include "Event/EventDispatcher.h"
 #include "Infra/AsyncExecutorModule.h"
@@ -9,13 +11,22 @@
 #include "Log/Logger.h"
 #include "Message/MessageRouter.h"
 #include "Module/ExampleAsyncModule.h"
+#include "Module/ExampleDbModule.h"
 #include "Module/ExampleLoggerModule.h"
 #include "Module/ExampleTimerModule.h"
+#include "Module/IUserService.h"
+#include "Module/IUserTable.h"
 #include "Network/NetworkModule.h"
 #include "Network/TcpServerModule.h"
 #include "Service/ExampleService.h"
 
 namespace serverexample {
+
+namespace {
+
+namespace no = common::async;
+
+}  // namespace
 
 /// @brief 创建 ServerExample 服务器应用程序。
 ///
@@ -105,15 +116,24 @@ bool CExampleApplication::RegisterModules()
         return false;
     }
 
-    // ⑩ 通用 TCP 服务器装配模块：从模块管理器获取网络 / 服务接口并启动
-    if (!m_moduleManager.RegisterModule(new sc::CTcpServerModule(m_nPort)))
+    // ⑩ 数据访问模块（模拟数据库）：对外提供用户信息表读写改删的异步函数，
+    //     须先于依赖它的业务模块注册（拓扑排序保证先初始化 / 启动）。
+    int dbLatencyMs = m_config.GetInt("db.latency_ms", 3);
+    if (!m_moduleManager.RegisterModule(IID_IUserTable(), new CExampleDbModule(dbLatencyMs)))
     {
         return false;
     }
 
-    // ⑪ 异步框架演示模块：周期性演示异步链式步骤 / 共享上下文 / 失败终止
+    // ⑪ 用户业务模块：按 IUserService 对外提供多个异步函数（读 / 写 / 改 / 删用户），
+    //     内部调用本模块与数据访问模块的异步函数，并由定时器周期演示。
     int asyncIntervalMs = m_config.GetInt("async.interval_ms", 5000);
-    if (!m_moduleManager.RegisterModule(new CExampleAsyncModule(asyncIntervalMs)))
+    if (!m_moduleManager.RegisterModule(IID_IUserService(), new CExampleAsyncModule(asyncIntervalMs)))
+    {
+        return false;
+    }
+
+    // ⑫ 通用 TCP 服务器装配模块：从模块管理器获取网络 / 服务接口并启动
+    if (!m_moduleManager.RegisterModule(new sc::CTcpServerModule(m_nPort)))
     {
         return false;
     }
@@ -164,6 +184,27 @@ bool CExampleApplication::OnStart()
     {
         m_pEventDispatcher->PublishAsync("example.hello", nullptr, 0);
     }
+
+    // 模块外部（应用层）按接口调用业务模块的异步函数：只注册完成回调，不阻塞启动流程。
+    m_pUserService.Reset(m_moduleManager.Resolve<IUserService>(IID_IUserService()));
+    if (m_pUserService != nullptr)
+    {
+        CUserRecord recApp;
+        recApp.strName = "app-user";
+        recApp.strMail = "app-user@example.com";
+        recApp.nLevel = 1;
+
+        // 异步函数立即返回 promise 句柄：操作数据从上下文取（回调捕获上下文保活）。
+        no::CPromise<CUserOpContext> promise = m_pUserService->RegisterUserAsync(recApp);
+        std::shared_ptr<CUserOpContext> spCtx = promise.GetContext();
+        promise.OnSettled([spCtx](no::CPromiseResult result)
+        {
+            common::log::CLogger::Instance().Info("[应用] 外部异步调用完成：" +
+                                                  std::string(result.IsFulfilled() ? "兑现" : "拒绝") +
+                                                  " id=" + std::to_string(spCtx->nUserId) + " 轨迹=" + spCtx->strTrace);
+        });
+        common::log::CLogger::Instance().Info("[应用] 已按接口调用业务模块异步函数（回调通知，不阻塞）");
+    }
     return true;
 }
 
@@ -189,6 +230,7 @@ void CExampleApplication::OnShutdown()
         }
         m_pEventDispatcher.Reset();
     }
+    m_pUserService.Reset();
 }
 
 }  // namespace serverexample
