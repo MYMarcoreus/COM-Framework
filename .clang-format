@@ -90,8 +90,6 @@ SpaceAfterCStyleCast: false
 LambdaBodyIndentation: OuterScope
 # lambda 体也不写在单行（Google 基准默认 All 会把 { return x; } 压成一行）。
 AllowShortLambdasOnASingleLine: None
-# 短 lambda 允许单行（如 [this]() { return m_bReady; }）
-AllowShortLambdasOnASingleLine: All
 
 # ---- 杂项（Google 默认，与代码一致，显式声明）----
 # 命名空间闭合注释：} // namespace detail
