@@ -439,8 +439,8 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<CPromiseCore<TCont
 /// @param pChainHandle 本链执行器句柄（默认值）。
 /// @return 本层应使用的执行器句柄。
 inline const std::shared_ptr<CExecutorHandle>& ResolveExecHandle(int nAffinity,
-                                                                const std::shared_ptr<CExecutorHandle>& pTarget,
-                                                                const std::shared_ptr<CExecutorHandle>& pChainHandle)
+                                                                 const std::shared_ptr<CExecutorHandle>& pTarget,
+                                                                 const std::shared_ptr<CExecutorHandle>& pChainHandle)
 {
     return (nAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pChainHandle;
 }
@@ -843,8 +843,7 @@ class CPromise
             return false;  // 无效 promise：无法注册（唯一返回 false 的情形）。
         }
 
-        m_pState->AddHandler(m_pCore->Handle(),
-                             [fnSettled](const CPromiseResult& result)
+        m_pState->AddHandler(m_pCore->Handle(), [fnSettled](const CPromiseResult& result)
         {
             if (fnSettled)
             {
