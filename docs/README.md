@@ -41,6 +41,17 @@
 | [async-mixed-then-example.md](common/async-mixed-then-example.md) | 单文件示例：一条链里混用多种 then（具名函数 / lambda / 跨模块异步 / 内层链 / 旁支 / catch / finally） |
 | [async-vs-js.md](common/async-vs-js.md) | 与 JavaScript Promise 的对照：API 对应、语义差异、从 JS 迁过来容易踩的坑 |
 
+### 风格模仿（`docs/common/`）
+
+把其他异步框架 / 语言的写法，用本框架临摹一遍（每篇一个可编译运行的用例）：
+
+| 文档 | 对标写法 |
+|---|---|
+| [async-style-coroutine.md](common/async-style-coroutine.md) | libgo：一个协程里直线书写，业务拒绝中断，统一兜底 |
+| [async-style-then-chain.md](common/async-style-then-chain.md) | JavaScript Promise：then 链 + 内层链 + reject + catch |
+| [async-style-manual-settle.md](common/async-style-manual-settle.md) | async_promise：`make_promise(resolve, reject)` 显式兑现 / 拒绝 |
+| [async-style-recover.md](common/async-style-recover.md) | Async++：手动完成 + `.recover` 分流兜底后继续链 |
+
 ## 其他
 
 | 文档 | 内容 |
