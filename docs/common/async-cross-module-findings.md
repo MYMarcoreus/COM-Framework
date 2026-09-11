@@ -99,7 +99,7 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
     return pHandle != nullptr && CThreadPool::IsInPoolThread(pHandle->m_pPool.get());
 }
 
-// Common/Async/Promise.h：层处理器（detail::RunHandler）
+// Common/Async/Promise.h：层处理器（CPromiseCore::RunHandler）
 if (IsInExecutorThread(pCore->Handle()) && InlineDepth() < kMaxInlineDepth)
 {
     ++InlineDepth(); fnRun(); --InlineDepth();      // 同执行器：就地内联
@@ -187,7 +187,7 @@ promiseStock.OnSettled([...](no::CPromiseResult result) { /* 回调 */ });      
 
 链路一步步是：
 
-1. 被调模块的执行器已 `Stop()` → 它内部 `NewPromise` 的投递失败 → `detail::PostHandler` 里
+1. 被调模块的执行器已 `Stop()` → 它内部 `NewPromise` 的投递失败 → `CPromiseCore::PostHandler` 里
    `pState->Settle(CPromiseResult::Reject(kStopped))` —— **这一步是对的**，子 promise 立即落定为 `kStopped`；
 2. 调用方紧接着 `OnSettled(...)`，此时子 promise **已经 settled** → `CPromiseState::AddHandler` 走路径 ②
    → `PostToHandle(pHandle, ...)` 用的是**被调模块的执行器**（已停止）→ 返回 `false`，

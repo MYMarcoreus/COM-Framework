@@ -174,7 +174,7 @@ extern struct CLaunchState { bool bDeferred; bool bStarted; std::function<void()
     { pNextState->Settle(upResult); return; }
 
     // finally：无论成败都执行（但忽略返回值）；then / catch：执行本层处理器
-    detail::RunHandler(pCore, pNextState, fnHandler, upResult, nMode);
+    pCore->RunHandler(pNextState, fnHandler, upResult, nMode);
 }
 ```
 
@@ -292,7 +292,7 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
     return pHandle != nullptr && CThreadPool::IsInPoolThread(pHandle->m_pPool.get());
 }
 
-// Common/Async/Promise.h：层处理器（detail::RunHandler）
+// Common/Async/Promise.h：层处理器（CPromiseCore::RunHandler）
 const std::shared_ptr<CExecutorHandle> pExec =
     (nAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pCore->Handle();   // 选执行器
 const bool bInline = (nAffinity == kAffinityInline) || IsInExecutorThread(pExec);         // 就地？
