@@ -144,6 +144,56 @@ inline int& InlineDepth()
     return s_nInlineDepth;
 }
 
+/// @brief 执行 settled 通知（异常兜底：通知里抛异常只报告，不向外抛）。
+///
+/// 通知不是「层」：它没有结果可落，也没人在等它。所以异常只能吞掉 ——
+/// 但绝不能放任它逃出（`CPromiseState::Settle` 在锁外直接调用处理器，线程池
+/// worker 不捕获异常 → 一旦逃出就是 std::terminate，整个进程完蛋）。
+///
+/// @param fnSettled 通知处理器（可为空）。
+/// @param result 本层最终结果。
+inline void RunNotice(const SettledHandler& fnSettled, const CPromiseResult& result)
+{
+    if (!fnSettled)
+    {
+        return;
+    }
+    try
+    {
+        fnSettled(result);
+    }
+    catch (...)
+    {
+        ReportDiagnostic("OnSettled 通知里抛出了异常（已忽略；通知不是层，没有结果可落）");
+    }
+}
+
+/// @brief 在指定执行器上执行 settled 通知（`OnSettledOn` 用）。
+///
+/// 已在该执行器线程 → 就地；否则投递过去；执行器不可用 → 就地送达
+/// （与 `OnSettled` 的「保证送达」一致，绝不丢通知）。
+///
+/// @param pTarget 目标执行器句柄。
+/// @param fnSettled 通知处理器（可为空）。
+/// @param result 本层最终结果。
+inline void RunNoticeOn(const std::shared_ptr<CExecutorHandle>& pTarget, const SettledHandler& fnSettled,
+                        const CPromiseResult& result)
+{
+    if (!fnSettled)
+    {
+        return;
+    }
+
+    std::function<void()> fnRun = [fnSettled, result]()
+    {
+        RunNotice(fnSettled, result);
+    };
+    if (IsInExecutorThread(pTarget) || !PostToHandle(pTarget, std::move(fnRun)))
+    {
+        RunNotice(fnSettled, result);  // 已在目标线程 / 目标执行器不可用 → 就地（送达保证）。
+    }
+}
+
 /// @brief promise 状态（对应 JS 中「每个 then 返回的新 promise」的状态）。
 ///
 /// 一道 promise 链由若干状态串成，一个状态对应一层。状态是单向开关：
@@ -151,7 +201,7 @@ inline int& InlineDepth()
 /// 处理器（handler）随后在锁外触发（链的逐层推进就在这条调用路径上级联完成）。
 class CPromiseState
 {
-   public:
+public:
     /// 处理器：接收上一层结果。
     using Handler = std::function<void(const CPromiseResult&)>;
 
@@ -269,6 +319,32 @@ class CPromiseState
         return m_result;
     }
 
+    /// @brief 阻塞等待本状态 settle，最多等 nTimeoutMs 毫秒。
+    ///
+    /// @param nTimeoutMs 超时毫秒数（< 0 = 无限等待，等价 `Await()`）。
+    /// @return 本层最终结果；超时返回被拒绝（kStopped）。
+    CPromiseResult AwaitFor(int nTimeoutMs)
+    {
+        if (nTimeoutMs < 0)
+        {
+            return Await();
+        }
+        if (m_bSettled.load(std::memory_order_relaxed))
+        {
+            return Await();  // 已落定：直接走原路径（含短自旋）。
+        }
+
+        std::unique_lock<std::mutex> lock(m_mutex);
+        if (!m_cv.wait_for(lock, std::chrono::milliseconds(nTimeoutMs), [this]()
+        {
+            return m_bSettled.load(std::memory_order_relaxed);
+        }))
+        {
+            return CPromiseResult::Reject(kStopped);  // 超时：不落定本层，只向调用方报「没等到」。
+        }
+        return m_result;
+    }
+
     /// @brief 本状态是否已 settled（兑现或拒绝）。
     bool IsSettled() const
     {
@@ -297,7 +373,7 @@ class CPromiseState
 #endif
     }
 
-   private:
+private:
     std::mutex m_mutex;                  ///< 保护结果与处理器列表。
     std::condition_variable m_cv;        ///< 通知等待者。
     std::vector<Handler> m_vecHandlers;  ///< 处理器列表（pending 时登记）。
@@ -332,7 +408,7 @@ struct CLaunchState
 template <typename TContext>
 class CPromiseCore
 {
-   public:
+public:
     /// @brief 创建核心。
     ///
     /// @param pHandle 执行器句柄（可为空：无效 promise）。
@@ -381,7 +457,7 @@ class CPromiseCore
         return m_pLaunch;
     }
 
-   private:
+private:
     mutable std::mutex m_mutex;                       ///< 保护上下文与启动状态的懒创建。
     std::shared_ptr<CExecutorHandle> m_pHandle;       ///< 执行器句柄。
     mutable std::shared_ptr<TContext> m_spContext;    ///< 共享上下文。
@@ -525,7 +601,7 @@ void PostHandler(const std::shared_ptr<CPromiseCore<TContext> >& pCore, const st
 template <typename TContext>
 class CPromise
 {
-   public:
+public:
     /// 处理器类型（固定签名：上一层结果 + 共享上下文 → 本层结果）。
     using ThenHandler = detail::ThenHandler<TContext>;
 
@@ -893,10 +969,36 @@ class CPromise
 
         m_pState->AddHandler(m_pCore->Handle(), [fnSettled](const CPromiseResult& result)
         {
-            if (fnSettled)
-            {
-                fnSettled(result);
-            }
+            detail::RunNotice(fnSettled, result);  // 通知里抛异常：只报告，不逃出（否则 terminate）。
+        }, /* bGuaranteedDelivery = */ true);
+        return true;
+    }
+
+    /// @brief onSettled（**指定执行器**版）：通知在给定执行器线程上触发（不在结算线程）。
+    ///
+    /// 与 `OnSettled` 的唯一差别：通知会**投递到目标执行器**（已在该线程则就地），
+    /// 用于「收尾 / 审计 / 指标上报要碰本模块状态」的场合（模块状态只在模块线程上改）。
+    ///
+    /// 送达保证与 `OnSettled` 一致：执行器不可用（已停止 / 拒绝投递）时在**结算线程**上就地执行，
+    /// 绝不丢弃。异常同样只报告、不外抛。
+    ///
+    /// @warning 目标执行器须存活到通知送达（句柄保活，但被持对象不得提前析构）；
+    ///          与其他「指定执行器」API 同理，**不要用它把执行器跨模块传递**。
+    ///
+    /// @param executor 目标执行器（典型：本模块的执行器）。
+    /// @param fnSettled 收尾通知（入参为本层最终结果）。
+    /// @return true 已登记 / 已投递 / 已就地送达；false 仅当本 promise 无效。
+    bool OnSettledOn(CAsyncExecutor& executor, const SettledHandler& fnSettled) const
+    {
+        if (m_pCore == nullptr || m_pState == nullptr)
+        {
+            return false;  // 无效 promise：无法注册（唯一返回 false 的情形）。
+        }
+
+        const std::shared_ptr<detail::CExecutorHandle> pTarget = executor.Handle();
+        m_pState->AddHandler(pTarget, [pTarget, fnSettled](const CPromiseResult& result)
+        {
+            detail::RunNoticeOn(pTarget, fnSettled, result);
         }, /* bGuaranteedDelivery = */ true);
         return true;
     }
@@ -919,12 +1021,39 @@ class CPromise
         {
             return CPromiseResult::Reject(kStopped);  // 无效 promise：无结果可等。
         }
+        ReportBlockingRisk();  // 死锁预警（不改变行为，只报告）。
         // 延迟链未启动 → 自动启动（兜底：漏写 Start() 也不会死等）。
         if (m_pCore != nullptr && m_pCore->Launch()->bDeferred && !m_pCore->Launch()->bStarted)
         {
             const_cast<CPromise*>(this)->Start();
         }
         return m_pState->Await();
+    }
+
+    /// @brief await（**带超时**）：最多等 nTimeoutMs 毫秒，超时不再阻塞。
+    ///
+    /// 用于**不允许永久挂住**的场合：测试、优雅关闭、启动自检。
+    /// 超时只是向调用方报「没等到」（返回 `kStopped`），**不会取消或落定本层**——
+    /// 链会继续在后台跑（要停链请用执行器 `Stop()` 或业务标记）。
+    ///
+    /// @warning 与 `Await()` 一样是阻塞等待；在层内 / 协程内调用同样会占住 worker
+    ///          （在单线程执行器里可能死锁），异步流程里请优先用
+    ///          `ThenPromise` / `ThenBridge` / `OnSettled` / 协程。
+    ///
+    /// @param nTimeoutMs 超时毫秒数（< 0 = 无限等待，等价 `Await()`）。
+    /// @return 本层最终结果；超时返回被拒绝（kStopped）。
+    CPromiseResult AwaitFor(int nTimeoutMs) const
+    {
+        if (m_pState == nullptr)
+        {
+            return CPromiseResult::Reject(kStopped);  // 无效 promise：无结果可等。
+        }
+        ReportBlockingRisk();  // 死锁预警（不改变行为，只报告）。
+        if (m_pCore != nullptr && m_pCore->Launch()->bDeferred && !m_pCore->Launch()->bStarted)
+        {
+            const_cast<CPromise*>(this)->Start();  // 与 Await() 一样自动启动延迟链。
+        }
+        return m_pState->AwaitFor(nTimeoutMs);
     }
 
     /// @brief 本层是否已 settled（兑现或拒绝）。
@@ -951,7 +1080,31 @@ class CPromise
         return m_pState != nullptr ? m_pState->Loc() : CSourceLoc();
     }
 
-   private:
+private:
+    /// @brief 阻塞等待前的「死锁预警」（**不改变行为**，只报告，便于开发期定位）。
+    ///
+    /// 两种形态都报：
+    ///  - **层内 / 通知内阻塞**（`InlineDepth() > 0`）：正卡在某个处理器里等异步 → 占住一个 worker，
+    ///    没有空闲 worker 时被等待的层无人推进 → 死锁（单线程执行器必然）；
+    ///  - **在本链执行器线程上等本链**：本链的后续层需要这条线程，而它正卡在这里 → 必然死锁
+    ///    （典型误用：在工作线程上 `p.Await()` 等自己这条链）。
+    ///
+    /// 不做硬失败的原因：「本链执行器线程上等一个由别的线程 settle 的层」（例如桥接层）是能正常
+    /// 返回的，硬失败会误伤。要避免永久挂住请用 `AwaitFor(ms)`。
+    void ReportBlockingRisk() const
+    {
+        if (m_pCore == nullptr || m_pState == nullptr || m_pState->IsSettled())
+        {
+            return;
+        }
+        if (detail::InlineDepth() > 0 || detail::IsInExecutorThread(m_pCore->Handle()))
+        {
+            ReportDiagnostic(
+                "Await(): 层内（或本链执行器线程上）阻塞等待未落定的层 → 极可能死锁；"
+                "请改用 ThenPromise / ThenBridge / OnSettled 回调续跑 / 协程 CO_AWAIT，或用 AwaitFor(ms) 兜底");
+        }
+    }
+
     /// @brief 内部：用执行器**句柄**创建「由外部兑现 / 拒绝」的 promise（`New` 与 `ThenBridge` 共用）。
     ///
     /// 与 `New(executor, …)` 等价，区别只在拿的是句柄而不是执行器引用 ——

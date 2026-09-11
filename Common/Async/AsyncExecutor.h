@@ -77,12 +77,29 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
 
 }  // namespace detail
 
+/// @brief 诊断处理器：接收一句「框架检测到的用法问题」描述（不带换行）。
+///
+/// 用途：把「不致命但肯定是 bug」的用法报告出来（通知里抛异常、在层内阻塞等待
+/// 未落定的层、在无效 promise 上挂层等）。应用可接日志 / 指标；测试可接断言。
+using DiagnosticHandler = std::function<void(const char* strWhat)>;
+
+/// @brief 设置诊断处理器（线程安全）。
+///
+/// @param fnHandler 处理器；传 `nullptr` 恢复默认（debug 构建打印到 stderr，发布构建忽略）；
+///                  想完全关闭传一个空 lambda。
+void SetDiagnosticHandler(const DiagnosticHandler& fnHandler);
+
+/// @brief 报告一次诊断（框架内部用；未设处理器时按默认策略处理，不会抛异常）。
+///
+/// @param strWhat 问题描述（静态字符串，生命周期无要求）。
+void ReportDiagnostic(const char* strWhat);
+
 /// @brief 异步执行器：工作线程池 + 投递入口。
 ///
 /// 非模板类；起 promise 通过模板成员 NewPromise 完成（上下文类型由参数推导）。
 class CAsyncExecutor
 {
-   public:
+public:
     /// @brief 创建执行器。
     ///
     /// @param nThreadCount 工作线程数（默认 1）。
@@ -184,7 +201,7 @@ class CAsyncExecutor
         return m_pHandle;
     }
 
-   private:
+private:
     std::shared_ptr<detail::CExecutorHandle> m_pHandle;  ///< 执行器句柄（promise / 协程共享）。
     size_t m_nThreadCount;                               ///< 工作线程数。
 };

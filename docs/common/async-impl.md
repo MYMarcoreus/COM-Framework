@@ -312,6 +312,33 @@ else if (!PostToHandle(pExec, std::move(fnRun))) { pState->Settle(Reject(kStoppe
 「已 settled 再注册」路径则各自投递 → 各支线依次在同一执行器线程上执行，
 但仍共享同一上下文，业务需自行保证上下文字段访问安全。
 
+### 8.2 健壮性：用户回调异常 / 阻塞等待 / 误用诊断（2026-09-12）
+
+一句话：**框架边界上的用户代码一律兜住** —— 异常不让它逃出线程，误用不让它静默，阻塞不让它挂死。
+
+| 场景 | 以前 | 现在 |
+| --- | --- | --- |
+| 层处理器抛异常 | `MakeHandlerRunner` 的 try/catch → 本层 `kException` | 不变（本来就安全） |
+| **通知**（`OnSettled` / `OnSettledOn`）抛异常 | 异常从 `CPromiseState::Settle` 逃出 → worker 无 catch → **`std::terminate`（进程挂掉）** | `detail::RunNotice` 兜住 + 报告诊断 |
+| `exec.Post(fn)` 的任务抛异常 | 同上（同样能弄死进程） | `CAsyncExecutor::Post` 包一层 guard 兜住 + 报告 |
+| `CPromise::New` 的 executor 抛异常 | `RunExternalExecutor` 兜住 → `kException` | 不变 |
+| `Await()` 永久挂住 | 只能靠文档警告 | 新增 `AwaitFor(ms)`（超时返回 `kStopped`，不落定、不取消链） |
+| 层内 / 本链线程上 `Await()` 未落定的层（必死锁） | 无任何提示 | `ReportBlockingRisk()` 报诊断（**不硬失败**：等「别的线程 settle 的层」是合法的） |
+| 无效 promise 上挂层 | 静默返回无效句柄 | 报诊断（链根本不会跑，静默最难查） |
+
+诊断出口（`AsyncExecutor.cpp`，进程级单槽 + 锁；处理器自身抛异常也会被忽略）：
+
+```cpp
+using DiagnosticHandler = std::function<void(const char* strWhat)>;
+void SetDiagnosticHandler(const DiagnosticHandler& fnHandler);  // nullptr = 恢复默认
+void ReportDiagnostic(const char* strWhat);                     // 框架内部调用
+// 默认策略：#if !defined(NDEBUG) → fprintf(stderr, "[async] %s\n", …)；发布构建忽略
+```
+
+**边界与不变的约定**：`CThreadPool::WorkerLoop` 依旧**不捕获异常**（「任务自己兜异常」的契约不变，
+`ServerCore/Exec` 也是按这个契约自己 catch 的）；async 只在自己这层把**用户回调**包住，
+不让框架的用法错误上升成进程级故障。
+
 ## 9. 源码位置调试（ASYNC_LOC）
 
 ```cpp

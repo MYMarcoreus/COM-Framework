@@ -1,5 +1,8 @@
 #include "Async/AsyncExecutor.h"
 
+#include <cstdio>
+#include <mutex>
+
 // ====================================================================
 // 非模板成员定义（模板成员 NewPromise / CoStart 分别在 Promise.h /
 // Coroutine.h 内定义）。非模板类 CAsyncExecutor 的成员定义放本文件，
@@ -8,6 +11,63 @@
 
 namespace common {
 namespace async {
+
+namespace {
+
+/// @brief 诊断处理器槽（进程级；进程内共享一个，故加锁保护）。
+std::mutex& DiagnosticMutex()
+{
+    static std::mutex s_mutex;
+    return s_mutex;
+}
+
+/// @brief 当前诊断处理器（空 = 未设置，走默认策略）。
+DiagnosticHandler& DiagnosticSlot()
+{
+    static DiagnosticHandler s_fnHandler;
+    return s_fnHandler;
+}
+
+}  // namespace
+
+/// @brief 设置诊断处理器（线程安全）。
+///
+/// @param fnHandler 处理器；传 nullptr 恢复默认（debug 构建打印到 stderr，发布构建忽略）。
+void SetDiagnosticHandler(const DiagnosticHandler& fnHandler)
+{
+    std::lock_guard<std::mutex> lock(DiagnosticMutex());
+    DiagnosticSlot() = fnHandler;
+}
+
+/// @brief 报告一次诊断（框架内部用；没设处理器时按默认策略处理，自身不抛异常）。
+///
+/// @param strWhat 问题描述。
+void ReportDiagnostic(const char* strWhat)
+{
+    DiagnosticHandler fnHandler;
+    {
+        std::lock_guard<std::mutex> lock(DiagnosticMutex());
+        fnHandler = DiagnosticSlot();
+    }
+
+    if (fnHandler)
+    {
+        try
+        {
+            fnHandler(strWhat != nullptr ? strWhat : "(null)");
+        }
+        catch (...)
+        {
+            // 诊断处理器自己抛异常：忽略（报告问题的手段不能反过来弄坏框架）。
+        }
+        return;
+    }
+
+#if !defined(NDEBUG)
+    // 默认策略：debug 构建打印（让开发期一眼看到误用），发布构建安静。
+    std::fprintf(stderr, "[async] %s\n", strWhat != nullptr ? strWhat : "(null)");
+#endif
+}
 
 /// @brief 创建异步执行器（构造即建句柄与线程池对象：执行器和线程池一定不为空）。
 ///
@@ -63,7 +123,26 @@ bool CAsyncExecutor::Post(std::function<void()> fnTask)
     {
         return false;
     }
-    return m_pHandle->m_pPool->Submit(std::move(fnTask));  // 移动投递；未启动 → false。
+    if (!fnTask)
+    {
+        ReportDiagnostic("exec.Post(): 任务为空（未提交）");
+        return false;
+    }
+
+    // 包一层异常兜底：线程池 worker 不捕获异常（异常逃出线程函数即 std::terminate），
+    // 而 Post 投递的是**用户任务**，所以在框架边界上收口。
+    std::function<void()> fnTaskGuarded = [fnTask]()
+    {
+        try
+        {
+            fnTask();
+        }
+        catch (...)
+        {
+            ReportDiagnostic("exec.Post() 投递的任务抛出了异常（已兜住，未终止进程）");
+        }
+    };
+    return m_pHandle->m_pPool->Submit(std::move(fnTaskGuarded));  // 移动投递；未启动 → false。
 }
 
 /// @brief 停止并等待任务完成（优雅关闭）。

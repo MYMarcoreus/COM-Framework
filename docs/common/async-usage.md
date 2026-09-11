@@ -367,6 +367,53 @@ no::kBusinessBase  = 100  // 业务错误码从 100 起取
 注意：`Await()` 返回与 `OnSettled` 回调的执行**没有先后保证**，测试里若依赖「回调已跑完」
 请另用标志 / 条件变量同步。
 
+### 7.1 带超时的等待（`AwaitFor`）
+
+```cpp
+no::CPromiseResult r = p.AwaitFor(500);   // 最多等 500ms；超时返回被拒绝（kStopped）
+no::CPromiseResult r2 = p.AwaitFor(-1);   // 负值 = 无限等待，等价 Await()
+```
+
+用途：测试、优雅关闭、启动自检 —— 这些场合**不允许永久挂住**。
+超时只向调用方报「没等到」，**不取消也不落定本层**（链继续在后台跑；要停链用执行器 `Stop()`
+或业务标记）。另外，在层内 / 本链执行器线程上阻塞等待未落定的层本身就是危险写法，框架会通过
+诊断钩子（见 7.3）给出死锁预警。
+
+### 7.2 通知跑在哪条线程（`OnSettled` / `OnSettledOn`）
+
+| 写法 | 通知在哪跑 | 典型用途 |
+| --- | --- | --- |
+| `OnSettled(handler)` | **结算线程**（典型：被调模块的线程）—— 通知**不迁移** | 只读日志 / 计数 |
+| `OnSettledOn(exec, handler)` | **指定执行器**线程（已在该线程则就地，否则投递） | 收尾要碰本模块状态（模块状态只在模块线程上改） |
+
+```cpp
+p.OnSettledOn(m_exec, [this](no::CPromiseResult r) { m_stat.nFinished += 1; });  // 回本模块线程收尾
+```
+
+送达保证两者一致：执行器不可用时改在结算线程上就地执行，**绝不丢通知**。
+通知里抛异常也同样安全：框架捕获 + 通过诊断钩子报告（见 7.3），**不终止进程、不影响链的结果**
+（这一点以前是致命的：异常会逃出 worker → `std::terminate`）。
+
+### 7.3 用法诊断钩子（`SetDiagnosticHandler`）
+
+框架会把「不致命但肯定是误用」的情况报告出来，默认策略是 **debug 构建打印 stderr、发布构建忽略**：
+
+```cpp
+no::SetDiagnosticHandler([](const char* strWhat) { LOG_WARN("async: %s", strWhat); });  // 接日志 / 指标
+no::SetDiagnosticHandler(nullptr);              // 恢复默认策略
+no::SetDiagnosticHandler([](const char*) {});   // 完全关闭
+```
+
+会报告的形态：
+
+| 形态 | 为什么要报 |
+| --- | --- |
+| 通知里抛异常（`OnSettled` / `OnSettledOn`） | 以前会让异常逃出 worker → 整个进程 `std::terminate`；现在兜住并报告 |
+| `exec.Post()` 投递的任务抛异常 | 同上（线程池 worker 本身不捕获异常） |
+| `exec.Post(nullptr)` | 空任务：不提交 + 报告（不再「返回 true 却什么也不做」） |
+| 层内 / 本链执行器线程上 `Await()` 未落定的层 | 极可能死锁（占住 worker / 卡住本链）—— 改用 `ThenPromise` / 协程 / `AwaitFor(ms)` |
+| 无效 promise 上挂层（`Then` / `ThenPromise`） | 静默无操作最容易埋坑（链根本不会跑） |
+
 ## 8. 执行器
 
 ```cpp
@@ -378,6 +425,8 @@ exec.Stop();                            // 停止并等待已投递任务完成
 ```
 
 - `Post`：不涉及 promise 的一次性任务（重活下沉 / 事件异步分发）；
+  投递的任务里抛异常 → 框架兜住并报告（见 7.3），**不会终止进程**；
+  但线程池 `CThreadPool` 本身**不捕获异常**，所以别绕过执行器直接往线程池提交会抛异常的任务；
 - 未 `Start()` / 已 `Stop()` 时起 promise、`Post` 都不抛异常，而是被拒绝 / 返回 `false`；
 - `Stop()` 之后可再次 `Start()`（重建句柄与线程池，隔离旧任务）。
 
@@ -464,6 +513,10 @@ auto t = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Then(StepB, ASYNC_LOC).Catch(S
 
 // 收尾（不改结果）
 auto t2 = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Finally(StepAudit, ASYNC_LOC);
+
+// 不允许永久挂住：带超时等 + 在自己线程收尾
+no::CPromiseResult r2 = t2.AwaitFor(500);              // 超时 → kStopped
+t2.OnSettledOn(m_exec, [](no::CPromiseResult) {});     // 通知投到本模块执行器
 
 // 分叉
 no::CPromise<Ctx> head = exec.NewPromise(spCtx, StepA, ASYNC_LOC);

@@ -27,6 +27,9 @@ TabWidth: 4
 UseTab: Never
 ContinuationIndentWidth: 4
 NamespaceIndentation: None
+# access 修饰符（public: / private: / protected:）不额外缩进：与所属 class / struct
+# 关键字对齐（顶层类即顶格，嵌套类与其 class 关键字同列），成员照常缩进 4 格。
+AccessModifierOffset: -4
 # #if / #else / #endif 内的指令按嵌套层级缩进（#define 缩进 4 格）。
 IndentPPDirectives: BeforeHash
 
