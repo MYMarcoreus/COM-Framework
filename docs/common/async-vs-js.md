@@ -170,162 +170,129 @@ return m_exec
 
 ## 5. 对照示例：内层链怎么写、怎么被外层等待
 
-同一个流程 —— 外层先拿到 `userId`，内层依次 **取用户 → 取订单 → 取支付金额**，内层全部完成后外层才继续。
-Promise/A+ 风格的 C++ 库（如 async_promise）写法：
+JS 原版（内层链 `fetchOrders → fetchPayment`，外层 `.then(total => …)` 等它跑完）：
 
-```cpp
-// async_promise（Promises/A+）：内层链直接 return，值沿链流动
-auto chain = async::make_promise([]() { return 123; })
-    .then([](int userId) -> async::promise<int> {
-        return fetchUserAsync(userId)                                     // 返回 promise → 外层等它
-            .then([](User user) { return fetchOrdersAsync(user); })
-            .then([](const std::vector<std::string>& orders) { return fetchPaymentAsync(orders[0]); })
-            .then([](int payment) { return payment; });                   // 内层链结果 = 支付金额
-    })
-    .then([](int total) { std::cout << "最终金额: " << total; });          // 内层跑完才执行
-chain.get().wait();
+```js
+function fetchUser(id)    { return Promise.resolve({ id, name: 'Alice' }); }
+function fetchOrders(user){ return Promise.resolve(['order1', 'order2']); }
+function fetchPayment(o)  { return Promise.resolve({ total: 99 }); }
+
+fetchUser(123)
+  .then(user => {
+    // 内层链：fetchOrders → fetchPayment，顺序执行
+    return fetchOrders(user)
+      .then(orders => {
+        console.log('订单:', orders);
+        return fetchPayment(orders[0]);   // 返回下一个 Promise
+      })
+      .then(payment => {
+        console.log('支付:', payment);
+        return payment.total;
+      });
+  })
+  .then(total => {
+    // 等 fetchOrders 和 fetchPayment 都完成后才执行
+    console.log('最终总额:', total);
+  });
 ```
 
-本框架：同一条流程，**内层链由外层的一层 `ThenPromise` 接进来**（代码可编译，输出见下）。
+本框架写法（同一流程，代码可编译，输出见下）：
 
 ```cpp
-// 对照 async_promise：内层链 fetchUser → fetchOrders → fetchPayment，被外层链等待
-#include <chrono>
+// 对照 JS：内层链 fetchOrders → fetchPayment，被外层 .then(total => …) 等待
 #include <cstdio>
 #include <memory>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "Async/AsyncExecutor.h"
-#include "Async/Coroutine.h"
 #include "Async/Promise.h"
 
 namespace no = common::async;
 
-/// 共享上下文：三层的数据都放这里（本框架层间只传成败，不传值）。
+/// 上下文：JS 里沿链流动的值，本框架都放这里（层间只传兑现 / 拒绝码）。
 struct CTradeCtx
 {
     int nUserId;
     std::string strUserName;
     std::vector<std::string> vecOrders;
-    int nPayment;
-    std::string strLog;
+    int nTotal;
 
-    CTradeCtx() : nUserId(0), nPayment(0)
+    CTradeCtx() : nUserId(0), nTotal(0)
     {}
 };
 
-/// @brief 交易模块：自持执行器；链与协程两种写法都提供。
+/// @brief 交易模块：自持执行器。
 class CTradeModule
 {
    public:
-    /// 协程版：逐步 CO_AWAIT（非阻塞挂起，不占 worker），代码是直线式的。
-    class CTradeCoro : public no::CCoroutine<CTradeCtx>
-    {
-       public:
-        using no::CCoroutine<CTradeCtx>::CCoroutine;
-
-        void Run() override
-        {
-            CO_BEGIN();
-            CO_AWAIT(NewPromise(&CTradeModule::StepFetchUser));     // 取用户
-            CO_AWAIT(NewPromise(&CTradeModule::StepFetchOrders));   // 取订单
-            CO_AWAIT(NewPromise(&CTradeModule::StepFetchPayment));  // 取支付
-            CO_AWAIT(NewPromise(&CTradeModule::StepReport));        // 汇总
-            CO_RETURN(no::CPromiseResult::Resolve());
-            CO_END();
-        }
-    };
-
     CTradeModule() : m_exec(2)
     {
         m_exec.Start();
     }
 
-    /// @brief 外层链：把内层链当成一层来等（等价 async_promise 里 then 返回 promise）。
+    /// @brief 等价 JS：fetchUser(123).then(user => { return 内层链 }).then(total => …)
     no::CPromise<CTradeCtx> RunAsync(const std::shared_ptr<CTradeCtx>& spCtx)
     {
-        // 内层链的工厂：外层在这一层等它跑完，再继续往下
+        // 等价 `return fetchOrders(user).then(…)`：这一层要等内层链，必须用 ThenPromise
         no::CPromise<CTradeCtx>::PromiseFactory fnInner = [this](const std::shared_ptr<CTradeCtx>& spSelf)
         {
-            return FetchPaymentAsync(spSelf);
+            return FetchOrdersAsync(spSelf);
         };
 
         return m_exec
-            .NewPromise(spCtx, &StepLoadUserId, ASYNC_LOC)  // ① 外层：先拿到 userId
-            .ThenPromise(fnInner, ASYNC_LOC)                // ② 内层链（等它）
-            .Then(&StepReport, ASYNC_LOC)                   // ③ 内层全部完成才执行
-            .Finally(&StepAudit, ASYNC_LOC);
+            .NewPromise(spCtx, &StepFetchUser, ASYNC_LOC)  // fetchUser(id)
+            .ThenPromise(fnInner, ASYNC_LOC)               // 等内层链跑完
+            .Then(&StepPrintTotal, ASYNC_LOC);             // 等价 .then(total => …)
     }
 
-    /// @brief 内层链：取用户 → 取订单 → 取支付（每步都返回一条 promise）。
-    no::CPromise<CTradeCtx> FetchPaymentAsync(const std::shared_ptr<CTradeCtx>& spCtx)
+    /// @brief 内层链：等价 JS `return fetchOrders(user).then(…).then(…)`。
+    no::CPromise<CTradeCtx> FetchOrdersAsync(const std::shared_ptr<CTradeCtx>& spCtx)
     {
-        no::CPromise<CTradeCtx>::PromiseFactory fnOrders = [this](const std::shared_ptr<CTradeCtx>& spSelf)
-        {
-            return m_exec.NewPromise(spSelf, &StepFetchOrders, ASYNC_LOC);
-        };
-
         no::CPromise<CTradeCtx>::PromiseFactory fnPayment = [this](const std::shared_ptr<CTradeCtx>& spSelf)
         {
             return m_exec.NewPromise(spSelf, &StepFetchPayment, ASYNC_LOC);
         };
 
-        return m_exec.NewPromise(spCtx, &StepFetchUser, ASYNC_LOC)
-            .ThenPromise(fnOrders, ASYNC_LOC)
-            .ThenPromise(fnPayment, ASYNC_LOC);
-    }
-
-    /// @brief 同一条流程的协程版入口。
-    std::shared_ptr<CTradeCoro> RunCoAsync(const std::shared_ptr<CTradeCtx>& spCtx)
-    {
-        return m_exec.CoStart<CTradeCoro>(spCtx);
+        return m_exec.NewPromise(spCtx, &StepFetchOrders, ASYNC_LOC).ThenPromise(fnPayment, ASYNC_LOC);
     }
 
    private:
-    static no::CPromiseResult StepLoadUserId(no::CPromiseResult /*upResult*/, const std::shared_ptr<CTradeCtx>& spCtx)
-    {
-        spCtx->nUserId = 123;
-        spCtx->strLog += "外层取ID;";
-        return no::CPromiseResult::Resolve();
-    }
-
+    /// ① fetchUser(id)：结果写进上下文
     static no::CPromiseResult StepFetchUser(no::CPromiseResult /*upResult*/, const std::shared_ptr<CTradeCtx>& spCtx)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));  // 模拟 IO
         spCtx->strUserName = "Alice";
-        spCtx->strLog += "取用户(" + spCtx->strUserName + ");";
+        std::printf("用户: %d %s\n", spCtx->nUserId, spCtx->strUserName.c_str());
         return no::CPromiseResult::Resolve();
     }
 
+    /// ② fetchOrders(user)：等价 `.then(orders => …)`
     static no::CPromiseResult StepFetchOrders(no::CPromiseResult /*upResult*/, const std::shared_ptr<CTradeCtx>& spCtx)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));  // 模拟 IO
         spCtx->vecOrders.push_back("order1");
         spCtx->vecOrders.push_back("order2");
-        spCtx->strLog += "取订单(" + std::to_string(spCtx->vecOrders.size()) + ");";
+        std::printf("订单:");
+        for (const std::string& strOrder : spCtx->vecOrders)
+        {
+            std::printf(" %s", strOrder.c_str());
+        }
+        std::printf("\n");
         return no::CPromiseResult::Resolve();
     }
 
+    /// ③ fetchPayment(orders[0])：等价 `.then(payment => …)`
     static no::CPromiseResult StepFetchPayment(no::CPromiseResult /*upResult*/, const std::shared_ptr<CTradeCtx>& spCtx)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));  // 模拟 IO
-        spCtx->nPayment = 99;                                       // 支付金额
-        spCtx->strLog += "取支付(" + std::to_string(spCtx->nPayment) + ");";
+        spCtx->nTotal = 99;
+        std::printf("支付: %d\n", spCtx->nTotal);
         return no::CPromiseResult::Resolve();
     }
 
-    static no::CPromiseResult StepReport(no::CPromiseResult /*upResult*/, const std::shared_ptr<CTradeCtx>& spCtx)
+    /// ④ .then(total => …)：内层链全部完成后才执行
+    static no::CPromiseResult StepPrintTotal(no::CPromiseResult /*upResult*/, const std::shared_ptr<CTradeCtx>& spCtx)
     {
-        spCtx->strLog += "汇总;";
+        std::printf("最终总额: %d\n", spCtx->nTotal);
         return no::CPromiseResult::Resolve();
-    }
-
-    static no::CPromiseResult StepAudit(no::CPromiseResult upResult, const std::shared_ptr<CTradeCtx>& spCtx)
-    {
-        spCtx->strLog += "审计;";
-        return upResult;
     }
 
     no::CAsyncExecutor m_exec;  ///< 模块私有执行器。
@@ -335,42 +302,31 @@ int main()
 {
     auto spModule = std::make_shared<CTradeModule>();
 
-    // 链式：外层等内层链
-    {
-        auto spCtx = std::make_shared<CTradeCtx>();
-        const no::CPromiseResult r = spModule->RunAsync(spCtx).Await();
-        std::printf("链式: 结果=%s 用户=%s 订单数=%zu 支付=%d 轨迹=%s\n", r.IsFulfilled() ? "兑现" : "拒绝",
-                    spCtx->strUserName.c_str(), spCtx->vecOrders.size(), spCtx->nPayment, spCtx->strLog.c_str());
-    }
+    auto spCtx = std::make_shared<CTradeCtx>();
+    spCtx->nUserId = 123;  // fetchUser(123)
 
-    // 协程：直线式 await，数据同样落在上下文里
-    {
-        auto spCtx = std::make_shared<CTradeCtx>();
-        const no::CPromiseResult r = spModule->RunCoAsync(spCtx)->Await();
-        std::printf("协程: 结果=%s 用户=%s 订单数=%zu 支付=%d 轨迹=%s\n", r.IsFulfilled() ? "兑现" : "拒绝",
-                    spCtx->strUserName.c_str(), spCtx->vecOrders.size(), spCtx->nPayment, spCtx->strLog.c_str());
-    }
+    const no::CPromiseResult result = spModule->RunAsync(spCtx).Await();
+    std::printf("结果: %s\n", result.IsFulfilled() ? "兑现" : "拒绝");
     return 0;
 }
 ```
 
-编译与运行（先 `./build.sh --debug Common` 生成 `build/debug/libCommon.a`）：
+编译运行（先 `./build.sh --debug Common` 生成 `build/debug/libCommon.a`）：
 
 ```bash
 g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon nested_chain.cpp build/debug/libCommon.a -o /tmp/nested_chain && /tmp/nested_chain
 ```
 
 ```text
-链式: 结果=兑现 用户=Alice 订单数=2 支付=99 轨迹=外层取ID;取用户(Alice);取订单(2);取支付(99);汇总;审计;
-协程: 结果=兑现 用户=Alice 订单数=2 支付=99 轨迹=取用户(Alice);取订单(2);取支付(99);汇总;
+用户: 123 Alice
+订单: order1 order2
+支付: 99
+最终总额: 99
+结果: 兑现
 ```
 
-三点对照：
+三点说明：
 
-| 关注点 | async_promise | 本框架 |
-|---|---|---|
-| 内层链怎么接进外层 | 回调里 `return` 内层 promise，**运行期**自动展平 | 外层写成 `ThenPromise(factory)`，**编译期**就决定这一层要等；factory 返回内层链 |
-| 数据怎么走 | 值沿链流动（`then(int userId)` → … → `then(int total)`） | 值写进共享上下文 `CTradeCtx`；层间只传「码」，所以 `Then`/`Catch` 拿到的是 `spCtx` |
-| 想要"直线代码" | 本身就是值链，天然直线 | 用协程：`CO_AWAIT(NewPromise(&StepX))` 逐步等（非阻塞、不占 worker）——值仍从上下文取，但阅读体验最接近 async_promise |
-
-内层链被拒绝时同样沿外层链透传：`ThenPromise` 那一层以**同一拒绝码**被拒绝，后续 `Then` 跳过、`Catch` / `Finally` 照常执行（`Tests/test_async_smoke.cpp` 的 `Smoke_ThenPromiseInnerReject` 覆盖）。
+- `.then(user => { return 内层链 })` 这一层要写成 `ThenPromise(工厂)`：外层等内层链 settle 后再继续，等价 JS 里「回调返回 promise 会被展平」。
+- 值不沿链传：`user` / `orders` / `payment` / `total` 都放在共享上下文 `CTradeCtx` 里，层间只传「兑现 / 拒绝码」，所以每层拿到的是 `spCtx`。
+- 内层链被拒绝时，`ThenPromise` 那一层以同一拒绝码被拒绝：外层后续 `Then` 跳过，`Catch` / `Finally` 照常执行。
