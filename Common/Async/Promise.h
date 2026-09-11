@@ -374,6 +374,14 @@ enum HandlerMode
     kModeFinally = 2  ///< finally(onFinally)：无论兑现或拒绝都执行；忽略返回值，透传上层结果。
 };
 
+/// @brief 层处理器的执行线程偏好（线程亲和，默认 `kAffinityChain`）。
+enum HandlerAffinity
+{
+    kAffinityChain = 0,  ///< 默认：本链执行器线程（同执行器内联；跨执行器投递回本链执行器）。
+    kAffinityInline = 1,  ///< 就地：在「结算本层的那条线程」上执行（不投递，不要求线程亲和）。
+    kAffinityExecutor = 2  ///< 指定执行器：在给定执行器线程上执行（同线程内联，否则投递）。
+};
+
 /// @brief 构造「执行本层处理器」的任务体（捕获核心与状态保活）。
 ///
 /// @param pCore promise 共享核心（上下文 + 执行器句柄）。
@@ -416,12 +424,21 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<CPromiseCore<TCont
 /// @param fnHandler 处理器。
 /// @param upResult 上一层结果。
 /// @param nMode 处理器模式。
+/// @param nAffinity 执行线程偏好（默认本链执行器；`kAffinityInline` 就地；`kAffinityExecutor` 用 pTarget）。
+/// @param pTarget 指定执行器句柄（`kAffinityExecutor` 时有效）。
 template <typename TContext>
 void RunHandler(const std::shared_ptr<CPromiseCore<TContext> >& pCore, const std::shared_ptr<CPromiseState>& pState,
-                const ThenHandler<TContext>& fnHandler, const CPromiseResult& upResult, int nMode)
+                const ThenHandler<TContext>& fnHandler, const CPromiseResult& upResult, int nMode,
+                int nAffinity = kAffinityChain, const std::shared_ptr<CExecutorHandle>& pTarget = nullptr)
 {
     std::function<void()> fnRun = MakeHandlerRunner(pCore, pState, fnHandler, upResult, nMode);
-    if (IsInExecutorThread(pCore->Handle()) && InlineDepth() < kMaxInlineDepth)
+
+    // 选本层的执行器：默认本链执行器；kAffinityExecutor 用调用方指定的那个。
+    const std::shared_ptr<CExecutorHandle> pExec =
+        (nAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pCore->Handle();
+
+    const bool bInline = (nAffinity == kAffinityInline) || IsInExecutorThread(pExec);
+    if (bInline && InlineDepth() < kMaxInlineDepth)
     {
         ++InlineDepth();
         fnRun();
@@ -429,7 +446,7 @@ void RunHandler(const std::shared_ptr<CPromiseCore<TContext> >& pCore, const std
         return;
     }
 
-    if (!PostToHandle(pCore->Handle(), std::move(fnRun)))
+    if (!PostToHandle(pExec, std::move(fnRun)))
     {
         pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用 → 本层被拒绝。
     }
@@ -442,12 +459,14 @@ void RunHandler(const std::shared_ptr<CPromiseCore<TContext> >& pCore, const std
 /// @param fnHandler 处理器。
 /// @param upResult 上一层结果（首层恒为「已兑现」）。
 /// @param nMode 处理器模式。
+/// @param pExec 目标执行器句柄（为空则用 pCore 的执行器）。
 template <typename TContext>
 void PostHandler(const std::shared_ptr<CPromiseCore<TContext> >& pCore, const std::shared_ptr<CPromiseState>& pState,
-                 const ThenHandler<TContext>& fnHandler, const CPromiseResult& upResult, int nMode)
+                 const ThenHandler<TContext>& fnHandler, const CPromiseResult& upResult, int nMode,
+                 const std::shared_ptr<CExecutorHandle>& pExec = nullptr)
 {
     std::function<void()> fnRun = MakeHandlerRunner(pCore, pState, fnHandler, upResult, nMode);
-    if (!PostToHandle(pCore->Handle(), std::move(fnRun)))
+    if (!PostToHandle(pExec != nullptr ? pExec : pCore->Handle(), std::move(fnRun)))
     {
         pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用 → 首层被拒绝。
     }
@@ -602,6 +621,40 @@ class CPromise
     CPromise Then(const ThenHandler& fnHandler, const CSourceLoc& loc = CSourceLoc())
     {
         return Append(fnHandler, loc, detail::kModeThen);
+    }
+
+    /// @brief then（**就地**版）：本层在「结算它的那条线程」上执行（不投递、不要求线程亲和）。
+    ///
+    /// 用途：显式覆盖默认线程亲和 —— 典型是跨模块返回后想直接跑在被调模块线程上
+    /// （只做与对方相关的轻活时，可省一次回本模块的投递）。
+    ///
+    /// 注意：
+    ///  - 本层可能跑在**别的模块的线程**上 → 不要碰本模块的非线程安全状态；
+    ///  - 内联深度超过 `kMaxInlineDepth` 时仍会改投递回本链执行器（防爆栈）；
+    ///  - 作首层时与其他层一样必须投递（起链线程不跑业务代码）。
+    ///
+    /// @param fnHandler 本层处理器（固定签名）。
+    /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
+    /// @return 指向本层的 promise 句柄。
+    CPromise ThenInline(const ThenHandler& fnHandler, const CSourceLoc& loc = CSourceLoc())
+    {
+        return Append(fnHandler, loc, detail::kModeThen, detail::kAffinityInline);
+    }
+
+    /// @brief then（**指定执行器**版）：本层在给定执行器线程上执行（已在该线程则就地，否则投递）。
+    ///
+    /// 用途：把一个层放到本模块的另一个执行器（或测试里的专用执行器）上跑。
+    ///
+    /// @warning 执行器须存活到本层执行完毕（句柄保活，但被持对象不得提前析构）；
+    ///          **不要用它把执行器跨模块传递**（执行器是模块私有资源，跨模块传是反模式）。
+    ///
+    /// @param executor 目标执行器。
+    /// @param fnHandler 本层处理器（固定签名）。
+    /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
+    /// @return 指向本层的 promise 句柄。
+    CPromise ThenOn(CAsyncExecutor& executor, const ThenHandler& fnHandler, const CSourceLoc& loc = CSourceLoc())
+    {
+        return Append(fnHandler, loc, detail::kModeThen, detail::kAffinityExecutor, executor.Handle());
     }
 
     /// @brief catch：上一层**被拒绝**时执行 fnHandler（回滚 / 补偿 / 错误处理）。
@@ -814,20 +867,29 @@ class CPromise
         }
     }
 
-    /// @brief 内部：追加一层（Then / Catch / Finally 共用；尚未起链时本层即首层）。
+    /// @brief 内部：追加一层（Then / Catch / Finally / ThenInline / ThenOn 共用；尚未起链时本层即首层）。
     ///
     /// @param fnHandler 本层处理器。
     /// @param loc 注册点源码位置。
     /// @param nMode 处理器模式（detail::kModeThen / kModeCatch / kModeFinally）。
+    /// @param nAffinity 执行线程偏好（默认本链执行器；kAffinityInline 就地；kAffinityExecutor 用 pTarget）。
+    /// @param pTarget 指定执行器句柄（kAffinityExecutor 时有效）。
     /// @return 指向本层的 promise 句柄（无效 promise 返回无效句柄）。
-    CPromise Append(const ThenHandler& fnHandler, const CSourceLoc& loc, int nMode)
+    CPromise Append(const ThenHandler& fnHandler, const CSourceLoc& loc, int nMode,
+                    int nAffinity = detail::kAffinityChain,
+                    const std::shared_ptr<detail::CExecutorHandle>& pTarget = nullptr)
     {
         if (m_pCore == nullptr)
         {
             return CPromise();  // 无效 promise：不注册任何处理器。
         }
 
+        // 本层实际的执行器：默认本链执行器；指定执行器版用调用方给的那个。
+        const std::shared_ptr<detail::CExecutorHandle> pExec =
+            (nAffinity == detail::kAffinityExecutor && pTarget != nullptr) ? pTarget : m_pCore->Handle();
+
         // ① 尚未起链：本次调用即首层（起点结果视为「已兑现」），投递执行。
+        //    首层总是投递（起链线程不跑业务代码）；kAffinityExecutor 时投递到指定执行器。
         if (m_pState == nullptr)
         {
             m_pState = std::make_shared<detail::CPromiseState>();
@@ -839,7 +901,7 @@ class CPromise
             }
             else
             {
-                detail::PostHandler(m_pCore, m_pState, fnHandler, CPromiseResult::Resolve(), nMode);
+                detail::PostHandler(m_pCore, m_pState, fnHandler, CPromiseResult::Resolve(), nMode, pExec);
             }
             return *this;
         }
@@ -853,9 +915,10 @@ class CPromise
 
         const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = m_pCore;
         const std::shared_ptr<detail::CPromiseState> pUpState = m_pState;
+        const std::shared_ptr<detail::CExecutorHandle> pTargetExec = pTarget;
 
-        const bool bOk =
-            pUpState->AddHandler(pCore->Handle(), [pCore, pNextState, fnHandler, nMode](const CPromiseResult& upResult)
+        const bool bOk = pUpState->AddHandler(
+            pExec, [pCore, pNextState, fnHandler, nMode, nAffinity, pTargetExec](const CPromiseResult& upResult)
         {
             // then：上一层被拒绝 → 失败即停（本层不执行，拒绝原因原样交给下一层）。
             if (nMode == detail::kModeThen && upResult.IsRejected())
@@ -871,12 +934,12 @@ class CPromise
             }
 
             // finally：无论成败都执行（但忽略返回值）；then / catch：执行本层处理器。
-            detail::RunHandler(pCore, pNextState, fnHandler, upResult, nMode);
+            detail::RunHandler(pCore, pNextState, fnHandler, upResult, nMode, nAffinity, pTargetExec);
         });
 
         if (!bOk)
         {
-            // 上一层已 settled 但执行器不可用：本层无法执行，以拒绝结束（下游继续透传）。
+            // 上一层已 settled 但目标执行器不可用：本层无法执行，以拒绝结束（下游继续透传）。
             pNextState->Settle(CPromiseResult::Reject(kStopped));
         }
         return promiseNext;

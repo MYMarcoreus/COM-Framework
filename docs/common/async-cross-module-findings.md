@@ -152,9 +152,12 @@ else
 
 ### 1.7 后续可做的改进
 
-- **B（逐层指定执行器）**：`ThenOn(exec, handler)` / `ThenInline(handler)`，按层覆盖默认亲和；
-- **C（build-then-start）**：全链挂完再投递首层，能额外消灭"补登记"路径（少一次投递），
-  但对"回本模块线程"而言 A 已经够了，C 是确定性与性能的补充。
+- ~~**B（逐层指定执行器）**：`ThenOn(exec, handler)` / `ThenInline(handler)`~~ —— **已完成（2026-09-11）**：
+  亲和三档（`kAffinityChain` 默认 / `kAffinityInline` 就地 / `kAffinityExecutor` 指定）已实现，
+  对外 API 为 `ThenInline` / `ThenOn`（只影响那一层，之后的层回本链执行器）；
+  验收：`Tests/test_async_affinity_override.cpp`（4 例）；文档：async-usage §9、async-impl §8.1；
+- **C（build-then-start）**：全链挂完再投递首层，能额外消灭“补登记”路径（少一次投递），
+  但对“回本模块线程”而言 A 已经够了，C 是确定性与性能的补充（待做）。
 
 ---
 

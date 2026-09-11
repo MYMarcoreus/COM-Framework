@@ -215,11 +215,19 @@ result = (nMode == kModeFinally) ? upResult : own;   // finally 不改变结果
 | 无悬垂 | 句柄 / 状态 / 上下文均为 `shared_ptr`，被续接与句柄共同持有 |
 | 深链不爆栈 | `kMaxInlineDepth` 上限 + 改投递（且只在同一执行器线程内累加） |
 
-### 8.1 线程亲和（改进 A，2026-09-11）
+### 8.1 线程亲和（改进 A，2026-09-11）+ 逐层覆盖（改进 B）
+
+亲和三档（`detail::HandlerAffinity`）：
+
+| 取值 | 本层在哪跑 | 对外 API |
+| --- | --- | --- |
+| `kAffinityChain`（默认） | 本链执行器线程（已在该线程 → 就地内联；否则投递回本链执行器） | `Then` / `Catch` / `Finally` / `ThenPromise` |
+| `kAffinityInline` | **结算本层的那条线程**上就地执行（不投递） | `ThenInline` |
+| `kAffinityExecutor` | 指定执行器线程（已在该线程 → 就地；否则投递到它） | `ThenOn(exec, …)` |
 
 ```cpp
 // Common/Thread/ThreadPool：worker 线程打 thread_local 标记
-thread_local const CThreadPool* tl_pCurrentPool = nullptr;   // WorkerLoop 进入设、退出清
+extern/static thread_local const CThreadPool* tl_pCurrentPool;   // WorkerLoop 进入设、退出清
 static bool CThreadPool::IsInPoolThread(const CThreadPool* pPool);
 
 // Common/Async/AsyncExecutor.h（detail）
@@ -229,17 +237,24 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
 }
 
 // Common/Async/Promise.h：层处理器（detail::RunHandler）
-// Common/Async/Coroutine.h：协程续跑（ResumeInline）
-if (IsInExecutorThread(...)) { 就地执行 } else { 投递回本链执行器 }
+const std::shared_ptr<CExecutorHandle> pExec =
+    (nAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pCore->Handle();   // 选执行器
+const bool bInline = (nAffinity == kAffinityInline) || IsInExecutorThread(pExec);         // 就地？
+if (bInline && InlineDepth() < kMaxInlineDepth) { ++InlineDepth(); fnRun(); --InlineDepth(); }
+else if (!PostToHandle(pExec, std::move(fnRun))) { pState->Settle(Reject(kStopped)); }       // 投递目标执行器
 ```
 
-- **保证**：每一层、以及协程的每一次续跑，都跑在「它所属链的执行器线程」上；跨模块调用
-  （被调模块 settle 本链的层）也会被拉回本模块线程。
-- **代价**：每次跨执行器的续接多一次入队 + 唤醒（微秒级）；同执行器内仍完全内联，不受影响。
-- **边界**：`OnSettled` 是「通知」不是「层」→ 仍在**结算线程**上触发（跨模块时=被调模块线程）；
-  `New(...)` 的 executor 是「发起」语义，仍在调用线程上同步执行；`Await()` 仍占住调用线程。
-- **验收**：`Tests/test_async_affinity.cpp`（5 例）+ `Tests/test_async_modules*.cpp`（当初发现问题的
-  极限用例，现在断言 200 条并发链 100% 落回本模块线程）。
+- `Append(fnHandler, loc, nMode, nAffinity, pTarget)`：亲和与目标句柄随注册的处理器一起捕获，
+  并在“已 settled → 投递”路径上也用同一个目标执行器（`AddHandler(pExec, …)`）；
+- **首层例外**：always 投递（起链线程不跑业务代码），`kAffinityExecutor` 时投递到目标执行器；
+- **保证**：默认配置下每一层与协程的每一次续跑都跑在「它所属链的执行器线程」上；
+- **代价**：每次跨执行器的续接多一次入队 + 唤醒（微秒级）；同执行器内仍完全内联；
+  内联深度只在同一执行器线程内累加，跨模块不涨栈；
+- **边界**：亲和只作用于「层」——`OnSettled` 通知仍在**结算线程**上触发（不可用时就地送达）；
+  `New(...)` 的 executor 是「发起」语义，仍在调用线程上同步执行；`Await()` 仍占住调用线程；
+- **验收**：`Tests/test_async_affinity.cpp`（5 例，默认亲和）+ `Tests/test_async_affinity_override.cpp`
+  （4 例，`ThenInline` / `ThenOn` / 已停执行器 / 默认对照）+ `Tests/test_async_modules*.cpp`
+  （当初发现问题的极限用例，现断言 200 条并发链 100% 落回本模块线程）。
 
 分叉（同一状态注册多个 `Then`）时各支线是独立状态：由上游 `Settle` 依次触发，若走
 「已 settled 再注册」路径则各自投递 → 各支线依次在同一执行器线程上执行，

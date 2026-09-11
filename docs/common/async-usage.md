@@ -341,18 +341,46 @@ exec.Stop();                            // 停止并等待已投递任务完成
 - 未 `Start()` / 已 `Stop()` 时起 promise、`Post` 都不抛异常，而是被拒绝 / 返回 `false`；
 - `Stop()` 之后可再次 `Start()`（重建句柄与线程池，隔离旧任务）。
 
-## 9. 线程模型与生命周期
+## 9. 逐层指定执行线程（`ThenInline` / `ThenOn`）
+
+默认（自 2026-09-11 的线程亲和起）：**每一层都在本链执行器线程上执行**。个别层要换个地方跑时：
+
+| 写法 | 本层在哪跑 | 典型用途 |
+| --- | --- | --- |
+| `Then(handler)`（默认） | 本链执行器线程（同执行器内联；跨模块返回也会被拉回本模块） | 绝大多数业务层 |
+| `ThenInline(handler)` | **结算本层的那条线程**上就地跑（不投递） | 跨模块返回后只想做与对方相关的轻活，省一次回本模块的投递 |
+| `ThenOn(exec, handler)` | **指定执行器**线程上（已在该线程则就地，否则投递） | 把重活/旁路工作放到本模块的另一个执行器 |
+
+```cpp
+exec.NewPromise(spCtx, StepLoad, ASYNC_LOC)
+    .ThenPromise(fnCallOtherModule, ASYNC_LOC)
+    .ThenInline(&StepUseResultInline, ASYNC_LOC)   // 就地：或许跑在被调模块线程上
+    .ThenOn(m_execSide, &StepHeavyWork, ASYNC_LOC) // 换到本模块的旁路执行器
+    .Then(&StepBackOnMain, ASYNC_LOC);             // 默认亲和：切回本链执行器
+```
+
+约束：
+
+- `ThenInline` 的层可能跑在**别的模块的线程**上 → 里面不要碰本模块的非线程安全状态；
+- `ThenOn` 的执行器须存活到本层执行完毕；指定执行器已 `Stop()` → 本层以 `kStopped` 收口
+  （后续层跳过、`Catch` 照常执行）；
+- **不要把 `ThenOn` 用来跨模块传执行器**（执行器是模块私有资源，跨模块只交换 promise + 上下文）；
+- 两种写法都只影响**那一层**：之后的层仍按默认亲和回本链执行器；内联深度超 `kMaxInlineDepth` 依旧改投递（防爆栈）。
+
+## 10. 线程模型与生命周期
 
 | 事实 | 说明 |
 | --- | --- |
 | 首层 | 由 `NewPromise` / 构造函数投递到执行器，**在工作线程上执行** |
-| 后续层 | 上一层 settled 时**在同一工作线程上级联执行**（不再逐层入队） |
+| 后续层 | 上一层 settled 时按**线程亲和**推进：已在本链执行器线程 → 就地级联；否则投递回本链执行器 |
+| 跨模块 | 被调模块的层在它自己的执行器上跑；本链的层**恒回本模块执行器**；`OnSettled` 通知仍在结算线程 |
+| 逐层覆盖 | `ThenInline`（就地）/ `ThenOn`（指定执行器）——只影响那一层 |
 | 单链并发度 | 一条链的层**顺序执行** |
 | 深链 | 连续内联超过 `kMaxInlineDepth`（64）改为投递，防递归爆栈 |
-| 分叉 | 同一层可注册多个 `Then`，各自独立延续（可能并行） |
+| 分叉 | 同一层可注册多个 `Then`，各自独立延续（按序在同一执行器上推进） |
 | 生命周期 | 句柄是浅句柄；promise 通过共享句柄引用线程池，**执行器析构后已起的 promise 仍安全跑完** |
 
-## 10. 常见用法速查
+## 11. 常见用法速查
 
 ```cpp
 // 单层
@@ -384,7 +412,7 @@ no::CPromise<Ctx> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC)
                          .Then(StepB, ASYNC_LOC);
 ```
 
-## 11. 与旧版（传值版 `CTask`）的迁移对照
+## 12. 与旧版（传值版 `CTask`）的迁移对照
 
 | 旧写法（已移除） | 新写法 |
 | --- | --- |
@@ -396,7 +424,7 @@ no::CPromise<Ctx> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC)
 | `NOTHROW_LOC` | `ASYNC_LOC` |
 | flatMap（层返回 `CTask`） | 同上下文：`ThenPromise`（处理器返回 promise，框架自动等）；跨上下文：`CPromise::New` 桥接（见 6.3 / 协程文档） |
 
-## 12. 测试与示例
+## 13. 测试与示例
 
 - 示例：`examples/main.cpp`（28 个演示：then / catch / finally / 分叉 / 深链 / 协程 / **嵌套** / **跨模块组合** / **多种 then 混用**）；
 - 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
