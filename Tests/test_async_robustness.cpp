@@ -284,6 +284,43 @@ TEST(Robust_AwaitInsideLayerReportsRisk)
     exec.Stop();
 }
 
+// ==================== 用例：无效 promise 上的误用 ====================
+
+/// @brief 无效 promise 上挂层：空操作但**不静默**（报诊断），Await 仍是 kStopped。
+TEST(Robust_InvalidPromiseAppendReports)
+{
+    CDiagnosticCapture capture;
+
+    no::CPromise<CRobustCtx> promiseInvalid;  // 未绑定执行器
+    ASSERT_TRUE(!promiseInvalid.IsValid());
+
+    no::CPromise<CRobustCtx>::ThenHandler fnStep = [](no::CPromiseResult, const std::shared_ptr<CRobustCtx>&)
+    {
+        return no::CPromiseResult::Resolve();
+    };
+    auto fnCreateInvalid = [](const std::shared_ptr<CRobustCtx>&) -> no::CPromise<CCalleeCtx>
+    {
+        return no::CPromise<CCalleeCtx>();
+    };
+    auto fnApplyInvalid = [](const std::shared_ptr<CRobustCtx>&, const std::shared_ptr<CCalleeCtx>&)
+    {
+    };
+
+    const no::CPromise<CRobustCtx> promiseAfterThen = promiseInvalid.Then(fnStep, ASYNC_LOC);
+    const no::CPromise<CRobustCtx> promiseAfterBridge =
+        promiseInvalid.ThenBridge(fnCreateInvalid, fnApplyInvalid, ASYNC_LOC);
+
+    ASSERT_TRUE(!promiseAfterThen.IsValid());
+    ASSERT_TRUE(!promiseAfterBridge.IsValid());
+    ASSERT_EQ(promiseAfterThen.Await().Code(), no::kStopped);  // 既有语义不变
+    ASSERT_TRUE(!promiseInvalid.OnSettled(
+        [](no::CPromiseResult)
+        {
+        }));                                        // 无效 promise 注册失败
+    ASSERT_TRUE(capture.Contains("无效 promise"));  // Then + ThenBridge 各一次（至少一次）
+    ASSERT_TRUE(capture.Count() >= 2);
+}
+
 // ==================== 用例：OnSettledOn（通知落到指定执行器） ====================
 
 /// @brief 通知跑在指定执行器线程上（而非结算线程），且执行器不可用时仍就地送达。

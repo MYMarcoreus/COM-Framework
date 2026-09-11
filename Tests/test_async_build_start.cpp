@@ -22,6 +22,8 @@
 
 namespace no = common::async;
 
+// 跨模块桥接（ThenBridge）用例会用到延迟链：证明「Start 之前连子链都不发起」。
+
 // ==================== 被调模块（1 线程） ====================
 
 /// @brief 被调模块上下文（用于证明构链期确实没被调用）。
@@ -320,4 +322,62 @@ TEST(BuildStart_EmptyChain)
     const no::CPromiseResult result = promiseEmpty.Await();
     ASSERT_TRUE(result.IsRejected());
     ASSERT_EQ(result.Code(), no::kStopped);  // 空链 = 没有层（句柄无状态）
+}
+
+/// @brief 延迟链 + `ThenBridge`：`Start()` 之前**连跨模块子链都不发起**（构链期零业务代码）。
+///
+/// 回归点：`CPromise::New` 系列（含 `ThenBridge` 内部）恒为「立即启动」——
+/// 它的等待语义由「轮到该层」保证，不能被延迟链的 `bDeferred` 影响。
+TEST(BuildStart_BridgeWaitsForStart)
+{
+    auto spCallee = std::make_shared<CStartCalleeModule>();
+    no::CAsyncExecutor exec(1);
+    ASSERT_TRUE(exec.Start());
+
+    auto spCtx = std::make_shared<CStartCtx>();
+    auto spCalleeCtx = std::make_shared<CStartCalleeCtx>();
+
+    no::CPromise<CStartCtx>::ThenHandler fnFirst = [](no::CPromiseResult, const std::shared_ptr<CStartCtx>& spCtx)
+    {
+        ++spCtx->nOwnSteps;
+        spCtx->strTrace += "A1;";
+        spCtx->idFirst = std::this_thread::get_id();
+        return no::CPromiseResult::Resolve();
+    };
+    auto fnCreateCallee = [spCallee, spCalleeCtx](const std::shared_ptr<CStartCtx>&) -> no::CPromise<CStartCalleeCtx>
+    {
+        return spCallee->QueryAsync(spCalleeCtx);  // 只有 Start 之后才会被调用
+    };
+    auto fnApplyCallee = [](const std::shared_ptr<CStartCtx>& spSelf, const std::shared_ptr<CStartCalleeCtx>& spOther)
+    {
+        spSelf->nStock = spOther->nAvail;
+    };
+    no::CPromise<CStartCtx>::ThenHandler fnAppend = [](no::CPromiseResult, const std::shared_ptr<CStartCtx>& spCtx)
+    {
+        ++spCtx->nOwnSteps;
+        spCtx->strTrace += "A2;";
+        spCtx->idAfterBridge = std::this_thread::get_id();
+        return no::CPromiseResult::Resolve();
+    };
+
+    no::CPromise<CStartCtx> promise = exec.BuildPromise(spCtx)
+                                          .Then(fnFirst, ASYNC_LOC)
+                                          .ThenBridge(fnCreateCallee, fnApplyCallee, ASYNC_LOC)
+                                          .Then(fnAppend, ASYNC_LOC);
+
+    ASSERT_TRUE(promise.IsDeferred());
+    ASSERT_TRUE(!promise.IsStarted());
+    ASSERT_EQ(spCtx->nOwnSteps, 0);            // 构链期：本模块层没跑
+    ASSERT_EQ(spCalleeCtx->nSteps.load(), 0);  // 构链期：跨模块子链也没发起
+    ASSERT_EQ(spCtx->strTrace, std::string(""));
+
+    promise.Start();
+    ASSERT_TRUE(promise.Await().IsFulfilled());
+
+    ASSERT_EQ(spCtx->strTrace, std::string("A1;A2;"));
+    ASSERT_EQ(spCtx->nOwnSteps, 2);
+    ASSERT_EQ(spCtx->nStock, 5);  // 跨模块数据已搬回
+    ASSERT_EQ(spCalleeCtx->nSteps.load(), 1);
+    ASSERT_TRUE(spCtx->idAfterBridge == spCtx->idFirst);  // 线程亲和不变
+    exec.Stop();
 }

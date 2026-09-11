@@ -830,7 +830,10 @@ public:
     {
         if (m_pCore == nullptr)
         {
-            return CPromise();  // 无效 promise：不注册任何处理器。
+            ReportDiagnostic(
+                "在无效 promise 上 ThenPromise（或 ThenBridge）：已忽略，该链不会跑；"
+                "请先确认 IsValid()");
+            return CPromise();
         }
 
         const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = m_pCore;
@@ -1134,21 +1137,10 @@ private:
         promise.m_pState = std::make_shared<detail::CPromiseState>();  // 待定：等外部 settle。
         promise.m_pState->SetLoc(loc);
 
-        const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = promise.m_pCore;
-        const std::shared_ptr<detail::CPromiseState> pState = promise.m_pState;
-
-        // 延迟启动链（BuildPromise）：executor 不立即执行，等 Start() 后轮到本层再发起。
-        if (pCore->Launch()->bDeferred)
-        {
-            pCore->Launch()->pFirst = pState;
-            pCore->Launch()->fnLaunch = [pCore, pState, fnExecutor]()
-            {
-                RunExternalExecutor(pState, fnExecutor);
-            };
-            return promise;
-        }
-
-        RunExternalExecutor(pState, fnExecutor);
+        // 这里恒为「立即启动」：本 promise 的 core 是新建的，延迟启动状态必为 false。
+        // 「挂完层再跑」的语义由调用方所在层的时机保证（`BuildPromise` 链里也是轮到该层才执行
+        // executor，见 `Append` / `ThenPromise` 的 bDeferred 分支），所以无需再判 bDeferred。
+        RunExternalExecutor(promise.m_pState, fnExecutor);
         return promise;
     }
 
@@ -1245,7 +1237,11 @@ private:
     {
         if (m_pCore == nullptr)
         {
-            return CPromise();  // 无效 promise：不注册任何处理器。
+            // 无效 promise（未绑定执行器）：空操作 —— 不要静默，报一次诊断便于定位误用。
+            ReportDiagnostic(
+                "在无效 promise 上挂层（Then / Catch / Finally / ThenInline / ThenOn）：已忽略，"
+                "该链不会跑；请先确认 IsValid()（句柄是否已由执行器产出）");
+            return CPromise();
         }
 
         // 本层实际的执行器：默认本链执行器；指定执行器版用调用方给的那个。

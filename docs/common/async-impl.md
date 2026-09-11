@@ -209,7 +209,11 @@ result = (nMode == kModeFinally) ? upResult : own;   // finally 不改变结果
 - 工厂抛异常 → 本层 `Reject(kException)`；工厂返回无效 promise → 本层 `Reject(kStopped)`；
   子 promise 的拒绝码**原样**成为本层拒绝码（后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
 - **保活**：子 promise 的最后一段由「上一段 handler 捕获下一段」链保活，本层 state 被子 promise
-  的 `OnSettled` handler 捕获 —— 即使句柄被丢弃，在途的整条链仍安全跑完。
+  的 `OnSettled` handler 捕获 —— 即使句柄被丢弃，在途的整条链仍安全跑完；
+- **`New` 恒为「立即启动」**：它建的是独立新链（`CPromiseCore` 新建 → 延迟启动状态必为 false），
+  executor 当场同步执行；「挂完层再跑」的等待语义由**轮到该层**保证 ——
+  `BuildPromise` 链里同样如此（首层/各层的投递时机才是 `bDeferred` 生效的地方）。
+  所以 `New` / `ThenBridge` 不需要（也不再）判 `bDeferred`。
 
 `ThenBridge` 与手写版的**等价关系**（也是它的实现）：
 
