@@ -9,7 +9,8 @@
 ///
 /// 调用方模块（订单 / 流程）**不放在这里**：每个用例的流程形状不同，留在各自文件里更自解释。
 ///
-/// 用法：`#include "AsyncTestKit.h"` + `using namespace asynctest;`（测试文件内）。
+/// 用法：`#include "AsyncTestKit.h"` + 按需 `using asynctest::CTraceSink;` 等（测试文件内，逐个引入，
+/// 不写 `using namespace asynctest;`）。
 
 #include <atomic>
 #include <chrono>
