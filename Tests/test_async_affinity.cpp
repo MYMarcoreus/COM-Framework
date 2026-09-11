@@ -21,97 +21,16 @@
 #include "Async/Coroutine.h"
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
+#include "AsyncTestKit.h"
 #include "TestFramework.h"
 
 namespace no = common::async;
 
-// ==================== 被调模块（库存，1 线程） ====================
-
-/// @brief 库存模块上下文。
-struct CAffinityStockCtx
-{
-    int nAvail;                     ///< 出参：可用库存。
-    int nDelayMs;                   ///< 每步模拟耗时。
-    std::atomic<int> nSteps;        ///< 已执行步骤数（跨线程观测）。
-    std::atomic<int> nInFlight;     ///< 当前并发步骤数。
-    std::atomic<int> nMaxInFlight;  ///< 并发峰值。
-    std::thread::id idConnect;      ///< 第一步所在线程。
-    std::thread::id idRead;         ///< 第二步所在线程。
-
-    CAffinityStockCtx() : nAvail(5), nDelayMs(0), nSteps(0), nInFlight(0), nMaxInFlight(0)
-    {}
-};
-
-/// @brief 库存模块：自持 1 线程执行器。
-class CAffinityStockModule
-{
-   public:
-    CAffinityStockModule() : m_exec(1)
-    {
-        m_exec.Start();
-    }
-
-    /// @brief 查询库存：两步都在本模块执行器上跑。
-    ///
-    /// @param spStock 本模块上下文。
-    ///
-    /// @return 库存查询 promise。
-    no::CPromise<CAffinityStockCtx> QueryAsync(const std::shared_ptr<CAffinityStockCtx>& spStock)
-    {
-        return m_exec.NewPromise(spStock, &StepConnect, ASYNC_LOC).Then(&StepRead, ASYNC_LOC);
-    }
-
-   private:
-    /// 第一步：连库。
-    static no::CPromiseResult StepConnect(no::CPromiseResult /*upResult*/,
-                                          const std::shared_ptr<CAffinityStockCtx>& spStock)
-    {
-        EnterStep(spStock);
-        spStock->idConnect = std::this_thread::get_id();
-        SleepMs(spStock->nDelayMs);
-        LeaveStep(spStock);
-        return no::CPromiseResult::Resolve();
-    }
-
-    /// 第二步：读库存（与第一步同线程、串行）。
-    static no::CPromiseResult StepRead(no::CPromiseResult /*upResult*/,
-                                       const std::shared_ptr<CAffinityStockCtx>& spStock)
-    {
-        EnterStep(spStock);
-        spStock->idRead = std::this_thread::get_id();
-        SleepMs(spStock->nDelayMs);
-        LeaveStep(spStock);
-        return no::CPromiseResult::Resolve();
-    }
-
-    /// @brief 进入步骤：计数 + 更新并发峰值。
-    static void EnterStep(const std::shared_ptr<CAffinityStockCtx>& spStock)
-    {
-        ++spStock->nSteps;
-        const int nNow = ++spStock->nInFlight;
-        int nMax = spStock->nMaxInFlight.load();
-        while (nNow > nMax && !spStock->nMaxInFlight.compare_exchange_weak(nMax, nNow))
-        {
-        }
-    }
-
-    /// @brief 离开步骤。
-    static void LeaveStep(const std::shared_ptr<CAffinityStockCtx>& spStock)
-    {
-        --spStock->nInFlight;
-    }
-
-    /// @brief 模拟耗时。
-    static void SleepMs(int nMs)
-    {
-        if (nMs > 0)
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(nMs));
-        }
-    }
-
-    no::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
-};
+// 共享脚手架见 Tests/AsyncTestKit.h：被调模块（CCalleeCtx/CCalleeModule，自持 1 线程、
+// 两步）与观测点（CStepProbe 的步数/并发峰值）。本文件不依赖轨迹，故不接 CTraceSink。
+using asynctest::CCalleeCtx;
+using asynctest::CCalleeModule;
+using asynctest::CStepProbe;
 
 // ==================== 订单模块（调用方，1 线程） ====================
 
@@ -154,7 +73,7 @@ class CAffinityOrderModule
     ///
     /// @return 指向最后一层的 promise。
     no::CPromise<CAffinityOrderCtx> RunOnceAsync(const std::shared_ptr<CAffinityOrderCtx>& spCtx,
-                                                 const std::shared_ptr<CAffinityStockModule>& spStockModule)
+                                                 const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         return m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
             .ThenPromise(MakeQueryFactory(spStockModule), ASYNC_LOC)
@@ -171,8 +90,7 @@ class CAffinityOrderModule
     ///
     /// @return 指向最后一层的 promise。
     no::CPromise<CAffinityOrderCtx> RunRoundsAsync(const std::shared_ptr<CAffinityOrderCtx>& spCtx,
-                                                   const std::shared_ptr<CAffinityStockModule>& spStockModule,
-                                                   int nRounds)
+                                                   const std::shared_ptr<CCalleeModule>& spStockModule, int nRounds)
     {
         no::CPromise<CAffinityOrderCtx> promise = m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC);
         for (int i = 0; i < nRounds; ++i)
@@ -191,7 +109,7 @@ class CAffinityOrderModule
     ///
     /// @return 指向最后一层的 promise。
     no::CPromise<CAffinityOrderCtx> RunWithOnSettledAsync(const std::shared_ptr<CAffinityOrderCtx>& spCtx,
-                                                          const std::shared_ptr<CAffinityStockModule>& spStockModule)
+                                                          const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         return m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
             .ThenPromise(MakeQueryFactory(spStockModule), ASYNC_LOC)
@@ -206,8 +124,8 @@ class CAffinityOrderModule
     ///
     /// @return 协程句柄（Await 取结果）。
     std::shared_ptr<CAffinityFlowCoro> RunCoAsync(const std::shared_ptr<CAffinityOrderCtx>& spCtx,
-                                                  const std::shared_ptr<CAffinityStockModule>& spStockModule,
-                                                  const no::CPromise<CAffinityStockCtx>& promiseStock)
+                                                  const std::shared_ptr<CCalleeModule>& spStockModule,
+                                                  const no::CPromise<CCalleeCtx>& promiseStock)
     {
         return m_exec.CoStart<CAffinityFlowCoro>(spCtx, spStockModule, promiseStock);
     }
@@ -222,8 +140,8 @@ class CAffinityOrderModule
         /// @param spStockModule 库存模块（跨模块 await 用，需保活）。
         /// @param promiseStock 要 await 的跨模块 promise。
         CAffinityFlowCoro(const std::shared_ptr<CAffinityOrderCtx>& spCtx,
-                          const std::shared_ptr<CAffinityStockModule>& spStockModule,
-                          const no::CPromise<CAffinityStockCtx>& promiseStock)
+                          const std::shared_ptr<CCalleeModule>& spStockModule,
+                          const no::CPromise<CCalleeCtx>& promiseStock)
             : no::CCoroutine<CAffinityOrderCtx>(spCtx), m_pStock(promiseStock), m_spStockModule(spStockModule)
         {}
 
@@ -238,14 +156,14 @@ class CAffinityOrderModule
         }
 
        private:
-        no::CPromise<CAffinityStockCtx> m_pStock;               ///< 跨模块 await 的目标。
-        std::shared_ptr<CAffinityStockModule> m_spStockModule;  ///< 库存模块（保活）。
+        no::CPromise<CCalleeCtx> m_pStock;               ///< 跨模块 await 的目标。
+        std::shared_ptr<CCalleeModule> m_spStockModule;  ///< 库存模块（保活）。
     };
 
    private:
     /// 跨模块那一层的工厂。
     no::CPromise<CAffinityOrderCtx>::PromiseFactory MakeQueryFactory(
-        const std::shared_ptr<CAffinityStockModule>& spStockModule)
+        const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         return [this, spStockModule](const std::shared_ptr<CAffinityOrderCtx>& spSelf)
         {
@@ -310,16 +228,16 @@ class CAffinityOrderModule
 
     /// 跨模块桥接层（本层属于本模块；被调模块在自己执行器上跑）。
     no::CPromise<CAffinityOrderCtx> BridgeQueryStock(const std::shared_ptr<CAffinityOrderCtx>& spCtx,
-                                                     const std::shared_ptr<CAffinityStockModule>& spStockModule)
+                                                     const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         no::CPromise<CAffinityOrderCtx>::PromiseExecutor fnExecutor =
             [spStockModule, spCtx](const no::CPromise<CAffinityOrderCtx>::ResolveFn& fnResolve,
                                    const no::CPromise<CAffinityOrderCtx>::RejectFn& fnReject)
         {
-            auto spStock = std::make_shared<CAffinityStockCtx>();
+            auto spStock = std::make_shared<CCalleeCtx>();
             spStock->nDelayMs = spCtx->nStockDelayMs;
 
-            no::CPromise<CAffinityStockCtx> promiseStock = spStockModule->QueryAsync(spStock);
+            no::CPromise<CCalleeCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
             const bool bOk = promiseStock.OnSettled([spCtx, spStock, fnResolve, fnReject](no::CPromiseResult result)
             {
                 // 通知（OnSettled）不迁移：本回调跑在被调模块线程上。
@@ -368,7 +286,7 @@ TEST(Affinity_CrossModuleReturnsToOwnExecutor)
 {
     const std::thread::id idMain = std::this_thread::get_id();
 
-    auto spStockModule = std::make_shared<CAffinityStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spOrderModule = std::make_shared<CAffinityOrderModule>();
     auto spCtx = std::make_shared<CAffinityOrderCtx>();
     spCtx->nSku = 7;
@@ -390,7 +308,7 @@ TEST(Affinity_CrossModuleWithSlowCallee)
 {
     const std::thread::id idMain = std::this_thread::get_id();
 
-    auto spStockModule = std::make_shared<CAffinityStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spOrderModule = std::make_shared<CAffinityOrderModule>();
     auto spCtx = std::make_shared<CAffinityOrderCtx>();
     spCtx->nSku = 8;
@@ -410,7 +328,7 @@ TEST(Affinity_AllLayersOnOwnExecutorOverRounds)
 {
     const int nRounds = 50;
 
-    auto spStockModule = std::make_shared<CAffinityStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spOrderModule = std::make_shared<CAffinityOrderModule>();
     auto spCtx = std::make_shared<CAffinityOrderCtx>();
     spCtx->nSku = 9;
@@ -429,14 +347,16 @@ TEST(Affinity_CoroutineResumesOnOwnExecutor)
 {
     const std::thread::id idMain = std::this_thread::get_id();
 
-    auto spStockModule = std::make_shared<CAffinityStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spOrderModule = std::make_shared<CAffinityOrderModule>();
     auto spCtx = std::make_shared<CAffinityOrderCtx>();
     spCtx->nSku = 10;
 
     // 协程要 await 的跨模块 promise（库存模块自己的上下文）。
-    auto spStock = std::make_shared<CAffinityStockCtx>();
-    const no::CPromise<CAffinityStockCtx> promiseStock = spStockModule->QueryAsync(spStock);
+    auto spStock = std::make_shared<CCalleeCtx>();
+    auto pProbe = std::make_shared<CStepProbe>();
+    spStock->pProbe = pProbe;
+    const no::CPromise<CCalleeCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
 
     std::shared_ptr<CAffinityOrderModule::CAffinityFlowCoro> pCoro =
         spOrderModule->RunCoAsync(spCtx, spStockModule, promiseStock);
@@ -445,8 +365,8 @@ TEST(Affinity_CoroutineResumesOnOwnExecutor)
 
     ASSERT_EQ(spCtx->nOwnSteps, 1);                          // StepOrderLoad（A2 层不计数）
     ASSERT_TRUE(spCtx->idAfterBridge != std::thread::id());  // 协程确实跑到了跨模块之后那一层
-    ASSERT_EQ(spStock->nSteps.load(), 2);                    // 被调模块两步
-    ASSERT_EQ(spStock->nMaxInFlight.load(), 1);              // 单线程模块：步骤不重叠
+    ASSERT_EQ(pProbe->nStockSteps.load(), 2);                // 被调模块两步
+    ASSERT_EQ(pProbe->nStockMaxInFlight.load(), 1);          // 单线程模块：步骤不重叠
     ASSERT_TRUE(spCtx->idAfterBridge == spCtx->idFirst);     // 协程体回到本模块线程
     ASSERT_TRUE(spCtx->idAfterBridge != spStock->idRead);    // 不是被调模块线程
     ASSERT_TRUE(spCtx->idFirst != idMain);
@@ -455,7 +375,7 @@ TEST(Affinity_CoroutineResumesOnOwnExecutor)
 /// @brief 4 条并发跨模块链：模块内不重叠，且跨模块返回层全在本模块线程（不死锁）。
 TEST(Affinity_ConcurrentChainsOwnThreadNoOverlap)
 {
-    auto spStockModule = std::make_shared<CAffinityStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spOrderModule = std::make_shared<CAffinityOrderModule>();
 
     const int nChains = 4;

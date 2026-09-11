@@ -19,152 +19,20 @@
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
+#include "AsyncTestKit.h"
 #include "TestFramework.h"
 
 namespace no = common::async;
 
-// ==================== 观测工具 ====================
-
-/// @brief 跨模块共享的步骤轨迹（两个模块都会写，故加锁）。
-struct CTraceSink
-{
-    std::mutex mutex;                                                ///< 保护 strTrace / vecSteps。
-    std::string strTrace;                                            ///< 步骤轨迹（如 "A1;B1;B2;A2;A3;"）。
-    std::vector<std::pair<std::string, std::thread::id> > vecSteps;  ///< 步骤 → 所在线程。
-
-    /// @brief 追加一步（同时记录所在线程）。
-    ///
-    /// @param strStep 步骤标签（如 "A1"）。
-    void Append(const char* strStep)
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        strTrace += strStep;
-        strTrace += ';';
-        vecSteps.push_back(std::make_pair(std::string(strStep), std::this_thread::get_id()));
-    }
-
-    /// @brief 取某一步所在线程。
-    ///
-    /// @param strStep 步骤标签。
-    ///
-    /// @return 该步所在线程（未找到时返回默认构造的 thread::id）。
-    std::thread::id ThreadOf(const char* strStep) const
-    {
-        for (size_t i = 0; i < vecSteps.size(); ++i)
-        {
-            if (vecSteps[i].first == strStep)
-            {
-                return vecSteps[i].second;
-            }
-        }
-        return std::thread::id();
-    }
-};
-
-/// @brief 模块内并发观测（跨链共享）：单线程执行器下 max 应为 1。
-struct CModuleProbe
-{
-    std::atomic<int> nInFlight;     ///< 当前正在执行的模块步骤数。
-    std::atomic<int> nMaxInFlight;  ///< 历史最大并发步骤数。
-
-    CModuleProbe() : nInFlight(0), nMaxInFlight(0)
-    {}
-};
-
-/// @brief 步骤进入：累加并发计数并更新峰值（未接入探针时为空操作）。
-static void EnterStep(const std::shared_ptr<CModuleProbe>& pProbe)
-{
-    if (pProbe == nullptr)
-    {
-        return;
-    }
-    const int nNow = ++pProbe->nInFlight;
-    int nMax = pProbe->nMaxInFlight.load();
-    while (nNow > nMax && !pProbe->nMaxInFlight.compare_exchange_weak(nMax, nNow))
-    {
-    }
-}
-
-/// @brief 步骤离开：递减并发计数（未接入探针时为空操作）。
-static void LeaveStep(const std::shared_ptr<CModuleProbe>& pProbe)
-{
-    if (pProbe != nullptr)
-    {
-        --pProbe->nInFlight;
-    }
-}
-
-/// @brief 模拟耗时（拉长窗口，便于暴露并发重叠）。
-static void SleepMs(int nMs)
-{
-    if (nMs > 0)
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(nMs));
-    }
-}
-
-// ==================== 库存模块（被调方） ====================
-
-/// @brief 库存模块的上下文（模块私有，调用方不解释其内容）。
-struct CStockCtx
-{
-    int nSku;                              ///< 入参：商品号。
-    int nAvail;                            ///< 出参：可用库存。
-    int nDelayMs;                          ///< 每步模拟耗时。
-    std::shared_ptr<CTraceSink> spTrace;   ///< 轨迹（跨模块共享观测点）。
-    std::shared_ptr<CModuleProbe> pProbe;  ///< 并发观测。
-    std::thread::id idConnect;             ///< 第一步所在线程。
-    std::thread::id idRead;                ///< 第二步所在线程。
-
-    CStockCtx() : nSku(0), nAvail(0), nDelayMs(0)
-    {}
-};
-
-/// @brief 库存模块：自持 1 线程执行器，对外只有 QueryStockAsync()。
-class CStockModule
-{
-   public:
-    CStockModule() : m_exec(1)
-    {
-        m_exec.Start();
-    }
-
-    /// @brief 查询库存：两步都在本模块自己的执行器上跑（调用方拿不到本执行器）。
-    ///
-    /// @param spStock 本模块的上下文。
-    ///
-    /// @return 库存查询 promise（结果在 spStock 里）。
-    no::CPromise<CStockCtx> QueryStockAsync(const std::shared_ptr<CStockCtx>& spStock)
-    {
-        return m_exec.NewPromise(spStock, &StepConnect, ASYNC_LOC).Then(&StepRead, ASYNC_LOC);
-    }
-
-   private:
-    /// 第一步：模拟连库。
-    static no::CPromiseResult StepConnect(no::CPromiseResult /*upResult*/, const std::shared_ptr<CStockCtx>& spStock)
-    {
-        EnterStep(spStock->pProbe);
-        spStock->idConnect = std::this_thread::get_id();
-        spStock->spTrace->Append("B1");
-        SleepMs(spStock->nDelayMs);
-        LeaveStep(spStock->pProbe);
-        return no::CPromiseResult::Resolve();
-    }
-
-    /// 第二步：读库存（与第一步串行、同线程）。
-    static no::CPromiseResult StepRead(no::CPromiseResult /*upResult*/, const std::shared_ptr<CStockCtx>& spStock)
-    {
-        EnterStep(spStock->pProbe);
-        spStock->idRead = std::this_thread::get_id();
-        spStock->spTrace->Append("B2");
-        spStock->nAvail = 5;
-        SleepMs(spStock->nDelayMs);
-        LeaveStep(spStock->pProbe);
-        return no::CPromiseResult::Resolve();
-    }
-
-    no::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程；析构自动 Stop）。
-};
+// 共享脚手架（观测工具 + 可配置的被调模块）见 Tests/AsyncTestKit.h：
+//   CTraceSink（步骤轨迹 + 每步线程）/ CStepProbe（并发与步数探针）/ CCalleeCtx、CCalleeModule（两步被调模块）
+using asynctest::CCalleeCtx;
+using asynctest::CCalleeModule;
+using asynctest::CStepProbe;
+using asynctest::CTraceSink;
+using asynctest::EnterStep;
+using asynctest::LeaveStep;
+using asynctest::SleepMs;
 
 // ==================== 订单模块（调用方） ====================
 
@@ -198,7 +66,7 @@ class COrderModule
     ///
     /// @return 指向最后一层的 promise。
     no::CPromise<COrderCtx> PlaceOrderAsync(const std::shared_ptr<COrderCtx>& spCtx,
-                                            const std::shared_ptr<CStockModule>& spStockModule)
+                                            const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         // ③ 跨模块那一层：等库存模块的 promise（桥接层属于本模块）
         no::CPromise<COrderCtx>::PromiseFactory fnQueryStock =
@@ -255,17 +123,17 @@ class COrderModule
     ///
     /// @return 由库存模块回调 settle 的本流程 promise。
     no::CPromise<COrderCtx> BridgeQueryStock(const std::shared_ptr<COrderCtx>& spCtx,
-                                             const std::shared_ptr<CStockModule>& spStockModule)
+                                             const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         no::CPromise<COrderCtx>::PromiseExecutor fnExecutor =
             [spStockModule, spCtx](const no::CPromise<COrderCtx>::ResolveFn& fnResolve,
                                    const no::CPromise<COrderCtx>::RejectFn& fnReject)
         {
             // 发起跨模块调用：执行器在库存模块内部，调用方不持有。
-            auto spStock = std::make_shared<CStockCtx>();
+            auto spStock = std::make_shared<CCalleeCtx>();
             spStock->nSku = spCtx->nSku;
             spStock->spTrace = spCtx->spTrace;
-            no::CPromise<CStockCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
+            no::CPromise<CCalleeCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
 
             const bool bOk = promiseStock.OnSettled([spCtx, spStock, fnResolve, fnReject](no::CPromiseResult result)
             {
@@ -321,8 +189,8 @@ TEST(Module_OrderAndThreadOwnership)
 {
     const std::thread::id idMain = std::this_thread::get_id();
 
-    auto spStockModule = std::make_shared<CStockModule>();  // 1 线程
-    auto spOrderModule = std::make_shared<COrderModule>();  // 1 线程
+    auto spStockModule = std::make_shared<CCalleeModule>();  // 1 线程
+    auto spOrderModule = std::make_shared<COrderModule>();   // 1 线程
 
     auto spTrace = std::make_shared<CTraceSink>();
 
@@ -353,16 +221,16 @@ TEST(Module_OrderAndThreadOwnership)
 /// @brief 单线程模块：并发调用也只是排队，模块内步骤不重叠。
 TEST(Module_SingleThreadSerializesOwnSteps)
 {
-    auto spStockModule = std::make_shared<CStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spTrace = std::make_shared<CTraceSink>();
-    auto spProbe = std::make_shared<CModuleProbe>();
+    auto spProbe = std::make_shared<CStepProbe>();
 
     // 4 条并发查询：模块只有 1 个 worker，步骤不该重叠
-    std::vector<std::shared_ptr<CStockCtx> > vecStock;
-    std::vector<no::CPromise<CStockCtx> > vecPromise;
+    std::vector<std::shared_ptr<CCalleeCtx> > vecStock;
+    std::vector<no::CPromise<CCalleeCtx> > vecPromise;
     for (int i = 0; i < 4; ++i)
     {
-        auto spStock = std::make_shared<CStockCtx>();
+        auto spStock = std::make_shared<CCalleeCtx>();
         spStock->nSku = i;
         spStock->nDelayMs = 5;  // 拉长窗口：多线程时会真的重叠
         spStock->spTrace = spTrace;
@@ -378,7 +246,7 @@ TEST(Module_SingleThreadSerializesOwnSteps)
     }
 
     // 不重叠：任意时刻最多 1 个模块步骤在跑
-    ASSERT_EQ(spProbe->nMaxInFlight.load(), 1);
+    ASSERT_EQ(spProbe->nStockMaxInFlight.load(), 1);
 
     // 每条链自己的两步同线程、且 4 条链都在同一个模块线程上
     for (size_t i = 0; i < vecStock.size(); ++i)
@@ -394,7 +262,7 @@ TEST(Module_SingleThreadSerializesOwnSteps)
 /// @brief 并发多条跨模块链：每条链自身顺序不乱，模块线程固定。
 TEST(Module_ConcurrentChainsKeepOwnOrder)
 {
-    auto spStockModule = std::make_shared<CStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spOrderModule = std::make_shared<COrderModule>();
 
     const int nChains = 2;

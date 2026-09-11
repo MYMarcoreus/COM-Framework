@@ -249,6 +249,23 @@ if (!bOk)
 
 ## 三、这些结论对应的用例与验证方式
 
+### 3.1 共享测试脚手架（`Tests/AsyncTestKit.h`）
+
+三个跨模块测试文件（`test_async_*modules*.cpp` / `_affinity.cpp`）原本各写一份「观测工具 + 被调
+模块」，现已抽到 `Tests/AsyncTestKit.h`（`namespace asynctest`）：
+
+| 组件 | 作用 |
+|---|---|
+| `CTraceSink` | 步骤轨迹 + 每步所在线程（带锁；可空，不接则不记录轨迹） |
+| `CStepProbe` | 步数与并发峰值（全 `std::atomic`，可空，不接则不计） |
+| `EnterOrderStep` / `LeaveOrderStep` / `EnterStockStep` / `LeaveStockStep` / `SleepMs` | 探针包装与模拟耗时（传空探针即空操作） |
+| `CCalleeCtx` / `CCalleeModule` | 两步被调模块：自持 1 线程执行器、`QueryStockAsync()` / `Stop()`、可配 `nDelayMs` 与 `bReject` |
+
+测试文件只留「本用例自己的订单模块与断言」：`test_async_affinity_override.cpp` 与
+`test_async_build_start.cpp` 保留各自的一步被调模块（轨迹约定与 `B1;B2;` 不同），不强行统一。
+
+### 3.2 用例清单
+
 | 用例 | 覆盖 |
 |---|---|
 | `Tests/test_async_affinity.cpp`（5 例） | 改进 A 的验收：0 延迟 / 慢被调 / 50 轮往返 / 协程跨模块 await / 4 条并发链，均在本模块线程 |
@@ -266,13 +283,23 @@ if (!bOk)
 | `Tests/test_async_settled_delivery.cpp`（5 例） | 问题 ② 的修复验收：通知送达保证 + 层的语义不变（含“漏检返回值不死等”回归） |
 
 ```bash
-# 跑全部测试（含以上 11 例）
-./build.sh --debug Tests && ./build/debug/tests        # total=111 pass=111 fail=0
+# 跑全部测试（含以上用例）
+./build.sh --debug Tests && ./build/debug/tests        # total=131 pass=131 fail=0
 
-# 数据竞争检查（只编这两个测试文件 + 异步框架 + 线程池）
+# 数据竞争检查（异步测试文件 + 异步框架 + 线程池）
 g++ -std=c++11 -fsanitize=thread -g -O1 -pthread -ICommon -ITests \
     Tests/main.cpp Tests/TestFramework.cpp \
     Tests/test_async_modules.cpp Tests/test_async_modules_stress.cpp \
-    Common/Async/AsyncExecutor.cpp Common/Thread/ThreadPool.cpp -o /tmp/tsan_mod
-/tmp/tsan_mod                                          # 0 条 data race
+    Tests/test_async_affinity.cpp Tests/test_async_affinity_override.cpp \
+    Tests/test_async_build_start.cpp Tests/test_async_settled_delivery.cpp \
+    Common/Async/AsyncExecutor.cpp Common/Thread/ThreadPool.cpp -o /tmp/tsan_async
+/tmp/tsan_async                                       # 0 条 data race
 ```
+
+> **待办（测试代码自身的问题，与本框架无关）**
+> - `Tests/test_async_chain.cpp` 的 `Promise_Fork` / `Coro_Restart` 用 2 线程执行器并发跑两条分支，
+>   却让两条分支写同一个非原子的 `CTestContext` 计数器（`nValue`/`nSteps`），TSan 会报 data race；
+>   修法是计数器改为 `std::atomic`（或分支各用独立上下文）。
+> - `Tests/test_async_affinity_override.cpp` 的 `ThenInline*` 用例依赖“登记时上游尚未 settle”的时间窗，
+>   在 TSan（~10 倍减速）下会偶发失败，宜改为“被调模块等一个手动放行的门”而非固定 `nDelayMs`。
+

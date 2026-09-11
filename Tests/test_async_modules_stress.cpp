@@ -24,6 +24,7 @@
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
+#include "AsyncTestKit.h"
 #include "TestFramework.h"
 
 namespace no = common::async;
@@ -43,236 +44,44 @@ enum
     kStockReject = no::kBusinessBase
 };
 
-// ==================== 共享探针（只用原子量，跨链共享） ====================
+// ==================== 共享脚手架 ====================
 
-/// @brief 极限测试探针：模块内并发峰值 + 步骤总数（全部原子，避免测试自身的数据竞争）。
-struct CStressProbe
-{
-    std::atomic<int> nOrderInFlight;     ///< 订单模块自有步骤当前并发数。
-    std::atomic<int> nOrderMaxInFlight;  ///< 订单模块自有步骤并发峰值。
-    std::atomic<int> nStockInFlight;     ///< 库存模块步骤当前并发数。
-    std::atomic<int> nStockMaxInFlight;  ///< 库存模块步骤并发峰值。
-    std::atomic<int> nOrderSteps;        ///< 订单模块自有步骤总数。
-    std::atomic<int> nStockSteps;        ///< 库存模块步骤总数。
-
-    CStressProbe()
-        : nOrderInFlight(0),
-          nOrderMaxInFlight(0),
-          nStockInFlight(0),
-          nStockMaxInFlight(0),
-          nOrderSteps(0),
-          nStockSteps(0)
-    {}
-};
-
-/// @brief 更新并发峰值。
-static void UpdatePeak(std::atomic<int>& nPeak, int nNow)
-{
-    int nMax = nPeak.load();
-    while (nNow > nMax && !nPeak.compare_exchange_weak(nMax, nNow))
-    {
-    }
-}
-
-/// @brief 订单模块自有步骤进入（未接入探针时为空操作）。
-static void EnterOrderStep(const std::shared_ptr<CStressProbe>& pProbe)
-{
-    if (pProbe == nullptr)
-    {
-        return;
-    }
-    ++pProbe->nOrderSteps;
-    UpdatePeak(pProbe->nOrderMaxInFlight, ++pProbe->nOrderInFlight);
-}
-
-/// @brief 订单模块自有步骤离开。
-static void LeaveOrderStep(const std::shared_ptr<CStressProbe>& pProbe)
-{
-    if (pProbe != nullptr)
-    {
-        --pProbe->nOrderInFlight;
-    }
-}
-
-/// @brief 库存模块步骤进入。
-static void EnterStockStep(const std::shared_ptr<CStressProbe>& pProbe)
-{
-    if (pProbe == nullptr)
-    {
-        return;
-    }
-    ++pProbe->nStockSteps;
-    UpdatePeak(pProbe->nStockMaxInFlight, ++pProbe->nStockInFlight);
-}
-
-/// @brief 库存模块步骤离开。
-static void LeaveStockStep(const std::shared_ptr<CStressProbe>& pProbe)
-{
-    if (pProbe != nullptr)
-    {
-        --pProbe->nStockInFlight;
-    }
-}
-
-/// @brief 模拟耗时。
-static void SleepMs(int nMs)
-{
-    if (nMs > 0)
-    {
-        std::this_thread::sleep_for(std::chrono::milliseconds(nMs));
-    }
-}
-
-// ==================== 每条链自己的轨迹（链内步骤串行，无需加锁） ====================
-
-/// @brief 单条链的步骤轨迹 + 每步所在线程。
-struct CStressTraceSink
-{
-    std::string strTrace;                                            ///< 轨迹（如 "A1;B1;B2;A2;A3;"）。
-    std::vector<std::pair<std::string, std::thread::id> > vecSteps;  ///< 步骤 → 所在线程。
-
-    /// @brief 追加一步。
-    void Append(const char* strStep)
-    {
-        strTrace += strStep;
-        strTrace += ';';
-        vecSteps.push_back(std::make_pair(std::string(strStep), std::this_thread::get_id()));
-    }
-
-    /// @brief 某一步所在线程。
-    std::thread::id ThreadOf(const char* strStep) const
-    {
-        for (size_t i = 0; i < vecSteps.size(); ++i)
-        {
-            if (vecSteps[i].first == strStep)
-            {
-                return vecSteps[i].second;
-            }
-        }
-        return std::thread::id();
-    }
-
-    /// @brief 某一步出现次数。
-    int Count(const char* strStep) const
-    {
-        int nCount = 0;
-        for (size_t i = 0; i < vecSteps.size(); ++i)
-        {
-            if (vecSteps[i].first == strStep)
-            {
-                ++nCount;
-            }
-        }
-        return nCount;
-    }
-};
-
-// ==================== 库存模块（被调方，1 线程） ====================
-
-/// @brief 库存模块上下文。
-struct CStressStockCtx
-{
-    int nSku;                                   ///< 入参：商品号。
-    int nAvail;                                 ///< 出参：可用库存。
-    int nDelayMs;                               ///< 每步模拟耗时。
-    bool bReject;                               ///< 是否拒绝本次查询。
-    std::shared_ptr<CStressTraceSink> spTrace;  ///< 本链轨迹（可空）。
-    std::shared_ptr<CStressProbe> pProbe;       ///< 共享探针（可空）。
-    std::thread::id idConnect;                  ///< 第一步所在线程。
-    std::thread::id idRead;                     ///< 第二步所在线程。
-
-    CStressStockCtx() : nSku(0), nAvail(0), nDelayMs(0), bReject(false)
-    {}
-};
-
-/// @brief 库存模块：自持 1 线程执行器；对外只有 QueryStockAsync() 与 Stop()。
-class CStressStockModule
-{
-   public:
-    CStressStockModule() : m_exec(1)
-    {
-        m_exec.Start();
-    }
-
-    /// @brief 停止本模块执行器（供「被调模块半路停止」的退化用例）。
-    void Stop()
-    {
-        m_exec.Stop();
-    }
-
-    /// @brief 查询库存：两步都在本模块执行器上跑（调用方拿不到本执行器）。
-    ///
-    /// @param spStock 本模块上下文。
-    ///
-    /// @return 库存查询 promise。
-    no::CPromise<CStressStockCtx> QueryStockAsync(const std::shared_ptr<CStressStockCtx>& spStock)
-    {
-        return m_exec.NewPromise(spStock, &StepConnect, ASYNC_LOC).Then(&StepRead, ASYNC_LOC);
-    }
-
-   private:
-    /// 第一步：连库。
-    static no::CPromiseResult StepConnect(no::CPromiseResult /*upResult*/,
-                                          const std::shared_ptr<CStressStockCtx>& spStock)
-    {
-        EnterStockStep(spStock->pProbe);
-        spStock->idConnect = std::this_thread::get_id();
-        if (spStock->spTrace != nullptr)
-        {
-            spStock->spTrace->Append("B1");
-        }
-        SleepMs(spStock->nDelayMs);
-        LeaveStockStep(spStock->pProbe);
-        return no::CPromiseResult::Resolve();
-    }
-
-    /// 第二步：读库存（与第一步串行、同线程）。
-    static no::CPromiseResult StepRead(no::CPromiseResult /*upResult*/, const std::shared_ptr<CStressStockCtx>& spStock)
-    {
-        EnterStockStep(spStock->pProbe);
-        spStock->idRead = std::this_thread::get_id();
-        if (spStock->spTrace != nullptr)
-        {
-            spStock->spTrace->Append("B2");
-        }
-        SleepMs(spStock->nDelayMs);
-        if (spStock->bReject)
-        {
-            LeaveStockStep(spStock->pProbe);
-            return no::CPromiseResult::Reject(kStockReject);
-        }
-        spStock->nAvail = 5;
-        LeaveStockStep(spStock->pProbe);
-        return no::CPromiseResult::Resolve();
-    }
-
-    no::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
-};
+// 共享探针（CStepProbe）、轨迹（CTraceSink）与可配置被调模块（CCalleeCtx/CCalleeModule）
+// 见 Tests/AsyncTestKit.h（与基础/亲和性用例共用同一套观测点）。
+using asynctest::CCalleeCtx;
+using asynctest::CCalleeModule;
+using asynctest::CStepProbe;
+using asynctest::CTraceSink;
+using asynctest::EnterOrderStep;
+using asynctest::EnterStockStep;
+using asynctest::LeaveOrderStep;
+using asynctest::LeaveStockStep;
+using asynctest::SleepMs;
 
 // ==================== 订单模块（调用方，1 线程） ====================
 
 /// @brief 订单流程上下文（每条链一个）。
 struct CStressOrderCtx
 {
-    int nSku;                                   ///< 入参：商品号。
-    int nStock;                                 ///< 出参：带回来的库存。
-    int nStockDelayMs;                          ///< 被调模块每步模拟耗时。
-    bool bRejectStock;                          ///< 让库存模块拒绝本次查询。
-    int nRounds;                                ///< 已完成的往返轮数。
-    int nOwnSteps;                              ///< 本模块自有步骤数（深链用例等于层数）。
-    int nResumeOnStockThread;                   ///< 落在结算线程的次数（亲和后恒为 0）。
-    int nResumeOnOwnThread;                     ///< 回本模块线程的次数。
-    std::atomic<int> nBranchDone;               ///< 已完成的分支数。
-    std::atomic<int> nBranchFail;               ///< 失败的分支数。
-    bool bCaught;                               ///< catch 是否执行过。
-    int nCaughtCode;                            ///< catch 收到的码。
-    std::shared_ptr<CStressTraceSink> spTrace;  ///< 本链轨迹。
-    std::shared_ptr<CStressProbe> pProbe;       ///< 共享探针。
-    std::thread::id idFirst;                    ///< 本模块首层所在线程。
-    std::thread::id idStockThread;              ///< 被调模块线程（OnSettled 回调所在）。
-    std::thread::id idAfterBridge;              ///< 跨模块返回后那一层所在线程。
-    std::thread::id idBackHome;                 ///< 回到本模块线程后那一层所在线程。
-    std::thread::id idLastOwn;                  ///< 最后一个自有步骤所在线程。
+    int nSku;                             ///< 入参：商品号。
+    int nStock;                           ///< 出参：带回来的库存。
+    int nStockDelayMs;                    ///< 被调模块每步模拟耗时。
+    bool bRejectStock;                    ///< 让库存模块拒绝本次查询。
+    int nRounds;                          ///< 已完成的往返轮数。
+    int nOwnSteps;                        ///< 本模块自有步骤数（深链用例等于层数）。
+    int nResumeOnStockThread;             ///< 落在结算线程的次数（亲和后恒为 0）。
+    int nResumeOnOwnThread;               ///< 回本模块线程的次数。
+    std::atomic<int> nBranchDone;         ///< 已完成的分支数。
+    std::atomic<int> nBranchFail;         ///< 失败的分支数。
+    bool bCaught;                         ///< catch 是否执行过。
+    int nCaughtCode;                      ///< catch 收到的码。
+    std::shared_ptr<CTraceSink> spTrace;  ///< 本链轨迹。
+    std::shared_ptr<CStepProbe> pProbe;   ///< 共享探针。
+    std::thread::id idFirst;              ///< 本模块首层所在线程。
+    std::thread::id idStockThread;        ///< 被调模块线程（OnSettled 回调所在）。
+    std::thread::id idAfterBridge;        ///< 跨模块返回后那一层所在线程。
+    std::thread::id idBackHome;           ///< 回到本模块线程后那一层所在线程。
+    std::thread::id idLastOwn;            ///< 最后一个自有步骤所在线程。
 
     CStressOrderCtx()
         : nSku(0),
@@ -306,7 +115,7 @@ class CStressOrderModule
     ///
     /// @return 指向最后一层的 promise。
     no::CPromise<CStressOrderCtx> RunOnceAsync(const std::shared_ptr<CStressOrderCtx>& spCtx,
-                                               const std::shared_ptr<CStressStockModule>& spStockModule)
+                                               const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         return m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
             .ThenPromise(MakeQueryStockFactory(spStockModule), ASYNC_LOC)
@@ -324,7 +133,7 @@ class CStressOrderModule
     ///
     /// @return 指向最后一层的 promise。
     no::CPromise<CStressOrderCtx> RunRoundsAsync(const std::shared_ptr<CStressOrderCtx>& spCtx,
-                                                 const std::shared_ptr<CStressStockModule>& spStockModule, int nRounds)
+                                                 const std::shared_ptr<CCalleeModule>& spStockModule, int nRounds)
     {
         no::CPromise<CStressOrderCtx> promise = m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC);
         for (int i = 0; i < nRounds; ++i)
@@ -371,8 +180,7 @@ class CStressOrderModule
     ///
     /// @return 指向最后一层的 promise。
     no::CPromise<CStressOrderCtx> RunFanOutAsync(const std::shared_ptr<CStressOrderCtx>& spCtx,
-                                                 const std::shared_ptr<CStressStockModule>& spStockModule,
-                                                 int nBranches)
+                                                 const std::shared_ptr<CCalleeModule>& spStockModule, int nBranches)
     {
         return m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
             .ThenPromise(MakeJoinFactory(spStockModule, nBranches), ASYNC_LOC)
@@ -387,7 +195,7 @@ class CStressOrderModule
     ///
     /// @return 指向最后一层的 promise。
     no::CPromise<CStressOrderCtx> RunStopMidFlightAsync(const std::shared_ptr<CStressOrderCtx>& spCtx,
-                                                        const std::shared_ptr<CStressStockModule>& spStockModule)
+                                                        const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         no::CPromise<CStressOrderCtx>::ThenHandler fnStopStockModule =
             [spStockModule](no::CPromiseResult /*upResult*/, const std::shared_ptr<CStressOrderCtx>& spSelf)
@@ -410,7 +218,7 @@ class CStressOrderModule
    private:
     /// 跨模块那一层的工厂：等库存模块的 promise。
     no::CPromise<CStressOrderCtx>::PromiseFactory MakeQueryStockFactory(
-        const std::shared_ptr<CStressStockModule>& spStockModule)
+        const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         return [this, spStockModule](const std::shared_ptr<CStressOrderCtx>& spSelf)
         {
@@ -428,8 +236,8 @@ class CStressOrderModule
     }
 
     /// 分叉 + 汇聚那一层的工厂。
-    no::CPromise<CStressOrderCtx>::PromiseFactory MakeJoinFactory(
-        const std::shared_ptr<CStressStockModule>& spStockModule, int nBranches)
+    no::CPromise<CStressOrderCtx>::PromiseFactory MakeJoinFactory(const std::shared_ptr<CCalleeModule>& spStockModule,
+                                                                  int nBranches)
     {
         return [this, spStockModule, nBranches](const std::shared_ptr<CStressOrderCtx>& spSelf)
         {
@@ -530,20 +338,20 @@ class CStressOrderModule
 
     /// 跨模块桥接层：本层属于本模块，被调模块在自己执行器上跑。
     no::CPromise<CStressOrderCtx> BridgeQueryStock(const std::shared_ptr<CStressOrderCtx>& spCtx,
-                                                   const std::shared_ptr<CStressStockModule>& spStockModule)
+                                                   const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         no::CPromise<CStressOrderCtx>::PromiseExecutor fnExecutor =
             [spStockModule, spCtx](const no::CPromise<CStressOrderCtx>::ResolveFn& fnResolve,
                                    const no::CPromise<CStressOrderCtx>::RejectFn& fnReject)
         {
-            auto spStock = std::make_shared<CStressStockCtx>();
+            auto spStock = std::make_shared<CCalleeCtx>();
             spStock->nSku = spCtx->nSku;
             spStock->nDelayMs = spCtx->nStockDelayMs;
             spStock->bReject = spCtx->bRejectStock;
             spStock->spTrace = spCtx->spTrace;
             spStock->pProbe = spCtx->pProbe;
 
-            no::CPromise<CStressStockCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
+            no::CPromise<CCalleeCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
             const bool bOk = promiseStock.OnSettled([spCtx, spStock, fnResolve, fnReject](no::CPromiseResult result)
             {
                 // 本回调要么在库存模块线程上内联跑，要么（补登记时）在库存模块执行器上跑。
@@ -586,7 +394,7 @@ class CStressOrderModule
 
     /// 分叉 + 汇聚：发起 nBranches 条跨模块分支，全部 settle 后 settle 本层（手写 when_all）。
     no::CPromise<CStressOrderCtx> JoinBranches(const std::shared_ptr<CStressOrderCtx>& spCtx,
-                                               const std::shared_ptr<CStressStockModule>& spStockModule, int nBranches)
+                                               const std::shared_ptr<CCalleeModule>& spStockModule, int nBranches)
     {
         no::CPromise<CStressOrderCtx>::PromiseExecutor fnExecutor =
             [spStockModule, spCtx, nBranches](const no::CPromise<CStressOrderCtx>::ResolveFn& fnResolve,
@@ -596,11 +404,11 @@ class CStressOrderModule
             auto pRemain = std::make_shared<std::atomic<int> >(nBranches);
             for (int i = 0; i < nBranches; ++i)
             {
-                auto spStock = std::make_shared<CStressStockCtx>();
+                auto spStock = std::make_shared<CCalleeCtx>();
                 spStock->nSku = spCtx->nSku + i;
                 spStock->pProbe = spCtx->pProbe;
 
-                no::CPromise<CStressStockCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
+                no::CPromise<CCalleeCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
                 const bool bOk = promiseStock.OnSettled([spCtx, pRemain, fnResolve, fnReject](no::CPromiseResult result)
                 {
                     // 本回调在库存模块线程上；单个 worker ⇒ 不会并发进入。
@@ -643,12 +451,12 @@ class CStressOrderModule
 // ==================== 工具 ====================
 
 /// @brief 建一个带轨迹与探针的订单上下文。
-static std::shared_ptr<CStressOrderCtx> MakeOrderCtx(const std::shared_ptr<CStressProbe>& pProbe, int nSku)
+static std::shared_ptr<CStressOrderCtx> MakeOrderCtx(const std::shared_ptr<CStepProbe>& pProbe, int nSku)
 {
     auto spCtx = std::make_shared<CStressOrderCtx>();
     spCtx->nSku = nSku;
     spCtx->pProbe = pProbe;
-    spCtx->spTrace = std::make_shared<CStressTraceSink>();
+    spCtx->spTrace = std::make_shared<CTraceSink>();
     return spCtx;
 }
 
@@ -659,9 +467,9 @@ TEST(ModuleStress_ManyConcurrentChains)
 {
     const std::thread::id idMain = std::this_thread::get_id();
 
-    auto spStockModule = std::make_shared<CStressStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spOrderModule = std::make_shared<CStressOrderModule>();
-    auto spProbe = std::make_shared<CStressProbe>();
+    auto spProbe = std::make_shared<CStepProbe>();
 
     std::vector<std::shared_ptr<CStressOrderCtx> > vecCtx;
     std::vector<no::CPromise<CStressOrderCtx> > vecPromise;
@@ -724,9 +532,9 @@ TEST(ModuleStress_ManyConcurrentChains)
 /// @brief 极限 2：单条链 100 轮 A↔B 往返（跨模块 + 回本模块交替）。
 TEST(ModuleStress_DeepRoundTrips)
 {
-    auto spStockModule = std::make_shared<CStressStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spOrderModule = std::make_shared<CStressOrderModule>();
-    auto spProbe = std::make_shared<CStressProbe>();
+    auto spProbe = std::make_shared<CStepProbe>();
     auto spCtx = MakeOrderCtx(spProbe, 7);
     spCtx->nStockDelayMs = 2;  // 库存每步 2ms：保证「挂下一层」早于 settle
 
@@ -760,7 +568,7 @@ TEST(ModuleStress_DeepRoundTrips)
 TEST(ModuleStress_DeepSingleChain)
 {
     auto spOrderModule = std::make_shared<CStressOrderModule>();
-    auto spProbe = std::make_shared<CStressProbe>();
+    auto spProbe = std::make_shared<CStepProbe>();
     auto spCtx = MakeOrderCtx(spProbe, 1);
 
     ASSERT_TRUE(spOrderModule->RunDeepAsync(spCtx, kStressDeepLayers).Await().IsFulfilled());
@@ -774,9 +582,9 @@ TEST(ModuleStress_DeepSingleChain)
 /// @brief 极限 4：8 个线程同时 Await 同一条跨模块链（链只跑一遍）。
 TEST(ModuleStress_ConcurrentAwaitSameChain)
 {
-    auto spStockModule = std::make_shared<CStressStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spOrderModule = std::make_shared<CStressOrderModule>();
-    auto spProbe = std::make_shared<CStressProbe>();
+    auto spProbe = std::make_shared<CStepProbe>();
     auto spCtx = MakeOrderCtx(spProbe, 3);
 
     const no::CPromise<CStressOrderCtx> promise = spOrderModule->RunOnceAsync(spCtx, spStockModule);
@@ -815,9 +623,9 @@ TEST(ModuleStress_ConcurrentAwaitSameChain)
 /// @brief 极限 5：一层分叉 64 条跨模块分支 + 手写汇聚（等价 when_all）。
 TEST(ModuleStress_FanOutJoin)
 {
-    auto spStockModule = std::make_shared<CStressStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spOrderModule = std::make_shared<CStressOrderModule>();
-    auto spProbe = std::make_shared<CStressProbe>();
+    auto spProbe = std::make_shared<CStepProbe>();
     auto spCtx = MakeOrderCtx(spProbe, 10);
 
     ASSERT_TRUE(spOrderModule->RunFanOutAsync(spCtx, spStockModule, kStressBranches).Await().IsFulfilled());
@@ -840,9 +648,9 @@ TEST(ModuleStress_LateAppendRunsOnOwnExecutor)
 {
     const std::thread::id idMain = std::this_thread::get_id();
 
-    auto spStockModule = std::make_shared<CStressStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spOrderModule = std::make_shared<CStressOrderModule>();
-    auto spProbe = std::make_shared<CStressProbe>();
+    auto spProbe = std::make_shared<CStepProbe>();
     auto spCtx = MakeOrderCtx(spProbe, 13);
 
     const no::CPromise<CStressOrderCtx> promise = spOrderModule->RunOnceAsync(spCtx, spStockModule);
@@ -860,9 +668,9 @@ TEST(ModuleStress_LateAppendRunsOnOwnExecutor)
 /// @brief 极限 6：100 条链一半让被调模块拒绝（成功与失败互不串）。
 TEST(ModuleStress_MixedRejections)
 {
-    auto spStockModule = std::make_shared<CStressStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spOrderModule = std::make_shared<CStressOrderModule>();
-    auto spProbe = std::make_shared<CStressProbe>();
+    auto spProbe = std::make_shared<CStepProbe>();
 
     std::vector<std::shared_ptr<CStressOrderCtx> > vecCtx;
     std::vector<no::CPromise<CStressOrderCtx> > vecPromise;
@@ -904,9 +712,9 @@ TEST(ModuleStress_MixedRejections)
 /// @brief 极限 7：链跑到一半停掉被调模块执行器（退化为 kStopped，不挂死）。
 TEST(ModuleStress_StopMidFlight)
 {
-    auto spStockModule = std::make_shared<CStressStockModule>();
+    auto spStockModule = std::make_shared<CCalleeModule>();
     auto spOrderModule = std::make_shared<CStressOrderModule>();
-    auto spProbe = std::make_shared<CStressProbe>();
+    auto spProbe = std::make_shared<CStepProbe>();
     auto spCtx = MakeOrderCtx(spProbe, 5);
 
     const no::CPromiseResult result = spOrderModule->RunStopMidFlightAsync(spCtx, spStockModule).Await();
