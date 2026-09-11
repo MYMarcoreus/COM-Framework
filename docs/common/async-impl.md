@@ -220,7 +220,8 @@ result = (nMode == kModeFinally) ? upResult : own;   // finally 不改变结果
 两者都不阻塞调用方，且都保证「本层只执行一次」；自 2026-09-11 的线程亲和（改进 A）起，
 **两者的落点线程一致：都是本链执行器线程**（差别只剩执行时机：立即 vs 入队）。
 
-`OnSettled` 走的是另一条路径（`AddSettledHandler`）：它是「通知」不是「层」，因此带**送达保证** ——
+`OnSettled` 走的是同一条路径（`AddHandler(..., bGuaranteedDelivery = true)`）：
+它是「通知」不是「层」，因此带**送达保证** ——
 执行器可用时投递（同上表第二种），执行器不可用时（被调模块已停 / 拒绝投递）**在调用线程上就地执行**，
 绝不丢弃（否则手写桥接漏检返回值就会让本层永久 pending、上层 `Await()` 死等）。
 层处理器仍保持 `AddHandler` 的语义：执行器不可用 → 返回 `false` → 框架以 `kStopped` 收口本层。

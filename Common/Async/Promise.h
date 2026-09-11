@@ -106,6 +106,13 @@
 //   q.Start();                     // 此刻才投递首层（幂等；漏写则首次 Await 自动启动）
 //   q.Await();
 // @endcode
+//
+// 文件结构（便于定位）：
+//   一、detail 基础设施：CPromiseState（层状态机，含处理器登记策略）/ CLaunchState（延迟启动）/
+//       CPromiseCore（共享核心：上下文 + 执行器 + 启动状态）/ HandlerMode、HandlerAffinity /
+//       MakeHandlerRunner、RunHandler、PostHandler（执行器选择与亲和）
+//   二、CPromise：对外句柄（构造 / Start / New / 层方法 / 结果与通知 / 内部实现）
+//   三、模板方法定义：CAsyncExecutor::NewPromise、BuildPromise
 // ====================================================================
 
 namespace common {
@@ -115,6 +122,10 @@ template <typename TContext>
 class CPromise;
 template <typename TContext>
 class CCoroutine;
+
+// ====================================================================
+// 一、detail 基础设施
+// ====================================================================
 
 namespace detail {
 
@@ -178,15 +189,22 @@ class CPromiseState
         }
     }
 
-    /// @brief 登记处理器；本状态已 settled 时投递到执行器异步触发（不阻塞调用方）。
+    /// @brief 登记处理器（执行器不可用时按策略收口）。
     ///
-    /// 层处理器（then / catch / finally / thenPromise）用本接口：执行器不可用时返回 false，
-    /// 由调用方以 `kStopped` 收口本层（“停了的执行器不再跑新层”）。
+    /// 两种送达策略：
+    ///  - **层处理器**（then / catch / finally / thenPromise，`bGuaranteedDelivery == false`）：
+    ///    执行器不可用时返回 `false`，由调用方以 `kStopped` 收口本层（“停了的执行器不再跑新层”）；
+    ///  - **通知**（`OnSettled`，`bGuaranteedDelivery == true`）：**保证送达** —— 执行器不可用时
+    ///    在调用线程上就地执行，绝不丢弃（否则手写桥接漏检返回值就会让本层永久 pending、
+    ///    上层 `Await()` 死等）。就地执行不会递归加深：通知里通常只是 settle 本层，
+    ///    而本层后续处理器走 `RunHandler`，执行器不可用时以 `kStopped` 收口，链会立即结束。
     ///
     /// @param pHandle 执行器句柄（已 settled 时投递用）。
     /// @param fnHandler 处理器（按值接收，登记时移动存储避免拷贝）。
-    /// @return true 已登记或已投递；false 已 settled 但执行器不可用（处理器不执行）。
-    bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler)
+    /// @param bGuaranteedDelivery 是否要求「送达保证」（通知用 true）。
+    /// @return true 已登记 / 已投递 / 已就地送达；false 仅当层处理器已 settled 且执行器不可用。
+    bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler,
+                    bool bGuaranteedDelivery = false)
     {
         bool bFireNow = false;
         CPromiseResult result;
@@ -195,51 +213,7 @@ class CPromiseState
             if (!m_bSettled.load(std::memory_order_relaxed))
             {
                 m_vecHandlers.push_back(std::move(fnHandler));
-                return true;  // pending：已登记，settle 时触发。
-            }
-            bFireNow = true;
-            result = m_result;
-        }
-
-        if (bFireNow && fnHandler)
-        {
-            // 已 settled：投递到执行器异步执行（与 JS 一致），保持调用方不阻塞。
-            std::function<void()> fnRun = [fnHandler, result]()
-            {
-                fnHandler(result);
-            };
-            if (PostToHandle(pHandle, std::move(fnRun)))
-            {
-                return true;
-            }
-            return false;  // 已 settled 但执行器不可用。
-        }
-        return true;
-    }
-
-    /// @brief 登记「保证送达」的 settled 通知：即使执行器不可用也一定执行。
-    ///
-    /// 与 `AddHandler` 的差别只在兜底：执行器不可用（对方模块已停止 / 拒绝投递）时
-    /// **在调用线程上就地执行**，绝不丢弃处理器。
-    ///
-    /// 用途：`OnSettled` —— 通知是「观测/收尾」语义，调用方不该为了“对方模块已停止”
-    /// 再写一遍兜底代码；否则手写桥接漏检返回值就会让本层永久 pending、上层 `Await()` 死等。
-    ///
-    /// 就地执行不会递归加深：通知里通常只是 settle 本层，而该层后续处理器走 `RunHandler`，
-    /// 执行器不可用时以 `kStopped` 收口，链会立刻结束。
-    ///
-    /// @param pHandle 执行器句柄（可用时投递，保证不阻塞调用方）。
-    /// @param fnHandler 通知处理器（按值接收）。
-    void AddSettledHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler)
-    {
-        bool bFireNow = false;
-        CPromiseResult result;
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            if (!m_bSettled.load(std::memory_order_relaxed))
-            {
-                m_vecHandlers.push_back(std::move(fnHandler));
-                return;  // pending：已登记，settle 时触发（在结算线程上）。
+                return true;  // pending：已登记，settle 时触发（在结算线程上）。
             }
             bFireNow = true;
             result = m_result;
@@ -247,22 +221,29 @@ class CPromiseState
 
         if (!bFireNow || !fnHandler)
         {
-            return;
+            return true;  // 已 settled 但没有处理器可跑。
         }
 
-        // 已 settled：优先投递到执行器（不阻塞调用方）；不可用则就地送达。
+        // 已 settled：优先投递到执行器异步执行（与 JS 一致），保持调用方不阻塞。
+        // 注意：按值传参（拷贝）—— 投递失败时 fnRun 仍可用（送达保证要就地执行它）。
         std::function<void()> fnRun = [fnHandler, result]()
         {
             fnHandler(result);
         };
-        if (PostToHandle(pHandle, fnRun))  // 注意：按值传参（拷贝）——失败时 fnRun 仍可用。
+        if (PostToHandle(pHandle, fnRun))
         {
-            return;
+            return true;
         }
 
-        ++InlineDepth();  // 与其它内联路径共用深度计数（防极端嵌套）。
+        if (!bGuaranteedDelivery)
+        {
+            return false;  // 层处理器：执行器不可用 → 交给调用方以 kStopped 收口。
+        }
+
+        ++InlineDepth();  // 通知就地送达（与其它内联路径共用深度计数，防极端嵌套）。
         fnRun();
         --InlineDepth();
+        return true;
     }
 
     /// @brief 阻塞等待本状态 settle（先短自旋，超时再阻塞等待）。
@@ -451,6 +432,19 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<CPromiseCore<TCont
     };
 }
 
+/// @brief 解析本层实际使用的执行器句柄（亲和三档）。
+///
+/// @param nAffinity 亲和三档（`kAffinityChain` / `kAffinityInline` / `kAffinityExecutor`）。
+/// @param pTarget 调用方指定的执行器（仅 `kAffinityExecutor` 且非空时生效）。
+/// @param pChainHandle 本链执行器句柄（默认值）。
+/// @return 本层应使用的执行器句柄。
+inline const std::shared_ptr<CExecutorHandle>& ResolveExecHandle(int nAffinity,
+                                                                const std::shared_ptr<CExecutorHandle>& pTarget,
+                                                                const std::shared_ptr<CExecutorHandle>& pChainHandle)
+{
+    return (nAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pChainHandle;
+}
+
 /// @brief 级联执行下一层（上一层刚 settle，当前在主调方线程上）。
 ///
 /// 线程亲和：**只有当前线程已经是本链执行器的线程**时才就地内联（省一次入队 + 保序）；
@@ -472,8 +466,7 @@ void RunHandler(const std::shared_ptr<CPromiseCore<TContext> >& pCore, const std
     std::function<void()> fnRun = MakeHandlerRunner(pCore, pState, fnHandler, upResult, nMode);
 
     // 选本层的执行器：默认本链执行器；kAffinityExecutor 用调用方指定的那个。
-    const std::shared_ptr<CExecutorHandle> pExec =
-        (nAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pCore->Handle();
+    const std::shared_ptr<CExecutorHandle> pExec = ResolveExecHandle(nAffinity, pTarget, pCore->Handle());
 
     const bool bInline = (nAffinity == kAffinityInline) || IsInExecutorThread(pExec);
     if (bInline && InlineDepth() < kMaxInlineDepth)
@@ -497,20 +490,24 @@ void RunHandler(const std::shared_ptr<CPromiseCore<TContext> >& pCore, const std
 /// @param fnHandler 处理器。
 /// @param upResult 上一层结果（首层恒为「已兑现」）。
 /// @param nMode 处理器模式。
-/// @param pExec 目标执行器句柄（为空则用 pCore 的执行器）。
+/// @param pExec 目标执行器句柄（调用方已按亲和解析好，恒非空）。
 template <typename TContext>
 void PostHandler(const std::shared_ptr<CPromiseCore<TContext> >& pCore, const std::shared_ptr<CPromiseState>& pState,
                  const ThenHandler<TContext>& fnHandler, const CPromiseResult& upResult, int nMode,
-                 const std::shared_ptr<CExecutorHandle>& pExec = nullptr)
+                 const std::shared_ptr<CExecutorHandle>& pExec)
 {
     std::function<void()> fnRun = MakeHandlerRunner(pCore, pState, fnHandler, upResult, nMode);
-    if (!PostToHandle(pExec != nullptr ? pExec : pCore->Handle(), std::move(fnRun)))
+    if (!PostToHandle(pExec, std::move(fnRun)))
     {
         pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用 → 首层被拒绝。
     }
 }
 
 }  // namespace detail
+
+// ====================================================================
+// 二、CPromise：对外句柄
+// ====================================================================
 
 /// @brief 异步 promise 句柄（浅句柄：拷贝共享同一条 promise 链的同一层）。
 ///
@@ -550,17 +547,18 @@ class CPromise
     CPromise() : m_pCore(), m_pState()
     {}
 
-    /// @brief 创建 promise（未起链；上下文由本 promise 在首次取用时创建）。
+    /// @brief 创建 promise（未起链；上下文懒创建）。
     ///
     /// 随后第一次 Then / Catch / Finally 即首层（起点结果视为「已兑现」）。
     ///
     /// @param executor 执行器（起链与续接投递用）。
-    explicit CPromise(CAsyncExecutor& executor)
-        : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(executor.Handle(), std::shared_ptr<TContext>())),
-          m_pState()
+    explicit CPromise(CAsyncExecutor& executor) : CPromise(executor, std::shared_ptr<TContext>())
     {}
 
     /// @brief 创建 promise（未起链；使用外部已备好的共享上下文）。
+    ///
+    /// 通常不直接用：起链用 `exec.NewPromise(spCtx, 首层)`（立即启动）或
+    /// `exec.BuildPromise(spCtx)`（延迟启动）。
     ///
     /// @param executor 执行器（起链与续接投递用）。
     /// @param spContext 共享上下文（外部持有；本 promise 所有层共用该实例）。
@@ -568,19 +566,9 @@ class CPromise
         : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(executor.Handle(), spContext)), m_pState()
     {}
 
-    /// @brief 创建并起链（等价 JS `new Promise(executor)`：executor 立即异步执行）。
-    ///
-    /// @param executor 执行器（起链与续接投递用）。
-    /// @param fnHandler 首层处理器（固定签名）。
-    /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
-    CPromise(CAsyncExecutor& executor, const ThenHandler& fnHandler, const CSourceLoc& loc = CSourceLoc())
-        : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(executor.Handle(), std::shared_ptr<TContext>())),
-          m_pState()
-    {
-        Append(fnHandler, loc, detail::kModeThen);
-    }
-
     /// @brief 创建并起链（使用外部已备好的共享上下文）。
+    ///
+    /// 与 `exec.NewPromise(spCtx, 首层)` 等价（首层立即投递）。
     ///
     /// @param executor 执行器（起链与续接投递用）。
     /// @param spContext 共享上下文（本 promise 所有层共用该实例）。
@@ -639,7 +627,7 @@ class CPromise
         }
 
         const std::shared_ptr<detail::CExecutorHandle> pExec =
-            (pLaunch->pTarget != nullptr) ? pLaunch->pTarget : m_pCore->Handle();
+            detail::ResolveExecHandle(detail::kAffinityExecutor, pLaunch->pTarget, m_pCore->Handle());
         if (!detail::PostToHandle(pExec, std::move(fnLaunch)))
         {
             pFirst->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用。
@@ -855,13 +843,14 @@ class CPromise
             return false;  // 无效 promise：无法注册（唯一返回 false 的情形）。
         }
 
-        m_pState->AddSettledHandler(m_pCore->Handle(), [fnSettled](const CPromiseResult& result)
+        m_pState->AddHandler(m_pCore->Handle(),
+                             [fnSettled](const CPromiseResult& result)
         {
             if (fnSettled)
             {
                 fnSettled(result);
             }
-        });
+        }, /* bGuaranteedDelivery = */ true);
         return true;
     }
 
@@ -946,15 +935,11 @@ class CPromise
             return;
         }
 
-        const bool bOk = promiseChild.OnSettled([pState](CPromiseResult childResult)
+        // OnSettled 保证送达（仅无效 promise 返回 false，此处已判过）→ 不需检查返回值。
+        promiseChild.OnSettled([pState](CPromiseResult childResult)
         {
             pState->Settle(childResult);
         });
-        if (!bOk)
-        {
-            // 防御：OnSettled 已保证送达（仅无效 promise 返回 false），正常路径不会走到这里。
-            pState->Settle(CPromiseResult::Reject(kStopped));
-        }
     }
 
     /// @brief 内部：执行外部 settle 体（`CPromise::New` 的 executor），把 resolve / reject 交给它。
@@ -1017,7 +1002,7 @@ class CPromise
 
         // 本层实际的执行器：默认本链执行器；指定执行器版用调用方给的那个。
         const std::shared_ptr<detail::CExecutorHandle> pExec =
-            (nAffinity == detail::kAffinityExecutor && pTarget != nullptr) ? pTarget : m_pCore->Handle();
+            detail::ResolveExecHandle(nAffinity, pTarget, m_pCore->Handle());
 
         // ① 尚未起链：本次调用即首层（起点结果视为「已兑现」），投递执行。
         //    首层总是投递（起链线程不跑业务代码）；kAffinityExecutor 时投递到指定执行器。
@@ -1127,6 +1112,10 @@ class CPromise
 /// @param fnHandler 首层处理器（固定签名）。
 /// @param loc 注册点源码位置（可选）。
 /// @return 指向首层的 promise 句柄。
+// ====================================================================
+// 三、模板方法定义（执行器入口）
+// ====================================================================
+
 template <typename TContext>
 CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& spContext,
                                               typename CPromise<TContext>::ThenHandler fnHandler,

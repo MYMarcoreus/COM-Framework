@@ -429,7 +429,7 @@ class CCoroutine
             {
                 MarkTerminated(CPromiseResult::Reject(pGroup->nCode.load(std::memory_order_relaxed)));
             }
-            ResumeInline();  // 负载感知内联 / 投递。
+            ResumeInline();  // 线程亲和 + 负载感知：就地续跑或投递回本执行器。
         }
     }
 

@@ -205,13 +205,10 @@ promiseStock.OnSettled([...](no::CPromiseResult result) { /* 回调 */ });      
 //    执行器不可用 → 返回 false，由框架以 kStopped 收口本层（“停了的执行器不再跑新层”）。
 bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler);
 
-// ② 通知（OnSettled）：保证送达
-void AddSettledHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler)
-{
-    ... // 已 settled：优先投递到执行器（不阻塞调用方）
-    if (PostToHandle(pHandle, fnRun)) { return; }
-    ++InlineDepth(); fnRun(); --InlineDepth();   // ← 执行器不可用：就地送达，绝不丢弃
-}
+// ② 通知（OnSettled）：送达保证（同一个 AddHandler，多传一个策略位）
+bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler,
+                bool bGuaranteedDelivery);
+// AddHandler(..., /* bGuaranteedDelivery = */ true) → 已 settled 且执行器不可用时就地送达
 ```
 
 于是：
