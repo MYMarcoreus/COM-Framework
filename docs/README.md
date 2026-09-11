@@ -52,6 +52,12 @@
 | [async-style-manual-settle.md](common/async-style-manual-settle.md) | async_promise：`make_promise(resolve, reject)` 显式兑现 / 拒绝 |
 | [async-style-recover.md](common/async-style-recover.md) | Async++：手动完成 + `.recover` 分流兜底后继续链 |
 
+### 问题记录（`docs/common/`）
+
+| 文档 | 内容 |
+|---|---|
+| [async-cross-module-findings.md](common/async-cross-module-findings.md) | 跨模块异步的两个真问题（续跑线程二选一、`OnSettled` 返回值漏检导致挂死）：现象 / 复现 / 根因 / 规避 |
+
 ## 其他
 
 | 文档 | 内容 |

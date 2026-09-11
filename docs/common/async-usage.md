@@ -233,6 +233,7 @@ no::CPromise<CMyContext> BridgeQueryOther(const CDeps& deps, const std::shared_p
             deps.spOther->QueryAsync(spCtx->spOtherOp)      // 模块 B 的 promise（另一套上下文）
                 .OnSettled([spCtx, fnResolve, fnReject](no::CPromiseResult result)
                 {
+                    // 执行器不可用时框架会就地送达本通知，不必检查返回值
                     if (result.IsRejected()) { fnReject(码); return; }   // 跨模块拒绝码 → 业务码
                     spCtx->nRows = spCtx->spOtherOp->nRows;             // 取回数据
                     fnResolve();
@@ -253,9 +254,19 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
 - **执行器归属**：执行器是模块的私有资源（随模块 Start / Stop），**不要跨模块传递** ——
   跨模块接口只交换 promise + 上下文；被调模块在自己的线程池上跑，调用方拿到的只是它的 promise。
   顺序由「依赖边」保证（内层 settle → 桥接回调 → 本层 settle → 外层下一层，之间有 happens-before），
-  **不依赖共享线程**；唯一不保证先后的是 fire-and-forget 旁支。续跑线程通常就是「结算它的那条线程」
-  （层间同线程级联）→ 回调里只做轻活；需要「必须回到本模块线程」时显式 `exec.Post(...)`。
-  参考 `examples/cases/ThenMixCase.cpp`：库存 / 记账模块各持一个执行器，并自校验线程互不共用；
+  **不依赖共享线程**；唯一不保证先后的是 fire-and-forget 旁支。
+  参考 `examples/cases/ThenMixCase.cpp`：库存 / 记账模块各持一个执行器；
+- **跨模块返回后那一层恒回本模块线程**（线程亲和，2026-09-11 改进 A）：本链的层只在本链执行器的线程上跑
+  —— 被调模块 settle 本链时，这一层会被投递回本模块执行器（同执行器内仍然就地内联，不多花一次入队）。
+  所以回调里可以直接改本模块状态，无需再显式 `exec.Post(...)`（想显式强制也仍然可用）；
+  但 **`OnSettled` 通知不迁移**：它仍在结算线程（= 被调模块线程）上触发，只对「层」做亲和；
+  `CPromise::New` 的 executor 是「发起」语义，仍在调用线程上同步执行。
+  背景与实测：见 [async-cross-module-findings.md](async-cross-module-findings.md)；
+- **`OnSettled` 保证送达**（2026-09-11 框架修复）：子 promise 已 settled 且它的执行器不可用
+  （被调模块已停止 / 拒绝投递）时，通知改为在**调用线程**上就地执行 —— 调用方**不需要**检查返回值，
+  漏检也不会让桥接层永久 pending（返回值只在 promise 无效时为 `false`）。
+  注意「层」的语义不变：`Then` / `Catch` / `Finally` 在同样情况下仍以 `kStopped` 收口
+  （停了的执行器不再跑新层）。背景见 [async-cross-module-findings.md](async-cross-module-findings.md)；
 - 子 promise 可以是**任意 promise**：同一 `TContext` 的 then 链**直接返回**就会被 adopt（无需桥接）；
   跨上下文才需要 `CPromise::New` 桥接（本节写法）。内层链被拒绝时，拒绝码会作为本层拒绝
   沿**外层链**透传（外层后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；

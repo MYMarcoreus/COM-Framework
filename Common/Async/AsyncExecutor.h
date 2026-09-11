@@ -63,6 +63,18 @@ inline bool PostToHandle(const std::shared_ptr<CExecutorHandle>& pHandle, std::f
     return pHandle->m_pPool->Submit(std::move(fnTask));
 }
 
+/// @brief 当前线程是否是某执行器的工作线程（线程亲和判定）。
+///
+/// 层处理器只在「已经在本链执行器线程上」时就地内联，否则投递回本链执行器，
+/// 从而保证「每一层都跑在它所属链的执行器线程上」。
+///
+/// @param pHandle 执行器句柄。
+/// @return true 当前线程是该执行器的工作线程。
+inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
+{
+    return pHandle != nullptr && common::thread::CThreadPool::IsInPoolThread(pHandle->m_pPool.get());
+}
+
 }  // namespace detail
 
 /// @brief 异步执行器：工作线程池 + 投递入口。
@@ -99,6 +111,16 @@ class CAsyncExecutor
 
     /// @brief 线程池是否空闲（无排队任务；协程内联续接判断用）。
     bool IsIdle() const;
+
+    /// @brief 当前线程是否本执行器的工作线程（线程亲和判定）。
+    ///
+    /// 层处理器与协程续跑只在本执行器线程上就地执行，否则投递回本执行器。
+    ///
+    /// @return true 当前线程是本执行器的工作线程。
+    bool IsInExecutorThread() const
+    {
+        return detail::IsInExecutorThread(m_pHandle);
+    }
 
     /// @brief 投递无返回值任务（fire-and-forget）。
     ///

@@ -47,6 +47,11 @@ class CThreadPool
     // 待处理任务数（队列中未取出的）。
     size_t PendingCount() const;
 
+    // 当前线程是否本线程池的工作线程。
+    // 工作线程在 WorkerLoop 里给自己打 thread_local 标记；供上层做「线程亲和」判断：
+    // 已经在本池线程上就地执行（省一次入队），否则投递回本池执行。
+    static bool IsInPoolThread(const CThreadPool* pPool);
+
    private:
     // 工作线程循环。
     void WorkerLoop();

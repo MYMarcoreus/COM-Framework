@@ -5,6 +5,27 @@
 namespace common {
 namespace thread {
 
+namespace {
+
+/// @brief 当前线程所属的线程池（仅工作线程内有效，其它线程为 nullptr）。
+thread_local const CThreadPool* tl_pCurrentPool = nullptr;
+
+/// @brief 工作线程作用域标记（进入设、退出清）——线程亲和的判定基础。
+struct CWorkerPoolScope
+{
+    explicit CWorkerPoolScope(const CThreadPool* pPool)
+    {
+        tl_pCurrentPool = pPool;
+    }
+
+    ~CWorkerPoolScope()
+    {
+        tl_pCurrentPool = nullptr;
+    }
+};
+
+}  // namespace
+
 /// @brief 创建线程池。
 ///
 /// @param nThreadCount 工作线程数量。
@@ -164,9 +185,19 @@ size_t CThreadPool::PendingCount() const
     return static_cast<size_t>(m_nPending.load(std::memory_order_relaxed));
 }
 
+/// @brief 当前线程是否本线程池的工作线程。
+///
+/// @param pPool 线程池指针（可为空）。
+/// @return true 当前线程是本池工作线程。
+bool CThreadPool::IsInPoolThread(const CThreadPool* pPool)
+{
+    return pPool != nullptr && tl_pCurrentPool == pPool;
+}
+
 /// @brief 工作线程循环。
 void CThreadPool::WorkerLoop()
 {
+    CWorkerPoolScope poolScope(this);  // 标记本线程归属（线程亲和判定用）。
     while (true)
     {
         CTask fnTask;

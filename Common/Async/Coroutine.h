@@ -216,11 +216,12 @@ class CCoroutine
             {
                 MarkTerminated(result);  // 被等待的 promise 被拒绝 → 协程终止（码透传）。
             }
-            ResumeInline();  // 负载感知内联 / 投递。
+            ResumeInline();  // 线程亲和 + 负载感知内联 / 投递。
         });
         if (!bOk)
         {
-            Terminate(CPromiseResult::Reject(kStopped));  // 无法注册（无效 promise / 执行器不可用）。
+            // 防御：OnSettled 已保证送达（仅无效 promise 返回 false），正常路径不会走到这里。
+            Terminate(CPromiseResult::Reject(kStopped));
         }
     }
 
@@ -337,9 +338,10 @@ class CCoroutine
         }
     }
 
-    /// @brief 内联续接（负载感知）：await 回调已运行在工作线程上，线程池无积压
-    ///        时直接在该线程继续执行协程体，省去一次入队 + 唤醒；有积压则投递，
-    ///        保持任务级并行度。
+    /// @brief 内联续接（线程亲和 + 负载感知）：await 回调已运行在工作线程上，
+    ///        只有当前线程就是本协程自己的执行器线程、且线程池无积压时才直接继续执行
+    ///        协程体（省去一次入队 + 唤醒）；跨执行器（典型：等别的模块的 promise）或有
+    ///        积压则投递 —— 保证协程体始终跑在自己的执行器线程上。
     ///
     /// 与 promise 的级联共用线程局部深度计数，限制连续内联层数防爆栈。
     void ResumeInline()
@@ -349,7 +351,7 @@ class CCoroutine
             Terminate(CPromiseResult::Reject(kStopped));
             return;
         }
-        if (m_pExec->IsIdle() && detail::InlineDepth() < detail::kMaxInlineDepth)
+        if (m_pExec->IsInExecutorThread() && m_pExec->IsIdle() && detail::InlineDepth() < detail::kMaxInlineDepth)
         {
             ++detail::InlineDepth();
             Resume();
@@ -357,7 +359,7 @@ class CCoroutine
             return;
         }
 
-        PostResume();  // 有积压 / 深度超限：投递，保并行度 / 防爆栈。
+        PostResume();  // 跨执行器 / 有积压 / 深度超限：投递，回本执行器线程 / 保并行度 / 防爆栈。
     }
 
     /// @brief 在当前线程继续执行协程体（状态机从恢复点继续）。

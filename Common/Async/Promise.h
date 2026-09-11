@@ -47,7 +47,8 @@
 //  - catch 层可恢复：返回 Resolve() 即吞掉拒绝，链从本层之后继续；
 //  - finally 层只做收尾（回滚 / 清理 / 日志），**忽略返回值、原样透传上层结果**；
 //  - 层内异常 → 本层被拒绝（kException），不向调用方抛出；
-//  - 首层投递一次，后续层在同一工作线程级联执行（超过 kMaxInlineDepth 改投递防爆栈）。
+//  - 首层投递一次；后续层带「线程亲和」：已在本链执行器线程上就地级联（超过 kMaxInlineDepth
+//    改投递防爆栈），否则（跨执行器 / 跨模块）投递回本链执行器 —— 保证每层都在本链执行器线程上。
 //
 // 嵌套用法（异步里再起异步）：
 //   ① 协程内 await（推荐，非阻塞挂起）：
@@ -110,6 +111,18 @@ class CCoroutine;
 
 namespace detail {
 
+/// @brief 级联内联深度（线程局部）：链逐层级联时最多连续内联多少层。
+///
+/// 超限则改为投递执行，避免超长链（数千层）在递归中爆栈。
+const int kMaxInlineDepth = 64;
+
+/// @brief 当前线程的级联内联深度。
+inline int& InlineDepth()
+{
+    static thread_local int s_nInlineDepth = 0;
+    return s_nInlineDepth;
+}
+
 /// @brief promise 状态（对应 JS 中「每个 then 返回的新 promise」的状态）。
 ///
 /// 一道 promise 链由若干状态串成，一个状态对应一层。状态是单向开关：
@@ -128,7 +141,8 @@ class CPromiseState
     /// @brief settle 本状态并触发处理器（锁外调用处理器，防重入死锁）。
     ///
     /// 仅首次生效；先唤醒等待者，再按注册顺序在锁外调用所有处理器。
-    /// 处理器在调用线程上执行 —— 逐层级联就是在该路径上完成的。
+    /// 处理器在调用方（结算）线程上被触发；若它是「层处理器」，再由 `RunHandler`
+    /// 按线程亲和决定就地执行（已在本链执行器线程）还是投递回本链执行器。
     ///
     /// @param result 本层最终结果（已兑现 / 已拒绝）。
     void Settle(const CPromiseResult& result)
@@ -158,6 +172,9 @@ class CPromiseState
     }
 
     /// @brief 登记处理器；本状态已 settled 时投递到执行器异步触发（不阻塞调用方）。
+    ///
+    /// 层处理器（then / catch / finally / thenPromise）用本接口：执行器不可用时返回 false，
+    /// 由调用方以 `kStopped` 收口本层（“停了的执行器不再跑新层”）。
     ///
     /// @param pHandle 执行器句柄（已 settled 时投递用）。
     /// @param fnHandler 处理器（按值接收，登记时移动存储避免拷贝）。
@@ -191,6 +208,54 @@ class CPromiseState
             return false;  // 已 settled 但执行器不可用。
         }
         return true;
+    }
+
+    /// @brief 登记「保证送达」的 settled 通知：即使执行器不可用也一定执行。
+    ///
+    /// 与 `AddHandler` 的差别只在兜底：执行器不可用（对方模块已停止 / 拒绝投递）时
+    /// **在调用线程上就地执行**，绝不丢弃处理器。
+    ///
+    /// 用途：`OnSettled` —— 通知是「观测/收尾」语义，调用方不该为了“对方模块已停止”
+    /// 再写一遍兜底代码；否则手写桥接漏检返回值就会让本层永久 pending、上层 `Await()` 死等。
+    ///
+    /// 就地执行不会递归加深：通知里通常只是 settle 本层，而该层后续处理器走 `RunHandler`，
+    /// 执行器不可用时以 `kStopped` 收口，链会立刻结束。
+    ///
+    /// @param pHandle 执行器句柄（可用时投递，保证不阻塞调用方）。
+    /// @param fnHandler 通知处理器（按值接收）。
+    void AddSettledHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler)
+    {
+        bool bFireNow = false;
+        CPromiseResult result;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (!m_bSettled.load(std::memory_order_relaxed))
+            {
+                m_vecHandlers.push_back(std::move(fnHandler));
+                return;  // pending：已登记，settle 时触发（在结算线程上）。
+            }
+            bFireNow = true;
+            result = m_result;
+        }
+
+        if (!bFireNow || !fnHandler)
+        {
+            return;
+        }
+
+        // 已 settled：优先投递到执行器（不阻塞调用方）；不可用则就地送达。
+        std::function<void()> fnRun = [fnHandler, result]()
+        {
+            fnHandler(result);
+        };
+        if (PostToHandle(pHandle, fnRun))  // 注意：按值传参（拷贝）——失败时 fnRun 仍可用。
+        {
+            return;
+        }
+
+        ++InlineDepth();  // 与其它内联路径共用深度计数（防极端嵌套）。
+        fnRun();
+        --InlineDepth();
     }
 
     /// @brief 阻塞等待本状态 settle（先短自旋，超时再阻塞等待）。
@@ -309,18 +374,6 @@ enum HandlerMode
     kModeFinally = 2  ///< finally(onFinally)：无论兑现或拒绝都执行；忽略返回值，透传上层结果。
 };
 
-/// @brief 级联内联深度（线程局部）：链逐层级联时最多连续内联多少层。
-///
-/// 超限则改为投递执行，避免超长链（数千层）在递归中爆栈。
-const int kMaxInlineDepth = 64;
-
-/// @brief 当前线程的级联内联深度。
-inline int& InlineDepth()
-{
-    static thread_local int s_nInlineDepth = 0;
-    return s_nInlineDepth;
-}
-
 /// @brief 构造「执行本层处理器」的任务体（捕获核心与状态保活）。
 ///
 /// @param pCore promise 共享核心（上下文 + 执行器句柄）。
@@ -348,13 +401,15 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<CPromiseCore<TCont
         {
             result = CPromiseResult::Reject(kException);  // 处理器抛异常 → 拒绝（finally 抛异常同样覆盖）。
         }
-        pState->Settle(result);  // settle 本层 → 触发下一层（同线程级联）。
+        pState->Settle(result);  // settle 本层 → 触发下一层（同执行器内联 / 跨执行器投递）。
     };
 }
 
-/// @brief 级联执行下一层（上一层刚 settle，当前已在工作线程上）。
+/// @brief 级联执行下一层（上一层刚 settle，当前在主调方线程上）。
 ///
-/// 直接执行以省去一次入队 + 唤醒；内联深度超限时改为投递（防爆栈）。
+/// 线程亲和：**只有当前线程已经是本链执行器的线程**时才就地内联（省一次入队 + 保序）；
+/// 否则一律投递回本链执行器（典型场景：被调模块 settle 本链的层，本层就回到本模块线程执行）。
+/// 内联深度也只在同一执行器线程内累加，跨模块不会涨栈。
 ///
 /// @param pCore promise 共享核心。
 /// @param pState 本层状态。
@@ -366,7 +421,7 @@ void RunHandler(const std::shared_ptr<CPromiseCore<TContext> >& pCore, const std
                 const ThenHandler<TContext>& fnHandler, const CPromiseResult& upResult, int nMode)
 {
     std::function<void()> fnRun = MakeHandlerRunner(pCore, pState, fnHandler, upResult, nMode);
-    if (InlineDepth() < kMaxInlineDepth)
+    if (IsInExecutorThread(pCore->Handle()) && InlineDepth() < kMaxInlineDepth)
     {
         ++InlineDepth();
         fnRun();
@@ -537,7 +592,8 @@ class CPromise
     /// @brief then：上一层**兑现**时执行 fnHandler，被拒绝时直接透传（失败即停）。
     ///
     /// 尚未起链时，本调用即首层（起点结果视为已兑现）。上游未 settle 时登记
-    /// （settle 时在本线程级联执行）；已 settle 时投递到执行器异步触发。
+    /// （settle 时由 `RunHandler` 按线程亲和执行：同执行器内联 / 跨执行器投递回本链执行器）；
+    /// 已 settle 时投递到执行器异步触发。
     /// 同一层多次 Then 即分叉，各自独立延续。
     ///
     /// @param fnHandler 本层处理器（固定签名）。
@@ -648,22 +704,27 @@ class CPromise
     ///
     /// 不产生新层、不改变结果；等价「观察最终结果」。
     ///
+    /// **保证送达**：即使本层的执行器已停止 / 拒绝投递（典型：被调模块已 Stop），
+    /// 通知也会执行（改在调用线程上就地执行）。所以调用方**不需要**检查返回值；
+    /// 手写桥接里漏检返回值也不会让本层永久 pending（框架保证不会因此死等）。
+    ///
     /// @param fnSettled 收尾通知（入参为本层最终结果）。
-    /// @return true 已登记或已投递；false 本层已 settled 但执行器不可用（通知不执行）。
+    /// @return true 已登记 / 已投递 / 已就地送达；false 仅当本 promise 无效（未绑定执行器）。
     bool OnSettled(const SettledHandler& fnSettled) const
     {
         if (m_pCore == nullptr || m_pState == nullptr)
         {
-            return false;  // 无效 promise：无法注册。
+            return false;  // 无效 promise：无法注册（唯一返回 false 的情形）。
         }
 
-        return m_pState->AddHandler(m_pCore->Handle(), [fnSettled](const CPromiseResult& result)
+        m_pState->AddSettledHandler(m_pCore->Handle(), [fnSettled](const CPromiseResult& result)
         {
             if (fnSettled)
             {
                 fnSettled(result);
             }
         });
+        return true;
     }
 
     /// @brief await：阻塞等待本层结果（JS await 的阻塞版，不抛异常）。
@@ -748,7 +809,8 @@ class CPromise
         });
         if (!bOk)
         {
-            pState->Settle(CPromiseResult::Reject(kStopped));  // 子 promise 已 settled 但执行器不可用。
+            // 防御：OnSettled 已保证送达（仅无效 promise 返回 false），正常路径不会走到这里。
+            pState->Settle(CPromiseResult::Reject(kStopped));
         }
     }
 

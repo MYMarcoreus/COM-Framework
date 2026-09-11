@@ -111,26 +111,29 @@ class CPromiseState
 要点：
 
 - **首层必须投递**（`PostHandler`）：起 promise 的线程不执行任何业务代码；
-- **后续层在同一线程级联**（`RunHandler` 内联）：一条链只花一次入队 + 唤醒，而不是每层一次；
+- **后续层级联**（`RunHandler`）：若当前线程已是本链执行器的线程 → 就地内联（省一次入队）；
+  **否则（跨执行器，比如被调模块 settle 本链）投递回本链执行器** —— 见「线程亲和」；
 - **then 失败即停不调用处理器**：续接里 `upResult.IsRejected()` 直接 `Settle(upResult)`；
 - **catch / finally 走同一续接，但分派不同**（见下节）。
 
-### 级联内联与深度限制
+### 级联内联与深度限制（含线程亲和）
 
 ```cpp
-std::function<void()> fnRun = MakeHandlerRunner(...);   // 执行处理器 + settle 本层
-if (InlineDepth() < kMaxInlineDepth)   // 线程局部深度计数（64）
+auto fnRun = MakeHandlerRunner(...);                       // 执行处理器 + settle 本层
+if (IsInExecutorThread(pCore->Handle())                    // ① 线程亲和：必须在本链执行器线程上
+    && InlineDepth() < kMaxInlineDepth)                    // ② 深度未超限（线程局部计数 64）
 {
-    ++InlineDepth(); fnRun(); --InlineDepth();          // 直接执行（省一次投递 + 唤醒）
+    ++InlineDepth(); fnRun(); --InlineDepth();              // 就地执行（省一次投递 + 唤醒）
 }
 else
 {
-    PostToHandle(pCore->Handle(), std::move(fnRun));    // 超限改投递，防递归爆栈
+    PostToHandle(pCore->Handle(), std::move(fnRun));        // 跨执行器 / 深度超限 → 投递回本链执行器
 }
 ```
 
 `InlineDepth()` 是线程局部计数器，链的级联与协程的内联续接**共用**它，
-因此「promise + 协程」混合递归也被同一上限保护。
+因此「promise + 协程」混合递归也被同一上限保护；加上①后，深度只在**同一执行器线程内**累加，
+跨模块不会涨栈。
 
 ## 6. 处理器模式分派（then / catch / finally）
 
@@ -188,10 +191,16 @@ result = (nMode == kModeFinally) ? upResult : own;   // finally 不改变结果
 
 | 注册时刻 | 路径 | 执行线程 |
 | --- | --- | --- |
-| 上一层**未 settled** | 登记到 `m_vecHandlers`，settle 时被调用 | settle 所在的工作线程（级联内联） |
-| 上一层**已 settled** | `AddHandler` 检测到 `m_bSettled` → 投递回调 | 执行器工作线程 |
+| 上一层**未 settled** | 登记到 `m_vecHandlers`，settle 时被调用 | 由「线程亲和」决定：在本链执行器线程上就地级联，否则投递回本链执行器 |
+| 上一层**已 settled** | `AddHandler` 检测到 `m_bSettled` → 投递回调 | 本链执行器的工作线程 |
 
-两者都不阻塞调用方，且都保证「本层只执行一次」。差别只在执行时机与落点线程。
+两者都不阻塞调用方，且都保证「本层只执行一次」；自 2026-09-11 的线程亲和（改进 A）起，
+**两者的落点线程一致：都是本链执行器线程**（差别只剩执行时机：立即 vs 入队）。
+
+`OnSettled` 走的是另一条路径（`AddSettledHandler`）：它是「通知」不是「层」，因此带**送达保证** ——
+执行器可用时投递（同上表第二种），执行器不可用时（被调模块已停 / 拒绝投递）**在调用线程上就地执行**，
+绝不丢弃（否则手写桥接漏检返回值就会让本层永久 pending、上层 `Await()` 死等）。
+层处理器仍保持 `AddHandler` 的语义：执行器不可用 → 返回 `false` → 框架以 `kStopped` 收口本层。
 
 ## 8. 线程模型与不变量
 
@@ -200,13 +209,41 @@ result = (nMode == kModeFinally) ? upResult : own;   // finally 不改变结果
 | 一条链的层不并发 | 状态只在 `Settle` 时按序触发一次处理器，级联在同一线程推进 |
 | 同一状态只 settle 一次 | `Settle` 锁内 `m_bSettled` 判定，后续调用直接返回 |
 | 处理器不在起链线程执行 | 首层固定走 `PostHandler` |
+| **每层都在本链执行器线程上** | 线程亲和：`RunHandler` 先判 `IsInExecutorThread`，不满足就投递回本链执行器 |
+| **跨模块返回的层回本模块** | 同上（被调模块 settle 本链时，本链层不在被调模块线程跑） |
 | 回调不持锁 | `Settle` 先换出处理器列表，再锁外调用 |
 | 无悬垂 | 句柄 / 状态 / 上下文均为 `shared_ptr`，被续接与句柄共同持有 |
-| 深链不爆栈 | `kMaxInlineDepth` 上限 + 改投递 |
+| 深链不爆栈 | `kMaxInlineDepth` 上限 + 改投递（且只在同一执行器线程内累加） |
+
+### 8.1 线程亲和（改进 A，2026-09-11）
+
+```cpp
+// Common/Thread/ThreadPool：worker 线程打 thread_local 标记
+thread_local const CThreadPool* tl_pCurrentPool = nullptr;   // WorkerLoop 进入设、退出清
+static bool CThreadPool::IsInPoolThread(const CThreadPool* pPool);
+
+// Common/Async/AsyncExecutor.h（detail）
+inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
+{
+    return pHandle != nullptr && CThreadPool::IsInPoolThread(pHandle->m_pPool.get());
+}
+
+// Common/Async/Promise.h：层处理器（detail::RunHandler）
+// Common/Async/Coroutine.h：协程续跑（ResumeInline）
+if (IsInExecutorThread(...)) { 就地执行 } else { 投递回本链执行器 }
+```
+
+- **保证**：每一层、以及协程的每一次续跑，都跑在「它所属链的执行器线程」上；跨模块调用
+  （被调模块 settle 本链的层）也会被拉回本模块线程。
+- **代价**：每次跨执行器的续接多一次入队 + 唤醒（微秒级）；同执行器内仍完全内联，不受影响。
+- **边界**：`OnSettled` 是「通知」不是「层」→ 仍在**结算线程**上触发（跨模块时=被调模块线程）；
+  `New(...)` 的 executor 是「发起」语义，仍在调用线程上同步执行；`Await()` 仍占住调用线程。
+- **验收**：`Tests/test_async_affinity.cpp`（5 例）+ `Tests/test_async_modules*.cpp`（当初发现问题的
+  极限用例，现在断言 200 条并发链 100% 落回本模块线程）。
 
 分叉（同一状态注册多个 `Then`）时各支线是独立状态：由上游 `Settle` 依次触发，若走
-「已 settled 再注册」路径则各自投递 → 可能在**不同线程并行**，各自持有同一上下文，
-业务需自行保证上下文字段访问安全。
+「已 settled 再注册」路径则各自投递 → 各支线依次在同一执行器线程上执行，
+但仍共享同一上下文，业务需自行保证上下文字段访问安全。
 
 ## 9. 源码位置调试（ASYNC_LOC）
 

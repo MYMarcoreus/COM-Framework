@@ -90,7 +90,7 @@ void AwaitWait(int nLine, const CPromise<TContext>& promise)
     bool bOk = promise.OnSettled([spSelf, this](CPromiseResult r)
     {
         if (r.IsRejected()) { MarkTerminated(r); }      // 被等待的 promise 被拒绝 → 标记终止
-        ResumeInline();                                 // 负载感知：内联或投递
+        ResumeInline();                                 // 线程亲和 + 负载感知：内联或投递
     });
     if (!bOk) { Terminate(CPromiseResult::Reject(kStopped)); }   // 注册失败：同步终止并 settle
 }
@@ -100,18 +100,23 @@ void AwaitWait(int nLine, const CPromise<TContext>& promise)
 - promise settled（可能很快，也可能是已 settled 的 promise 走投递）→ 回调恢复协程；
 - 恢复时若 `IsTerminated()`，宏在恢复点统一 `CompleteTerminated()` 结束。
 
-### ResumeInline：负载感知的内联续接
+### ResumeInline：线程亲和 + 负载感知的内联续接
 
 ```cpp
-if (m_pExec->IsIdle() && detail::InlineDepth() < detail::kMaxInlineDepth)
+if (m_pExec->IsInExecutorThread()                            // ① 线程亲和：必须在本协程自己的执行器线程上
+    && m_pExec->IsIdle() && detail::InlineDepth() < detail::kMaxInlineDepth)   // ② 无积压 + 深度未超限
 {
     ++detail::InlineDepth();
-    Resume();                 // 当前线程直接继续（省一次入队 + 唤醒）
+    Resume();                 // 在当前线程直接继续（省一次入队 + 唤醒）
     --detail::InlineDepth();
     return;
 }
-PostResume();                 // 队列有积压 / 深度超限：投递，保并行度 / 防爆栈
+PostResume();                 // 跨执行器 / 队列有积压 / 深度超限：投递，回本执行器 / 保并行度 / 防爆栈
 ```
+
+① 是 2026-09-11 的线程亲和（改进 A）：`CO_AWAIT` 等别的模块的 promise 时，回调在被调模块线程上跑，
+此时若直接 `Resume()`，协程体就跑到别人模块的线程上了；加①后协程体**始终在自己的执行器线程**上续跑
+（验收：`Tests/test_async_affinity.cpp` 的 `Affinity_CoroutineResumesOnOwnExecutor`）。
 
 内联深度计数与 **promise 的级联共用**（`detail::InlineDepth()`），因此 promise 与协程
 互相嵌套时仍受同一上限（64）保护。
