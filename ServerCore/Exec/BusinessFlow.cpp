@@ -19,11 +19,12 @@ bool CBusinessFlow::SubmitTask(CModuleScheduler* pScheduler, CModuleScheduler::E
     // 按值捕获流程自引用，保证子任务跨线程执行期间流程存活。
     std::shared_ptr<CBusinessFlow> spSelf = shared_from_this();
     BeginTask();
-    bool bOk = pScheduler->Submit(eKind, [spSelf, fnTask]()
-    {
-        fnTask();  // 子任务业务逻辑（异常由调度器包装捕获）
-        spSelf->EndTask();
-    });
+    bool bOk = pScheduler->Submit(eKind,
+                                  [spSelf, fnTask]()
+                                  {
+                                      fnTask();  // 子任务业务逻辑（异常由调度器包装捕获）
+                                      spSelf->EndTask();
+                                  });
     if (!bOk)
     {
         EndTask();  // 投递失败：立即归还计数

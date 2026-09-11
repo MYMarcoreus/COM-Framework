@@ -59,7 +59,7 @@ struct StoreItemInfo
 /// @endcode
 class CFileStore
 {
-   public:
+public:
     CFileStore();
 
     // 设置短码长度（默认 6；构造函数调用）。
@@ -103,7 +103,7 @@ class CFileStore
     // 清空全部租户的数据。
     void Clear();
 
-   private:
+private:
     // 数据项（内部表示）。
     struct Item
     {

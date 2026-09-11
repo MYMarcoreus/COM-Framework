@@ -14,7 +14,7 @@ namespace sc {
 /// 发布者与订阅者互不依赖，仅通过事件类型耦合。
 SC_INTERFACE(IEventDispatcher, "sc::IEventDispatcher", "3da6cfa3-000a-49cd-9510-0df2984983e0")
 {
-   public:
+public:
     virtual ~IEventDispatcher()
     {}
 

@@ -58,10 +58,11 @@ bool CTcpClient::Send(const char* pData, size_t nLen)
         return false;
     }
     std::string strPayload(pData, nLen);
-    asio::post(m_io, [this, strPayload]()
-    {
-        AppendWrite(strPayload);
-    });
+    asio::post(m_io,
+               [this, strPayload]()
+               {
+                   AppendWrite(strPayload);
+               });
     return true;
 }
 
@@ -74,10 +75,11 @@ void CTcpClient::Close()
     {
         return;
     }
-    asio::post(m_io, [this]()
-    {
-        CloseOnIoThread();
-    });
+    asio::post(m_io,
+               [this]()
+               {
+                   CloseOnIoThread();
+               });
 }
 
 /// @brief 停止客户端。
@@ -89,10 +91,11 @@ void CTcpClient::Stop()
     if (m_bRunning.load())
     {
         m_bRunning.store(false);
-        asio::post(m_io, [this]()
-        {
-            CloseOnIoThread();
-        });
+        asio::post(m_io,
+                   [this]()
+                   {
+                       CloseOnIoThread();
+                   });
     }
     if (m_thread.joinable())
     {
@@ -127,23 +130,24 @@ void CTcpClient::StartConnect()
 {
     m_resolver.async_resolve(m_strHost, std::to_string(m_nPort),
                              [this](const asio::error_code& ec, asio::ip::tcp::resolver::results_type results)
-    {
-        if (ec)
-        {
-            // 解析失败：通知连接失败
-            if (m_fnConnect)
-            {
-                m_fnConnect(false, "");
-            }
-            NotifyClose();
-            return;
-        }
-        asio::async_connect(m_socket, results,
-                            [this](const asio::error_code& cerr, const asio::ip::tcp::endpoint& endpoint)
-        {
-            HandleConnect(cerr, endpoint);
-        });
-    });
+                             {
+                                 if (ec)
+                                 {
+                                     // 解析失败：通知连接失败
+                                     if (m_fnConnect)
+                                     {
+                                         m_fnConnect(false, "");
+                                     }
+                                     NotifyClose();
+                                     return;
+                                 }
+                                 asio::async_connect(
+                                     m_socket, results,
+                                     [this](const asio::error_code& cerr, const asio::ip::tcp::endpoint& endpoint)
+                                     {
+                                         HandleConnect(cerr, endpoint);
+                                     });
+                             });
 }
 
 /// @brief 处理连接完成。
@@ -170,10 +174,11 @@ void CTcpClient::HandleConnect(const asio::error_code& ec, const asio::ip::tcp::
 /// @brief 发起一次异步读。
 void CTcpClient::DoRead()
 {
-    m_socket.async_read_some(asio::buffer(m_vecReadBuffer), [this](const asio::error_code& ec, size_t bytes)
-    {
-        HandleRead(ec, bytes);
-    });
+    m_socket.async_read_some(asio::buffer(m_vecReadBuffer),
+                             [this](const asio::error_code& ec, size_t bytes)
+                             {
+                                 HandleRead(ec, bytes);
+                             });
 }
 
 /// @brief 处理读完成。
@@ -218,10 +223,11 @@ void CTcpClient::AppendWrite(const std::string& strData)
 /// @brief 发起一次异步写。
 void CTcpClient::DoWrite()
 {
-    m_socket.async_write_some(asio::buffer(m_strPendingOutput), [this](const asio::error_code& ec, size_t nBytes)
-    {
-        HandleWrite(ec, nBytes);
-    });
+    m_socket.async_write_some(asio::buffer(m_strPendingOutput),
+                              [this](const asio::error_code& ec, size_t nBytes)
+                              {
+                                  HandleWrite(ec, nBytes);
+                              });
 }
 
 /// @brief 处理写完成。

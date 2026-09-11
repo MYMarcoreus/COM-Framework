@@ -12,7 +12,7 @@ namespace network {
 /// 基于 std::vector 的读写缓冲区，支持追加、读取、回收与扩容。
 class CBuffer
 {
-   public:
+public:
     // 默认初始容量。
     static const size_t kInitialSize = 1024;
 
@@ -48,7 +48,7 @@ class CBuffer
     // 当前容量。
     size_t Capacity() const;
 
-   private:
+private:
     // 确保可写空间不小于 len。
     void EnsureWritable(size_t len);
 

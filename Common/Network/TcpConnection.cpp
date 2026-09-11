@@ -82,10 +82,11 @@ void CTcpConnection::Send(const char* pData, size_t nLen)
     }
     std::string strPayload(pData, nLen);
     Ptr self = shared_from_this();
-    asio::post(m_io, [self, strPayload]()
-    {
-        self->AppendWrite(strPayload);
-    });
+    asio::post(m_io,
+               [self, strPayload]()
+               {
+                   self->AppendWrite(strPayload);
+               });
 }
 
 /// @brief 关闭连接。
@@ -98,10 +99,11 @@ void CTcpConnection::Close()
         return;
     }
     Ptr self = shared_from_this();
-    asio::post(m_io, [self]()
-    {
-        self->CloseOnIoThread();
-    });
+    asio::post(m_io,
+               [self]()
+               {
+                   self->CloseOnIoThread();
+               });
 }
 
 /// @brief 是否已关闭。
@@ -118,10 +120,11 @@ void CTcpConnection::DoRead()
         return;
     }
     Ptr self = shared_from_this();
-    m_socket.async_read_some(asio::buffer(m_vecReadBuffer), [self](const asio::error_code& ec, size_t nBytes)
-    {
-        self->HandleRead(ec, nBytes);
-    });
+    m_socket.async_read_some(asio::buffer(m_vecReadBuffer),
+                             [self](const asio::error_code& ec, size_t nBytes)
+                             {
+                                 self->HandleRead(ec, nBytes);
+                             });
 }
 
 /// @brief 处理读完成。
@@ -185,10 +188,11 @@ void CTcpConnection::DoWrite()
 {
     m_bWriting.store(true);
     Ptr self = shared_from_this();
-    m_socket.async_write_some(asio::buffer(m_strPendingOutput), [self](const asio::error_code& ec, size_t nBytes)
-    {
-        self->HandleWrite(ec, nBytes);
-    });
+    m_socket.async_write_some(asio::buffer(m_strPendingOutput),
+                              [self](const asio::error_code& ec, size_t nBytes)
+                              {
+                                  self->HandleWrite(ec, nBytes);
+                              });
 }
 
 /// @brief 处理写完成。

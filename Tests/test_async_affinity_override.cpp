@@ -41,7 +41,7 @@ struct COverrideCalleeCtx
 /// @brief 被调模块：自持 1 线程执行器。
 class COverrideCalleeModule
 {
-   public:
+public:
     COverrideCalleeModule() : m_exec(1)
     {
         m_exec.Start();
@@ -57,7 +57,7 @@ class COverrideCalleeModule
         return m_exec.NewPromise(spCtx, &StepQuery, ASYNC_LOC);
     }
 
-   private:
+private:
     /// 层处理器：记录线程与次数。
     static no::CPromiseResult StepQuery(no::CPromiseResult /*upResult*/,
                                         const std::shared_ptr<COverrideCalleeCtx>& spCtx)
@@ -94,7 +94,7 @@ struct COverrideOrderCtx
 /// @brief 调用方模块：主执行器 + 旁路执行器。
 class COverrideOrderModule
 {
-   public:
+public:
     COverrideOrderModule() : m_execMain(1), m_execSide(1)
     {
         m_execMain.Start();
@@ -148,7 +148,7 @@ class COverrideOrderModule
             .Catch(&StepCatch, ASYNC_LOC);
     }
 
-   private:
+private:
     /// 跨模块桥接层的工厂（本层属于本模块；被调模块在自己执行器上跑）。
     no::CPromise<COverrideOrderCtx>::PromiseFactory MakeCallFactory(
         const std::shared_ptr<COverrideCalleeModule>& spCallee)
@@ -230,16 +230,17 @@ class COverrideOrderModule
             auto spCalleeCtx = std::make_shared<COverrideCalleeCtx>();
             spCalleeCtx->nDelayMs = spCtx->nCalleeDelayMs;
             no::CPromise<COverrideCalleeCtx> promiseCallee = spCallee->QueryAsync(spCalleeCtx);
-            promiseCallee.OnSettled([spCtx, spCalleeCtx, fnResolve, fnReject](no::CPromiseResult result)
-            {
-                if (result.IsRejected())
+            promiseCallee.OnSettled(
+                [spCtx, spCalleeCtx, fnResolve, fnReject](no::CPromiseResult result)
                 {
-                    fnReject(result.Code());
-                    return;
-                }
-                spCtx->strTrace += "B1;";
-                fnResolve();
-            });
+                    if (result.IsRejected())
+                    {
+                        fnReject(result.Code());
+                        return;
+                    }
+                    spCtx->strTrace += "B1;";
+                    fnResolve();
+                });
         };
         return no::CPromise<COverrideOrderCtx>::New(m_execMain, spCtx, fnExecutor, ASYNC_LOC);
     }

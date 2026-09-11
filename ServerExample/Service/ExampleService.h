@@ -39,7 +39,7 @@ struct ConnContext
 ///  - 指标上报（IMetrics）。
 class CExampleService : public sc::CModule, public sc::INetworkHandler
 {
-   public:
+public:
     CExampleService();
 
     virtual ~CExampleService();
@@ -64,11 +64,11 @@ class CExampleService : public sc::CModule, public sc::INetworkHandler
     // 状态报告。
     std::string GetStatus() const override;
 
-   protected:
+protected:
     // 接口查询实现（接口映射宏生成，暴露 INetworkHandler）。
     SC_DECLARE_INTERFACE_MAP();
 
-   private:
+private:
     // 处理 PING 命令（异步返回 PONG）。
     void HandlePing(sc::ConnectionId id);
 

@@ -15,7 +15,7 @@ namespace sc {
 ///  - 自定义接口（无 InterfaceIdOf 特化）仍可用显式 iid 版本 Resolve<T>(iid)。
 class CResolveContext
 {
-   public:
+public:
     explicit CResolveContext(CModuleManager& manager) : m_manager(manager)
     {}
 
@@ -33,7 +33,7 @@ class CResolveContext
         return m_manager.Resolve<T>(iid);
     }
 
-   private:
+private:
     CModuleManager& m_manager;
 };
 

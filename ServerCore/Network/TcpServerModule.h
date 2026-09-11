@@ -20,7 +20,7 @@ namespace sc {
 /// 模块名默认 "network"，同一应用需要多个 TCP 服务器时可自定义名称。
 class CTcpServerModule : public CModule
 {
-   public:
+public:
     // 创建 TCP 服务器装配模块。
     // @param nPort   监听端口。
     // @param strName 模块名（默认 "network"）。
@@ -49,7 +49,7 @@ class CTcpServerModule : public CModule
     // 网络接口（借用指针；Initialize 后可用）。
     INetwork* Network() const;
 
-   private:
+private:
     std::uint16_t m_nPort;
     ScopedInterfacePtr<INetwork> m_pNetwork;
     ScopedInterfacePtr<INetworkHandler> m_pHandler;

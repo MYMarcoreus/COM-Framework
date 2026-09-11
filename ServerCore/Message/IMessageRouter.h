@@ -57,7 +57,7 @@ using MessageHandler = std::function<void(ConnectionId id, int type, const char*
 /// 与具体协议解耦（提取器属于业务层）。
 SC_INTERFACE(IMessageRouter, "sc::IMessageRouter", "8085dca6-f19e-4bb1-a52f-6c12bc85b5c9")
 {
-   public:
+public:
     virtual ~IMessageRouter()
     {}
 

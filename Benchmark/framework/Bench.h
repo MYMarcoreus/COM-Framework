@@ -61,7 +61,7 @@ struct Result
 // ====================================================================
 class Registry
 {
-   public:
+public:
     static Registry& Instance()
     {
         static Registry s_instance;
@@ -83,7 +83,7 @@ class Registry
         m_results.clear();
     }
 
-   private:
+private:
     Registry()
     {}
     std::vector<Result> m_results;

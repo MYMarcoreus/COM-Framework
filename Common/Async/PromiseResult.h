@@ -63,7 +63,7 @@ const int kBusinessBase = 100;
 /// @endcode
 class CPromiseResult
 {
-   public:
+public:
     /// @brief 默认构造：已兑现。
     CPromiseResult() : m_nCode(kFulfilled)
     {}
@@ -122,7 +122,7 @@ class CPromiseResult
         return m_nCode != other.m_nCode;
     }
 
-   private:
+private:
     int m_nCode;  ///< 错误码（kFulfilled = 已兑现）。
 };
 

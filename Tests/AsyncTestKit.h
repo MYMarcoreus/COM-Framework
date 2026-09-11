@@ -222,7 +222,7 @@ struct CCalleeCtx
 /// @brief 被调模块：自持 1 线程执行器；两步都在自己的执行器上跑；可显式 Stop。
 class CCalleeModule
 {
-   public:
+public:
     CCalleeModule() : m_exec(1)
     {
         m_exec.Start();
@@ -244,7 +244,7 @@ class CCalleeModule
         return m_exec.NewPromise(spCtx, &StepConnect, ASYNC_LOC).Then(&StepRead, ASYNC_LOC);
     }
 
-   private:
+private:
     /// 第一步：模拟连库。
     static no::CPromiseResult StepConnect(no::CPromiseResult /*upResult*/, const std::shared_ptr<CCalleeCtx>& spCtx)
     {

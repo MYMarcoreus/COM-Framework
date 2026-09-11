@@ -30,7 +30,7 @@ namespace serverexample {
 /// 调用方不需要等待（只登记回调），因此双方互相不占线程。
 class CExampleDbModule : public sc::CModule, public IUserTable
 {
-   public:
+public:
     explicit CExampleDbModule(int nLatencyMs);
 
     virtual ~CExampleDbModule();
@@ -50,11 +50,11 @@ class CExampleDbModule : public sc::CModule, public IUserTable
     // 状态报告（当前表行数）。
     std::string GetStatus() const override;
 
-   protected:
+protected:
     // 接口查询实现（暴露自定义接口 IUserTable）。
     SC_DECLARE_INTERFACE_MAP();
 
-   private:
+private:
     // 处理器类型（then / catch / finally 的回调，固定签名）。
     using Handler = common::async::CPromise<CUserTableOp>::ThenHandler;
     // 成员函数形式的处理器（可访问表数据与互斥锁）。

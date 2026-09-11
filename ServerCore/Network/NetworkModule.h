@@ -31,7 +31,7 @@ namespace sc {
 /// network.closed / network.msgs。
 class CNetworkModule : public CModule, public INetwork
 {
-   public:
+public:
     CNetworkModule();
 
     virtual ~CNetworkModule();
@@ -93,7 +93,7 @@ class CNetworkModule : public CModule, public INetwork
 
     SC_DECLARE_INTERFACE_MAP();
 
-   private:
+private:
     std::unique_ptr<common::network::CTcpServer> m_pServer;
     ScopedInterfacePtr<INetworkHandler> m_pHandler;
     ScopedInterfacePtr<IMetrics> m_pMetrics;

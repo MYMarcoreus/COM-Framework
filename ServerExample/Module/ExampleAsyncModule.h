@@ -40,7 +40,7 @@ namespace serverexample {
 /// 周期演示也由纯回调驱动（零阻塞）：定时器只负责投递一次演示任务。
 class CExampleAsyncModule : public sc::CModule, public IUserService
 {
-   public:
+public:
     explicit CExampleAsyncModule(std::int64_t nIntervalMs);
 
     virtual ~CExampleAsyncModule();
@@ -60,11 +60,11 @@ class CExampleAsyncModule : public sc::CModule, public IUserService
     // 状态报告。
     std::string GetStatus() const override;
 
-   protected:
+protected:
     // 接口查询实现（暴露自定义接口 IUserService）。
     SC_DECLARE_INTERFACE_MAP();
 
-   private:
+private:
     // ---------------- 对外异步函数（IUserService 实现） ----------------
     common::async::CPromise<CUserOpContext> QueryUserAsync(std::uint64_t nUserId) override;
     common::async::CPromise<CUserOpContext> RegisterUserAsync(const CUserRecord& recRequest) override;

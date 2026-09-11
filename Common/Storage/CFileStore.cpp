@@ -201,10 +201,11 @@ std::vector<StoreItemInfo> CFileStore::List(const std::string& strTenant) const
         vecResult.push_back(info);
     }
     // 按创建时间倒序（新的在前）。
-    std::sort(vecResult.begin(), vecResult.end(), [](const StoreItemInfo& a, const StoreItemInfo& b)
-    {
-        return a.nCreateMs > b.nCreateMs;
-    });
+    std::sort(vecResult.begin(), vecResult.end(),
+              [](const StoreItemInfo& a, const StoreItemInfo& b)
+              {
+                  return a.nCreateMs > b.nCreateMs;
+              });
     return vecResult;
 }
 
@@ -232,10 +233,11 @@ std::vector<StoreItemInfo> CFileStore::ListSince(const std::string& strTenant, s
         vecResult.push_back(info);
     }
     // 按序号升序（旧→新），便于客户端按顺序追加渲染。
-    std::sort(vecResult.begin(), vecResult.end(), [](const StoreItemInfo& a, const StoreItemInfo& b)
-    {
-        return a.nSeq < b.nSeq;
-    });
+    std::sort(vecResult.begin(), vecResult.end(),
+              [](const StoreItemInfo& a, const StoreItemInfo& b)
+              {
+                  return a.nSeq < b.nSeq;
+              });
     return vecResult;
 }
 

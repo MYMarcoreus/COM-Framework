@@ -24,7 +24,7 @@ namespace sc {
 /// 可作为模块注册到 CModuleManager（IID_EventDispatcher）。
 class CEventDispatcher : public CModule, public IEventDispatcher
 {
-   public:
+public:
     CEventDispatcher();
 
     virtual ~CEventDispatcher();
@@ -54,7 +54,7 @@ class CEventDispatcher : public CModule, public IEventDispatcher
 
     SC_DECLARE_INTERFACE_MAP();
 
-   private:
+private:
     struct Subscription
     {
         EventType type;

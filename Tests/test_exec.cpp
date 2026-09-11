@@ -104,7 +104,7 @@ void RunWriteWork(SModuleState* pModState, STestState* pGlobal)
 ///        对应服务器中的一个业务模块（模块内子任务由调度器把关）。
 class CTestModuleBase
 {
-   public:
+public:
     explicit CTestModuleBase(CThreadPool* pPool, size_t nMaxReaders) : m_scheduler(pPool, nMaxReaders)
     {}
 
@@ -117,7 +117,7 @@ class CTestModuleBase
         return m_state;
     }
 
-   protected:
+protected:
     CModuleScheduler m_scheduler;  // 模块级读写调度器。
     SModuleState m_state;          // 本模块读写观测状态。
 };
@@ -125,56 +125,60 @@ class CTestModuleBase
 /// @brief 读模块：只提交读子任务（多线程并发进入）。
 class CReaderModule : public CTestModuleBase
 {
-   public:
+public:
     explicit CReaderModule(CThreadPool* pPool, size_t nMaxReaders) : CTestModuleBase(pPool, nMaxReaders)
     {}
 
     bool SubmitRead(const std::shared_ptr<CBusinessFlow>& spFlow, STestState* pGlobal)
     {
-        return spFlow->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kRead, [this, pGlobal]()
-        {
-            RunReadWork(&m_state, pGlobal);
-        });
+        return spFlow->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                                  [this, pGlobal]()
+                                  {
+                                      RunReadWork(&m_state, pGlobal);
+                                  });
     }
 };
 
 /// @brief 写模块：只提交写子任务（独占进入）。
 class CWriterModule : public CTestModuleBase
 {
-   public:
+public:
     explicit CWriterModule(CThreadPool* pPool) : CTestModuleBase(pPool, 0)
     {}
 
     bool SubmitWrite(const std::shared_ptr<CBusinessFlow>& spFlow, STestState* pGlobal)
     {
-        return spFlow->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kWrite, [this, pGlobal]()
-        {
-            RunWriteWork(&m_state, pGlobal);
-        });
+        return spFlow->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+                                  [this, pGlobal]()
+                                  {
+                                      RunWriteWork(&m_state, pGlobal);
+                                  });
     }
 };
 
 /// @brief 读写混合模块：读并发 + 写独占。
 class CRwModule : public CTestModuleBase
 {
-   public:
+public:
     explicit CRwModule(CThreadPool* pPool, size_t nMaxReaders) : CTestModuleBase(pPool, nMaxReaders)
     {}
 
     bool SubmitRead(const std::shared_ptr<CBusinessFlow>& spFlow, STestState* pGlobal)
     {
-        return spFlow->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kRead, [this, pGlobal]()
-        {
-            RunReadWork(&m_state, pGlobal);
-        });
+        return spFlow->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                                  [this, pGlobal]()
+                                  {
+                                      RunReadWork(&m_state, pGlobal);
+                                  });
     }
 
     bool SubmitWrite(const std::shared_ptr<CBusinessFlow>& spFlow, STestState* pGlobal)
     {
-        return spFlow->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kWrite, [this, pGlobal]()
-        {
-            RunWriteWork(&m_state, pGlobal);
-        });
+        return spFlow->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+                                  [this, pGlobal]()
+                                  {
+                                      RunWriteWork(&m_state, pGlobal);
+                                  });
     }
 };
 
@@ -182,7 +186,7 @@ class CRwModule : public CTestModuleBase
 ///        收到业务请求后，在流程主体线程（单线程）内处理并扇出多个读/写子任务。
 class CSimModule
 {
-   public:
+public:
     explicit CSimModule(CThreadPool* pPool, size_t nMaxReaders) : m_scheduler(pPool, nMaxReaders), m_state()
     {}
 
@@ -207,32 +211,37 @@ class CSimModule
     {
         std::shared_ptr<CBusinessFlow> sp = spFlow;
         // 本模块：读缓存（并发）
-        sp->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kRead, [this, pGlobal]()
-        {
-            RunReadWork(&m_state, pGlobal);
-        });
-        sp->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kRead, [this, pGlobal]()
-        {
-            RunReadWork(&m_state, pGlobal);
-        });
+        sp->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                       [this, pGlobal]()
+                       {
+                           RunReadWork(&m_state, pGlobal);
+                       });
+        sp->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                       [this, pGlobal]()
+                       {
+                           RunReadWork(&m_state, pGlobal);
+                       });
         // 本模块：更新数据（写独占）
-        sp->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kWrite, [this, pGlobal]()
-        {
-            RunWriteWork(&m_state, pGlobal);
-        });
+        sp->SubmitTask(Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+                       [this, pGlobal]()
+                       {
+                           RunWriteWork(&m_state, pGlobal);
+                       });
         // 依赖模块：查询（读）
-        sp->SubmitTask(pReadPeer->Scheduler(), CModuleScheduler::ETaskKind::kRead, [pReadPeer, pGlobal]()
-        {
-            RunReadWork(&pReadPeer->ModState(), pGlobal);
-        });
+        sp->SubmitTask(pReadPeer->Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                       [pReadPeer, pGlobal]()
+                       {
+                           RunReadWork(&pReadPeer->ModState(), pGlobal);
+                       });
         // 通知模块：写
-        sp->SubmitTask(pWritePeer->Scheduler(), CModuleScheduler::ETaskKind::kWrite, [pWritePeer, pGlobal]()
-        {
-            RunWriteWork(&pWritePeer->ModState(), pGlobal);
-        });
+        sp->SubmitTask(pWritePeer->Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+                       [pWritePeer, pGlobal]()
+                       {
+                           RunWriteWork(&pWritePeer->ModState(), pGlobal);
+                       });
     }
 
-   private:
+private:
     CModuleScheduler m_scheduler;
     SModuleState m_state;
 };
@@ -261,18 +270,21 @@ TEST(Exec_CallbackStack_Lifo)
 {
     CCallbackStack stack;
     std::vector<std::string> vecOrder;
-    stack.Push([&vecOrder]()
-    {
-        vecOrder.push_back("first");
-    });
-    stack.Push([&vecOrder]()
-    {
-        vecOrder.push_back("second");
-    });
-    stack.Push([&vecOrder]()
-    {
-        vecOrder.push_back("third");
-    });
+    stack.Push(
+        [&vecOrder]()
+        {
+            vecOrder.push_back("first");
+        });
+    stack.Push(
+        [&vecOrder]()
+        {
+            vecOrder.push_back("second");
+        });
+    stack.Push(
+        [&vecOrder]()
+        {
+            vecOrder.push_back("third");
+        });
     stack.RunAll();
     ASSERT_TRUE(stack.Empty());
     ASSERT_TRUE(vecOrder.size() == 3);
@@ -289,23 +301,28 @@ TEST(Exec_Flow_Complete_NoSubtask)
     CGlobalDispatcher dispatcher(&pool);
 
     std::atomic<long> nCb(0);
-    const bool bDispatch = dispatcher.Dispatch([&nCb](const std::shared_ptr<CBusinessFlow>& spFlow)
-    {
-        spFlow->Callbacks().Push([&nCb]()
+    const bool bDispatch = dispatcher.Dispatch(
+        [&nCb](const std::shared_ptr<CBusinessFlow>& spFlow)
         {
-            nCb.fetch_add(1);
+            spFlow->Callbacks().Push(
+                [&nCb]()
+                {
+                    nCb.fetch_add(1);
+                });
+            spFlow->Callbacks().Push(
+                [&nCb]()
+                {
+                    nCb.fetch_add(1);
+                });
         });
-        spFlow->Callbacks().Push([&nCb]()
-        {
-            nCb.fetch_add(1);
-        });
-    });
     ASSERT_TRUE(bDispatch);
 
-    const bool bDone = WaitUntil([&nCb]()
-    {
-        return nCb.load() == 2;
-    }, 3000);
+    const bool bDone = WaitUntil(
+        [&nCb]()
+        {
+            return nCb.load() == 2;
+        },
+        3000);
     pool.Stop();
     ASSERT_TRUE(bDone);
 }
@@ -321,29 +338,33 @@ TEST(Exec_Flow_Complete_WithSubtask)
 
     std::atomic<int> nWorkDone(0);  // 子任务内置位
     std::atomic<long> nCbAfterWork(0);
-    const bool bDispatch =
-        dispatcher.Dispatch([&writer, &nWorkDone, &nCbAfterWork](const std::shared_ptr<CBusinessFlow>& spFlow)
-    {
-        spFlow->SubmitTask(writer.Scheduler(), CModuleScheduler::ETaskKind::kWrite, [&nWorkDone]()
+    const bool bDispatch = dispatcher.Dispatch(
+        [&writer, &nWorkDone, &nCbAfterWork](const std::shared_ptr<CBusinessFlow>& spFlow)
         {
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            nWorkDone.store(1);
+            spFlow->SubmitTask(writer.Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+                               [&nWorkDone]()
+                               {
+                                   std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                                   nWorkDone.store(1);
+                               });
+            // 回调应在子任务完成后触发：仅当 nWorkDone==1 才计数
+            spFlow->Callbacks().Push(
+                [&nWorkDone, &nCbAfterWork]()
+                {
+                    if (nWorkDone.load() == 1)
+                    {
+                        nCbAfterWork.fetch_add(1);
+                    }
+                });
         });
-        // 回调应在子任务完成后触发：仅当 nWorkDone==1 才计数
-        spFlow->Callbacks().Push([&nWorkDone, &nCbAfterWork]()
-        {
-            if (nWorkDone.load() == 1)
-            {
-                nCbAfterWork.fetch_add(1);
-            }
-        });
-    });
     ASSERT_TRUE(bDispatch);
 
-    const bool bDone = WaitUntil([&nCbAfterWork]()
-    {
-        return nCbAfterWork.load() == 1;
-    }, 3000);
+    const bool bDone = WaitUntil(
+        [&nCbAfterWork]()
+        {
+            return nCbAfterWork.load() == 1;
+        },
+        3000);
     pool.Stop();
     ASSERT_TRUE(bDone);
 }
@@ -363,20 +384,24 @@ TEST(Exec_Rw_ReadConcurrent)
     STestState state;
     for (int i = 0; i < kFlows; ++i)
     {
-        ASSERT_TRUE(dispatcher.Dispatch([&reader, &state](const std::shared_ptr<CBusinessFlow>& spFlow)
-        {
-            reader.SubmitRead(spFlow, &state);
-            spFlow->Callbacks().Push([&state]()
+        ASSERT_TRUE(dispatcher.Dispatch(
+            [&reader, &state](const std::shared_ptr<CBusinessFlow>& spFlow)
             {
-                state.nFlowDone.fetch_add(1);
-            });
-        }));
+                reader.SubmitRead(spFlow, &state);
+                spFlow->Callbacks().Push(
+                    [&state]()
+                    {
+                        state.nFlowDone.fetch_add(1);
+                    });
+            }));
     }
 
-    const bool bDone = WaitUntil([&state]()
-    {
-        return state.nFlowDone.load() == kFlows;
-    }, 10000);
+    const bool bDone = WaitUntil(
+        [&state]()
+        {
+            return state.nFlowDone.load() == kFlows;
+        },
+        10000);
     pool.Stop();
     ASSERT_TRUE(bDone);
     ASSERT_TRUE(state.nReadDone.load() == kFlows);                      // 全部读完成
@@ -399,20 +424,24 @@ TEST(Exec_Rw_WriteExclusive)
     STestState state;
     for (int i = 0; i < kFlows; ++i)
     {
-        ASSERT_TRUE(dispatcher.Dispatch([&writer, &state](const std::shared_ptr<CBusinessFlow>& spFlow)
-        {
-            writer.SubmitWrite(spFlow, &state);
-            spFlow->Callbacks().Push([&state]()
+        ASSERT_TRUE(dispatcher.Dispatch(
+            [&writer, &state](const std::shared_ptr<CBusinessFlow>& spFlow)
             {
-                state.nFlowDone.fetch_add(1);
-            });
-        }));
+                writer.SubmitWrite(spFlow, &state);
+                spFlow->Callbacks().Push(
+                    [&state]()
+                    {
+                        state.nFlowDone.fetch_add(1);
+                    });
+            }));
     }
 
-    const bool bDone = WaitUntil([&state]()
-    {
-        return state.nFlowDone.load() == kFlows;
-    }, 10000);
+    const bool bDone = WaitUntil(
+        [&state]()
+        {
+            return state.nFlowDone.load() == kFlows;
+        },
+        10000);
     pool.Stop();
     ASSERT_TRUE(bDone);
     ASSERT_TRUE(state.nWriteDone.load() == kFlows);           // 全部写完成
@@ -434,29 +463,35 @@ TEST(Exec_Rw_ReentrantSameModule)
     STestState state;
     for (int i = 0; i < kFlows; ++i)
     {
-        ASSERT_TRUE(dispatcher.Dispatch([&rw, &state](const std::shared_ptr<CBusinessFlow>& spFlow)
-        {
-            std::shared_ptr<CBusinessFlow> sp = spFlow;  // 按值供嵌套捕获保活
-            sp->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kRead, [sp, &rw, &state]()
+        ASSERT_TRUE(dispatcher.Dispatch(
+            [&rw, &state](const std::shared_ptr<CBusinessFlow>& spFlow)
             {
-                RunReadWork(&rw.ModState(), &state);
-                // 读子任务内再提交同模块写子任务（写需等读退出）
-                sp->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kWrite, [&rw, &state]()
-                {
-                    RunWriteWork(&rw.ModState(), &state);
-                });
-            });
-            sp->Callbacks().Push([&state]()
-            {
-                state.nFlowDone.fetch_add(1);
-            });
-        }));
+                std::shared_ptr<CBusinessFlow> sp = spFlow;  // 按值供嵌套捕获保活
+                sp->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                               [sp, &rw, &state]()
+                               {
+                                   RunReadWork(&rw.ModState(), &state);
+                                   // 读子任务内再提交同模块写子任务（写需等读退出）
+                                   sp->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+                                                  [&rw, &state]()
+                                                  {
+                                                      RunWriteWork(&rw.ModState(), &state);
+                                                  });
+                               });
+                sp->Callbacks().Push(
+                    [&state]()
+                    {
+                        state.nFlowDone.fetch_add(1);
+                    });
+            }));
     }
 
-    const bool bDone = WaitUntil([&state]()
-    {
-        return state.nFlowDone.load() == kFlows;
-    }, 15000);
+    const bool bDone = WaitUntil(
+        [&state]()
+        {
+            return state.nFlowDone.load() == kFlows;
+        },
+        15000);
     pool.Stop();
     ASSERT_TRUE(bDone);
     ASSERT_TRUE(state.nReadDone.load() == kFlows);
@@ -485,43 +520,49 @@ TEST(Exec_Rw_MultiModuleChain)
     {
         ASSERT_TRUE(dispatcher.Dispatch(
             [&readerA, &rwB, &writerC, &dispatcher, &state](const std::shared_ptr<CBusinessFlow>& spFlow)
-        {
-            std::shared_ptr<CBusinessFlow> sp = spFlow;  // 按值供嵌套捕获保活
-            // 模块 A：读子任务
-            sp->SubmitTask(readerA.Scheduler(), CModuleScheduler::ETaskKind::kRead,
-                           [sp, &readerA, &rwB, &writerC, &dispatcher, &state]()
             {
-                RunReadWork(&readerA.ModState(), &state);
-                // 链式调用模块 B：写子任务（经注册表查找）
-                CModuleScheduler* pB = dispatcher.FindScheduler("B");
-                sp->SubmitTask(pB, CModuleScheduler::ETaskKind::kWrite, [sp, &rwB, &writerC, &dispatcher, &state]()
-                {
-                    RunWriteWork(&rwB.ModState(), &state);
-                    // 链式调用模块 C：写子任务
-                    CModuleScheduler* pC = dispatcher.FindScheduler("C");
-                    sp->SubmitTask(pC, CModuleScheduler::ETaskKind::kWrite, [&writerC, &state]()
+                std::shared_ptr<CBusinessFlow> sp = spFlow;  // 按值供嵌套捕获保活
+                // 模块 A：读子任务
+                sp->SubmitTask(readerA.Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                               [sp, &readerA, &rwB, &writerC, &dispatcher, &state]()
+                               {
+                                   RunReadWork(&readerA.ModState(), &state);
+                                   // 链式调用模块 B：写子任务（经注册表查找）
+                                   CModuleScheduler* pB = dispatcher.FindScheduler("B");
+                                   sp->SubmitTask(pB, CModuleScheduler::ETaskKind::kWrite,
+                                                  [sp, &rwB, &writerC, &dispatcher, &state]()
+                                                  {
+                                                      RunWriteWork(&rwB.ModState(), &state);
+                                                      // 链式调用模块 C：写子任务
+                                                      CModuleScheduler* pC = dispatcher.FindScheduler("C");
+                                                      sp->SubmitTask(pC, CModuleScheduler::ETaskKind::kWrite,
+                                                                     [&writerC, &state]()
+                                                                     {
+                                                                         RunWriteWork(&writerC.ModState(), &state);
+                                                                     });
+                                                  });
+                               });
+                // 模块 B：读子任务（与 B 的写并发/排队）
+                sp->SubmitTask(rwB.Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                               [&rwB, &state]()
+                               {
+                                   RunReadWork(&rwB.ModState(), &state);
+                               });
+                // 流程收尾：完成后回放
+                sp->Callbacks().Push(
+                    [&state]()
                     {
-                        RunWriteWork(&writerC.ModState(), &state);
+                        state.nFlowDone.fetch_add(1);
                     });
-                });
-            });
-            // 模块 B：读子任务（与 B 的写并发/排队）
-            sp->SubmitTask(rwB.Scheduler(), CModuleScheduler::ETaskKind::kRead, [&rwB, &state]()
-            {
-                RunReadWork(&rwB.ModState(), &state);
-            });
-            // 流程收尾：完成后回放
-            sp->Callbacks().Push([&state]()
-            {
-                state.nFlowDone.fetch_add(1);
-            });
-        }));
+            }));
     }
 
-    const bool bDone = WaitUntil([&state]()
-    {
-        return state.nFlowDone.load() == kFlows;
-    }, 30000);
+    const bool bDone = WaitUntil(
+        [&state]()
+        {
+            return state.nFlowDone.load() == kFlows;
+        },
+        30000);
     pool.Stop();
     ASSERT_TRUE(bDone);
     // 每流程：A 读 + B 读 = 2 读；B 写 + C 写 = 2 写
@@ -551,16 +592,19 @@ TEST(Exec_Scheduler_DrainIdle)
     STestState state;
     for (int i = 0; i < kFlows; ++i)
     {
-        ASSERT_TRUE(dispatcher.Dispatch([&writer, &state](const std::shared_ptr<CBusinessFlow>& spFlow)
-        {
-            writer.SubmitWrite(spFlow, &state);
-        }));
+        ASSERT_TRUE(dispatcher.Dispatch(
+            [&writer, &state](const std::shared_ptr<CBusinessFlow>& spFlow)
+            {
+                writer.SubmitWrite(spFlow, &state);
+            }));
     }
 
-    const bool bDone = WaitUntil([&state]()
-    {
-        return state.nWriteDone.load() == kFlows;
-    }, 10000);
+    const bool bDone = WaitUntil(
+        [&state]()
+        {
+            return state.nWriteDone.load() == kFlows;
+        },
+        10000);
     pool.Stop();
     dispatcher.DrainAll();
     ASSERT_TRUE(bDone);
@@ -585,29 +629,33 @@ TEST(Exec_Rw_Stress)
     for (int i = 0; i < kFlows; ++i)
     {
         // 注意：i 必须按值捕获（流程异步执行，引用捕获循环变量会悬垂）
-        ASSERT_TRUE(dispatcher.Dispatch([&rwA, &rwB, &state, i](const std::shared_ptr<CBusinessFlow>& spFlow)
-        {
-            if ((i & 1) == 0)
+        ASSERT_TRUE(dispatcher.Dispatch(
+            [&rwA, &rwB, &state, i](const std::shared_ptr<CBusinessFlow>& spFlow)
             {
-                rwA.SubmitRead(spFlow, &state);
-                rwB.SubmitWrite(spFlow, &state);
-            }
-            else
-            {
-                rwA.SubmitWrite(spFlow, &state);
-                rwB.SubmitRead(spFlow, &state);
-            }
-            spFlow->Callbacks().Push([&state]()
-            {
-                state.nFlowDone.fetch_add(1);
-            });
-        }));
+                if ((i & 1) == 0)
+                {
+                    rwA.SubmitRead(spFlow, &state);
+                    rwB.SubmitWrite(spFlow, &state);
+                }
+                else
+                {
+                    rwA.SubmitWrite(spFlow, &state);
+                    rwB.SubmitRead(spFlow, &state);
+                }
+                spFlow->Callbacks().Push(
+                    [&state]()
+                    {
+                        state.nFlowDone.fetch_add(1);
+                    });
+            }));
     }
 
-    const bool bDone = WaitUntil([&state]()
-    {
-        return state.nFlowDone.load() == kFlows;
-    }, 60000);
+    const bool bDone = WaitUntil(
+        [&state]()
+        {
+            return state.nFlowDone.load() == kFlows;
+        },
+        60000);
     pool.Stop();
     ASSERT_TRUE(bDone);
     // 每流程：1 读 + 1 写
@@ -634,20 +682,24 @@ TEST(Exec_Rw_HighConcurrencyRead)
     STestState state;
     for (int i = 0; i < kFlows; ++i)
     {
-        ASSERT_TRUE(dispatcher.Dispatch([&reader, &state](const std::shared_ptr<CBusinessFlow>& spFlow)
-        {
-            reader.SubmitRead(spFlow, &state);
-            spFlow->Callbacks().Push([&state]()
+        ASSERT_TRUE(dispatcher.Dispatch(
+            [&reader, &state](const std::shared_ptr<CBusinessFlow>& spFlow)
             {
-                state.nFlowDone.fetch_add(1);
-            });
-        }));
+                reader.SubmitRead(spFlow, &state);
+                spFlow->Callbacks().Push(
+                    [&state]()
+                    {
+                        state.nFlowDone.fetch_add(1);
+                    });
+            }));
     }
 
-    const bool bDone = WaitUntil([&state]()
-    {
-        return state.nFlowDone.load() == kFlows;
-    }, 15000);
+    const bool bDone = WaitUntil(
+        [&state]()
+        {
+            return state.nFlowDone.load() == kFlows;
+        },
+        15000);
     pool.Stop();
     ASSERT_TRUE(bDone);
     ASSERT_TRUE(state.nReadDone.load() == kFlows);
@@ -686,36 +738,41 @@ TEST(Exec_Rw_MultiProducerDispatch)
     std::vector<std::thread> vecProducers;
     for (int p = 0; p < kProducers; ++p)
     {
-        vecProducers.push_back(std::thread([&, p]()
-        {
-            for (int i = 0; i < kFlowsPerProducer; ++i)
+        vecProducers.push_back(std::thread(
+            [&, p]()
             {
-                const int nReadMod = (p + i) % kModules;
-                const int nWriteMod = (p + i + 1) % kModules;
-                if (!dispatcher.Dispatch([&, nReadMod, nWriteMod](const std::shared_ptr<CBusinessFlow>& spFlow)
+                for (int i = 0; i < kFlowsPerProducer; ++i)
                 {
-                    vecModules[nReadMod]->SubmitRead(spFlow, &state);
-                    vecModules[nWriteMod]->SubmitWrite(spFlow, &state);
-                    spFlow->Callbacks().Push([&state]()
+                    const int nReadMod = (p + i) % kModules;
+                    const int nWriteMod = (p + i + 1) % kModules;
+                    if (!dispatcher.Dispatch(
+                            [&, nReadMod, nWriteMod](const std::shared_ptr<CBusinessFlow>& spFlow)
+                            {
+                                vecModules[nReadMod]->SubmitRead(spFlow, &state);
+                                vecModules[nWriteMod]->SubmitWrite(spFlow, &state);
+                                spFlow->Callbacks().Push(
+                                    [&state]()
+                                    {
+                                        state.nFlowDone.fetch_add(1);
+                                    });
+                            }))
                     {
-                        state.nFlowDone.fetch_add(1);
-                    });
-                }))
-                {
-                    nDispatchFail.fetch_add(1);
+                        nDispatchFail.fetch_add(1);
+                    }
                 }
-            }
-        }));
+            }));
     }
     for (std::vector<std::thread>::iterator it = vecProducers.begin(); it != vecProducers.end(); ++it)
     {
         it->join();
     }
 
-    const bool bDone = WaitUntil([&state]()
-    {
-        return state.nFlowDone.load() == kFlows;
-    }, 30000);
+    const bool bDone = WaitUntil(
+        [&state]()
+        {
+            return state.nFlowDone.load() == kFlows;
+        },
+        30000);
     pool.Stop();
     ASSERT_TRUE(bDone);
     ASSERT_TRUE(nDispatchFail.load() == 0);  // 全部投递成功
@@ -758,21 +815,25 @@ TEST(Exec_Rw_ManyModulesStress)
         // 确定性散布到各模块（可复现）
         const int nReadMod = (i * 5 + 1) % kModules;
         const int nWriteMod = (i * 7 + 3) % kModules;
-        ASSERT_TRUE(dispatcher.Dispatch([&, nReadMod, nWriteMod](const std::shared_ptr<CBusinessFlow>& spFlow)
-        {
-            vecModules[nReadMod]->SubmitRead(spFlow, &state);
-            vecModules[nWriteMod]->SubmitWrite(spFlow, &state);
-            spFlow->Callbacks().Push([&state]()
+        ASSERT_TRUE(dispatcher.Dispatch(
+            [&, nReadMod, nWriteMod](const std::shared_ptr<CBusinessFlow>& spFlow)
             {
-                state.nFlowDone.fetch_add(1);
-            });
-        }));
+                vecModules[nReadMod]->SubmitRead(spFlow, &state);
+                vecModules[nWriteMod]->SubmitWrite(spFlow, &state);
+                spFlow->Callbacks().Push(
+                    [&state]()
+                    {
+                        state.nFlowDone.fetch_add(1);
+                    });
+            }));
     }
 
-    const bool bDone = WaitUntil([&state]()
-    {
-        return state.nFlowDone.load() == kFlows;
-    }, 60000);
+    const bool bDone = WaitUntil(
+        [&state]()
+        {
+            return state.nFlowDone.load() == kFlows;
+        },
+        60000);
     pool.Stop();
     ASSERT_TRUE(bDone);
     ASSERT_TRUE(state.nReadDone.load() == kFlows);
@@ -802,43 +863,53 @@ TEST(Exec_Rw_Order_ReadThenWrite)
     std::atomic<long> nF1Done(0);  // 流程 F 完成
 
     // 占位读 R0：占据唯一读槽位一段时间
-    ASSERT_TRUE(dispatcher.Dispatch([&rw, &nReady](const std::shared_ptr<CBusinessFlow>& spFlow)
-    {
-        spFlow->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kRead, [&nReady]()
+    ASSERT_TRUE(dispatcher.Dispatch(
+        [&rw, &nReady](const std::shared_ptr<CBusinessFlow>& spFlow)
         {
-            nReady.store(1);
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-        });
-    }));
+            spFlow->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                               [&nReady]()
+                               {
+                                   nReady.store(1);
+                                   std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                               });
+        }));
 
     // 等占位读活跃后，提交流程 F：先读后写（读会因槽位满而排队）
-    ASSERT_TRUE(WaitUntil([&nReady]()
-    {
-        return nReady.load() == 1;
-    }, 3000));
-    ASSERT_TRUE(dispatcher.Dispatch([&rw, &mutex, &vecOrder, &nF1Done](const std::shared_ptr<CBusinessFlow>& spFlow)
-    {
-        std::shared_ptr<CBusinessFlow> sp = spFlow;
-        sp->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kRead, [&mutex, &vecOrder]()
+    ASSERT_TRUE(WaitUntil(
+        [&nReady]()
         {
-            std::lock_guard<std::mutex> lock(mutex);
-            vecOrder.push_back(1);  // 读
-        });
-        sp->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kWrite, [&mutex, &vecOrder]()
+            return nReady.load() == 1;
+        },
+        3000));
+    ASSERT_TRUE(dispatcher.Dispatch(
+        [&rw, &mutex, &vecOrder, &nF1Done](const std::shared_ptr<CBusinessFlow>& spFlow)
         {
-            std::lock_guard<std::mutex> lock(mutex);
-            vecOrder.push_back(2);  // 写
-        });
-        sp->Callbacks().Push([&nF1Done]()
-        {
-            nF1Done.fetch_add(1);
-        });
-    }));
+            std::shared_ptr<CBusinessFlow> sp = spFlow;
+            sp->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                           [&mutex, &vecOrder]()
+                           {
+                               std::lock_guard<std::mutex> lock(mutex);
+                               vecOrder.push_back(1);  // 读
+                           });
+            sp->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+                           [&mutex, &vecOrder]()
+                           {
+                               std::lock_guard<std::mutex> lock(mutex);
+                               vecOrder.push_back(2);  // 写
+                           });
+            sp->Callbacks().Push(
+                [&nF1Done]()
+                {
+                    nF1Done.fetch_add(1);
+                });
+        }));
 
-    const bool bDone = WaitUntil([&nF1Done]()
-    {
-        return nF1Done.load() == 1;
-    }, 3000);
+    const bool bDone = WaitUntil(
+        [&nF1Done]()
+        {
+            return nF1Done.load() == 1;
+        },
+        3000);
     pool.Stop();
     ASSERT_TRUE(bDone);
     std::lock_guard<std::mutex> lock(mutex);
@@ -860,28 +931,34 @@ TEST(Exec_Rw_Order_WriteThenRead)
     std::vector<int> vecOrder;
     std::atomic<long> nDone(0);
 
-    ASSERT_TRUE(dispatcher.Dispatch([&rw, &mutex, &vecOrder, &nDone](const std::shared_ptr<CBusinessFlow>& spFlow)
-    {
-        spFlow->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kWrite, [&mutex, &vecOrder]()
+    ASSERT_TRUE(dispatcher.Dispatch(
+        [&rw, &mutex, &vecOrder, &nDone](const std::shared_ptr<CBusinessFlow>& spFlow)
         {
-            std::lock_guard<std::mutex> lock(mutex);
-            vecOrder.push_back(1);  // 写
-        });
-        spFlow->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kRead, [&mutex, &vecOrder]()
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            vecOrder.push_back(2);  // 读
-        });
-        spFlow->Callbacks().Push([&nDone]()
-        {
-            nDone.fetch_add(1);
-        });
-    }));
+            spFlow->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+                               [&mutex, &vecOrder]()
+                               {
+                                   std::lock_guard<std::mutex> lock(mutex);
+                                   vecOrder.push_back(1);  // 写
+                               });
+            spFlow->SubmitTask(rw.Scheduler(), CModuleScheduler::ETaskKind::kRead,
+                               [&mutex, &vecOrder]()
+                               {
+                                   std::lock_guard<std::mutex> lock(mutex);
+                                   vecOrder.push_back(2);  // 读
+                               });
+            spFlow->Callbacks().Push(
+                [&nDone]()
+                {
+                    nDone.fetch_add(1);
+                });
+        }));
 
-    const bool bDone = WaitUntil([&nDone]()
-    {
-        return nDone.load() == 1;
-    }, 3000);
+    const bool bDone = WaitUntil(
+        [&nDone]()
+        {
+            return nDone.load() == 1;
+        },
+        3000);
     pool.Stop();
     ASSERT_TRUE(bDone);
     std::lock_guard<std::mutex> lock(mutex);
@@ -904,26 +981,31 @@ TEST(Exec_Rw_Order_WriterFifo)
     std::atomic<long> nDone(0);
     const int kWriters = 8;
 
-    ASSERT_TRUE(dispatcher.Dispatch([&writer, &mutex, &vecOrder, &nDone](const std::shared_ptr<CBusinessFlow>& spFlow)
-    {
-        for (int i = 0; i < kWriters; ++i)
+    ASSERT_TRUE(dispatcher.Dispatch(
+        [&writer, &mutex, &vecOrder, &nDone](const std::shared_ptr<CBusinessFlow>& spFlow)
         {
-            spFlow->SubmitTask(writer.Scheduler(), CModuleScheduler::ETaskKind::kWrite, [&mutex, &vecOrder, i]()
+            for (int i = 0; i < kWriters; ++i)
             {
-                std::lock_guard<std::mutex> lock(mutex);
-                vecOrder.push_back(i);  // 记录执行顺序
-            });
-        }
-        spFlow->Callbacks().Push([&nDone]()
-        {
-            nDone.fetch_add(1);
-        });
-    }));
+                spFlow->SubmitTask(writer.Scheduler(), CModuleScheduler::ETaskKind::kWrite,
+                                   [&mutex, &vecOrder, i]()
+                                   {
+                                       std::lock_guard<std::mutex> lock(mutex);
+                                       vecOrder.push_back(i);  // 记录执行顺序
+                                   });
+            }
+            spFlow->Callbacks().Push(
+                [&nDone]()
+                {
+                    nDone.fetch_add(1);
+                });
+        }));
 
-    const bool bDone = WaitUntil([&nDone]()
-    {
-        return nDone.load() == 1;
-    }, 3000);
+    const bool bDone = WaitUntil(
+        [&nDone]()
+        {
+            return nDone.load() == 1;
+        },
+        3000);
     pool.Stop();
     ASSERT_TRUE(bDone);
     std::lock_guard<std::mutex> lock(mutex);
@@ -968,39 +1050,44 @@ TEST(Exec_Sim_BusinessLoad)
     std::vector<std::thread> vecProducers;
     for (int p = 0; p < kProducers; ++p)
     {
-        vecProducers.push_back(std::thread([&, p]()
-        {
-            for (int i = 0; i < kRequestsPerProducer; ++i)
+        vecProducers.push_back(std::thread(
+            [&, p]()
             {
-                const int nTarget = (p + i) % kModules;
-                if (!dispatcher.Dispatch([&, nTarget](const std::shared_ptr<CBusinessFlow>& spFlow)
+                for (int i = 0; i < kRequestsPerProducer; ++i)
                 {
-                    CSimModule* pSelf = vecModules[nTarget].get();
-                    CSimModule* pReadPeer = vecModules[(nTarget + 1) % kModules].get();
-                    CSimModule* pWritePeer = vecModules[(nTarget + 2) % kModules].get();
-                    // 一次业务处理：单线程内扇出多个读/写子任务
-                    pSelf->HandleRequest(spFlow, pReadPeer, pWritePeer, &state);
-                    // 处理结束：全部子任务完成后回放
-                    spFlow->Callbacks().Push([&state]()
+                    const int nTarget = (p + i) % kModules;
+                    if (!dispatcher.Dispatch(
+                            [&, nTarget](const std::shared_ptr<CBusinessFlow>& spFlow)
+                            {
+                                CSimModule* pSelf = vecModules[nTarget].get();
+                                CSimModule* pReadPeer = vecModules[(nTarget + 1) % kModules].get();
+                                CSimModule* pWritePeer = vecModules[(nTarget + 2) % kModules].get();
+                                // 一次业务处理：单线程内扇出多个读/写子任务
+                                pSelf->HandleRequest(spFlow, pReadPeer, pWritePeer, &state);
+                                // 处理结束：全部子任务完成后回放
+                                spFlow->Callbacks().Push(
+                                    [&state]()
+                                    {
+                                        state.nFlowDone.fetch_add(1);
+                                    });
+                            }))
                     {
-                        state.nFlowDone.fetch_add(1);
-                    });
-                }))
-                {
-                    nDispatchFail.fetch_add(1);
+                        nDispatchFail.fetch_add(1);
+                    }
                 }
-            }
-        }));
+            }));
     }
     for (std::vector<std::thread>::iterator it = vecProducers.begin(); it != vecProducers.end(); ++it)
     {
         it->join();
     }
 
-    const bool bDone = WaitUntil([&state]()
-    {
-        return state.nFlowDone.load() == kTotalFlows;
-    }, 60000);
+    const bool bDone = WaitUntil(
+        [&state]()
+        {
+            return state.nFlowDone.load() == kTotalFlows;
+        },
+        60000);
     pool.Stop();
     ASSERT_TRUE(bDone);
     ASSERT_TRUE(nDispatchFail.load() == 0);  // 全部投递成功

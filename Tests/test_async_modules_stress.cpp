@@ -102,7 +102,7 @@ struct CStressOrderCtx
 /// @brief 订单模块：自持 1 线程执行器；跨模块调用库存模块（不传执行器）。
 class CStressOrderModule
 {
-   public:
+public:
     CStressOrderModule() : m_exec(1)
     {
         m_exec.Start();
@@ -215,7 +215,7 @@ class CStressOrderModule
             .Catch(&StepOrderCatch, ASYNC_LOC);
     }
 
-   private:
+private:
     /// 跨模块那一层的工厂：等库存模块的 promise。
     no::CPromise<CStressOrderCtx>::PromiseFactory MakeQueryStockFactory(
         const std::shared_ptr<CCalleeModule>& spStockModule)
@@ -352,18 +352,19 @@ class CStressOrderModule
             spStock->pProbe = spCtx->pProbe;
 
             no::CPromise<CCalleeCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
-            const bool bOk = promiseStock.OnSettled([spCtx, spStock, fnResolve, fnReject](no::CPromiseResult result)
-            {
-                // 本回调要么在库存模块线程上内联跑，要么（补登记时）在库存模块执行器上跑。
-                spCtx->idStockThread = std::this_thread::get_id();
-                if (result.IsRejected())
+            const bool bOk = promiseStock.OnSettled(
+                [spCtx, spStock, fnResolve, fnReject](no::CPromiseResult result)
                 {
-                    fnReject(result.Code());
-                    return;
-                }
-                spCtx->nStock = spStock->nAvail;
-                fnResolve();
-            });
+                    // 本回调要么在库存模块线程上内联跑，要么（补登记时）在库存模块执行器上跑。
+                    spCtx->idStockThread = std::this_thread::get_id();
+                    if (result.IsRejected())
+                    {
+                        fnReject(result.Code());
+                        return;
+                    }
+                    spCtx->nStock = spStock->nAvail;
+                    fnResolve();
+                });
             if (!bOk)
             {
                 // 子 promise 已 settled 且对方执行器不可用：回调不会执行，本层必须以拒绝收口
@@ -381,10 +382,11 @@ class CStressOrderModule
             [this](const no::CPromise<CStressOrderCtx>::ResolveFn& fnResolve,
                    const no::CPromise<CStressOrderCtx>::RejectFn& fnReject)
         {
-            if (!m_exec.Post([fnResolve]()
-            {
-                fnResolve();
-            }))
+            if (!m_exec.Post(
+                    [fnResolve]()
+                    {
+                        fnResolve();
+                    }))
             {
                 fnReject(no::kStopped);
             }
@@ -409,28 +411,29 @@ class CStressOrderModule
                 spStock->pProbe = spCtx->pProbe;
 
                 no::CPromise<CCalleeCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
-                const bool bOk = promiseStock.OnSettled([spCtx, pRemain, fnResolve, fnReject](no::CPromiseResult result)
-                {
-                    // 本回调在库存模块线程上；单个 worker ⇒ 不会并发进入。
-                    spCtx->idStockThread = std::this_thread::get_id();
-                    if (result.IsRejected())
+                const bool bOk = promiseStock.OnSettled(
+                    [spCtx, pRemain, fnResolve, fnReject](no::CPromiseResult result)
                     {
-                        ++spCtx->nBranchFail;
-                    }
-                    else
-                    {
-                        ++spCtx->nBranchDone;
-                    }
-                    if (--(*pRemain) == 0)
-                    {
-                        if (spCtx->nBranchFail.load() > 0)
+                        // 本回调在库存模块线程上；单个 worker ⇒ 不会并发进入。
+                        spCtx->idStockThread = std::this_thread::get_id();
+                        if (result.IsRejected())
                         {
-                            fnReject(kStockReject);
-                            return;
+                            ++spCtx->nBranchFail;
                         }
-                        fnResolve();
-                    }
-                });
+                        else
+                        {
+                            ++spCtx->nBranchDone;
+                        }
+                        if (--(*pRemain) == 0)
+                        {
+                            if (spCtx->nBranchFail.load() > 0)
+                            {
+                                fnReject(kStockReject);
+                                return;
+                            }
+                            fnResolve();
+                        }
+                    });
                 if (!bOk)
                 {
                     // 分支已 settled 但对方执行器不可用：计失败并计入剩余数（不能永久 pending）。
@@ -594,17 +597,18 @@ TEST(ModuleStress_ConcurrentAwaitSameChain)
     std::vector<std::thread> vecWaiter;
     for (int i = 0; i < kStressWaiters; ++i)
     {
-        vecWaiter.push_back(std::thread([promise, &nFulfilled, &nRejected]()
-        {
-            if (promise.Await().IsFulfilled())
+        vecWaiter.push_back(std::thread(
+            [promise, &nFulfilled, &nRejected]()
             {
-                ++nFulfilled;
-            }
-            else
-            {
-                ++nRejected;
-            }
-        }));
+                if (promise.Await().IsFulfilled())
+                {
+                    ++nFulfilled;
+                }
+                else
+                {
+                    ++nRejected;
+                }
+            }));
     }
     for (size_t i = 0; i < vecWaiter.size(); ++i)
     {

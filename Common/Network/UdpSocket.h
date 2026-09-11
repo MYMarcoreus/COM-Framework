@@ -18,7 +18,7 @@ namespace network {
 /// 事件循环在独立线程运行，通过回调上报数据到达事件。
 class CUdpSocket
 {
-   public:
+public:
     // 数据回调：data/len 为本次数据报内容，from 为来源地址。
     using DataCallback = std::function<void(const char* data, size_t len, const std::string& from)>;
 
@@ -41,7 +41,7 @@ class CUdpSocket
     // 是否正在运行。
     bool IsRunning() const;
 
-   private:
+private:
     // 事件循环线程入口。
     void ThreadMain();
 

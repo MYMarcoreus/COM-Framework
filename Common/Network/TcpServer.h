@@ -23,7 +23,7 @@ namespace network {
 /// 通过回调向上层报告 accept / data / close 事件，不依赖具体业务接口。
 class CTcpServer
 {
-   public:
+public:
     // 新连接回调。
     using AcceptCallback = std::function<void(ConnectionId id, const std::string& peer)>;
 
@@ -77,7 +77,7 @@ class CTcpServer
     // 设置最大连接数上限（0 表示不限制）；达到上限时新连接被直接关闭。
     void SetMaxConnections(size_t nMax);
 
-   private:
+private:
     // 启动空闲检测定时器（事件循环线程内调用）。
     void StartIdleTimer();
 

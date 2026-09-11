@@ -83,10 +83,11 @@ struct AsioEngine
         work.reset(new asio::executor_work_guard<asio::io_context::executor_type>(io->get_executor()));
         workers.clear();
         for (int i = 0; i < n; ++i)
-            workers.emplace_back([this]()
-            {
-                io->run();
-            });
+            workers.emplace_back(
+                [this]()
+                {
+                    io->run();
+                });
     }
 
     void Submit(const std::function<void()>& f)

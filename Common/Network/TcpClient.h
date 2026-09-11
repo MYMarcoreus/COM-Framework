@@ -19,7 +19,7 @@ namespace network {
 /// 通过回调上报连接结果 / 数据 / 关闭事件，不依赖具体业务接口。
 class CTcpClient
 {
-   public:
+public:
     // 连接结果回调：success 表示是否连接成功，peer 为对端地址。
     using ConnectCallback = std::function<void(bool success, const std::string& peer)>;
 
@@ -52,7 +52,7 @@ class CTcpClient
     // 对端地址字符串。
     std::string PeerAddress() const;
 
-   private:
+private:
     // 事件循环线程入口。
     void ThreadMain();
 

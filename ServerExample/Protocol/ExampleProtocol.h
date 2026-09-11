@@ -42,7 +42,7 @@ enum class ParseResult : int
 /// 协议只用于验证 ServerCore 网络能力，不属于 ServerCore。
 class CExampleProtocol
 {
-   public:
+public:
     // 头部长度。
     static const size_t kHeaderSize = 4;
 

@@ -304,11 +304,12 @@ TEST(Promise_OnSettledCallback)
     std::atomic<int> nOk(0);
     std::atomic<bool> bOkDone(false);
     no::CPromise<CTestContext> chainOk = exec.NewPromise(spOk, &StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC);
-    ASSERT_TRUE(chainOk.OnSettled([&nOk, &bOkDone](no::CPromiseResult r)
-    {
-        nOk.store(r.Code() + 1);  // 成功：0 + 1
-        bOkDone.store(true);
-    }));
+    ASSERT_TRUE(chainOk.OnSettled(
+        [&nOk, &bOkDone](no::CPromiseResult r)
+        {
+            nOk.store(r.Code() + 1);  // 成功：0 + 1
+            bOkDone.store(true);
+        }));
     chainOk.Await();
     while (!bOkDone.load())
     {
@@ -322,11 +323,12 @@ TEST(Promise_OnSettledCallback)
     std::atomic<int> nCode(-1);
     std::atomic<bool> bFailDone(false);
     no::CPromise<CTestContext> chainFail = exec.NewPromise(spFail, &StepFail, ASYNC_LOC);
-    ASSERT_TRUE(chainFail.OnSettled([&nCode, &bFailDone](no::CPromiseResult r)
-    {
-        nCode.store(r.Code());
-        bFailDone.store(true);
-    }));
+    ASSERT_TRUE(chainFail.OnSettled(
+        [&nCode, &bFailDone](no::CPromiseResult r)
+        {
+            nCode.store(r.Code());
+            bFailDone.store(true);
+        }));
     chainFail.Await();
     while (!bFailDone.load())
     {
@@ -350,14 +352,16 @@ TEST(Promise_Fork)
     std::atomic<int> nDone(0);
     no::CPromise<CTestContext> branchA = head.Then(&StepAdd1, ASYNC_LOC);
     no::CPromise<CTestContext> branchB = head.Then(&StepAdd10, ASYNC_LOC);
-    branchA.OnSettled([&nDone](no::CPromiseResult)
-    {
-        nDone.fetch_add(1);
-    });
-    branchB.OnSettled([&nDone](no::CPromiseResult)
-    {
-        nDone.fetch_add(1);
-    });
+    branchA.OnSettled(
+        [&nDone](no::CPromiseResult)
+        {
+            nDone.fetch_add(1);
+        });
+    branchB.OnSettled(
+        [&nDone](no::CPromiseResult)
+        {
+            nDone.fetch_add(1);
+        });
 
     ASSERT_TRUE(branchA.Await().IsFulfilled());
     ASSERT_TRUE(branchB.Await().IsFulfilled());
@@ -381,10 +385,11 @@ TEST(Promise_ThenAfterSettled)
 
     std::atomic<bool> bDone(false);
     no::CPromise<CTestContext> tail = chain.Then(&StepAdd10, ASYNC_LOC);
-    tail.OnSettled([&bDone](no::CPromiseResult)
-    {
-        bDone.store(true);
-    });
+    tail.OnSettled(
+        [&bDone](no::CPromiseResult)
+        {
+            bDone.store(true);
+        });
 
     ASSERT_TRUE(tail.Await().IsFulfilled());
     while (!bDone.load())
@@ -484,13 +489,14 @@ TEST(Promise_ConcurrentAwait)
     std::vector<std::thread> threads;
     for (int i = 0; i < 8; ++i)
     {
-        threads.push_back(std::thread([&tail, &nOk]()
-        {
-            if (tail.Await().IsFulfilled())
+        threads.push_back(std::thread(
+            [&tail, &nOk]()
             {
-                nOk.fetch_add(1);
-            }
-        }));
+                if (tail.Await().IsFulfilled())
+                {
+                    nOk.fetch_add(1);
+                }
+            }));
     }
     for (size_t i = 0; i < threads.size(); ++i)
     {
@@ -516,17 +522,19 @@ TEST(Promise_ParallelPromises)
     {
         std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
         no::CPromise<CTestContext> chain = exec.NewPromise(
-            spCtx, [&nActive, &nPeak](no::CPromiseResult /*upStep*/, const std::shared_ptr<CTestContext>& /*spCtx*/)
-        {
-            const int nNow = nActive.fetch_add(1) + 1;
-            int nCur = nPeak.load();
-            while (nCur < nNow && !nPeak.compare_exchange_weak(nCur, nNow))
+            spCtx,
+            [&nActive, &nPeak](no::CPromiseResult /*upStep*/, const std::shared_ptr<CTestContext>& /*spCtx*/)
             {
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-            nActive.fetch_sub(1);
-            return no::CPromiseResult::Resolve();
-        }, ASYNC_LOC);
+                const int nNow = nActive.fetch_add(1) + 1;
+                int nCur = nPeak.load();
+                while (nCur < nNow && !nPeak.compare_exchange_weak(nCur, nNow))
+                {
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                nActive.fetch_sub(1);
+                return no::CPromiseResult::Resolve();
+            },
+            ASYNC_LOC);
         chains.push_back(chain);
     }
 
@@ -603,28 +611,31 @@ TEST(Promise_PostBehavior)
 {
     no::CAsyncExecutor exec(2);
     std::atomic<int> nDone(0);
-    ASSERT_TRUE(!exec.Post([&nDone]()
-    {
-        nDone.fetch_add(1);
-    }));  // 未启动
+    ASSERT_TRUE(!exec.Post(
+        [&nDone]()
+        {
+            nDone.fetch_add(1);
+        }));  // 未启动
 
     ASSERT_TRUE(exec.Start());
     const std::thread::id mainId = std::this_thread::get_id();
     std::thread::id workerId;
-    ASSERT_TRUE(exec.Post([&nDone, &workerId, mainId]()
-    {
-        workerId = std::this_thread::get_id();
-        (void)mainId;
-        nDone.fetch_add(1);
-    }));
+    ASSERT_TRUE(exec.Post(
+        [&nDone, &workerId, mainId]()
+        {
+            workerId = std::this_thread::get_id();
+            (void)mainId;
+            nDone.fetch_add(1);
+        }));
     exec.Stop();  // 等待任务完成
     ASSERT_EQ(nDone.load(), 1);
     ASSERT_TRUE(workerId != mainId);
 
-    ASSERT_TRUE(!exec.Post([&nDone]()
-    {
-        nDone.fetch_add(1);
-    }));  // 已停止
+    ASSERT_TRUE(!exec.Post(
+        [&nDone]()
+        {
+            nDone.fetch_add(1);
+        }));  // 已停止
     ASSERT_EQ(nDone.load(), 1);
 }
 
@@ -633,7 +644,7 @@ TEST(Promise_PostBehavior)
 /// 协程：顺序 await 两条子链（协程与子链共享同一上下文）。
 class CSequentialCoro : public no::CCoroutine<CTestContext>
 {
-   public:
+public:
     using no::CCoroutine<CTestContext>::CCoroutine;
 
     void Run() override
@@ -649,7 +660,7 @@ class CSequentialCoro : public no::CCoroutine<CTestContext>
 /// 协程：并行 await 两条子链。
 class CParallelCoro : public no::CCoroutine<CTestContext>
 {
-   public:
+public:
     using no::CCoroutine<CTestContext>::CCoroutine;
 
     void Run() override
@@ -664,7 +675,7 @@ class CParallelCoro : public no::CCoroutine<CTestContext>
 /// 协程：await 到失败 → 终止（失败码透传，后续 await 不执行）。
 class CFailCoro : public no::CCoroutine<CTestContext>
 {
-   public:
+public:
     using no::CCoroutine<CTestContext>::CCoroutine;
 
     void Run() override
@@ -680,7 +691,7 @@ class CFailCoro : public no::CCoroutine<CTestContext>
 /// 协程：显式以失败结果结束（CO_RETURN）。
 class CReturnFailCoro : public no::CCoroutine<CTestContext>
 {
-   public:
+public:
     using no::CCoroutine<CTestContext>::CCoroutine;
 
     void Run() override
@@ -695,7 +706,7 @@ class CReturnFailCoro : public no::CCoroutine<CTestContext>
 /// 子协程：await 一条子链。
 class CChildCoro : public no::CCoroutine<CTestContext>
 {
-   public:
+public:
     using no::CCoroutine<CTestContext>::CCoroutine;
 
     void Run() override
@@ -710,7 +721,7 @@ class CChildCoro : public no::CCoroutine<CTestContext>
 /// 父协程：await 子协程（嵌套）。
 class CParentCoro : public no::CCoroutine<CTestContext>
 {
-   public:
+public:
     explicit CParentCoro(const std::shared_ptr<CTestContext>& spCtx, no::CAsyncExecutor* pExec)
         : no::CCoroutine<CTestContext>(spCtx), m_pExec(pExec), m_pChild()
     {}
@@ -725,7 +736,7 @@ class CParentCoro : public no::CCoroutine<CTestContext>
         CO_END();
     }
 
-   private:
+private:
     no::CAsyncExecutor* m_pExec;
     std::shared_ptr<CChildCoro> m_pChild;
 };
@@ -847,10 +858,11 @@ TEST(Coro_OnSettledCallback)
     std::shared_ptr<CSequentialCoro> pCoro = exec.CoStart<CSequentialCoro>(spCtx);
 
     std::atomic<int> nCode(-1);
-    ASSERT_TRUE(pCoro->AsPromise().OnSettled([&nCode](no::CPromiseResult r)
-    {
-        nCode.store(r.Code());
-    }));
+    ASSERT_TRUE(pCoro->AsPromise().OnSettled(
+        [&nCode](no::CPromiseResult r)
+        {
+            nCode.store(r.Code());
+        }));
     while (nCode.load() < 0)
     {
         std::this_thread::yield();
@@ -958,7 +970,7 @@ static no::CPromiseResult StepQueryRows(no::CPromiseResult upResult, const std::
 /// 协程：await 另一套上下文的子流程（跨上下文嵌套）。
 class CCrossContextCoro : public no::CCoroutine<CTestContext>
 {
-   public:
+public:
     explicit CCrossContextCoro(const std::shared_ptr<CTestContext>& spCtx, no::CAsyncExecutor* pExec)
         : no::CCoroutine<CTestContext>(spCtx), m_pExec(pExec), m_spOther()
     {}
@@ -974,7 +986,7 @@ class CCrossContextCoro : public no::CCoroutine<CTestContext>
         CO_END();
     }
 
-   private:
+private:
     no::CAsyncExecutor* m_pExec;
     std::shared_ptr<COtherContext> m_spOther;
 };
@@ -997,7 +1009,7 @@ TEST(Coro_AwaitOtherContext)
 /// 协程：并行 await「同上下文 + 两套别的上下文」的混合列表。
 class CMixedParallelCoro : public no::CCoroutine<CTestContext>
 {
-   public:
+public:
     explicit CMixedParallelCoro(const std::shared_ptr<CTestContext>& spCtx, no::CAsyncExecutor* pExec)
         : no::CCoroutine<CTestContext>(spCtx), m_pExec(pExec), m_spOtherA(), m_spOtherB()
     {}
@@ -1015,7 +1027,7 @@ class CMixedParallelCoro : public no::CCoroutine<CTestContext>
         CO_END();
     }
 
-   private:
+private:
     no::CAsyncExecutor* m_pExec;
     std::shared_ptr<COtherContext> m_spOtherA;
     std::shared_ptr<COtherContext> m_spOtherB;
@@ -1071,30 +1083,33 @@ TEST(Promise_BridgeForeignPromise)
     std::shared_ptr<no::CPromise<COtherContext> > spForeign(
         new no::CPromise<COtherContext>(exec.NewPromise(spOther, &StepQueryRows, ASYNC_LOC)));
 
-    no::CPromise<CTestContext> pTail = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC)  // 本模块层
-                                           .ThenPromise(
-                                               [&exec, spForeign](const std::shared_ptr<CTestContext>& spCtxSelf)
-    {
-        // new Promise：由「别的模块」的完成回调兑现 / 拒绝本 promise（非阻塞桥接）。
-        return no::CPromise<CTestContext>::New(
-            exec, spCtxSelf,
-            [spForeign, spCtxSelf](const no::CPromise<CTestContext>::ResolveFn& fnResolve,
-                                   const no::CPromise<CTestContext>::RejectFn& fnReject)
-        {
-            spForeign->OnSettled([spForeign, spCtxSelf, fnResolve, fnReject](no::CPromiseResult result)
-            {
-                if (result.IsRejected())
+    no::CPromise<CTestContext> pTail =
+        exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC)  // 本模块层
+            .ThenPromise(
+                [&exec, spForeign](const std::shared_ptr<CTestContext>& spCtxSelf)
                 {
-                    fnReject(result.Code());  // 拒绝：本流程后续 then 层不执行。
-                    return;
-                }
-                spCtxSelf->nValue += spForeign->GetContext()->nRows;  // 汇总别的模块的数据。
-                fnResolve();
-            });
-        },
-            ASYNC_LOC);
-    }, ASYNC_LOC)
-                                           .Then(&StepAdd10, ASYNC_LOC);  // 子 promise 完成后继续本模块层
+                    // new Promise：由「别的模块」的完成回调兑现 / 拒绝本 promise（非阻塞桥接）。
+                    return no::CPromise<CTestContext>::New(
+                        exec, spCtxSelf,
+                        [spForeign, spCtxSelf](const no::CPromise<CTestContext>::ResolveFn& fnResolve,
+                                               const no::CPromise<CTestContext>::RejectFn& fnReject)
+                        {
+                            spForeign->OnSettled(
+                                [spForeign, spCtxSelf, fnResolve, fnReject](no::CPromiseResult result)
+                                {
+                                    if (result.IsRejected())
+                                    {
+                                        fnReject(result.Code());  // 拒绝：本流程后续 then 层不执行。
+                                        return;
+                                    }
+                                    spCtxSelf->nValue += spForeign->GetContext()->nRows;  // 汇总别的模块的数据。
+                                    fnResolve();
+                                });
+                        },
+                        ASYNC_LOC);
+                },
+                ASYNC_LOC)
+            .Then(&StepAdd10, ASYNC_LOC);  // 子 promise 完成后继续本模块层
 
     ASSERT_TRUE(pTail.Await().IsFulfilled());
     ASSERT_EQ(spOther->nRows, 3);
@@ -1115,28 +1130,32 @@ TEST(Promise_BridgeForeignRejected)
     std::shared_ptr<no::CPromise<COtherContext> > spForeign(
         new no::CPromise<COtherContext>(exec.NewPromise(spOther, &StepQueryRowsFail, ASYNC_LOC)));
 
-    no::CPromise<CTestContext> pTail = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC)
-                                           .ThenPromise(
-                                               [&exec, spForeign](const std::shared_ptr<CTestContext>& spCtxSelf)
-    {
-        return no::CPromise<CTestContext>::New(exec, spCtxSelf,
-                                               [spForeign](const no::CPromise<CTestContext>::ResolveFn& fnResolve,
-                                                           const no::CPromise<CTestContext>::RejectFn& fnReject)
-        {
-            spForeign->OnSettled([fnResolve, fnReject](no::CPromiseResult result)
-            {
-                if (result.IsRejected())
+    no::CPromise<CTestContext> pTail =
+        exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC)
+            .ThenPromise(
+                [&exec, spForeign](const std::shared_ptr<CTestContext>& spCtxSelf)
                 {
-                    fnReject(result.Code());
-                    return;
-                }
-                fnResolve();
-            });
-        },
-                                               ASYNC_LOC);
-    }, ASYNC_LOC)
-                                           .Then(&StepShouldNotRun, ASYNC_LOC)    // 子 promise 被拒绝 → 不执行
-                                           .Catch(&StepCatchObserve, ASYNC_LOC);  // catch 仍执行（观察拒绝）
+                    return no::CPromise<CTestContext>::New(
+                        exec, spCtxSelf,
+                        [spForeign](const no::CPromise<CTestContext>::ResolveFn& fnResolve,
+                                    const no::CPromise<CTestContext>::RejectFn& fnReject)
+                        {
+                            spForeign->OnSettled(
+                                [fnResolve, fnReject](no::CPromiseResult result)
+                                {
+                                    if (result.IsRejected())
+                                    {
+                                        fnReject(result.Code());
+                                        return;
+                                    }
+                                    fnResolve();
+                                });
+                        },
+                        ASYNC_LOC);
+                },
+                ASYNC_LOC)
+            .Then(&StepShouldNotRun, ASYNC_LOC)    // 子 promise 被拒绝 → 不执行
+            .Catch(&StepCatchObserve, ASYNC_LOC);  // catch 仍执行（观察拒绝）
 
     const no::CPromiseResult result = pTail.Await();
     ASSERT_TRUE(result.IsRejected());

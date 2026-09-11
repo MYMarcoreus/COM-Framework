@@ -126,7 +126,7 @@ bool Expect(bool bCond, const std::string& strWhat, const std::string& strDetail
 /// @brief 库存模块（演示用的最小模块）：执行器随模块生灭，对外只有异步函数。
 class CStockModule
 {
-   public:
+public:
     CStockModule() : m_exec(1)
     {
         m_exec.Start();
@@ -144,7 +144,7 @@ class CStockModule
         return m_exec.NewPromise(spStock, &StepConnect, ASYNC_LOC).Then(&StepRead, ASYNC_LOC);
     }
 
-   private:
+private:
     /// 层 1：建连（模拟握手）。
     static no::CPromiseResult StepConnect(no::CPromiseResult /*upResult*/, const std::shared_ptr<CStockContext>& spCtx)
     {
@@ -171,7 +171,7 @@ class CStockModule
 /// @brief 记账模块（演示用的最小模块）：执行器随模块生灭，对外只有异步函数。
 class CBillingModule
 {
-   public:
+public:
     CBillingModule() : m_exec(1)
     {
         m_exec.Start();
@@ -191,7 +191,7 @@ class CBillingModule
         return m_exec.NewPromise(spBill, &StepWrite, ASYNC_LOC);
     }
 
-   private:
+private:
     /// 唯一一步：写流水（模拟 IO）。
     static no::CPromiseResult StepWrite(no::CPromiseResult /*upResult*/, const std::shared_ptr<CBillingContext>& spCtx)
     {
@@ -210,7 +210,7 @@ class CBillingModule
 /// @brief 下单模块（演示用的最小模块）：链里的 lambda 捕获 this，模块要比链活得久。
 class COrderModule
 {
-   public:
+public:
     COrderModule() : m_exec(2)
     {
         m_exec.Start();
@@ -248,13 +248,14 @@ class COrderModule
             const int nOrderId = spCtxSelf->nSku * 1000 + spCtxSelf->nQty;
             no::CPromise<CBillingContext> promiseBill = spBillingModule->WriteBillingAsync(nOrderId, spCtxSelf->nTotal);
             // 旁支的收尾通知跑在记账模块的线程上 → 只写原子，不做重活。
-            promiseBill.OnSettled([spCtxSelf](no::CPromiseResult result)
-            {
-                if (result.IsFulfilled())
+            promiseBill.OnSettled(
+                [spCtxSelf](no::CPromiseResult result)
                 {
-                    spCtxSelf->nBillingDone.store(1, std::memory_order_relaxed);
-                }
-            });
+                    if (result.IsFulfilled())
+                    {
+                        spCtxSelf->nBillingDone.store(1, std::memory_order_relaxed);
+                    }
+                });
             spCtxSelf->strTrace += "记账已发起(不等);";
             return no::CPromiseResult::Resolve();  // 主链继续，不等待记账。
         };
@@ -271,7 +272,7 @@ class COrderModule
             .Finally(&StepAudit, ASYNC_LOC);          // finally：成败都跑
     }
 
-   private:
+private:
     /// ① 读订单：取单价（模拟一次 IO）。
     static no::CPromiseResult StepLoad(no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
     {
@@ -316,25 +317,26 @@ class COrderModule
             // 发起跨模块调用：拿到的是库存模块上下文的 promise，执行器在模块内部。
             no::CPromise<CStockContext> promiseStock = spStockModule->QueryStockAsync(spCtx->nSku);
             const std::shared_ptr<CStockContext> spStock = promiseStock.GetContext();
-            promiseStock.OnSettled([spCtx, spStock, fnResolve, fnReject](no::CPromiseResult result)
-            {
-                // 本回调在库存模块的线程上：只做语义转换 + 改上下文 + settle。
-                if (result.IsRejected())
+            promiseStock.OnSettled(
+                [spCtx, spStock, fnResolve, fnReject](no::CPromiseResult result)
                 {
-                    fnReject(result.Code());  // 库存模块拒绝 → 本流程拒绝（原样透传）。
-                    return;
-                }
-                spCtx->nStock = spStock->nAvail;
-                spCtx->bStockEnough = (spStock->nAvail >= spCtx->nQty);
-                spCtx->strTrace += "查库存(" + std::to_string(spStock->nAvail) + ");";
-                if (!spCtx->bStockEnough)
-                {
-                    spCtx->strTrace += "库存不足;";
-                    fnReject(kCodeOutOfStock);  // 业务拒绝：后续 then 不执行。
-                    return;
-                }
-                fnResolve();
-            });
+                    // 本回调在库存模块的线程上：只做语义转换 + 改上下文 + settle。
+                    if (result.IsRejected())
+                    {
+                        fnReject(result.Code());  // 库存模块拒绝 → 本流程拒绝（原样透传）。
+                        return;
+                    }
+                    spCtx->nStock = spStock->nAvail;
+                    spCtx->bStockEnough = (spStock->nAvail >= spCtx->nQty);
+                    spCtx->strTrace += "查库存(" + std::to_string(spStock->nAvail) + ");";
+                    if (!spCtx->bStockEnough)
+                    {
+                        spCtx->strTrace += "库存不足;";
+                        fnReject(kCodeOutOfStock);  // 业务拒绝：后续 then 不执行。
+                        return;
+                    }
+                    fnResolve();
+                });
         };
         return no::CPromise<COrderContext>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
     }

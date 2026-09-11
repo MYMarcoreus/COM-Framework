@@ -26,7 +26,7 @@ namespace sc {
 ///  - 回调栈回放期间/之后不得再向本流程提交子任务。
 class CBusinessFlow : public std::enable_shared_from_this<CBusinessFlow>
 {
-   public:
+public:
     CBusinessFlow();
     virtual ~CBusinessFlow();
 
@@ -63,7 +63,7 @@ class CBusinessFlow : public std::enable_shared_from_this<CBusinessFlow>
         return m_bFinished.load();
     }
 
-   private:
+private:
     // 子任务计数归零且已 Complete → 回放回调栈（恰好一次，线程安全）。
     void MaybeFinish();
 

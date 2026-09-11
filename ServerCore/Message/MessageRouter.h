@@ -20,7 +20,7 @@ namespace sc {
 ///       SetExtractor/RegisterHandler 可跨线程安全调用。
 class CMessageRouter : public CModule, public IMessageRouter
 {
-   public:
+public:
     CMessageRouter();
 
     virtual ~CMessageRouter();
@@ -48,7 +48,7 @@ class CMessageRouter : public CModule, public IMessageRouter
 
     SC_DECLARE_INTERFACE_MAP();
 
-   private:
+private:
     struct HandlerEntry
     {
         int type;

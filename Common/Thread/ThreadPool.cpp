@@ -221,10 +221,11 @@ void CThreadPool::WorkerLoop()
                 lock.lock();
                 if (m_dequeTasks.empty())
                 {
-                    m_condition.wait(lock, [this]()
-                    {
-                        return m_bStopping || !m_dequeTasks.empty();
-                    });
+                    m_condition.wait(lock,
+                                     [this]()
+                                     {
+                                         return m_bStopping || !m_dequeTasks.empty();
+                                     });
                 }
             }
             if (m_bStopping && m_dequeTasks.empty())

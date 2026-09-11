@@ -155,13 +155,14 @@ TEST(Smoke_MixedUsagesTrace)
         // 旁支用独立上下文，避免与主链并发写同一个 ctx
         std::shared_ptr<CSmokeCtx> spSide = std::make_shared<CSmokeCtx>();
         exec.NewPromise(spSide, &StepMark, ASYNC_LOC)
-            .OnSettled([spSelf](no::CPromiseResult result)
-        {
-            if (result.IsFulfilled())
-            {
-                spSelf->nSide.fetch_add(1, std::memory_order_relaxed);
-            }
-        });
+            .OnSettled(
+                [spSelf](no::CPromiseResult result)
+                {
+                    if (result.IsFulfilled())
+                    {
+                        spSelf->nSide.fetch_add(1, std::memory_order_relaxed);
+                    }
+                });
         spSelf->strTrace += "s";
         return no::CPromiseResult::Resolve();
     };
@@ -276,11 +277,11 @@ TEST(Smoke_NewExternalSettle)
             exec, spCtx,
             [&fnResolveHolder, &fnRejectHolder, spCtx](const no::CPromise<CSmokeCtx>::ResolveFn& fnResolve,
                                                        const no::CPromise<CSmokeCtx>::RejectFn& fnReject)
-        {
-            fnResolveHolder = fnResolve;  // 存起来，稍后由「外部事件」调用
-            fnRejectHolder = fnReject;
-            spCtx->strTrace += "n";  // executor 是同步执行的
-        },
+            {
+                fnResolveHolder = fnResolve;  // 存起来，稍后由「外部事件」调用
+                fnRejectHolder = fnReject;
+                spCtx->strTrace += "n";  // executor 是同步执行的
+            },
             ASYNC_LOC);
 
         ASSERT_TRUE(spCtx->strTrace == "n");  // 立即执行
@@ -295,14 +296,14 @@ TEST(Smoke_NewExternalSettle)
     {
         std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
         no::CPromise<CSmokeCtx>::RejectFn fnRejectHolder;
-        no::CPromise<CSmokeCtx> p =
-            no::CPromise<CSmokeCtx>::New(exec, spCtx,
-                                         [&fnRejectHolder](const no::CPromise<CSmokeCtx>::ResolveFn& /*fnResolve*/,
-                                                           const no::CPromise<CSmokeCtx>::RejectFn& fnReject)
-        {
-            fnRejectHolder = fnReject;
-        },
-                                         ASYNC_LOC);
+        no::CPromise<CSmokeCtx> p = no::CPromise<CSmokeCtx>::New(
+            exec, spCtx,
+            [&fnRejectHolder](const no::CPromise<CSmokeCtx>::ResolveFn& /*fnResolve*/,
+                              const no::CPromise<CSmokeCtx>::RejectFn& fnReject)
+            {
+                fnRejectHolder = fnReject;
+            },
+            ASYNC_LOC);
 
         fnRejectHolder(no::kBusinessBase + 5);
         const no::CPromiseResult r = p.Then(&StepMark, ASYNC_LOC).Catch(&StepCatchPass, ASYNC_LOC).Await();
@@ -321,15 +322,15 @@ TEST(Smoke_NewBadExecutor)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtxThrow = std::make_shared<CSmokeCtx>();
-    const no::CPromiseResult rThrow =
-        no::CPromise<CSmokeCtx>::New(exec, spCtxThrow,
-                                     [](const no::CPromise<CSmokeCtx>::ResolveFn& /*fnResolve*/,
-                                        const no::CPromise<CSmokeCtx>::RejectFn& /*fnReject*/)
-    {
-        throw std::runtime_error("executor boom");
-    },
-                                     ASYNC_LOC)
-            .Await();
+    const no::CPromiseResult rThrow = no::CPromise<CSmokeCtx>::New(
+                                          exec, spCtxThrow,
+                                          [](const no::CPromise<CSmokeCtx>::ResolveFn& /*fnResolve*/,
+                                             const no::CPromise<CSmokeCtx>::RejectFn& /*fnReject*/)
+                                          {
+                                              throw std::runtime_error("executor boom");
+                                          },
+                                          ASYNC_LOC)
+                                          .Await();
     ASSERT_TRUE(rThrow.IsRejected());
     ASSERT_EQ(rThrow.Code(), static_cast<int>(no::kException));
 
@@ -463,24 +464,26 @@ TEST(Smoke_OnSettledSideChannel)
     std::atomic<int> nOk(0);
     std::atomic<int> nFail(0);
     no::CPromise<CSmokeCtx> p = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC).Catch(&StepCatchPass, ASYNC_LOC);
-    ASSERT_TRUE(p.OnSettled([&nOk, &nFail](no::CPromiseResult r)
-    {
-        if (r.IsRejected())
+    ASSERT_TRUE(p.OnSettled(
+        [&nOk, &nFail](no::CPromiseResult r)
         {
-            nFail.fetch_add(1);
-        }
-        else
+            if (r.IsRejected())
+            {
+                nFail.fetch_add(1);
+            }
+            else
+            {
+                nOk.fetch_add(1);
+            }
+        }));
+    ASSERT_TRUE(p.OnSettled(
+        [&nFail](no::CPromiseResult r)
         {
-            nOk.fetch_add(1);
-        }
-    }));
-    ASSERT_TRUE(p.OnSettled([&nFail](no::CPromiseResult r)
-    {
-        if (r.IsRejected())
-        {
-            nFail.fetch_add(1);
-        }
-    }));
+            if (r.IsRejected())
+            {
+                nFail.fetch_add(1);
+            }
+        }));
 
     const no::CPromiseResult r = p.Await();
     ASSERT_TRUE(r.IsRejected());
@@ -541,17 +544,18 @@ TEST(Smoke_BridgeTwoModules)
                                       const no::CPromise<CSmokeCtx>::RejectFn& fnReject)
     {
         no::CPromise<CSmokeCtx> pStock = execStock.NewPromise(spCtx, &StepAdd10, ASYNC_LOC);
-        pStock.OnSettled([spCtx, fnResolve, fnReject, &idStock](no::CPromiseResult result)
-        {
-            idStock = std::this_thread::get_id();  // 回调跑在库存模块的线程上
-            if (result.IsRejected())
+        pStock.OnSettled(
+            [spCtx, fnResolve, fnReject, &idStock](no::CPromiseResult result)
             {
-                fnReject(result.Code());
-                return;
-            }
-            spCtx->strTrace += "b";
-            fnResolve();
-        });
+                idStock = std::this_thread::get_id();  // 回调跑在库存模块的线程上
+                if (result.IsRejected())
+                {
+                    fnReject(result.Code());
+                    return;
+                }
+                spCtx->strTrace += "b";
+                fnResolve();
+            });
     };
 
     // 工厂里才发起跨模块调用（与外层链同步：③ 层被调用时才发起）
@@ -594,20 +598,22 @@ TEST(Smoke_SingleWorkerNoBlocking)
             .ThenPromise(fnInner, ASYNC_LOC)
             .Then(
                 [&exec](no::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spSelf)
-    {
-        // 旁支用独立上下文，避免与主链并发写同一个 ctx
-        std::shared_ptr<CSmokeCtx> spSide = std::make_shared<CSmokeCtx>();
-        exec.NewPromise(spSide, &StepMark, ASYNC_LOC)
-            .OnSettled([spSelf](no::CPromiseResult result)
-        {
-            if (result.IsFulfilled())
-            {
-                spSelf->nSide.fetch_add(1, std::memory_order_relaxed);
-            }
-        });
-        spSelf->strTrace += "s";
-        return no::CPromiseResult::Resolve();
-    }, ASYNC_LOC)
+                {
+                    // 旁支用独立上下文，避免与主链并发写同一个 ctx
+                    std::shared_ptr<CSmokeCtx> spSide = std::make_shared<CSmokeCtx>();
+                    exec.NewPromise(spSide, &StepMark, ASYNC_LOC)
+                        .OnSettled(
+                            [spSelf](no::CPromiseResult result)
+                            {
+                                if (result.IsFulfilled())
+                                {
+                                    spSelf->nSide.fetch_add(1, std::memory_order_relaxed);
+                                }
+                            });
+                    spSelf->strTrace += "s";
+                    return no::CPromiseResult::Resolve();
+                },
+                ASYNC_LOC)
             .Finally(&StepFinallyIgnoreReturn, ASYNC_LOC)
             .Await();
     WaitSide(spCtx, 500);

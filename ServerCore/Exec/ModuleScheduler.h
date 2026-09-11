@@ -28,7 +28,7 @@ namespace sc {
 /// 依赖全局线程池（common::thread::CThreadPool）只执行、不调度。
 class CModuleScheduler
 {
-   public:
+public:
     /// @brief 子任务类型。
     enum class ETaskKind
     {
@@ -74,7 +74,7 @@ class CModuleScheduler
     /// @brief 等待排空（Stop/Shutdown 时由编排线程调用；不阻止新提交）。
     void Drain();
 
-   private:
+private:
     /// @brief 待调度条目：子任务类型 + 子任务逻辑（统一 FIFO 队列）。
     struct CDispatchEntry
     {

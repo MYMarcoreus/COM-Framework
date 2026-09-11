@@ -36,7 +36,7 @@ struct MetricSnapshot
 /// 应用层聚合为状态报告 / 健康检查，替代手拼字符串的状态描述。
 SC_INTERFACE(IMetrics, "sc::IMetrics", "9c1b3d42-7a51-4f6e-9a2b-cd8e55f0a3f1")
 {
-   public:
+public:
     virtual ~IMetrics()
     {}
 

@@ -17,7 +17,7 @@ namespace thread {
 /// 基于 C++11 标准库自实现，不依赖第三方库。
 class CThreadPool
 {
-   public:
+public:
     /// @brief 任务类型。
     using CTask = std::function<void()>;
 
@@ -52,7 +52,7 @@ class CThreadPool
     // 已经在本池线程上就地执行（省一次入队），否则投递回本池执行。
     static bool IsInPoolThread(const CThreadPool* pPool);
 
-   private:
+private:
     // 工作线程循环。
     void WorkerLoop();
 

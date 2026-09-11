@@ -15,7 +15,7 @@ namespace sc {
 /// 线程安全：Push / Size / Empty / RunAll / Clear 可跨线程调用。
 class CCallbackStack
 {
-   public:
+public:
     /// @brief 压栈回调（越晚压入越先触发）。
     ///
     /// @param fnCallback 回调（可为空，空则忽略）。
@@ -39,7 +39,7 @@ class CCallbackStack
     /// @brief 清空且不触发（异常回滚 / 流程丢弃时使用）。
     void Clear();
 
-   private:
+private:
     std::vector<std::function<void()> > m_vecCallbacks;  // 回调栈（尾为栈顶）。
     mutable std::mutex m_mutex;                          // 保护回调栈。
 };

@@ -59,7 +59,7 @@ inline const sc::InterfaceId& IID_IUserService()
 /// 映射为业务码后透传。
 class IUserService : public virtual sc::IUnknown
 {
-   public:
+public:
     virtual ~IUserService()
     {}
 

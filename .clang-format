@@ -93,8 +93,9 @@ AllowShortIfStatementsOnASingleLine: WithoutElse
 SpaceAfterCStyleCast: false
 
 # ---- lambda ----
-# lambda 花括号换行（BeforeLambdaBody: true），体按外层作用域缩进。
-LambdaBodyIndentation: OuterScope
+# lambda 花括号换行（BeforeLambdaBody: true），体按**签名所在行**再多缩进一级
+# （Signature：内联在实参列表里的 lambda 体也会缩进一次，不会掉回外层作用域）。
+LambdaBodyIndentation: Signature
 # lambda 体也不写在单行（Google 基准默认 All 会把 { return x; } 压成一行）。
 AllowShortLambdasOnASingleLine: None
 

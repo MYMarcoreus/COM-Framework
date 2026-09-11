@@ -38,7 +38,7 @@ struct CStartCalleeCtx
 /// @brief 被调模块：自持 1 线程执行器。
 class CStartCalleeModule
 {
-   public:
+public:
     CStartCalleeModule() : m_exec(1)
     {
         m_exec.Start();
@@ -54,7 +54,7 @@ class CStartCalleeModule
         return m_exec.NewPromise(spCtx, &StepQuery, ASYNC_LOC);
     }
 
-   private:
+private:
     /// 层处理器。
     static no::CPromiseResult StepQuery(no::CPromiseResult /*upResult*/, const std::shared_ptr<CStartCalleeCtx>& spCtx)
     {
@@ -86,7 +86,7 @@ struct CStartCtx
 /// @brief 调用方模块：链用 `BuildPromise` 建（延迟启动）。
 class CStartOrderModule
 {
-   public:
+public:
     CStartOrderModule() : m_exec(1)
     {
         m_exec.Start();
@@ -139,7 +139,7 @@ class CStartOrderModule
         return promise.Then(&StepFinal, ASYNC_LOC);
     }
 
-   private:
+private:
     /// ① 本模块自有层。
     static no::CPromiseResult StepLoad(no::CPromiseResult /*upResult*/, const std::shared_ptr<CStartCtx>& spCtx)
     {
@@ -185,17 +185,18 @@ class CStartOrderModule
         {
             auto spCalleeCtx = std::make_shared<CStartCalleeCtx>();
             no::CPromise<CStartCalleeCtx> promiseCallee = spCallee->QueryAsync(spCalleeCtx);
-            promiseCallee.OnSettled([spCtx, spCalleeCtx, fnResolve, fnReject](no::CPromiseResult result)
-            {
-                if (result.IsRejected())
+            promiseCallee.OnSettled(
+                [spCtx, spCalleeCtx, fnResolve, fnReject](no::CPromiseResult result)
                 {
-                    fnReject(result.Code());
-                    return;
-                }
-                spCtx->nStock = spCalleeCtx->nAvail;
-                spCtx->strTrace += "B1;";
-                fnResolve();
-            });
+                    if (result.IsRejected())
+                    {
+                        fnReject(result.Code());
+                        return;
+                    }
+                    spCtx->nStock = spCalleeCtx->nAvail;
+                    spCtx->strTrace += "B1;";
+                    fnResolve();
+                });
         };
         return no::CPromise<CStartCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
     }

@@ -69,13 +69,14 @@ bool CTcpServer::Start(uint16_t nPort, const AcceptCallback& fnAccept, const Dat
     m_nPort = nPort;
     m_bRunning.store(true);
     m_thread = std::thread(&CTcpServer::ThreadMain, this);
-    asio::post(m_io, [this]()
-    {
-        if (m_nIdleSeconds.load() != 0 && m_pIdleTimer == nullptr)
-        {
-            StartIdleTimer();
-        }
-    });
+    asio::post(m_io,
+               [this]()
+               {
+                   if (m_nIdleSeconds.load() != 0 && m_pIdleTimer == nullptr)
+                   {
+                       StartIdleTimer();
+                   }
+               });
     return true;
 }
 
@@ -89,10 +90,11 @@ void CTcpServer::Stop()
         return;
     }
     m_bRunning.store(false);
-    asio::post(m_io, [this]()
-    {
-        ShutdownOnIoThread();
-    });
+    asio::post(m_io,
+               [this]()
+               {
+                   ShutdownOnIoThread();
+               });
     if (m_thread.joinable())
     {
         m_thread.join();
@@ -115,51 +117,52 @@ void CTcpServer::StartAccept()
     {
         return;
     }
-    m_pAcceptor->async_accept([this](const asio::error_code& ec, asio::ip::tcp::socket socket)
-    {
-        // ① 错误处理
-        if (ec)
+    m_pAcceptor->async_accept(
+        [this](const asio::error_code& ec, asio::ip::tcp::socket socket)
         {
-            if (ec == asio::error::operation_aborted)
+            // ① 错误处理
+            if (ec)
             {
-                return;  // 服务器关闭中
+                if (ec == asio::error::operation_aborted)
+                {
+                    return;  // 服务器关闭中
+                }
+                if (m_pAcceptor != nullptr && m_pAcceptor->is_open())
+                {
+                    StartAccept();  // 瞬时错误，继续接受
+                }
+                return;
             }
-            if (m_pAcceptor != nullptr && m_pAcceptor->is_open())
+            // ② 连接数上限检查：达到上限时直接关闭新连接（防资源耗尽）
+            size_t nMax = m_nMaxConnections.load();
+            if (nMax > 0 && m_nConnectionCount.load() >= nMax)
             {
-                StartAccept();  // 瞬时错误，继续接受
+                asio::error_code ignored;
+                static_cast<void>(socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignored));
+                static_cast<void>(socket.close(ignored));
+                StartAccept();
+                return;
             }
-            return;
-        }
-        // ② 连接数上限检查：达到上限时直接关闭新连接（防资源耗尽）
-        size_t nMax = m_nMaxConnections.load();
-        if (nMax > 0 && m_nConnectionCount.load() >= nMax)
-        {
-            asio::error_code ignored;
-            static_cast<void>(socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignored));
-            static_cast<void>(socket.close(ignored));
-            StartAccept();
-            return;
-        }
-        // ③ 创建连接并注册
-        ConnectionId nId = m_nNextId++;
-        CTcpConnection::Ptr pConn = std::make_shared<CTcpConnection>(m_io, nId, std::move(socket));
-        pConn->SetCallbacks(std::bind(&CTcpServer::HandleData, this, std::placeholders::_1, std::placeholders::_2,
-                                      std::placeholders::_3),
-                            std::bind(&CTcpServer::HandleClose, this, std::placeholders::_1));
-        m_mapConnections[nId] = pConn;
-        pConn->StartRead();
-        {
-            std::lock_guard<std::mutex> lock(m_mutexPeer);
-            m_mapPeerAddresses[nId] = pConn->PeerAddress();
-        }
-        m_nConnectionCount.fetch_add(1);
-        m_nTotalAccepted.fetch_add(1);
-        if (m_fnAccept)
-        {
-            m_fnAccept(nId, pConn->PeerAddress());
-        }
-        StartAccept();  // 继续接受下一个连接
-    });
+            // ③ 创建连接并注册
+            ConnectionId nId = m_nNextId++;
+            CTcpConnection::Ptr pConn = std::make_shared<CTcpConnection>(m_io, nId, std::move(socket));
+            pConn->SetCallbacks(std::bind(&CTcpServer::HandleData, this, std::placeholders::_1, std::placeholders::_2,
+                                          std::placeholders::_3),
+                                std::bind(&CTcpServer::HandleClose, this, std::placeholders::_1));
+            m_mapConnections[nId] = pConn;
+            pConn->StartRead();
+            {
+                std::lock_guard<std::mutex> lock(m_mutexPeer);
+                m_mapPeerAddresses[nId] = pConn->PeerAddress();
+            }
+            m_nConnectionCount.fetch_add(1);
+            m_nTotalAccepted.fetch_add(1);
+            if (m_fnAccept)
+            {
+                m_fnAccept(nId, pConn->PeerAddress());
+            }
+            StartAccept();  // 继续接受下一个连接
+        });
 }
 
 /// @brief 连接数据回调。
@@ -203,44 +206,46 @@ bool CTcpServer::Send(ConnectionId nId, const char* pData, size_t nLen)
         return false;
     }
     std::string strPayload(pData, nLen);
-    asio::post(m_io, [this, nId, strPayload]()
-    {
-        std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = m_mapConnections.find(nId);
-        if (it != m_mapConnections.end())
-        {
-            it->second->Send(strPayload.data(), strPayload.size());
-        }
-    });
+    asio::post(m_io,
+               [this, nId, strPayload]()
+               {
+                   std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = m_mapConnections.find(nId);
+                   if (it != m_mapConnections.end())
+                   {
+                       it->second->Send(strPayload.data(), strPayload.size());
+                   }
+               });
     return true;
 }
 
 /// @brief 关闭指定连接。
 void CTcpServer::Close(ConnectionId nId)
 {
-    asio::post(m_io, [this, nId]()
-    {
-        std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = m_mapConnections.find(nId);
-        if (it == m_mapConnections.end())
-        {
-            return;
-        }
-        CTcpConnection::Ptr pConn = it->second;
-        m_mapConnections.erase(it);
-        {
-            std::lock_guard<std::mutex> lock(m_mutexPeer);
-            m_mapPeerAddresses.erase(nId);
-        }
-        if (m_nConnectionCount.load() > 0)
-        {
-            m_nConnectionCount.fetch_sub(1);
-        }
-        m_nTotalClosed.fetch_add(1);
-        pConn->Close();
-        if (m_fnClose)
-        {
-            m_fnClose(nId);
-        }
-    });
+    asio::post(m_io,
+               [this, nId]()
+               {
+                   std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = m_mapConnections.find(nId);
+                   if (it == m_mapConnections.end())
+                   {
+                       return;
+                   }
+                   CTcpConnection::Ptr pConn = it->second;
+                   m_mapConnections.erase(it);
+                   {
+                       std::lock_guard<std::mutex> lock(m_mutexPeer);
+                       m_mapPeerAddresses.erase(nId);
+                   }
+                   if (m_nConnectionCount.load() > 0)
+                   {
+                       m_nConnectionCount.fetch_sub(1);
+                   }
+                   m_nTotalClosed.fetch_add(1);
+                   pConn->Close();
+                   if (m_fnClose)
+                   {
+                       m_fnClose(nId);
+                   }
+               });
 }
 
 /// @brief 设置最大连接数上限。
@@ -261,13 +266,14 @@ void CTcpServer::SetIdleTimeout(uint32_t nSeconds)
     m_nIdleSeconds.store(nSeconds);
     if (nSeconds != 0)
     {
-        asio::post(m_io, [this]()
-        {
-            if (m_pIdleTimer == nullptr)
-            {
-                StartIdleTimer();
-            }
-        });
+        asio::post(m_io,
+                   [this]()
+                   {
+                       if (m_pIdleTimer == nullptr)
+                       {
+                           StartIdleTimer();
+                       }
+                   });
     }
 }
 
@@ -282,18 +288,19 @@ void CTcpServer::StartIdleTimer()
     }
     m_pIdleTimer.reset(new asio::steady_timer(m_io));
     m_pIdleTimer->expires_after(std::chrono::seconds(1));
-    m_pIdleTimer->async_wait([this](const asio::error_code& ec)
-    {
-        if (ec)
+    m_pIdleTimer->async_wait(
+        [this](const asio::error_code& ec)
         {
-            return;  // 定时器被取消（服务器关闭中）
-        }
-        CheckIdleConnections();
-        if (m_bRunning.load())
-        {
-            StartIdleTimer();  // 周期继续
-        }
-    });
+            if (ec)
+            {
+                return;  // 定时器被取消（服务器关闭中）
+            }
+            CheckIdleConnections();
+            if (m_bRunning.load())
+            {
+                StartIdleTimer();  // 周期继续
+            }
+        });
 }
 
 /// @brief 扫描并关闭空闲超时的连接。

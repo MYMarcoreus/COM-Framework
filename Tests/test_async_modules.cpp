@@ -55,7 +55,7 @@ struct COrderCtx
 /// @brief 订单模块：自持 1 线程执行器；跨模块调用库存模块并等它。
 class COrderModule
 {
-   public:
+public:
     COrderModule() : m_exec(1)
     {
         m_exec.Start();
@@ -133,7 +133,7 @@ class COrderModule
             .Then(&StepFinish, ASYNC_LOC);                       // ⑥ 本模块执行器
     }
 
-   private:
+private:
     /// ① 读订单：本模块执行器线程。
     static no::CPromiseResult StepLoadOrder(no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderCtx>& spCtx)
     {
@@ -180,17 +180,18 @@ class COrderModule
             spStock->spTrace = spCtx->spTrace;
             no::CPromise<CCalleeCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
 
-            const bool bOk = promiseStock.OnSettled([spCtx, spStock, fnResolve, fnReject](no::CPromiseResult result)
-            {
-                // 本回调在被调模块线程上执行：只做语义转换 + 改上下文 + settle。
-                if (result.IsRejected())
+            const bool bOk = promiseStock.OnSettled(
+                [spCtx, spStock, fnResolve, fnReject](no::CPromiseResult result)
                 {
-                    fnReject(result.Code());  // 库存模块拒绝 → 本流程拒绝（原样透传）。
-                    return;
-                }
-                spCtx->nStock = spStock->nAvail;
-                fnResolve();
-            });
+                    // 本回调在被调模块线程上执行：只做语义转换 + 改上下文 + settle。
+                    if (result.IsRejected())
+                    {
+                        fnReject(result.Code());  // 库存模块拒绝 → 本流程拒绝（原样透传）。
+                        return;
+                    }
+                    spCtx->nStock = spStock->nAvail;
+                    fnResolve();
+                });
             if (!bOk)
             {
                 // 子 promise 已 settled 且对方执行器不可用：回调不会执行，本层必须以拒绝收口
@@ -213,10 +214,11 @@ class COrderModule
                    const no::CPromise<COrderCtx>::RejectFn& fnReject)
         {
             // executor 在本层所在线程（亲和后 = 本模块执行器线程）上同步执行，这里只投递、不干活。
-            if (!m_exec.Post([fnResolve]()
-            {
-                fnResolve();
-            }))
+            if (!m_exec.Post(
+                    [fnResolve]()
+                    {
+                        fnResolve();
+                    }))
             {
                 fnReject(no::kStopped);
             }

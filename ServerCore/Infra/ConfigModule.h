@@ -14,7 +14,7 @@ namespace sc {
 /// 内部持有独立 common::config::CConfig 实例。
 class CConfigModule : public CModule, public IConfig
 {
-   public:
+public:
     CConfigModule();
 
     virtual ~CConfigModule();
@@ -33,7 +33,7 @@ class CConfigModule : public CModule, public IConfig
 
     SC_DECLARE_INTERFACE_MAP();
 
-   private:
+private:
     common::config::CConfig m_config;
 };
 

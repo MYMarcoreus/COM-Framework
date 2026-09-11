@@ -14,7 +14,7 @@ namespace config {
 /// 支持配置文件变更检测与热加载（ReloadIfChanged）。
 class CConfig
 {
-   public:
+public:
     CConfig();
 
     // 从文件加载（追加合并，后加载覆盖先加载）。
@@ -41,7 +41,7 @@ class CConfig
     // 清空配置。
     void Clear();
 
-   private:
+private:
     // 返回文件修改时间；获取失败返回 0。
     static std::time_t FileMtime(const std::string& strPath);
 

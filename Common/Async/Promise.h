@@ -312,10 +312,11 @@ public:
         }
 
         std::unique_lock<std::mutex> lock(m_mutex);
-        m_cv.wait(lock, [this]()
-        {
-            return m_bSettled.load(std::memory_order_relaxed);
-        });
+        m_cv.wait(lock,
+                  [this]()
+                  {
+                      return m_bSettled.load(std::memory_order_relaxed);
+                  });
         return m_result;
     }
 
@@ -335,10 +336,11 @@ public:
         }
 
         std::unique_lock<std::mutex> lock(m_mutex);
-        if (!m_cv.wait_for(lock, std::chrono::milliseconds(nTimeoutMs), [this]()
-        {
-            return m_bSettled.load(std::memory_order_relaxed);
-        }))
+        if (!m_cv.wait_for(lock, std::chrono::milliseconds(nTimeoutMs),
+                           [this]()
+                           {
+                               return m_bSettled.load(std::memory_order_relaxed);
+                           }))
         {
             return CPromiseResult::Reject(kStopped);  // 超时：不落定本层，只向调用方报「没等到」。
         }
@@ -868,15 +870,16 @@ public:
 
         const std::shared_ptr<detail::CPromiseState> pUpState = m_pState;
         const bool bOk =
-            pUpState->AddHandler(pCore->Handle(), [pCore, pNextState, fnFactory](const CPromiseResult& upResult)
-        {
-            if (upResult.IsRejected())
-            {
-                pNextState->Settle(upResult);  // 上层被拒绝：失败即停（与 Then 一致）。
-                return;
-            }
-            Adopt(pCore, pNextState, fnFactory);
-        });
+            pUpState->AddHandler(pCore->Handle(),
+                                 [pCore, pNextState, fnFactory](const CPromiseResult& upResult)
+                                 {
+                                     if (upResult.IsRejected())
+                                     {
+                                         pNextState->Settle(upResult);  // 上层被拒绝：失败即停（与 Then 一致）。
+                                         return;
+                                     }
+                                     Adopt(pCore, pNextState, fnFactory);
+                                 });
 
         if (!bOk)
         {
@@ -923,27 +926,28 @@ public:
                 [promiseChild, fnApply, spSelf](const ResolveFn& fnResolve, const RejectFn& fnReject)
             {
                 // 子链落定 → 搬数据 → 收口本层；OnSettled 保证送达（此处恒返回 true，不需检查）。
-                promiseChild.OnSettled([promiseChild, fnApply, spSelf, fnResolve, fnReject](CPromiseResult childResult)
-                {
-                    if (childResult.IsRejected())
+                promiseChild.OnSettled(
+                    [promiseChild, fnApply, spSelf, fnResolve, fnReject](CPromiseResult childResult)
                     {
-                        fnReject(childResult.Code());  // 子链拒绝：原样透传拒绝码。
-                        return;
-                    }
-                    try
-                    {
-                        if (fnApply)
+                        if (childResult.IsRejected())
                         {
-                            fnApply(spSelf, promiseChild.GetContext());  // 搬到本上下文（跨线程：见 @warning）。
+                            fnReject(childResult.Code());  // 子链拒绝：原样透传拒绝码。
+                            return;
                         }
-                    }
-                    catch (...)
-                    {
-                        fnReject(kException);  // 搬运里抛异常 → 本层被拒绝（不向外抛）。
-                        return;
-                    }
-                    fnResolve();
-                });
+                        try
+                        {
+                            if (fnApply)
+                            {
+                                fnApply(spSelf, promiseChild.GetContext());  // 搬到本上下文（跨线程：见 @warning）。
+                            }
+                        }
+                        catch (...)
+                        {
+                            fnReject(kException);  // 搬运里抛异常 → 本层被拒绝（不向外抛）。
+                            return;
+                        }
+                        fnResolve();
+                    });
             };
             return NewFromHandle(pCore->Handle(), spSelf, fnExecutor, loc);
         };
@@ -967,10 +971,13 @@ public:
             return false;  // 无效 promise：无法注册（唯一返回 false 的情形）。
         }
 
-        m_pState->AddHandler(m_pCore->Handle(), [fnSettled](const CPromiseResult& result)
-        {
-            detail::RunNotice(fnSettled, result);  // 通知里抛异常：只报告，不逃出（否则 terminate）。
-        }, /* bGuaranteedDelivery = */ true);
+        m_pState->AddHandler(
+            m_pCore->Handle(),
+            [fnSettled](const CPromiseResult& result)
+            {
+                detail::RunNotice(fnSettled, result);  // 通知里抛异常：只报告，不逃出（否则 terminate）。
+            },
+            /* bGuaranteedDelivery = */ true);
         return true;
     }
 
@@ -996,10 +1003,13 @@ public:
         }
 
         const std::shared_ptr<detail::CExecutorHandle> pTarget = executor.Handle();
-        m_pState->AddHandler(pTarget, [pTarget, fnSettled](const CPromiseResult& result)
-        {
-            detail::RunNoticeOn(pTarget, fnSettled, result);
-        }, /* bGuaranteedDelivery = */ true);
+        m_pState->AddHandler(
+            pTarget,
+            [pTarget, fnSettled](const CPromiseResult& result)
+            {
+                detail::RunNoticeOn(pTarget, fnSettled, result);
+            },
+            /* bGuaranteedDelivery = */ true);
         return true;
     }
 
@@ -1173,10 +1183,11 @@ private:
         }
 
         // OnSettled 保证送达（仅无效 promise 返回 false，此处已判过）→ 不需检查返回值。
-        promiseChild.OnSettled([pState](CPromiseResult childResult)
-        {
-            pState->Settle(childResult);
-        });
+        promiseChild.OnSettled(
+            [pState](CPromiseResult childResult)
+            {
+                pState->Settle(childResult);
+            });
     }
 
     /// @brief 内部：执行外部 settle 体（`CPromise::New` 的 executor），把 resolve / reject 交给它。
@@ -1294,24 +1305,25 @@ private:
         const std::shared_ptr<detail::CExecutorHandle> pTargetExec = pTarget;
 
         const bool bOk = pUpState->AddHandler(
-            pExec, [pCore, pNextState, fnHandler, nMode, nAffinity, pTargetExec](const CPromiseResult& upResult)
-        {
-            // then：上一层被拒绝 → 失败即停（本层不执行，拒绝原因原样交给下一层）。
-            if (nMode == detail::kModeThen && upResult.IsRejected())
+            pExec,
+            [pCore, pNextState, fnHandler, nMode, nAffinity, pTargetExec](const CPromiseResult& upResult)
             {
-                pNextState->Settle(upResult);
-                return;
-            }
-            // catch：上一层已兑现 → 无事可做，原样交给下一层。
-            if (nMode == detail::kModeCatch && upResult.IsFulfilled())
-            {
-                pNextState->Settle(upResult);
-                return;
-            }
+                // then：上一层被拒绝 → 失败即停（本层不执行，拒绝原因原样交给下一层）。
+                if (nMode == detail::kModeThen && upResult.IsRejected())
+                {
+                    pNextState->Settle(upResult);
+                    return;
+                }
+                // catch：上一层已兑现 → 无事可做，原样交给下一层。
+                if (nMode == detail::kModeCatch && upResult.IsFulfilled())
+                {
+                    pNextState->Settle(upResult);
+                    return;
+                }
 
-            // finally：无论成败都执行（但忽略返回值）；then / catch：执行本层处理器。
-            detail::RunHandler(pCore, pNextState, fnHandler, upResult, nMode, nAffinity, pTargetExec);
-        });
+                // finally：无论成败都执行（但忽略返回值）；then / catch：执行本层处理器。
+                detail::RunHandler(pCore, pNextState, fnHandler, upResult, nMode, nAffinity, pTargetExec);
+            });
 
         if (!bOk)
         {

@@ -53,10 +53,11 @@ class CDiagnosticCapture
 public:
     CDiagnosticCapture()
     {
-        no::SetDiagnosticHandler([this](const char* strWhat)
-        {
-            Append(strWhat);
-        });
+        no::SetDiagnosticHandler(
+            [this](const char* strWhat)
+            {
+                Append(strWhat);
+            });
     }
 
     ~CDiagnosticCapture()
@@ -127,25 +128,28 @@ TEST(Robust_NoticeThrowIsContained)
     no::CPromise<CRobustCtx> p = exec.NewPromise(spCtx, &StepBump, ASYNC_LOC);
 
     std::atomic<bool> bNoticeRan(false);
-    ASSERT_TRUE(p.OnSettled([&bNoticeRan](no::CPromiseResult)
-    {
-        bNoticeRan.store(true);
-        throw std::runtime_error("通知里抛异常");  // 以前：逃出 settle → std::terminate。
-    }));
+    ASSERT_TRUE(p.OnSettled(
+        [&bNoticeRan](no::CPromiseResult)
+        {
+            bNoticeRan.store(true);
+            throw std::runtime_error("通知里抛异常");  // 以前：逃出 settle → std::terminate。
+        }));
 
     const no::CPromiseResult result = p.Await();
     ASSERT_TRUE(result.IsFulfilled());
     ASSERT_EQ(spCtx->nValue, 1);
 
-    ASSERT_TRUE(WaitFor([&bNoticeRan]()
-    {
-        return bNoticeRan.load();
-    }));
+    ASSERT_TRUE(WaitFor(
+        [&bNoticeRan]()
+        {
+            return bNoticeRan.load();
+        }));
     // 诊断在抛异常之后才写入，故用 WaitFor 等它落地（避免读早于写）。
-    ASSERT_TRUE(WaitFor([&capture]()
-    {
-        return capture.Contains("OnSettled");
-    }));
+    ASSERT_TRUE(WaitFor(
+        [&capture]()
+        {
+            return capture.Contains("OnSettled");
+        }));
     exec.Stop();
 }
 
@@ -162,19 +166,22 @@ TEST(Robust_NoticeThrowOnGuaranteedDeliveryPath)
     exec.Stop();  // 执行器已停 → 通知只能就地送达。
 
     std::atomic<bool> bNoticeRan(false);
-    ASSERT_TRUE(p.OnSettled([&bNoticeRan](no::CPromiseResult)
-    {
-        bNoticeRan.store(true);
-        throw std::runtime_error("就地送达的通知里抛异常");
-    }));
-    ASSERT_TRUE(WaitFor([&bNoticeRan]()
-    {
-        return bNoticeRan.load();
-    }));
-    ASSERT_TRUE(WaitFor([&capture]()
-    {
-        return capture.Contains("OnSettled");
-    }));
+    ASSERT_TRUE(p.OnSettled(
+        [&bNoticeRan](no::CPromiseResult)
+        {
+            bNoticeRan.store(true);
+            throw std::runtime_error("就地送达的通知里抛异常");
+        }));
+    ASSERT_TRUE(WaitFor(
+        [&bNoticeRan]()
+        {
+            return bNoticeRan.load();
+        }));
+    ASSERT_TRUE(WaitFor(
+        [&capture]()
+        {
+            return capture.Contains("OnSettled");
+        }));
 }
 
 /// @brief `exec.Post` 的用户任务抛异常：兜住；worker 与后续任务照常工作。
@@ -186,19 +193,22 @@ TEST(Robust_PostedTaskThrowIsContained)
     ASSERT_TRUE(exec.Start());
 
     std::atomic<bool> bSecondRan(false);
-    ASSERT_TRUE(exec.Post([]()
-    {
-        throw std::runtime_error("投递的任务抛异常");
-    }));
-    ASSERT_TRUE(exec.Post([&bSecondRan]()
-    {
-        bSecondRan.store(true);
-    }));
+    ASSERT_TRUE(exec.Post(
+        []()
+        {
+            throw std::runtime_error("投递的任务抛异常");
+        }));
+    ASSERT_TRUE(exec.Post(
+        [&bSecondRan]()
+        {
+            bSecondRan.store(true);
+        }));
 
-    ASSERT_TRUE(WaitFor([&bSecondRan]()
-    {
-        return bSecondRan.load();
-    }));
+    ASSERT_TRUE(WaitFor(
+        [&bSecondRan]()
+        {
+            return bSecondRan.load();
+        }));
     ASSERT_TRUE(capture.Contains("exec.Post()"));
 
     // 空任务：不提交 + 报告（不再返回 true 却什么也不做）。
@@ -216,10 +226,12 @@ TEST(Robust_AwaitForTimesOut)
 
     auto spCtx = std::make_shared<CRobustCtx>();
     no::CPromise<CRobustCtx> promisePending = no::CPromise<CRobustCtx>::New(
-        exec, spCtx, [](const no::CPromise<CRobustCtx>::ResolveFn&, const no::CPromise<CRobustCtx>::RejectFn&)
-    {
-        // 故意不 settle：模拟「对端永远不回」。
-    }, ASYNC_LOC);
+        exec, spCtx,
+        [](const no::CPromise<CRobustCtx>::ResolveFn&, const no::CPromise<CRobustCtx>::RejectFn&)
+        {
+            // 故意不 settle：模拟「对端永远不回」。
+        },
+        ASYNC_LOC);
 
     const auto tBegin = std::chrono::steady_clock::now();
     const no::CPromiseResult result = promisePending.AwaitFor(50);
@@ -287,27 +299,31 @@ TEST(Robust_OnSettledOnRunsOnTargetExecutor)
     // 先取本执行器的线程 id（用同样走 Post 的方式）。
     std::atomic<bool> bGotOwnThread(false);
     std::thread::id idOwnThread;
-    ASSERT_TRUE(ownExec.Post([&bGotOwnThread, &idOwnThread]()
-    {
-        idOwnThread = std::this_thread::get_id();
-        bGotOwnThread.store(true);
-    }));
-    ASSERT_TRUE(WaitFor([&bGotOwnThread]()
-    {
-        return bGotOwnThread.load();
-    }));
+    ASSERT_TRUE(ownExec.Post(
+        [&bGotOwnThread, &idOwnThread]()
+        {
+            idOwnThread = std::this_thread::get_id();
+            bGotOwnThread.store(true);
+        }));
+    ASSERT_TRUE(WaitFor(
+        [&bGotOwnThread]()
+        {
+            return bGotOwnThread.load();
+        }));
 
     std::atomic<bool> bNoticeRan(false);
     std::thread::id idNoticeThread;
-    ASSERT_TRUE(promiseCallee.OnSettledOn(ownExec, [&bNoticeRan, &idNoticeThread](no::CPromiseResult)
-    {
-        idNoticeThread = std::this_thread::get_id();
-        bNoticeRan.store(true);
-    }));
-    ASSERT_TRUE(WaitFor([&bNoticeRan]()
-    {
-        return bNoticeRan.load();
-    }));
+    ASSERT_TRUE(promiseCallee.OnSettledOn(ownExec,
+                                          [&bNoticeRan, &idNoticeThread](no::CPromiseResult)
+                                          {
+                                              idNoticeThread = std::this_thread::get_id();
+                                              bNoticeRan.store(true);
+                                          }));
+    ASSERT_TRUE(WaitFor(
+        [&bNoticeRan]()
+        {
+            return bNoticeRan.load();
+        }));
     ASSERT_TRUE(idNoticeThread == idOwnThread);              // 指定执行器线程
     ASSERT_TRUE(idOwnThread != std::this_thread::get_id());  // 不是调用线程
     ASSERT_TRUE(idNoticeThread != spCalleeCtx->idRead);      // 也不是被调模块线程
@@ -316,12 +332,14 @@ TEST(Robust_OnSettledOnRunsOnTargetExecutor)
     // 执行器已停：通知无法投递 → 就地送达（绝不丢）。
     ownExec.Stop();
     std::atomic<bool> bDeliveredAfterStop(false);
-    ASSERT_TRUE(promiseCallee.OnSettledOn(ownExec, [&bDeliveredAfterStop](no::CPromiseResult)
-    {
-        bDeliveredAfterStop.store(true);
-    }));
-    ASSERT_TRUE(WaitFor([&bDeliveredAfterStop]()
-    {
-        return bDeliveredAfterStop.load();
-    }));
+    ASSERT_TRUE(promiseCallee.OnSettledOn(ownExec,
+                                          [&bDeliveredAfterStop](no::CPromiseResult)
+                                          {
+                                              bDeliveredAfterStop.store(true);
+                                          }));
+    ASSERT_TRUE(WaitFor(
+        [&bDeliveredAfterStop]()
+        {
+            return bDeliveredAfterStop.load();
+        }));
 }

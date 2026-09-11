@@ -19,7 +19,7 @@ namespace sc {
 /// 模块名 "config-reload"。
 class CConfigReloadModule : public CModule
 {
-   public:
+public:
     // 创建配置热加载模块。
     // @param nIntervalMs 重载检测周期（毫秒，<100 按 100 处理，默认 5000）。
     CConfigReloadModule(std::int64_t nIntervalMs = 5000);
@@ -38,7 +38,7 @@ class CConfigReloadModule : public CModule
     // 停止定时器并释放引用。
     void Shutdown() override;
 
-   private:
+private:
     // 周期重载检查：发生变更时发布 config.reloaded 事件。
     void CheckReload();
 

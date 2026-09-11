@@ -67,22 +67,23 @@ bool CUdpSocket::SendTo(const std::string& strHost, uint16_t nPort, const char* 
     m_resolver.async_resolve(
         strHost, std::to_string(nPort),
         [this, strPayload](const asio::error_code& ec, asio::ip::udp::resolver::results_type results)
-    {
-        if (ec || results.empty())
         {
-            return;
-        }
-        asio::ip::udp::endpoint endpointTarget = *results.begin();
-        asio::post(m_io, [this, strPayload, endpointTarget]()
-        {
-            if (!m_socket.is_open())
+            if (ec || results.empty())
             {
                 return;
             }
-            asio::error_code ignored;
-            static_cast<void>(m_socket.send_to(asio::buffer(strPayload), endpointTarget, 0, ignored));
+            asio::ip::udp::endpoint endpointTarget = *results.begin();
+            asio::post(m_io,
+                       [this, strPayload, endpointTarget]()
+                       {
+                           if (!m_socket.is_open())
+                           {
+                               return;
+                           }
+                           asio::error_code ignored;
+                           static_cast<void>(m_socket.send_to(asio::buffer(strPayload), endpointTarget, 0, ignored));
+                       });
         });
-    });
     return true;
 }
 
@@ -132,9 +133,9 @@ void CUdpSocket::StartReceive()
     }
     m_socket.async_receive_from(asio::buffer(m_vecRecvBuffer), m_remoteEndpoint,
                                 [this](const asio::error_code& ec, size_t nBytes)
-    {
-        HandleReceive(ec, nBytes);
-    });
+                                {
+                                    HandleReceive(ec, nBytes);
+                                });
 }
 
 /// @brief 处理接收完成。

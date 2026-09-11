@@ -36,17 +36,20 @@ void RunChainCases()
     for (size_t i = 0; i < 4; ++i)
     {
         const int n = lens[i];
-        benchmark::BenchOp(group, "direct chain x" + std::to_string(n) + " (baseline)", [n]()
-        {
-            volatile long long s;
-            long long v = 0;
-            for (int k = 0; k < n; ++k)
+        benchmark::BenchOp(
+            group, "direct chain x" + std::to_string(n) + " (baseline)",
+            [n]()
             {
-                v = v + 1;
-            }
-            s = v;
-            (void)s;
-        }, 41, "循环内联，理论下限");
+                volatile long long s;
+                long long v = 0;
+                for (int k = 0; k < n; ++k)
+                {
+                    v = v + 1;
+                }
+                s = v;
+                (void)s;
+            },
+            41, "循环内联，理论下限");
     }
 
     // 正确性校验：链结果与失败即停语义。
@@ -64,33 +67,42 @@ void RunChainCases()
     for (size_t i = 0; i < 4; ++i)
     {
         const int n = lens[i];
-        benchmark::BenchOp(group, "CPromise x" + std::to_string(n), [&exec, n]()
-        {
-            volatile long long s = RunChain(exec, n);
-            (void)s;
-        }, 21, "构建 N 层 promise + 首层投递 + 逐层级联 + Await");
+        benchmark::BenchOp(
+            group, "CPromise x" + std::to_string(n),
+            [&exec, n]()
+            {
+                volatile long long s = RunChain(exec, n);
+                (void)s;
+            },
+            21, "构建 N 层 promise + 首层投递 + 逐层级联 + Await");
     }
 
     // 深链：256 层（超过内联深度上限 kMaxInlineDepth=64 后，后续层改投递执行）。
-    benchmark::BenchOp(group, "CPromise deep x256 (inline→post)", [&exec]()
-    {
-        volatile long long s = RunChain(exec, 256);
-        (void)s;
-    }, 11, "深层链：内联 64 层后改投递，验证不爆栈");
+    benchmark::BenchOp(
+        group, "CPromise deep x256 (inline→post)",
+        [&exec]()
+        {
+            volatile long long s = RunChain(exec, 256);
+            (void)s;
+        },
+        11, "深层链：内联 64 层后改投递，验证不爆栈");
 
     // 失败即停链：第 2 层失败 → 后续层全部短路（对比同长度成功链）。
-    benchmark::BenchOp(group, "CPromise fail-fast x20", [&exec]()
-    {
-        std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-        common::async::CPromise<bench::CChainContext> tail =
-            exec.NewPromise(spCtx, &bench::StepInc).Then(&bench::StepFail);
-        for (int k = 0; k < 18; ++k)
+    benchmark::BenchOp(
+        group, "CPromise fail-fast x20",
+        [&exec]()
         {
-            tail = tail.Then(&bench::StepInc);  // 全部短路
-        }
-        volatile int s = tail.Await().Code();
-        (void)s;
-    }, 21, "失败后后续层短路（不执行层函数，仅透传结果）");
+            std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
+            common::async::CPromise<bench::CChainContext> tail =
+                exec.NewPromise(spCtx, &bench::StepInc).Then(&bench::StepFail);
+            for (int k = 0; k < 18; ++k)
+            {
+                tail = tail.Then(&bench::StepInc);  // 全部短路
+            }
+            volatile int s = tail.Await().Code();
+            (void)s;
+        },
+        21, "失败后后续层短路（不执行层函数，仅透传结果）");
 
     exec.Stop();
 }

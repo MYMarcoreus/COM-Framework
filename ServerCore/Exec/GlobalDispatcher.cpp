@@ -51,22 +51,24 @@ bool CGlobalDispatcher::Dispatch(const std::function<void(const std::shared_ptr<
         return false;
     }
     std::shared_ptr<CBusinessFlow> spFlow(new CBusinessFlow());
-    return m_pPool->Submit([spFlow, fnBody]()
-    {
-        try
+    return m_pPool->Submit(
+        [spFlow, fnBody]()
         {
-            fnBody(spFlow);  // 主体在线程池线程执行，投递子任务
-        }
-        catch (const std::exception& e)
-        {
-            common::log::CLogger::Instance().Error(std::string("CGlobalDispatcher::Dispatch 主体异常: ") + e.what());
-        }
-        catch (...)
-        {
-            common::log::CLogger::Instance().Error("CGlobalDispatcher::Dispatch 主体未知异常");
-        }
-        spFlow->Complete();  // 主体结束；全部子任务排空后回放回调栈
-    });
+            try
+            {
+                fnBody(spFlow);  // 主体在线程池线程执行，投递子任务
+            }
+            catch (const std::exception& e)
+            {
+                common::log::CLogger::Instance().Error(std::string("CGlobalDispatcher::Dispatch 主体异常: ") +
+                                                       e.what());
+            }
+            catch (...)
+            {
+                common::log::CLogger::Instance().Error("CGlobalDispatcher::Dispatch 主体未知异常");
+            }
+            spFlow->Complete();  // 主体结束；全部子任务排空后回放回调栈
+        });
 }
 
 /// @brief 等待所有已注册模块调度器排空（Shutdown 时由编排线程调用）。

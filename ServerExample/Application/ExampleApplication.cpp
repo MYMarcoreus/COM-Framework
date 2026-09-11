@@ -155,24 +155,30 @@ bool CExampleApplication::OnInitialize()
     }
 
     // 订阅网络启动事件：从事件负载读取监听端口
-    m_tEventStartId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStarted, [](const sc::Event& event)
-    {
-        if (event.data != nullptr && event.size == sizeof(std::uint16_t))
+    m_tEventStartId = m_pEventDispatcher->Subscribe(
+        sc::events::kNetworkStarted,
+        [](const sc::Event& event)
         {
-            std::uint16_t port = *static_cast<const std::uint16_t*>(event.data);
-            common::log::CLogger::Instance().Info("[Event] 收到 network.started，端口 " + std::to_string(port));
-        }
-    });
+            if (event.data != nullptr && event.size == sizeof(std::uint16_t))
+            {
+                std::uint16_t port = *static_cast<const std::uint16_t*>(event.data);
+                common::log::CLogger::Instance().Info("[Event] 收到 network.started，端口 " + std::to_string(port));
+            }
+        });
     // 订阅网络停止事件
-    m_tEventStopId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStopped, [](const sc::Event&)
-    {
-        common::log::CLogger::Instance().Info("[Event] 收到 network.stopped");
-    });
+    m_tEventStopId =
+        m_pEventDispatcher->Subscribe(sc::events::kNetworkStopped,
+                                      [](const sc::Event&)
+                                      {
+                                          common::log::CLogger::Instance().Info("[Event] 收到 network.stopped");
+                                      });
     // 订阅自定义事件（由 OnStart 中 PublishAsync 异步发布，工作线程处理）
-    m_tExampleEventId = m_pEventDispatcher->Subscribe("example.hello", [](const sc::Event&)
-    {
-        common::log::CLogger::Instance().Info("[Event] 收到 example.hello（异步分发）");
-    });
+    m_tExampleEventId = m_pEventDispatcher->Subscribe(
+        "example.hello",
+        [](const sc::Event&)
+        {
+            common::log::CLogger::Instance().Info("[Event] 收到 example.hello（异步分发）");
+        });
     return true;
 }
 
@@ -202,12 +208,13 @@ bool CExampleApplication::OnStart()
         // 异步函数立即返回 promise 句柄：操作数据从上下文取（回调捕获上下文保活）。
         no::CPromise<CUserOpContext> promise = m_pUserService->RegisterUserAsync(recApp);
         std::shared_ptr<CUserOpContext> spCtx = promise.GetContext();
-        promise.OnSettled([spCtx](no::CPromiseResult result)
-        {
-            common::log::CLogger::Instance().Info("[应用] 外部异步调用完成：" +
-                                                  std::string(result.IsFulfilled() ? "兑现" : "拒绝") +
-                                                  " id=" + std::to_string(spCtx->nUserId) + " 轨迹=" + spCtx->strTrace);
-        });
+        promise.OnSettled(
+            [spCtx](no::CPromiseResult result)
+            {
+                common::log::CLogger::Instance().Info(
+                    "[应用] 外部异步调用完成：" + std::string(result.IsFulfilled() ? "兑现" : "拒绝") +
+                    " id=" + std::to_string(spCtx->nUserId) + " 轨迹=" + spCtx->strTrace);
+            });
         common::log::CLogger::Instance().Info("[应用] 已按接口调用业务模块异步函数（回调通知，不阻塞）");
     }
     return true;

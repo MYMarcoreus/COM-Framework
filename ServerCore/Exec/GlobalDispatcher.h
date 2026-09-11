@@ -24,7 +24,7 @@ namespace sc {
 /// Dispatch 可跨线程调用。
 class CGlobalDispatcher
 {
-   public:
+public:
     /// @brief 构造。
     ///
     /// @param pPool 全局线程池（仅执行不调度；生命周期由调用方管理）。
@@ -63,7 +63,7 @@ class CGlobalDispatcher
         return m_pPool;
     }
 
-   private:
+private:
     common::thread::CThreadPool* m_pPool;  // 全局线程池（生命周期由调用方管理）。
     mutable std::mutex m_mutex;            // 保护模块调度器注册表。
     std::unordered_map<std::string, CModuleScheduler*> m_mapSchedulers;

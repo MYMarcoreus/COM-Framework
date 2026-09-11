@@ -27,10 +27,11 @@ inline void RunStressFor(const std::string& group, const std::string& name,
     std::atomic<uint64_t> done(0);
     std::function<void()> wrap = [&]()
     {
-        submit([&done]()
-        {
-            done.fetch_add(1, std::memory_order_release);
-        });
+        submit(
+            [&done]()
+            {
+                done.fetch_add(1, std::memory_order_release);
+            });
     };
     benchmark::StressWindow(group, name, window, ms, wrap, done, note);
     stop();
@@ -52,10 +53,11 @@ inline void RunChainStress(const std::string& group, const std::string& name, in
         {
             tail = tail.Then(&bench::StepInc);
         }
-        tail.OnSettled([&done](no::CPromiseResult)
-        {
-            done.fetch_add(1, std::memory_order_release);
-        });
+        tail.OnSettled(
+            [&done](no::CPromiseResult)
+            {
+                done.fetch_add(1, std::memory_order_release);
+            });
     };
     benchmark::StressWindow(group, name, window, ms, startOne, done, note);
     exec.Stop();
@@ -64,7 +66,7 @@ inline void RunChainStress(const std::string& group, const std::string& name, in
 /// 压力协程：2 次 await 后完成（完成时 AsPromise().OnSettled 计数）。
 class StressCoro : public no::CCoroutine<bench::CChainContext>
 {
-   public:
+public:
     using no::CCoroutine<bench::CChainContext>::CCoroutine;
 
     void Run() override
@@ -90,10 +92,11 @@ inline void RunCoroStress(const std::string& group, const std::string& name, int
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
         std::shared_ptr<StressCoro> pCoro = exec.CoStart<StressCoro>(spCtx);
         // 协程对象由框架自持弱引用保活；这里只挂完成通知用于计数。
-        if (!pCoro->AsPromise().OnSettled([&done](no::CPromiseResult)
-        {
-            done.fetch_add(1, std::memory_order_release);
-        }))
+        if (!pCoro->AsPromise().OnSettled(
+                [&done](no::CPromiseResult)
+                {
+                    done.fetch_add(1, std::memory_order_release);
+                }))
         {
             done.fetch_add(1, std::memory_order_release);  // 注册失败（不应发生）：按已完成计
         }
@@ -118,10 +121,11 @@ inline void RunMixedLoad(const std::string& group, const std::string& name, int 
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
             exec.NewPromise(spCtx, &bench::StepInc)
                 .Then(&bench::StepInc)
-                .OnSettled([&done](no::CPromiseResult)
-            {
-                done.fetch_add(1);
-            });
+                .OnSettled(
+                    [&done](no::CPromiseResult)
+                    {
+                        done.fetch_add(1);
+                    });
         }
         benchmark::WaitDone(done, 500);
         done.store(0);
@@ -131,41 +135,45 @@ inline void RunMixedLoad(const std::string& group, const std::string& name, int 
     std::vector<std::thread> threads;
     for (int i = 0; i < nProducers; ++i)
     {
-        threads.emplace_back([&, i]()
-        {
-            for (uint64_t k = 0; k < nPerProducer; ++k)
+        threads.emplace_back(
+            [&, i]()
             {
-                if ((i + static_cast<int>(k)) % 3 == 0)
+                for (uint64_t k = 0; k < nPerProducer; ++k)
                 {
-                    // 链
-                    std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-                    exec.NewPromise(spCtx, &bench::StepInc)
-                        .Then(&bench::StepInc)
-                        .OnSettled([&done](no::CPromiseResult)
+                    if ((i + static_cast<int>(k)) % 3 == 0)
                     {
-                        done.fetch_add(1);
-                    });
-                }
-                else if ((i + static_cast<int>(k)) % 3 == 1)
-                {
-                    // 协程
-                    std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-                    std::shared_ptr<StressCoro> pCoro = exec.CoStart<StressCoro>(spCtx);
-                    pCoro->AsPromise().OnSettled([&done](no::CPromiseResult)
+                        // 链
+                        std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
+                        exec.NewPromise(spCtx, &bench::StepInc)
+                            .Then(&bench::StepInc)
+                            .OnSettled(
+                                [&done](no::CPromiseResult)
+                                {
+                                    done.fetch_add(1);
+                                });
+                    }
+                    else if ((i + static_cast<int>(k)) % 3 == 1)
                     {
-                        done.fetch_add(1);
-                    });
-                }
-                else
-                {
-                    // Post（fire-and-forget）
-                    exec.Post([&done]()
+                        // 协程
+                        std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
+                        std::shared_ptr<StressCoro> pCoro = exec.CoStart<StressCoro>(spCtx);
+                        pCoro->AsPromise().OnSettled(
+                            [&done](no::CPromiseResult)
+                            {
+                                done.fetch_add(1);
+                            });
+                    }
+                    else
                     {
-                        done.fetch_add(1);
-                    });
+                        // Post（fire-and-forget）
+                        exec.Post(
+                            [&done]()
+                            {
+                                done.fetch_add(1);
+                            });
+                    }
                 }
-            }
-        });
+            });
     }
     for (size_t i = 0; i < threads.size(); ++i)
     {
@@ -201,38 +209,47 @@ void RunStressCases()
     {
         bench::PoolEngine eng;
         eng.Start(kThreads);
-        RunStressFor(group, "CThreadPool (4 threads)",
-                     [&eng](const std::function<void()>& f)
-        {
-            eng.Submit(f);
-        }, [&eng]()
-        {
-            eng.Stop();
-        }, kWindow, kMs, "mutex+condvar 线程池");
+        RunStressFor(
+            group, "CThreadPool (4 threads)",
+            [&eng](const std::function<void()>& f)
+            {
+                eng.Submit(f);
+            },
+            [&eng]()
+            {
+                eng.Stop();
+            },
+            kWindow, kMs, "mutex+condvar 线程池");
     }
     {
         bench::AsyncEngine eng;
         eng.Start(kThreads);
-        RunStressFor(group, "CAsyncExecutor Post (4 threads)",
-                     [&eng](const std::function<void()>& f)
-        {
-            eng.Submit(f);
-        }, [&eng]()
-        {
-            eng.Stop();
-        }, kWindow, kMs, "异步执行器 fire-and-forget");
+        RunStressFor(
+            group, "CAsyncExecutor Post (4 threads)",
+            [&eng](const std::function<void()>& f)
+            {
+                eng.Submit(f);
+            },
+            [&eng]()
+            {
+                eng.Stop();
+            },
+            kWindow, kMs, "异步执行器 fire-and-forget");
     }
     {
         bench::AsioEngine eng;
         eng.Start(kThreads);
-        RunStressFor(group, "asio::post (4 threads)",
-                     [&eng](const std::function<void()>& f)
-        {
-            eng.Submit(f);
-        }, [&eng]()
-        {
-            eng.Stop();
-        }, kWindow, kMs, "行业标准异步库");
+        RunStressFor(
+            group, "asio::post (4 threads)",
+            [&eng](const std::function<void()>& f)
+            {
+                eng.Submit(f);
+            },
+            [&eng]()
+            {
+                eng.Stop();
+            },
+            kWindow, kMs, "行业标准异步库");
     }
 
     // promise 压力：4 层 / 8 层（每条自带共享上下文，验证分配 + 调度压力）。

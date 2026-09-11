@@ -16,7 +16,7 @@ namespace sc {
 /// 内部持有 common::async::CAsyncExecutor 实例。
 class CAsyncExecutorModule : public CModule, public IAsyncExecutor
 {
-   public:
+public:
     explicit CAsyncExecutorModule(size_t nThreadCount = 1);
 
     virtual ~CAsyncExecutorModule();
@@ -29,7 +29,7 @@ class CAsyncExecutorModule : public CModule, public IAsyncExecutor
 
     SC_DECLARE_INTERFACE_MAP();
 
-   private:
+private:
     std::unique_ptr<common::async::CAsyncExecutor> m_pExecutor;
     size_t m_nThreadCount;
 };

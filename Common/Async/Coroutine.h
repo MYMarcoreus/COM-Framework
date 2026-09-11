@@ -94,7 +94,7 @@ struct CAwaitAllGroup
 template <typename TContext>
 class CCoroutine
 {
-   public:
+public:
     /// 处理器类型（与 promise 一致：固定签名）。
     using ThenHandler = detail::ThenHandler<TContext>;
 
@@ -185,7 +185,7 @@ class CCoroutine
         m_wpSelf = sp;
     }
 
-   protected:
+protected:
     // ---------------- 宏接口 ----------------
 
     /// @brief 当前恢复点（状态机步号；CO_BEGIN 的 switch 用）。
@@ -210,14 +210,15 @@ class CCoroutine
 
         // 回调捕获自持强引用：保证协程对象存活到回调执行完毕。
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        const bool bOk = promise.OnSettled([spSelf, this](CPromiseResult result)
-        {
-            if (result.IsRejected())
+        const bool bOk = promise.OnSettled(
+            [spSelf, this](CPromiseResult result)
             {
-                MarkTerminated(result);  // 被等待的 promise 被拒绝 → 协程终止（码透传）。
-            }
-            ResumeInline();  // 线程亲和 + 负载感知内联 / 投递。
-        });
+                if (result.IsRejected())
+                {
+                    MarkTerminated(result);  // 被等待的 promise 被拒绝 → 协程终止（码透传）。
+                }
+                ResumeInline();  // 线程亲和 + 负载感知内联 / 投递。
+            });
         if (!bOk)
         {
             // 防御：OnSettled 已保证送达（仅无效 promise 返回 false），正常路径不会走到这里。
@@ -279,7 +280,7 @@ class CCoroutine
         m_pSegment->Settle(CPromiseResult::Reject(TerminateCode()));
     }
 
-   private:
+private:
     /// @brief 协程热状态：步号 / 终止标志 / 拒绝码（紧邻打包，减少跨线程迁移的 cache line 数）。
     struct CHotState
     {
@@ -329,10 +330,11 @@ class CCoroutine
             Terminate(CPromiseResult::Reject(kStopped));  // 无强引用（理论不应发生）。
             return;
         }
-        if (!m_pExec->Post([spSelf, this]()
-        {
-            Resume();
-        }))
+        if (!m_pExec->Post(
+                [spSelf, this]()
+                {
+                    Resume();
+                }))
         {
             Terminate(CPromiseResult::Reject(kStopped));  // 执行器已停止 / 不可用。
         }
@@ -401,10 +403,11 @@ class CCoroutine
                    TRest&&... rest)
     {
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        const bool bOk = promise.OnSettled([pGroup, spSelf, this](CPromiseResult result)
-        {
-            OnAwaitDone(pGroup, result);
-        });
+        const bool bOk = promise.OnSettled(
+            [pGroup, spSelf, this](CPromiseResult result)
+            {
+                OnAwaitDone(pGroup, result);
+            });
         if (!bOk)
         {
             OnAwaitDone(pGroup, CPromiseResult::Reject(kStopped));  // 无法注册 → 该 promise 计为拒绝。

@@ -18,7 +18,7 @@ class ScopedInterfacePtr
 {
     static_assert(std::is_base_of<IUnknown, T>::value, "ScopedInterfacePtr<T> 要求 T 必须是 IUnknown 派生接口");
 
-   public:
+public:
     ScopedInterfacePtr() : m_ptr(nullptr)
     {}
 
@@ -169,7 +169,7 @@ class ScopedInterfacePtr
         return m_ptr != nullptr;
     }
 
-   private:
+private:
     T* m_ptr;
 };
 

@@ -53,12 +53,12 @@ bool CExampleTimerModule::Start()
     // 回调参数为已升级的强引用（类型随弱引用，无需转换）。
     m_tTimerId = sc::AddGuardedPeriodicTimer(m_pTimer.Get(), m_nIntervalMs, WeakSelf(),
                                              [](const sc::ScopedInterfacePtr<sc::IModule>& sp)
-    {
-        std::string strMessage = "ServerExample 服务器运行中 (module=";
-        strMessage += sp->GetName();
-        strMessage += ")";
-        common::log::CLogger::Instance().Info(strMessage);
-    });
+                                             {
+                                                 std::string strMessage = "ServerExample 服务器运行中 (module=";
+                                                 strMessage += sp->GetName();
+                                                 strMessage += ")";
+                                                 common::log::CLogger::Instance().Info(strMessage);
+                                             });
     return true;
 }
 

@@ -39,7 +39,7 @@ struct CDeliveryCtx
 /// @brief 被调模块：自持 1 线程执行器，可显式 Stop。
 class CDeliveryModule
 {
-   public:
+public:
     CDeliveryModule() : m_exec(1)
     {
         m_exec.Start();
@@ -61,7 +61,7 @@ class CDeliveryModule
         return m_exec.NewPromise(spCtx, &StepQuery, ASYNC_LOC);
     }
 
-   private:
+private:
     /// 层处理器：记录执行次数。
     static no::CPromiseResult StepQuery(no::CPromiseResult /*upResult*/, const std::shared_ptr<CDeliveryCtx>& spCtx)
     {
@@ -96,7 +96,7 @@ struct CCallerCtx
 /// @brief 调用方模块：桥接里**故意不检查** `OnSettled` 返回值（模拟用户代码）。
 class CCallerModule
 {
-   public:
+public:
     CCallerModule() : m_exec(1)
     {
         m_exec.Start();
@@ -122,7 +122,7 @@ class CCallerModule
             .Catch(&StepCatch, ASYNC_LOC);
     }
 
-   private:
+private:
     /// ① 本模块自有层。
     static no::CPromiseResult StepOrderA(no::CPromiseResult /*upResult*/, const std::shared_ptr<CCallerCtx>& spCtx)
     {
@@ -159,16 +159,17 @@ class CCallerModule
             no::CPromise<CDeliveryCtx> promiseCallee = spCallee->QueryAsync(spCalleeCtx);
 
             // 注意：返回值被丢弃（模拟漏检的调用方代码）
-            promiseCallee.OnSettled([spCtx, fnResolve, fnReject](no::CPromiseResult result)
-            {
-                ++spCtx->nNotify;
-                if (result.IsRejected())
+            promiseCallee.OnSettled(
+                [spCtx, fnResolve, fnReject](no::CPromiseResult result)
                 {
-                    fnReject(result.Code());
-                    return;
-                }
-                fnResolve();
-            });
+                    ++spCtx->nNotify;
+                    if (result.IsRejected())
+                    {
+                        fnReject(result.Code());
+                        return;
+                    }
+                    fnResolve();
+                });
         };
         return no::CPromise<CCallerCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
     }
@@ -197,12 +198,13 @@ TEST(SettledNotice_DeliveredEvenIfExecutorStopped)
     // 在「已 settled + 执行器不可用」的层上注册通知：必须被送达
     int nNotify = 0;
     std::thread::id idNotified;
-    const bool bOk = promise.OnSettled([&nNotify, &idNotified](no::CPromiseResult r)
-    {
-        ++nNotify;
-        idNotified = std::this_thread::get_id();
-        ASSERT_TRUE(r.IsRejected());  // 通知里能看到真实结果
-    });
+    const bool bOk = promise.OnSettled(
+        [&nNotify, &idNotified](no::CPromiseResult r)
+        {
+            ++nNotify;
+            idNotified = std::this_thread::get_id();
+            ASSERT_TRUE(r.IsRejected());  // 通知里能看到真实结果
+        });
 
     ASSERT_TRUE(bOk);                       // 不再返回 false（唯一 false 是无效 promise）
     ASSERT_EQ(nNotify, 1);                  // 回调确实执行了
@@ -230,12 +232,13 @@ TEST(SettledNotice_ManyRegistrationsAllDelivered)
     {
         std::string strSeq = std::to_string(i);
         strSeq += ';';
-        const bool bOk = promise.OnSettled([&nNotify, &strOrder, &idNotified, strSeq](no::CPromiseResult /*r*/)
-        {
-            ++nNotify;
-            strOrder += strSeq;
-            idNotified = std::this_thread::get_id();
-        });
+        const bool bOk = promise.OnSettled(
+            [&nNotify, &strOrder, &idNotified, strSeq](no::CPromiseResult /*r*/)
+            {
+                ++nNotify;
+                strOrder += strSeq;
+                idNotified = std::this_thread::get_id();
+            });
         ASSERT_TRUE(bOk);
     }
 
@@ -255,10 +258,11 @@ TEST(SettledNotice_InvalidPromiseReturnsFalse)
 {
     int nNotify = 0;
     no::CPromise<CDeliveryCtx> promiseInvalid;  // 默认构造：无效
-    const bool bOk = promiseInvalid.OnSettled([&nNotify](no::CPromiseResult /*r*/)
-    {
-        ++nNotify;
-    });
+    const bool bOk = promiseInvalid.OnSettled(
+        [&nNotify](no::CPromiseResult /*r*/)
+        {
+            ++nNotify;
+        });
 
     ASSERT_TRUE(bOk == false);
     ASSERT_EQ(nNotify, 0);

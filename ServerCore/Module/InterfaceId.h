@@ -12,7 +12,7 @@ namespace sc {
 /// 进程内唯一、可比较、可作 map 键；Name() 提供可读名（日志 / 快照）。
 class InterfaceId
 {
-   public:
+public:
     // 无效标识（全零）。
     InterfaceId() : m_nHigh(0), m_nLow(0), m_strName()
     {}
@@ -55,7 +55,7 @@ class InterfaceId
         return m_strName;
     }
 
-   private:
+private:
     // 解析标准 GUID 字符串到 128 位；非法时置全零。
     static void ParseGuid(const char* strGuid, uint64_t& nHigh, uint64_t& nLow)
     {

@@ -72,7 +72,7 @@ inline const sc::InterfaceId& IID_IUserTable()
 ///  - 驱动异常 → kException（处理器内异常由框架捕获，不向调用方抛出）。
 class IUserTable : public virtual sc::IUnknown
 {
-   public:
+public:
     virtual ~IUserTable()
     {}
 

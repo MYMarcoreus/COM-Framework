@@ -13,7 +13,7 @@ namespace sc {
 /// 使模块通过模块管理器按接口使用线程池执行任务。
 SC_INTERFACE(IThreadPool, "sc::IThreadPool", "8f578de1-43a1-46fd-a371-2766edbb7f32")
 {
-   public:
+public:
     virtual ~IThreadPool()
     {}
 

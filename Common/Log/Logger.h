@@ -25,7 +25,7 @@ enum class LogLevel
 /// 提供等级过滤与时间戳格式化；可配置单文件按大小滚动（保留备份）。
 class CLogger
 {
-   public:
+public:
     // 获取全局单例。
     static CLogger& Instance();
 
@@ -52,7 +52,7 @@ class CLogger
     void Warn(const std::string& strMessage);
     void Error(const std::string& strMessage);
 
-   private:
+private:
     CLogger();
     ~CLogger();
 

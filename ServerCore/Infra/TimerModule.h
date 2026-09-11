@@ -14,7 +14,7 @@ namespace sc {
 /// 内部持有 common::timer::CTimerManager 实例。
 class CTimerModule : public CModule, public ITimer
 {
-   public:
+public:
     CTimerModule();
 
     virtual ~CTimerModule();
@@ -30,7 +30,7 @@ class CTimerModule : public CModule, public ITimer
 
     SC_DECLARE_INTERFACE_MAP();
 
-   private:
+private:
     common::timer::CTimerManager m_timer;
 };
 

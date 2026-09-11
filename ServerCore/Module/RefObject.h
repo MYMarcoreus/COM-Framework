@@ -40,7 +40,7 @@ struct IsSelfable
 ///  - WeakSelf().Lock() 保证绝不访问已销毁的对象。
 class CRefObject : public virtual IUnknown
 {
-   public:
+public:
     CRefObject();
 
     virtual ~CRefObject();
@@ -75,14 +75,14 @@ class CRefObject : public virtual IUnknown
         return CWeakPtr<T>(dynamic_cast<T*>(this), m_pLifetime);
     }
 
-   protected:
+protected:
     // 子类重写以返回自身实现的接口。
     virtual void* QueryInterfaceImpl(const InterfaceId& iid);
 
     // 堆上共享的存活状态（供弱引用判断对象是否已销毁）。
     std::shared_ptr<detail::CLifetime> m_pLifetime;
 
-   private:
+private:
     std::atomic<unsigned int> m_nRefCount;
 };
 

@@ -58,7 +58,7 @@ struct CAffinityOrderCtx
 /// @brief 订单模块：自持 1 线程执行器；跨模块调用库存模块（不传执行器）。
 class CAffinityOrderModule
 {
-   public:
+public:
     class CAffinityFlowCoro;  ///< 前向声明（RunCoAsync 的返回类型需要；定义见下）。
 
     CAffinityOrderModule() : m_exec(1)
@@ -133,7 +133,7 @@ class CAffinityOrderModule
     /// @brief 跨模块协程：先在本模块跑一层，await 别的模块的 promise，再回到本模块跑一层。
     class CAffinityFlowCoro : public no::CCoroutine<CAffinityOrderCtx>
     {
-       public:
+    public:
         /// @brief 创建协程。
         ///
         /// @param spCtx 本流程上下文。
@@ -155,12 +155,12 @@ class CAffinityOrderModule
             CO_END();
         }
 
-       private:
+    private:
         no::CPromise<CCalleeCtx> m_pStock;               ///< 跨模块 await 的目标。
         std::shared_ptr<CCalleeModule> m_spStockModule;  ///< 库存模块（保活）。
     };
 
-   private:
+private:
     /// 跨模块那一层的工厂。
     no::CPromise<CAffinityOrderCtx>::PromiseFactory MakeQueryFactory(
         const std::shared_ptr<CCalleeModule>& spStockModule)
@@ -238,18 +238,19 @@ class CAffinityOrderModule
             spStock->nDelayMs = spCtx->nStockDelayMs;
 
             no::CPromise<CCalleeCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
-            const bool bOk = promiseStock.OnSettled([spCtx, spStock, fnResolve, fnReject](no::CPromiseResult result)
-            {
-                // 通知（OnSettled）不迁移：本回调跑在被调模块线程上。
-                spCtx->idOnSettled = std::this_thread::get_id();
-                if (result.IsRejected())
+            const bool bOk = promiseStock.OnSettled(
+                [spCtx, spStock, fnResolve, fnReject](no::CPromiseResult result)
                 {
-                    fnReject(result.Code());
-                    return;
-                }
-                spCtx->nStock = spStock->nAvail;
-                fnResolve();
-            });
+                    // 通知（OnSettled）不迁移：本回调跑在被调模块线程上。
+                    spCtx->idOnSettled = std::this_thread::get_id();
+                    if (result.IsRejected())
+                    {
+                        fnReject(result.Code());
+                        return;
+                    }
+                    spCtx->nStock = spStock->nAvail;
+                    fnResolve();
+                });
             if (!bOk)
             {
                 fnReject(no::kStopped);
@@ -265,10 +266,11 @@ class CAffinityOrderModule
             [this](const no::CPromise<CAffinityOrderCtx>::ResolveFn& fnResolve,
                    const no::CPromise<CAffinityOrderCtx>::RejectFn& fnReject)
         {
-            if (!m_exec.Post([fnResolve]()
-            {
-                fnResolve();
-            }))
+            if (!m_exec.Post(
+                    [fnResolve]()
+                    {
+                        fnResolve();
+                    }))
             {
                 fnReject(no::kStopped);
             }

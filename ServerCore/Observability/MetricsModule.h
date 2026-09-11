@@ -17,7 +17,7 @@ namespace sc {
 /// 内部按名称维护原子值，首次写入自动注册（类型以首次写入为准）。
 class CMetricsModule : public CModule, public IMetrics
 {
-   public:
+public:
     CMetricsModule();
 
     virtual ~CMetricsModule();
@@ -51,7 +51,7 @@ class CMetricsModule : public CModule, public IMetrics
 
     SC_DECLARE_INTERFACE_MAP();
 
-   private:
+private:
     struct Entry
     {
         MetricKind kind;       // 指标类型（首次写入时确定）

@@ -21,12 +21,12 @@ namespace serverexample {
 /// 启动钩子里按接口调用一次业务模块的异步函数（回调通知），示范模块外部的异步调用方式。
 class CExampleApplication : public sc::CMyApplication
 {
-   public:
+public:
     explicit CExampleApplication(std::uint16_t port);
 
     virtual ~CExampleApplication();
 
-   protected:
+protected:
     // 注册模块：默认装配 + 接口模块（网络/事件/服务）+ 业务模块（日志/定时器/网络）。
     bool RegisterModules() override;
 
@@ -39,7 +39,7 @@ class CExampleApplication : public sc::CMyApplication
     // 关闭钩子：取消订阅并释放引用。
     void OnShutdown() override;
 
-   private:
+private:
     std::uint16_t m_nPort;
     common::config::CConfig m_config;
     sc::ScopedInterfacePtr<sc::IEventDispatcher> m_pEventDispatcher;

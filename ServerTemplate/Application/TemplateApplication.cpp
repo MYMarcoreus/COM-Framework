@@ -79,18 +79,23 @@ bool CTemplateApplication::OnInitialize()
         return false;
     }
 
-    m_tEventStartId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStarted, [](const sc::Event& event)
-    {
-        if (event.data != nullptr && event.size == sizeof(std::uint16_t))
-        {
-            std::uint16_t port = *static_cast<const std::uint16_t*>(event.data);
-            common::log::CLogger::Instance().Info("[Event] ServerTemplate 网络已启动，端口 " + std::to_string(port));
-        }
-    });
-    m_tEventStopId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStopped, [](const sc::Event&)
-    {
-        common::log::CLogger::Instance().Info("[Event] ServerTemplate 网络已停止");
-    });
+    m_tEventStartId =
+        m_pEventDispatcher->Subscribe(sc::events::kNetworkStarted,
+                                      [](const sc::Event& event)
+                                      {
+                                          if (event.data != nullptr && event.size == sizeof(std::uint16_t))
+                                          {
+                                              std::uint16_t port = *static_cast<const std::uint16_t*>(event.data);
+                                              common::log::CLogger::Instance().Info(
+                                                  "[Event] ServerTemplate 网络已启动，端口 " + std::to_string(port));
+                                          }
+                                      });
+    m_tEventStopId =
+        m_pEventDispatcher->Subscribe(sc::events::kNetworkStopped,
+                                      [](const sc::Event&)
+                                      {
+                                          common::log::CLogger::Instance().Info("[Event] ServerTemplate 网络已停止");
+                                      });
     return true;
 }
 

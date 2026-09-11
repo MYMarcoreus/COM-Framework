@@ -20,7 +20,7 @@ namespace detail {
 /// 从而保证绝不访问已销毁的对象内存。
 class CLifetime
 {
-   public:
+public:
     CLifetime() : m_bAlive(true)
     {}
 
@@ -39,7 +39,7 @@ class CLifetime
     // 保护"IsAlive 检查 + AddRef"与"MarkDead + 析构"互斥。
     std::mutex m_mutex;
 
-   private:
+private:
     std::atomic<bool> m_bAlive;
 };
 
@@ -71,7 +71,7 @@ class CWeakPtr
 {
     static_assert(std::is_base_of<IUnknown, T>::value, "CWeakPtr<T> 要求 T 必须是 IUnknown 派生接口");
 
-   public:
+public:
     // 创建空弱引用。
     CWeakPtr() : m_ptr(nullptr)
     {}
@@ -124,7 +124,7 @@ class CWeakPtr
         return !Expired();
     }
 
-   private:
+private:
     friend class CModule;
     friend class CRefObject;
 

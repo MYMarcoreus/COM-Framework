@@ -12,7 +12,7 @@ namespace sc {
 /// 使模块通过模块管理器按接口读取配置，而非直接持有 CConfig 实例。
 SC_INTERFACE(IConfig, "sc::IConfig", "cfaa634b-1064-40d3-94eb-b8518776bd7e")
 {
-   public:
+public:
     virtual ~IConfig()
     {}
 

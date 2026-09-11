@@ -18,7 +18,7 @@ namespace no = common::async;
 /// 协程：3 次顺序 await（批量伸缩测试的载荷）。
 class BenchCoroSeq3 : public no::CCoroutine<bench::CChainContext>
 {
-   public:
+public:
     using no::CCoroutine<bench::CChainContext>::CCoroutine;
 
     void Run() override
@@ -35,7 +35,7 @@ class BenchCoroSeq3 : public no::CCoroutine<bench::CChainContext>
 /// 协程：20 次顺序 await（长协程：测每次挂起 / 恢复的摊销成本）。
 class BenchCoroSeq20 : public no::CCoroutine<bench::CChainContext>
 {
-   public:
+public:
     using no::CCoroutine<bench::CChainContext>::CCoroutine;
 
     void Run() override
@@ -77,13 +77,14 @@ inline int RunCoroBatch(no::CAsyncExecutor& exec, int nCoros)
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
         std::shared_ptr<BenchCoroSeq3> pCoro = exec.CoStart<BenchCoroSeq3>(spCtx);
-        pCoro->AsPromise().OnSettled([&nDone](no::CPromiseResult r)
-        {
-            if (r.IsFulfilled())
+        pCoro->AsPromise().OnSettled(
+            [&nDone](no::CPromiseResult r)
             {
-                nDone.fetch_add(1, std::memory_order_release);
-            }
-        });
+                if (r.IsFulfilled())
+                {
+                    nDone.fetch_add(1, std::memory_order_release);
+                }
+            });
     }
     while (nDone.load(std::memory_order_acquire) < nCoros)
     {
@@ -110,13 +111,16 @@ void RunResumableCases()
                                    pCoro->Await().IsFulfilled() && spCtx->nValue == 20);
         }
 
-        benchmark::BenchOp(group, "CCoroutine 20 awaits (1 thread)", [&exec]()
-        {
-            std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-            std::shared_ptr<BenchCoroSeq20> pCoro = exec.CoStart<BenchCoroSeq20>(spCtx);
-            volatile int s = pCoro->Await().Code();
-            (void)s;
-        }, 11, "单协程 20 次挂起 / 恢复（每次 await 一条单层子链）");
+        benchmark::BenchOp(
+            group, "CCoroutine 20 awaits (1 thread)",
+            [&exec]()
+            {
+                std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
+                std::shared_ptr<BenchCoroSeq20> pCoro = exec.CoStart<BenchCoroSeq20>(spCtx);
+                volatile int s = pCoro->Await().Code();
+                (void)s;
+            },
+            11, "单协程 20 次挂起 / 恢复（每次 await 一条单层子链）");
 
         exec.Stop();
     }
@@ -136,10 +140,11 @@ void RunResumableCases()
         benchmark::BenchOp(
             group, "batch " + std::to_string(kBatch) + " coro x3 await @" + std::to_string(nThreads[i]) + " thread",
             [&exec]()
-        {
-            volatile int s = RunCoroBatch(exec, kBatch);
-            (void)s;
-        }, 7, "一次逻辑操作 = " + std::to_string(kBatch) + " 个协程（各 3 次 await）全部完成");
+            {
+                volatile int s = RunCoroBatch(exec, kBatch);
+                (void)s;
+            },
+            7, "一次逻辑操作 = " + std::to_string(kBatch) + " 个协程（各 3 次 await）全部完成");
 
         exec.Stop();
     }

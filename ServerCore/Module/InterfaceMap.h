@@ -34,7 +34,7 @@ void* InterfaceGetter(void* pThis)
 /// 声明 GetInterfaceTable() 与 QueryInterfaceImpl() 覆写；
 /// 定义在 .cpp 中由 SC_BEGIN_INTERFACE_MAP / SC_END_INTERFACE_MAP 生成。
 #define SC_DECLARE_INTERFACE_MAP()                        \
-   protected:                                             \
+protected:                                                \
     static const sc::InterfaceEntry* GetInterfaceTable(); \
     void* QueryInterfaceImpl(const sc::InterfaceId& iid) override;
 

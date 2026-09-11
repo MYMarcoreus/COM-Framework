@@ -13,7 +13,7 @@ namespace sc {
 /// 使模块通过模块管理器按接口使用定时能力。
 SC_INTERFACE(ITimer, "sc::ITimer", "4810a33f-4a1c-490e-b19f-a2d1f3d4229d")
 {
-   public:
+public:
     virtual ~ITimer()
     {}
 

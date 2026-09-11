@@ -58,9 +58,9 @@ bool CConfigReloadModule::Start()
     // 回调参数为具体类型强引用（无需转换）。
     m_tTimerId = sc::AddGuardedPeriodicTimer(&m_timer, m_nIntervalMs, WeakSelf<CConfigReloadModule>(),
                                              [](const sc::ScopedInterfacePtr<CConfigReloadModule>& sp)
-    {
-        sp->CheckReload();
-    });
+                                             {
+                                                 sp->CheckReload();
+                                             });
     return true;
 }
 

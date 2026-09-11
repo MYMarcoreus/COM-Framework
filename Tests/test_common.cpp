@@ -44,10 +44,11 @@ TEST(ThreadPool_SubmitTasks)
     std::atomic<int> nCounter(0);
     for (int i = 0; i < 20; ++i)
     {
-        ASSERT_TRUE(pool.Submit([&nCounter]()
-        {
-            nCounter.fetch_add(1);
-        }));
+        ASSERT_TRUE(pool.Submit(
+            [&nCounter]()
+            {
+                nCounter.fetch_add(1);
+            }));
     }
     pool.Stop();  // 等待所有已提交任务执行完毕
     ASSERT_EQ(nCounter.load(), 20);
@@ -70,17 +71,18 @@ TEST(ThreadPool_BurstParallelism)
     // 单线程突发投递（不等待），验证工作线程并行度。
     for (int i = 0; i < kTasks; ++i)
     {
-        ASSERT_TRUE(pool.Submit([&nActive, &nPeak, &nDone]()
-        {
-            const int nNow = nActive.fetch_add(1) + 1;
-            int nCur = nPeak.load();
-            while (nCur < nNow && !nPeak.compare_exchange_weak(nCur, nNow))
+        ASSERT_TRUE(pool.Submit(
+            [&nActive, &nPeak, &nDone]()
             {
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            nActive.fetch_sub(1);
-            nDone.fetch_add(1);
-        }));
+                const int nNow = nActive.fetch_add(1) + 1;
+                int nCur = nPeak.load();
+                while (nCur < nNow && !nPeak.compare_exchange_weak(nCur, nNow))
+                {
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                nActive.fetch_sub(1);
+                nDone.fetch_add(1);
+            }));
     }
     pool.Stop();  // 等待全部完成
     ASSERT_EQ(nDone.load(), kTasks);
@@ -94,10 +96,11 @@ TEST(Timer_OneShotFires)
     ASSERT_TRUE(timerManager.Start());
 
     std::atomic<int> nFired(0);
-    common::timer::TimerId nId = timerManager.AddTimer(30, [&nFired]()
-    {
-        nFired.fetch_add(1);
-    });
+    common::timer::TimerId nId = timerManager.AddTimer(30,
+                                                       [&nFired]()
+                                                       {
+                                                           nFired.fetch_add(1);
+                                                       });
     ASSERT_TRUE(nId != common::timer::kInvalidTimerId);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(120));

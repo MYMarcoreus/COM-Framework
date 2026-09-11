@@ -204,10 +204,11 @@ bool CModuleScheduler::IsIdle() const
 void CModuleScheduler::Drain()
 {
     std::unique_lock<std::mutex> lock(m_mutex);
-    m_condition.wait(lock, [this]()
-    {
-        return m_nActiveReaders.load() == 0 && !m_bWriterActive.load() && m_dequeTasks.empty();
-    });
+    m_condition.wait(lock,
+                     [this]()
+                     {
+                         return m_nActiveReaders.load() == 0 && !m_bWriterActive.load() && m_dequeTasks.empty();
+                     });
 }
 
 }  // namespace sc

@@ -20,7 +20,7 @@ class CResolveContext;
 
 class CModule : public CRefObject, public IModule
 {
-   public:
+public:
     explicit CModule(const char* strName = "");
 
     virtual ~CModule();
@@ -60,14 +60,14 @@ class CModule : public CRefObject, public IModule
     // Lock() 升级为强引用时若模块已销毁则返回空，不会阻止模块销毁。
     CWeakPtr<IModule> WeakSelf();
 
-   protected:
+protected:
     // 子类重写以返回自身实现的接口。
     void* QueryInterfaceImpl(const InterfaceId& iid) override;
 
     // 声明本模块依赖的接口标识（构造函数中调用），供生命周期拓扑排序。
     void AddDependency(const InterfaceId& iid);
 
-   private:
+private:
     // 仅供 CModuleManager 在生命周期编排时调用，外部不可直接修改。
     void SetState(ModuleState state);
 

@@ -11,7 +11,7 @@ namespace serverexample {
 /// 模块名 "logger"，应在依赖日志的模块之前注册。
 class CExampleLoggerModule : public sc::CModule
 {
-   public:
+public:
     explicit CExampleLoggerModule(const common::config::CConfig& config);
 
     virtual ~CExampleLoggerModule();
@@ -24,7 +24,7 @@ class CExampleLoggerModule : public sc::CModule
     void Stop() override;
     void Shutdown() override;
 
-   private:
+private:
     const common::config::CConfig& m_config;
 };
 

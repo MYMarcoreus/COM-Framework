@@ -19,7 +19,7 @@ namespace {
 /// @brief 用于记录生命周期调用序的测试模块。
 class CTestModule : public sc::CModule
 {
-   public:
+public:
     explicit CTestModule(const char* strName = "test")
         : sc::CModule(strName), m_nInit(0), m_nStart(0), m_nStop(0), m_nShutdown(0)
     {}
@@ -74,7 +74,7 @@ inline const sc::InterfaceId& IID_ITestRefObj()
 /// @brief 测试接口（普通对象使用 CRefObject 的接口视图 Self<T>）。
 class ITestRefObj : public virtual sc::IUnknown
 {
-   public:
+public:
     virtual ~ITestRefObj()
     {}
     virtual int GetValue() const = 0;
@@ -83,7 +83,7 @@ class ITestRefObj : public virtual sc::IUnknown
 /// @brief 普通对象（非模块）：继承 CRefObject 复用引用 / 弱引用能力。
 class CTestRefObj : public sc::CRefObject, public ITestRefObj
 {
-   public:
+public:
     CTestRefObj() : m_nValue(42)
     {}
 
@@ -171,21 +171,22 @@ TEST(WeakRef_ConcurrentLockAndRelease)
     std::vector<std::thread> vecThreads;
     for (int i = 0; i < 4; ++i)
     {
-        vecThreads.push_back(std::thread([&wp, &nLocks, &nBadNames]()
-        {
-            for (int j = 0; j < 10000; ++j)
+        vecThreads.push_back(std::thread(
+            [&wp, &nLocks, &nBadNames]()
             {
-                sc::ScopedInterfacePtr<sc::IModule> sp = wp.Lock();
-                if (sp)
+                for (int j = 0; j < 10000; ++j)
                 {
-                    ++nLocks;
-                    if (sp->GetName() == nullptr)
+                    sc::ScopedInterfacePtr<sc::IModule> sp = wp.Lock();
+                    if (sp)
                     {
-                        ++nBadNames;
+                        ++nLocks;
+                        if (sp->GetName() == nullptr)
+                        {
+                            ++nBadNames;
+                        }
                     }
                 }
-            }
-        }));
+            }));
     }
 
     // 主线程释放初始引用（不归零：spMain 仍持有），与工作线程并发 Lock/Release 波动
@@ -261,10 +262,11 @@ TEST(EventDispatcher_SubscribePublish)
 {
     sc::CEventDispatcher dispatcher;
     std::atomic<int> nCount(0);
-    sc::SubscriptionId nId = dispatcher.Subscribe("evt.test", [&nCount](const sc::Event&)
-    {
-        nCount.fetch_add(1);
-    });
+    sc::SubscriptionId nId = dispatcher.Subscribe("evt.test",
+                                                  [&nCount](const sc::Event&)
+                                                  {
+                                                      nCount.fetch_add(1);
+                                                  });
     ASSERT_TRUE(nId != sc::kInvalidSubscriptionId);
 
     dispatcher.Publish("evt.test", nullptr, 0);
@@ -355,42 +357,44 @@ TEST(Module_SelfReference)
 TEST(MessageRouter_Dispatch)
 {
     sc::CMessageRouter* pRouter = new sc::CMessageRouter();
-    pRouter->SetExtractor([](const char* pData, size_t nLen) -> sc::ExtractedMessage
-    {
-        sc::ExtractedMessage msg;
-        msg.result = sc::MessageParseResult::kNeedMore;
-        msg.step = 0;
-        msg.type = 0;
-        msg.payload = nullptr;
-        msg.payloadSize = 0;
-        if (nLen < 8)
+    pRouter->SetExtractor(
+        [](const char* pData, size_t nLen) -> sc::ExtractedMessage
         {
+            sc::ExtractedMessage msg;
+            msg.result = sc::MessageParseResult::kNeedMore;
+            msg.step = 0;
+            msg.type = 0;
+            msg.payload = nullptr;
+            msg.payloadSize = 0;
+            if (nLen < 8)
+            {
+                return msg;
+            }
+            uint32_t nLength = 0;
+            uint32_t nType = 0;
+            for (int i = 0; i < 4; ++i)
+            {
+                nLength |= static_cast<uint32_t>(static_cast<unsigned char>(pData[i])) << (8 * i);
+                nType |= static_cast<uint32_t>(static_cast<unsigned char>(pData[4 + i])) << (8 * i);
+            }
+            if (nLength > nLen - 8)
+            {
+                return msg;  // 数据不足，等待更多
+            }
+            msg.result = sc::MessageParseResult::kOk;
+            msg.step = 8 + nLength;
+            msg.type = static_cast<int>(nType);
+            msg.payload = pData + 8;
+            msg.payloadSize = nLength;
             return msg;
-        }
-        uint32_t nLength = 0;
-        uint32_t nType = 0;
-        for (int i = 0; i < 4; ++i)
-        {
-            nLength |= static_cast<uint32_t>(static_cast<unsigned char>(pData[i])) << (8 * i);
-            nType |= static_cast<uint32_t>(static_cast<unsigned char>(pData[4 + i])) << (8 * i);
-        }
-        if (nLength > nLen - 8)
-        {
-            return msg;  // 数据不足，等待更多
-        }
-        msg.result = sc::MessageParseResult::kOk;
-        msg.step = 8 + nLength;
-        msg.type = static_cast<int>(nType);
-        msg.payload = pData + 8;
-        msg.payloadSize = nLength;
-        return msg;
-    });
+        });
 
     std::vector<std::string> vecReceived;
-    pRouter->RegisterHandler(1, [&vecReceived](sc::ConnectionId, int, const char* pPayload, size_t nLen)
-    {
-        vecReceived.push_back(std::string(pPayload, nLen));
-    });
+    pRouter->RegisterHandler(1,
+                             [&vecReceived](sc::ConnectionId, int, const char* pPayload, size_t nLen)
+                             {
+                                 vecReceived.push_back(std::string(pPayload, nLen));
+                             });
 
     // 构造两条消息（type=1, payload="hello"/"world"），每条 13 字节
     unsigned char buf[26];

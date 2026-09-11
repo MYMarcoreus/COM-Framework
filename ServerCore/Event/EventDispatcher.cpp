@@ -177,13 +177,14 @@ size_t CEventDispatcher::PublishAsync(const EventType& strType, const void* pDat
 
     // ④ 投递到执行器；捕获模块自持引用保证回调期间模块存活
     auto spSelf = Self<CEventDispatcher>();
-    bool bPosted = m_pExecutor->Post([spSelf, strType, vecPayload]()
-    {
-        if (spSelf)
+    bool bPosted = m_pExecutor->Post(
+        [spSelf, strType, vecPayload]()
         {
-            spSelf->Publish(strType, vecPayload.empty() ? nullptr : vecPayload.data(), vecPayload.size());
-        }
-    });
+            if (spSelf)
+            {
+                spSelf->Publish(strType, vecPayload.empty() ? nullptr : vecPayload.data(), vecPayload.size());
+            }
+        });
     return bPosted ? nCount : 0;
 }
 

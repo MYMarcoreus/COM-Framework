@@ -59,14 +59,16 @@ bool CExampleService::Initialize(const sc::CResolveContext& ctx)
         return false;
     }
     m_pRouter->SetExtractor(CExampleProtocol::MakeMessageExtractor());
-    m_pRouter->RegisterHandler(kCmdPing, [this](sc::ConnectionId id, int, const char*, size_t)
-    {
-        HandlePing(id);
-    });
-    m_pRouter->RegisterHandler(kCmdEcho, [this](sc::ConnectionId id, int, const char* payload, size_t payloadSize)
-    {
-        HandleEcho(id, payload, payloadSize);
-    });
+    m_pRouter->RegisterHandler(kCmdPing,
+                               [this](sc::ConnectionId id, int, const char*, size_t)
+                               {
+                                   HandlePing(id);
+                               });
+    m_pRouter->RegisterHandler(kCmdEcho,
+                               [this](sc::ConnectionId id, int, const char* payload, size_t payloadSize)
+                               {
+                                   HandleEcho(id, payload, payloadSize);
+                               });
 
     // ③ 异步执行器（可选，重活投递）
     m_pExecutor.Reset(ctx.Resolve<sc::IAsyncExecutor>());
@@ -142,19 +144,20 @@ void CExampleService::HandlePing(sc::ConnectionId id)
     if (m_pExecutor != nullptr)
     {
         auto spSelf = Self<CExampleService>();
-        m_pExecutor->Post([spSelf, id]()
-        {
-            if (!spSelf)
+        m_pExecutor->Post(
+            [spSelf, id]()
             {
-                return;
-            }
-            std::string response = CExampleProtocol::BuildPong();
-            if (spSelf->m_pNetwork != nullptr)
-            {
-                spSelf->m_pNetwork->Send(id, response.data(), response.size());
-            }
-            spSelf->Log("异步处理 PING，返回 PONG: id=" + std::to_string(id));
-        });
+                if (!spSelf)
+                {
+                    return;
+                }
+                std::string response = CExampleProtocol::BuildPong();
+                if (spSelf->m_pNetwork != nullptr)
+                {
+                    spSelf->m_pNetwork->Send(id, response.data(), response.size());
+                }
+                spSelf->Log("异步处理 PING，返回 PONG: id=" + std::to_string(id));
+            });
         return;
     }
     std::string response = CExampleProtocol::BuildPong();
@@ -174,23 +177,24 @@ void CExampleService::HandleEcho(sc::ConnectionId id, const char* payload, size_
     if (m_pExecutor != nullptr)
     {
         auto spSelf = Self<CExampleService>();
-        m_pExecutor->Post([spSelf, id, strPayload]()
-        {
-            if (!spSelf)
+        m_pExecutor->Post(
+            [spSelf, id, strPayload]()
             {
-                return;
-            }
-            std::string response = CExampleProtocol::BuildPacket(kCmdEcho, strPayload);
-            if (spSelf->m_pNetwork != nullptr)
-            {
-                spSelf->m_pNetwork->Send(id, response.data(), response.size());
-            }
-            if (spSelf->m_pMetrics != nullptr)
-            {
-                spSelf->m_pMetrics->Inc("example.echo");
-            }
-            spSelf->Log("异步处理 ECHO: id=" + std::to_string(id) + " len=" + std::to_string(strPayload.size()));
-        });
+                if (!spSelf)
+                {
+                    return;
+                }
+                std::string response = CExampleProtocol::BuildPacket(kCmdEcho, strPayload);
+                if (spSelf->m_pNetwork != nullptr)
+                {
+                    spSelf->m_pNetwork->Send(id, response.data(), response.size());
+                }
+                if (spSelf->m_pMetrics != nullptr)
+                {
+                    spSelf->m_pMetrics->Inc("example.echo");
+                }
+                spSelf->Log("异步处理 ECHO: id=" + std::to_string(id) + " len=" + std::to_string(strPayload.size()));
+            });
         return;
     }
     std::string response = CExampleProtocol::BuildPacket(kCmdEcho, strPayload);

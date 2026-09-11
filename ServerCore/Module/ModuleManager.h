@@ -29,7 +29,7 @@ struct ModuleSnapshot
 /// 某一步失败时逆序回滚已完成的模块，保证状态一致。
 class CModuleManager
 {
-   public:
+public:
     CModuleManager();
 
     ~CModuleManager();
@@ -113,7 +113,7 @@ class CModuleManager
     // 带超时地统一关闭所有模块；返回 true 表示在超时前完成。
     bool ShutdownAllWithTimeout(uint32_t nTimeoutMs);
 
-   private:
+private:
     // 设置模块生命周期状态（friend 访问 CModule::SetState）。
     static void SetModuleState(IModule* pModule, ModuleState state);
 

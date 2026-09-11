@@ -12,7 +12,7 @@ namespace servertemplate {
 /// 模块名 "logger"，应在依赖日志的模块之前注册。
 class CTemplateLoggerModule : public sc::CModule
 {
-   public:
+public:
     CTemplateLoggerModule();
 
     virtual ~CTemplateLoggerModule();

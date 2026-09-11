@@ -30,7 +30,7 @@ using TimerCallback = std::function<void()>;
 /// 定时器回调在 io 线程内执行，应尽快返回。
 class CTimerManager
 {
-   public:
+public:
     CTimerManager();
 
     ~CTimerManager();
@@ -59,7 +59,7 @@ class CTimerManager
     // 是否正在运行。
     bool IsRunning() const;
 
-   private:
+private:
     // 调度一次异步等待（周期定时器到期后重新调度）。
     void Schedule(std::shared_ptr<asio::steady_timer> pTimer, TimerId nId, std::int64_t nIntervalMs,
                   const TimerCallback& fnCallback);

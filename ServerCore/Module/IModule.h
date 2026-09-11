@@ -30,7 +30,7 @@ class CResolveContext;
 
 SC_INTERFACE(IModule, "sc::IModule", "fe293bce-4c0e-443b-8ce8-953c4806c6fa")
 {
-   public:
+public:
     virtual ~IModule()
     {}
 
