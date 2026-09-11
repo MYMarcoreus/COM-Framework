@@ -341,7 +341,9 @@ exec.Stop();                            // 停止并等待已投递任务完成
 - 未 `Start()` / 已 `Stop()` 时起 promise、`Post` 都不抛异常，而是被拒绝 / 返回 `false`；
 - `Stop()` 之后可再次 `Start()`（重建句柄与线程池，隔离旧任务）。
 
-## 9. 逐层指定执行线程（`ThenInline` / `ThenOn`）
+## 9. 执行线程控制（逐层亲和 + 建链 / 启动分离）
+
+### 9.1 逐层指定执行线程（`ThenInline` / `ThenOn`）
 
 默认（自 2026-09-11 的线程亲和起）：**每一层都在本链执行器线程上执行**。个别层要换个地方跑时：
 
@@ -366,6 +368,32 @@ exec.NewPromise(spCtx, StepLoad, ASYNC_LOC)
   （后续层跳过、`Catch` 照常执行）；
 - **不要把 `ThenOn` 用来跨模块传执行器**（执行器是模块私有资源，跨模块只交换 promise + 上下文）；
 - 两种写法都只影响**那一层**：之后的层仍按默认亲和回本链执行器；内联深度超 `kMaxInlineDepth` 依旧改投递（防爆栈）。
+
+### 9.2 先建链、后启动（`BuildPromise` + `Start`）
+
+`NewPromise` 一返回就把首层投递出去了（链边跑边搭）；需要“先把链完全搭好、再开始跑”时用 `BuildPromise`：
+
+```cpp
+no::CPromise<COrderCtx> p = exec.BuildPromise(spCtx)
+    .Then(StepLoad, ASYNC_LOC)                    // 只登记，不跑
+    .ThenPromise(fnCallOtherModule, ASYNC_LOC)     // 跨模块调用此时也没发起
+    .Then(StepAfterBridge, ASYNC_LOC);
+
+// 此处可以放心地再改上下文 / 再挂层：没有任何层在跑
+p.Start();                     // 此刻才把 StepLoad 投递到执行器
+no::CPromiseResult r = p.Await();
+```
+
+| 事实 | 说明 |
+| --- | --- |
+| 构链期 | **不跑任何业务代码**（含 `New(...)` 的发起也不会执行） |
+| `Start()` | 投递首层；**幂等**（重复调用无副作用）；普通链（`NewPromise`）调用它无副作用 |
+| 漏写 `Start()` | 直接 `Await()` 会**自动启动**（兜底，不会死等） |
+| 执行器不可用 | 首层以 `kStopped` 收口（下游继续透传） |
+| `Start()` 后追加层 | 仍可用：新层按亲和回本链执行器（“已 settled 后补登”路径） |
+| 空链（没挂过任何层） | `Start()` 无动作；`Await()` 仍是既有的“无状态句柄”语义（`kStopped`） |
+
+好处：构链期间可放心初始化上下文；所有层都在首层开跑前登记完毕（跨模块续接不会出现“补登”的时序差异）。
 
 ## 10. 线程模型与生命周期
 

@@ -146,6 +146,26 @@ class CAsyncExecutor
                                   typename CPromise<TContext>::ThenHandler fnHandler,
                                   const CSourceLoc& loc = CSourceLoc());
 
+    /// @brief 建一条「延迟启动」的 promise 链（先挂完所有层，再 `Start()`）。
+    ///
+    /// 与 `NewPromise` 的差别：**追加层只登记，不投递**；`Start()`（或首次 `Await()`）后
+    /// 首层才投递执行。好处：
+    ///  - 构链期间不跑任何业务代码（可放心初始化上下文 / 挂完所有层）；
+    ///  - 所有层都在首层开跑前登记完毕 → 跨模块续接不再出现“补登记”的时序差异。
+    ///
+    /// 用法：
+    /// @code
+    /// auto p = exec.BuildPromise(spCtx, ASYNC_LOC).Then(StepA).ThenPromise(fnCallOther).Then(StepB);
+    /// p.Start();            // 此刻才开始跑（不调 Start 直接 Await 也行，会自动启动）
+    /// p.Await();
+    /// @endcode
+    ///
+    /// @tparam TContext 上下文类型（由 spContext 推导）。
+    /// @param spContext 共享上下文（所有层共用）。
+    /// @return 未启动的链句柄。
+    template <typename TContext>
+    CPromise<TContext> BuildPromise(const std::shared_ptr<TContext>& spContext);
+
     /// @brief 创建并启动协程（投递首次 Resume；返回 shared_ptr 管理生命周期）。
     ///
     /// 协程类型须继承 common::async::CCoroutine<TContext> 并实现 Run()。

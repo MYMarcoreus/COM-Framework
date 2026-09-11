@@ -11,6 +11,7 @@
 ///  - 指定执行器不可用（已 Stop）→ 本层以 `kStopped` 收口，不挂死、后续层跳过。
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -29,10 +30,11 @@ namespace no = common::async;
 struct COverrideCalleeCtx
 {
     int nAvail;               ///< 出参：可用库存。
+    int nDelayMs;             ///< 步骤模拟耗时（让“挂层”早于 settle，用例才确定）。
     std::atomic<int> nSteps;  ///< 已执行步骤数。
     std::thread::id idStep;   ///< 步骤所在线程。
 
-    COverrideCalleeCtx() : nAvail(5), nSteps(0)
+    COverrideCalleeCtx() : nAvail(5), nDelayMs(0), nSteps(0)
     {}
 };
 
@@ -74,6 +76,7 @@ class COverrideCalleeModule
 struct COverrideOrderCtx
 {
     int nOwnSteps;                         ///< 本模块自有层执行次数。
+    int nCalleeDelayMs;                    ///< 传给被调模块的每步耗时（用例确定性用）。
     int nCatchRuns;                        ///< catch 执行次数。
     int nCaughtCode;                       ///< catch 收到的码。
     std::string strTrace;                  ///< 层轨迹。
@@ -84,7 +87,7 @@ struct COverrideOrderCtx
     std::thread::id idAfterSide;           ///< `ThenOn` 之后那一层所在线程（应回主执行器）。
     std::thread::id idLastOwn;             ///< 最后一个自有层所在线程。
 
-    COverrideOrderCtx() : nOwnSteps(0), nCatchRuns(0), nCaughtCode(0)
+    COverrideOrderCtx() : nOwnSteps(0), nCalleeDelayMs(0), nCatchRuns(0), nCaughtCode(0)
     {}
 };
 
@@ -225,6 +228,7 @@ class COverrideOrderModule
                               const no::CPromise<COverrideOrderCtx>::RejectFn& fnReject)
         {
             auto spCalleeCtx = std::make_shared<COverrideCalleeCtx>();
+            spCalleeCtx->nDelayMs = spCtx->nCalleeDelayMs;
             no::CPromise<COverrideCalleeCtx> promiseCallee = spCallee->QueryAsync(spCalleeCtx);
             promiseCallee.OnSettled([spCtx, spCalleeCtx, fnResolve, fnReject](no::CPromiseResult result)
             {
@@ -252,6 +256,7 @@ TEST(AffinityOverride_ThenInlineRunsOnSettleThread)
     auto spCallee = std::make_shared<COverrideCalleeModule>();
     auto spOrder = std::make_shared<COverrideOrderModule>();
     auto spCtx = std::make_shared<COverrideOrderCtx>();
+    spCtx->nCalleeDelayMs = 10;  // 被调模块慢一点：保证“挂层”早于 settle
 
     ASSERT_TRUE(spOrder->RunInlineAsync(spCtx, spCallee).Await().IsFulfilled());
 
@@ -282,6 +287,7 @@ TEST(AffinityOverride_ThenOnRunsOnGivenExecutor)
     auto spCallee = std::make_shared<COverrideCalleeModule>();
     auto spOrder = std::make_shared<COverrideOrderModule>();
     auto spCtx = std::make_shared<COverrideOrderCtx>();
+    spCtx->nCalleeDelayMs = 10;  // 同上：固定时序
 
     ASSERT_TRUE(spOrder->RunOnSideAsync(spCtx, spCallee).Await().IsFulfilled());
 

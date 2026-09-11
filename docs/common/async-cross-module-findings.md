@@ -156,8 +156,10 @@ else
   亲和三档（`kAffinityChain` 默认 / `kAffinityInline` 就地 / `kAffinityExecutor` 指定）已实现，
   对外 API 为 `ThenInline` / `ThenOn`（只影响那一层，之后的层回本链执行器）；
   验收：`Tests/test_async_affinity_override.cpp`（4 例）；文档：async-usage §9、async-impl §8.1；
-- **C（build-then-start）**：全链挂完再投递首层，能额外消灭“补登记”路径（少一次投递），
-  但对“回本模块线程”而言 A 已经够了，C 是确定性与性能的补充（待做）。
+- **C（build-then-start）**：全链挂完再投递首层 —— **已完成（2026-09-11）**：
+  新增 `CAsyncExecutor::BuildPromise(spCtx)` + `CPromise::Start()`（幂等；`Await()` 对未启动的延迟链
+  自动 `Start()` 兜底；`New(...)` 的 executor 也延后到轮到该层才执行；首层启动尊重 `ThenOn` 的目标执行器）。
+  验收：`Tests/test_async_build_start.cpp`（6 例）；文档：async-usage §9.2、async-impl §5.1。
 
 ---
 

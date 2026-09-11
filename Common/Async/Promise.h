@@ -98,6 +98,13 @@
 // p.OnSettled([](common::async::CPromiseResult r) { /* 跑完通知 */ });
 // common::async::CPromiseResult r = p.Await();             // 阻塞等待结果
 // (void)r;
+//
+// 需要「先把链完全搭好、再开跑」时（等价 build-then-start）：
+//   no::CPromise<CLoginContext> q = exec.BuildPromise(spCtx)   // 追加层只登记，不投递
+//       .Then(StepReadParam, ASYNC_LOC)
+//       .Then(StepVerify, ASYNC_LOC);
+//   q.Start();                     // 此刻才投递首层（幂等；漏写则首次 Await 自动启动）
+//   q.Await();
 // @endcode
 // ====================================================================
 
@@ -317,6 +324,23 @@ class CPromiseState
 #endif
 };
 
+/// @brief 延迟启动状态（`BuildPromise` 建链用，整条链共享）。
+///
+/// 普通链（`NewPromise` / 构造函数）`bDeferred == false`：行为完全不变（首层立即投递）。
+/// 延迟链：追加层只**登记**，首层动作暂存在 `fnLaunch`，由 `Start()` 才投递 ——
+/// 于是「链跑起来」与「挂层」分开，跨模块续接的登记时机不再与执行赛跑。
+struct CLaunchState
+{
+    bool bDeferred;                            ///< 是否延迟启动链。
+    bool bStarted;                             ///< 是否已启动（Start 幂等）。
+    std::function<void()> fnLaunch;            ///< 首层启动动作（Start 时投递到执行器执行）。
+    std::shared_ptr<CPromiseState> pFirst;     ///< 首层状态（启动无法投递时以 kStopped 收口它）。
+    std::shared_ptr<CExecutorHandle> pTarget;  ///< 启动投递的目标执行器（为空 = 本链执行器）。
+
+    CLaunchState() : bDeferred(false), bStarted(false)
+    {}
+};
+
 /// @brief promise 共享核心：执行器句柄 + 共享上下文。
 ///
 /// 一条链的所有层共用同一个核心（同一上下文 + 同一执行器），句柄持有者彼此
@@ -360,10 +384,24 @@ class CPromiseCore
         m_pHandle = pHandle;
     }
 
+    /// @brief 延迟启动状态（懒创建，整条链共享）。
+    ///
+    /// @return 启动状态（非空）。
+    std::shared_ptr<CLaunchState> Launch() const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_pLaunch)
+        {
+            m_pLaunch = std::make_shared<CLaunchState>();
+        }
+        return m_pLaunch;
+    }
+
    private:
-    mutable std::mutex m_mutex;                     ///< 保护上下文懒创建。
-    std::shared_ptr<CExecutorHandle> m_pHandle;     ///< 执行器句柄。
-    mutable std::shared_ptr<TContext> m_spContext;  ///< 共享上下文。
+    mutable std::mutex m_mutex;                       ///< 保护上下文与启动状态的懒创建。
+    std::shared_ptr<CExecutorHandle> m_pHandle;       ///< 执行器句柄。
+    mutable std::shared_ptr<TContext> m_spContext;    ///< 共享上下文。
+    mutable std::shared_ptr<CLaunchState> m_pLaunch;  ///< 延迟启动状态（BuildPromise 链用）。
 };
 
 /// @brief 处理器模式（对应 JS 的 then / catch / finally）。
@@ -561,6 +599,53 @@ class CPromise
         return m_pCore != nullptr && m_pState != nullptr;
     }
 
+    /// @brief 本链是否「延迟启动」（`BuildPromise` 建的链）。
+    bool IsDeferred() const
+    {
+        return m_pCore != nullptr && m_pCore->Launch()->bDeferred;
+    }
+
+    /// @brief 本链是否已启动（普通链恒为 true）。
+    bool IsStarted() const
+    {
+        return m_pCore == nullptr || !m_pCore->Launch()->bDeferred || m_pCore->Launch()->bStarted;
+    }
+
+    /// @brief 启动「延迟链」：此刻才把首层投递到执行器（幂等；普通链调用无副作用）。
+    ///
+    /// - 延迟链（`BuildPromise`）在 `Start()` 之前**不跑任何业务代码**，追加层只做登记；
+    /// - 未启动就叫 `Await()` 会自动 `Start()`（兜底，不会死等）；
+    /// - 目标执行器不可用（已 Stop / 拒绝投递）→ 首层以 `kStopped` 收口，下游继续透传。
+    void Start()
+    {
+        if (m_pCore == nullptr)
+        {
+            return;
+        }
+
+        const std::shared_ptr<detail::CLaunchState> pLaunch = m_pCore->Launch();
+        if (!pLaunch->bDeferred || pLaunch->bStarted)
+        {
+            return;  // 非延迟链 / 已启动：幂等。
+        }
+        pLaunch->bStarted = true;
+
+        std::function<void()> fnLaunch = pLaunch->fnLaunch;
+        const std::shared_ptr<detail::CPromiseState> pFirst = pLaunch->pFirst;
+        pLaunch->fnLaunch = nullptr;
+        if (!fnLaunch || pFirst == nullptr)
+        {
+            return;  // 空链（没挂过任何层）：没有启动动作。
+        }
+
+        const std::shared_ptr<detail::CExecutorHandle> pExec =
+            (pLaunch->pTarget != nullptr) ? pLaunch->pTarget : m_pCore->Handle();
+        if (!detail::PostToHandle(pExec, std::move(fnLaunch)))
+        {
+            pFirst->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用。
+        }
+    }
+
     /// @brief 创建「由外部兑现 / 拒绝」的 promise（等价 JS `new Promise((resolve, reject) => ...)`）。
     ///
     /// 用途：把**其他模块 / 回调式**的异步接进本流程 —— executor 里发起调用并登记回调，
@@ -581,30 +666,21 @@ class CPromise
         promise.m_pState = std::make_shared<detail::CPromiseState>();  // 待定：等外部 settle。
         promise.m_pState->SetLoc(loc);
 
+        const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = promise.m_pCore;
         const std::shared_ptr<detail::CPromiseState> pState = promise.m_pState;
-        ResolveFn fnResolve = [pState]()
+
+        // 延迟启动链（BuildPromise）：executor 不立即执行，等 Start() 后轮到本层再发起。
+        if (pCore->Launch()->bDeferred)
         {
-            pState->Settle(CPromiseResult::Resolve());
-        };
-        RejectFn fnReject = [pState](int nCode)
-        {
-            pState->Settle(CPromiseResult::Reject(nCode));
-        };
-        try
-        {
-            if (fnExecutor)
+            pCore->Launch()->pFirst = pState;
+            pCore->Launch()->fnLaunch = [pCore, pState, fnExecutor]()
             {
-                fnExecutor(fnResolve, fnReject);
-            }
-            else
-            {
-                fnReject(kRejected);  // 未给执行体：本 promise 直接被拒绝。
-            }
+                RunExternalExecutor(pState, fnExecutor);
+            };
+            return promise;
         }
-        catch (...)
-        {
-            fnReject(kException);  // executor 内异常 → 本 promise 被拒绝（与层内异常一致）。
-        }
+
+        RunExternalExecutor(pState, fnExecutor);
         return promise;
     }
 
@@ -719,6 +795,15 @@ class CPromise
             {
                 Adopt(pCore, pState, fnFactory);
             };
+
+            // 延迟启动链（BuildPromise）：只登记，等 Start() 再投递。
+            if (pCore->Launch()->bDeferred)
+            {
+                pCore->Launch()->pFirst = pState;
+                pCore->Launch()->fnLaunch = fnAdopt;
+                return *this;
+            }
+
             if (!detail::PostToHandle(pCore->Handle(), std::move(fnAdopt)))
             {
                 pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用。
@@ -798,6 +883,11 @@ class CPromise
         {
             return CPromiseResult::Reject(kStopped);  // 无效 promise：无结果可等。
         }
+        // 延迟链未启动 → 自动启动（兜底：漏写 Start() 也不会死等）。
+        if (m_pCore != nullptr && m_pCore->Launch()->bDeferred && !m_pCore->Launch()->bStarted)
+        {
+            const_cast<CPromise*>(this)->Start();
+        }
         return m_pState->Await();
     }
 
@@ -867,6 +957,47 @@ class CPromise
         }
     }
 
+    /// @brief 内部：执行外部 settle 体（`CPromise::New` 的 executor），把 resolve / reject 交给它。
+    ///
+    /// @param pState 本层状态（executor 通过 resolve / reject 收口它）。
+    /// @param fnExecutor 执行体。
+    static void RunExternalExecutor(const std::shared_ptr<detail::CPromiseState>& pState,
+                                    const PromiseExecutor& fnExecutor)
+    {
+        ResolveFn fnResolve = [pState]()
+        {
+            pState->Settle(CPromiseResult::Resolve());
+        };
+        RejectFn fnReject = [pState](int nCode)
+        {
+            pState->Settle(CPromiseResult::Reject(nCode));
+        };
+        try
+        {
+            if (fnExecutor)
+            {
+                fnExecutor(fnResolve, fnReject);
+            }
+            else
+            {
+                fnReject(kRejected);  // 未给执行体：本 promise 直接被拒绝。
+            }
+        }
+        catch (...)
+        {
+            fnReject(kException);  // executor 内异常 → 本 promise 被拒绝（与层内异常一致）。
+        }
+    }
+
+    /// @brief 内部：标记为「延迟启动」链（`CAsyncExecutor::BuildPromise` 用）。
+    void MarkDeferred()
+    {
+        if (m_pCore != nullptr)
+        {
+            m_pCore->Launch()->bDeferred = true;
+        }
+    }
+
     /// @brief 内部：追加一层（Then / Catch / Finally / ThenInline / ThenOn 共用；尚未起链时本层即首层）。
     ///
     /// @param fnHandler 本层处理器。
@@ -894,6 +1025,29 @@ class CPromise
         {
             m_pState = std::make_shared<detail::CPromiseState>();
             m_pState->SetLoc(loc);
+
+            // 延迟启动链（BuildPromise）：只登记首层动作，等 Start() 再投递。
+            if (m_pCore->Launch()->bDeferred)
+            {
+                const std::shared_ptr<detail::CPromiseState> pFirst = m_pState;
+                m_pCore->Launch()->pFirst = pFirst;
+                m_pCore->Launch()->pTarget = (nAffinity == detail::kAffinityExecutor) ? pTarget : nullptr;
+                if (nMode == detail::kModeCatch)
+                {
+                    // catch 作为首层：起点已兑现，没有可处理的拒绝 → 启动即 settled。
+                    m_pCore->Launch()->fnLaunch = [pFirst]()
+                    {
+                        pFirst->Settle(CPromiseResult::Resolve());
+                    };
+                }
+                else
+                {
+                    m_pCore->Launch()->fnLaunch =
+                        detail::MakeHandlerRunner(m_pCore, pFirst, fnHandler, CPromiseResult::Resolve(), nMode);
+                }
+                return *this;
+            }
+
             if (nMode == detail::kModeCatch)
             {
                 // catch 作为首层：起点已兑现，没有可处理的拒绝 → 直接 settled（原样透传）。
@@ -979,6 +1133,19 @@ CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& s
                                               const CSourceLoc& loc /* = CSourceLoc() */)
 {
     return CPromise<TContext>(*this, spContext, fnHandler, loc);
+}
+
+/// @brief 建一条「延迟启动」的 promise 链（先挂完层，再 Start）。
+///
+/// @tparam TContext 上下文类型（由 spContext 推导）。
+/// @param spContext 共享上下文（所有层共用）。
+/// @return 未启动的链句柄；`Start()`（或首次 `Await()`）后首层才投递执行。
+template <typename TContext>
+CPromise<TContext> CAsyncExecutor::BuildPromise(const std::shared_ptr<TContext>& spContext)
+{
+    CPromise<TContext> promise(*this, spContext);
+    promise.MarkDeferred();
+    return promise;
 }
 
 }  // namespace async

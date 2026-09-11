@@ -135,6 +135,29 @@ else
 因此「promise + 协程」混合递归也被同一上限保护；加上①后，深度只在**同一执行器线程内**累加，
 跨模块不会涨栈。
 
+### 5.1 两种启动模式：立即启动 vs 延迟启动（`BuildPromise`，改进 C）
+
+| 模式 | 入口 | 追加层 | 首层何时投递 |
+| --- | --- | --- | --- |
+| 立即启动（默认） | `exec.NewPromise(spCtx, 首层)` / `CPromise(exec, spCtx, 首层)` | 链已在跑，追加可能落在“已 settled”路径上 | 调用即投递 |
+| 延迟启动 | `exec.BuildPromise(spCtx)` | 只登记（首层动作暂存在 `CLaunchState::fnLaunch`） | `Start()`（或首次 `Await()`）才投递 |
+
+```cpp
+// Common/Async/Promise.h
+extern struct CLaunchState { bool bDeferred; bool bStarted; std::function<void()> fnLaunch;
+                            std::shared_ptr<CPromiseState> pFirst; std::shared_ptr<CExecutorHandle> pTarget; };
+// Append / ThenPromise / New 在 bDeferred 时只登记启动动作；Start() 投递它（幂等）；
+// Await() 发现“延迟链未启动”则自动 Start()（兜底）。
+```
+
+要点：
+
+- 延迟链**构链期不跑任何业务代码**（连 `New(...)` 的 executor 都延后到轮到该层才执行）；
+- 所有层都在首层开跑前登记完毕 → 跨模块续接不再出现“补登”的时序差异（对第 7 节的两种注册时机是个限定）；
+- 首层启动仍尊重 `kAffinityExecutor`（`pTarget`），启动失败（执行器已停）以 `kStopped` 收口首层；
+- `Await()` 对未启动的延迟链自动 `Start()`，所以漏写 `Start()` 不会死等；
+- 普通链行为完全不变（`bDeferred == false`）。
+
 ## 6. 处理器模式分派（then / catch / finally）
 
 `Append(handler, loc, nMode)` 是 `Then` / `Catch` / `Finally` 的共同实现，差异只在续接分派：
