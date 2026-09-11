@@ -192,12 +192,13 @@ result = (nMode == kModeFinally) ? upResult : own;   // finally 不改变结果
 **首层特例**：尚未起链时第一次 `Then` / `Catch` / `Finally` 即首层，起点结果视为「已兑现」。
 因此 `Catch` 作为首层不会执行（没有可处理的拒绝），直接以 `Resolve()` settle。
 
-### 6.1 跨模块组合的两个原语（`ThenPromise` / `CPromise::New`）
+### 6.1 跨模块组合的三个原语（`ThenPromise` / `CPromise::New` / `ThenBridge`）
 
 | API | JS 对照 | 实现要点 |
 | --- | --- | --- |
 | `CPromise<T>::New(exec, spCtx, executor, loc)` | `new Promise((resolve, reject) => …)` | 直接建 `CPromiseState` 并交出 `ResolveFn` / `RejectFn`（内部就是 `pState->Settle(...)`）；executor 同步执行（与 JS 一致），抛异常 → `Reject(kException)`；`Settle` 幂等，故重复 settle / settle 后异常都安全 |
 | `CPromise<T>::ThenPromise(factory, loc)` | `then(处理器返回 promise)` 的 flatten | 建本层 state，在上游 state 上登记 handler：上游被拒 → 直接透传；上游兑现 → `Adopt()` |
+| `CPromise<T>::ThenBridge(fnCreate, fnApply, loc)` | `then` 里「等别的模块 + 取回数据」 | **上面两个原语的语法糖**：内部就是 `Adopt()` + `New`（改走句柄版 `NewFromHandle`）+ `OnSettled`，多出的只是「子链兑现时先 `fnApply` 搬数据」 |
 
 `Adopt()` 做的事：调 `factory(spCtx)` 拿到子 promise，在**子 promise** 的 `OnSettled` 回调里
 `pState->Settle(childResult)` —— 本层的 settle 由子 promise 的结果决定。注意点：
@@ -209,6 +210,33 @@ result = (nMode == kModeFinally) ? upResult : own;   // finally 不改变结果
   子 promise 的拒绝码**原样**成为本层拒绝码（后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
 - **保活**：子 promise 的最后一段由「上一段 handler 捕获下一段」链保活，本层 state 被子 promise
   的 `OnSettled` handler 捕获 —— 即使句柄被丢弃，在途的整条链仍安全跑完。
+
+`ThenBridge` 与手写版的**等价关系**（也是它的实现）：
+
+```text
+ThenBridge(fnCreate, fnApply, loc)
+  = ThenPromise([=](spSelf) {
+        child = fnCreate(spSelf);                    // ① 工厂：在轮到本层时起子链
+        if (!child.IsValid()) return CPromise();     //    → Adopt 会以 kStopped 收口本层
+        return NewFromHandle(本链执行器句柄, spSelf, // ② 造一条「由外部 settle」的本上下文 promise
+            [=](fnResolve, fnReject) {
+                child.OnSettled([=](r) {             // ③ 子链落定 → 搬数据 → 收口（OnSettled 保证送达）
+                    if (r.IsRejected()) { fnReject(r.Code()); return; }
+                    try { fnApply(spSelf, child.GetContext()); }
+                    catch (...) { fnReject(kException); return; }
+                    fnResolve();
+                });
+            }, loc);
+    }, loc)
+```
+
+要点：
+
+- **没有新增调度路径**：亲和、送达保证、延迟启动（`BuildPromise`）全部沿用 `Adopt` / `New` / `OnSettled`
+  既有语义 —— 所以桥接层与手写的完全逐项等价（`Tests/test_async_modules.cpp` 有对照用例）；
+- `fnApply` 跑在**子链的结算线程**上（通知不迁移）→ 只搬数据；要拒绝（业务规则）放到桥接之后的层；
+- 为什么需要 `NewFromHandle`：工厂里只有「本链执行器**句柄**」（`pCore->Handle()`），
+  没有 `CAsyncExecutor&`，故把 `New` 的建 state / 投递逻辑抽成句柄版供两者共用。
 
 ## 7. 两种注册时机
 

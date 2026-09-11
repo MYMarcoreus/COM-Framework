@@ -148,7 +148,11 @@ else
 5. 要额外强调"必须回本模块"时，显式 `exec.Post(...)` 仍然可用（现已是冗余保险，
    见 `PostBackToOwnThread`）；
 6. 写测试时**不要再写"续跑一定在对方线程"的断言**（改前很容易写成这样）；改后应为
-   "跨模块返回的层必在本模块线程"、"`OnSettled` 通知在被调模块线程"。
+   "跨模块返回的层必在本模块线程"、"`OnSettled` 通知在被调模块线程"；
+7. 跨模块那一层**优先用 `p.ThenBridge(fnCreate, fnApply, ASYNC_LOC)`**（2026-09-12 新增）：
+   起子链 + 搬数据一步到位，不用手写 `New` + `OnSettled` 样板（也不再需要 `if (!bOk)` 保险）。
+   子链被拒绝时的码原样透传；业务规则上的拒绝写到**桥接之后的层**里。
+   对照用例：`Tests/test_async_modules.cpp` 的 `Module_BridgeHelper*`（与手写版逐项等价）。
 
 ### 1.7 后续可做的改进
 
@@ -302,4 +306,3 @@ g++ -std=c++11 -fsanitize=thread -g -O1 -pthread -ICommon -ITests \
 >   修法是计数器改为 `std::atomic`（或分支各用独立上下文）。
 > - `Tests/test_async_affinity_override.cpp` 的 `ThenInline*` 用例依赖“登记时上游尚未 settle”的时间窗，
 >   在 TSan（~10 倍减速）下会偶发失败，宜改为“被调模块等一个手动放行的门”而非固定 `nDelayMs`。
-

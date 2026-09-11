@@ -13,6 +13,7 @@
 | `new Promise` **由外部回调 settle** | `CPromise<Ctx>::New(exec, spCtx, executor)`（executor 里拿到 resolve / reject 句柄） |
 | `promise.then(onFulfilled)` | `p.Then(处理器)` |
 | `then` 的处理器**返回 promise**（flatten） | `p.ThenPromise(子 promise 工厂)` |
+| `then` 里**等另一个模块的 promise 并把数据取回来** | `p.ThenBridge(起子链, 搬数据)`（简写，等价下行两行） |
 | `promise.catch(onRejected)` | `p.Catch(处理器)` |
 | `promise.finally(onFinally)` | `p.Finally(处理器)` |
 | `await promise` | `p.Await()`（阻塞） |
@@ -216,10 +217,49 @@ exec.NewPromise(spCtx, [&exec, spSub](no::CPromiseResult up, const std::shared_p
 }, ASYNC_LOC);
 ```
 
-### 6.3 跨模块组合：`ThenPromise` + `CPromise::New`（纯异步、零阻塞、不用协程）
+### 6.3 跨模块组合：`ThenBridge`（推荐）/ `ThenPromise` + `CPromise::New`
 
 场景：模块 A 的业务流程要调「**模块 B（另一套上下文类型）**」的异步函数，
 且模块 A 的调用方希望拿到的 promise 反映**含 B 在内的完整结果**。
+
+#### 推荐写法：`ThenBridge`（起子链 + 搬数据，一行搞定）
+
+```cpp
+// ① 起子链：轮到本层时发起跨模块调用（跑在本模块线程上，只发起不干活）
+auto fnCreateRows = [deps](const std::shared_ptr<CMyContext>& spSelf) -> no::CPromise<COtherCtx>
+{
+    return deps.spOther->QueryAsync(spSelf->spOtherOp);  // 模块 B 的 promise（另一套上下文）
+};
+
+// ② 搬数据：子链兑现时把它的上下文数据搬回本上下文
+//    （跑在模块 B 的线程上 → 只搬数据，别碰本模块的其他状态）
+auto fnApplyRows = [](const std::shared_ptr<CMyContext>& spSelf, const std::shared_ptr<COtherCtx>& spOther)
+{
+    spSelf->nRows = spOther->nRows;
+};
+
+p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
+        .ThenBridge(fnCreateRows, fnApplyRows, ASYNC_LOC)  // 等模块 B；回来时数据已就位
+        .Then(&StepUseRows, ASYNC_LOC)                     // 线程亲和：这一层已回本模块线程
+        .Finally(&StepAudit, ASYNC_LOC);
+```
+
+`ThenBridge` 的语义（与 `ThenPromise` 完全一致，只是多一步搬数据）：
+
+| 情形 | 行为 |
+| --- | --- |
+| 子链**兑现** | 先 `fnApply(本上下文, 子上下文)` 搬数据，再兑现本层 |
+| 子链**被拒绝** | 本层以**同一拒绝码**被拒绝（不搬数据；后续 `Then` 不执行，`Catch` / `Finally` 仍执行） |
+| 子链**无效**（工厂返回无效 promise） | 本层以 `kStopped` 拒绝（不挂死） |
+| `fnApply` **抛异常** | 本层以 `kException` 拒绝（异常不会窜出通知回调） |
+| 上层被拒绝 | 本层不执行，拒绝原因原样透传 |
+
+- `fnCreate` 在**本链执行器线程**上执行（只做「发起 + 登记回调」）；`fnApply` 在**子链的结算线程**
+  （典型：模块 B 的线程）上执行 —— 通知不迁移，所以它只应搬数据；
+- 需要因业务规则拒绝（如「库存不足」）时，请在**桥接之后的层**里 `return CPromiseResult::Reject(码)`，
+  不要塞进 `fnApply`（它没有返回值，也不该做业务分支）。
+
+#### 等价的手写版：`ThenPromise` + `CPromise::New`（`ThenBridge` 内部就是这两步）
 
 两步写出来就是 JS 的组合方式：
 
@@ -434,9 +474,14 @@ no::CPromise<Ctx> b2 = head.Then(StepC, ASYNC_LOC);
 no::CPromise<Ctx> c1(exec);            // 链内创建
 no::CPromise<Ctx> c2(exec, spCtx);     // 外部注入
 
-// 跨模块组合（纯异步、零阻塞）：new Promise 桥接 + then-promise 接入（详见 6.3）
+// 跨模块组合（纯异步、零阻塞）：桥接 + then-promise 接入（详见 6.3）
+auto fnCreateOther = [deps](const std::shared_ptr<Ctx>& sp) { return deps.spOther->QueryAsync(sp->nId); };
+auto fnApplyOther = [](const std::shared_ptr<Ctx>& sp, const std::shared_ptr<COtherCtx>& spOther)
+{
+    sp->nRows = spOther->nRows;
+};
 no::CPromise<Ctx> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC)
-                         .ThenPromise([deps](const std::shared_ptr<Ctx>& sp) { return BridgeOther(deps, sp); }, ASYNC_LOC)
+                         .ThenBridge(fnCreateOther, fnApplyOther, ASYNC_LOC)
                          .Then(StepB, ASYNC_LOC);
 ```
 

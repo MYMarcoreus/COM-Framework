@@ -40,6 +40,7 @@
 //   new Promise((resolve, reject)    →  CPromise<Ctx>::New(exec, spCtx, executor, ASYNC_LOC);
 //     => { … 回调里 resolve()/reject()… })   // 由外部（其他模块 / 回调）兑现或拒绝本 promise
 //   then(onFulfilled 返回 promise)  →  p.ThenPromise(FnFactory);   // 等子 promise（flatten）
+//   + 把子 promise 的数据搬回本上下文 →  p.ThenBridge(FnCreate, FnApply);  // 跨模块 / 跨上下文桥接（推荐）
 //
 // 语义要点：
 //  - then / catch / finally 都返回「指向新一层的 promise」（与 JS 一致，链式可读）；
@@ -65,6 +66,8 @@
 //      ① 用 `CPromise<CMyCtx>::New(exec, spCtx, executor)` 造一条「由外部 settle」的 promise
 //         （executor 里发起别的模块的调用，在其 OnSettled 回调里 resolve() / reject(码)）；
 //      ② 用 `p.ThenPromise([&]{ return bridgePromise; })` 把它接进本流程（then 的 promise 版）。
+//    ③ ①② 合一、不用写样板的简写：`p.ThenBridge(fnCreate, fnApply, ASYNC_LOC)` ——
+//       fnCreate 在轮到本层时起子链，fnApply 在子链兑现时把它的上下文数据搬进本上下文。
 //    本流程的最终结果 = 含跨模块子流程的完整结果，全程不阻塞任何线程。
 //
 // 并发注意：并行/嵌套的子 promise 若共用同一份共享上下文，请让各分支只写**不同字段**
@@ -650,26 +653,7 @@ class CPromise
     static CPromise New(CAsyncExecutor& executor, const std::shared_ptr<TContext>& spContext,
                         const PromiseExecutor& fnExecutor, const CSourceLoc& loc = CSourceLoc())
     {
-        CPromise promise(executor, spContext);
-        promise.m_pState = std::make_shared<detail::CPromiseState>();  // 待定：等外部 settle。
-        promise.m_pState->SetLoc(loc);
-
-        const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = promise.m_pCore;
-        const std::shared_ptr<detail::CPromiseState> pState = promise.m_pState;
-
-        // 延迟启动链（BuildPromise）：executor 不立即执行，等 Start() 后轮到本层再发起。
-        if (pCore->Launch()->bDeferred)
-        {
-            pCore->Launch()->pFirst = pState;
-            pCore->Launch()->fnLaunch = [pCore, pState, fnExecutor]()
-            {
-                RunExternalExecutor(pState, fnExecutor);
-            };
-            return promise;
-        }
-
-        RunExternalExecutor(pState, fnExecutor);
-        return promise;
+        return NewFromHandle(executor.Handle(), spContext, fnExecutor, loc);
     }
 
     /// @brief then：上一层**兑现**时执行 fnHandler，被拒绝时直接透传（失败即停）。
@@ -826,6 +810,70 @@ class CPromise
         return promiseNext;
     }
 
+    /// @brief 桥接一层：轮到本层时用 fnCreate 起一条「别的上下文」的子链，等它落定后把数据搬回本上下文，
+    ///        再继续本链（= 手写 `New` + `OnSettled` 桥接的简写版，样板由框架收口）。
+    ///
+    /// 这是「跨模块 / 跨上下文调用」的推荐写法，等价 `ThenPromise` + 「子链落定后搬数据」两件事合一：
+    ///  - `fnCreate(spSelf)` 在**本链执行器线程**上执行（只做「起子链 + 登记回调」，不要做重活）；
+    ///  - 子链被拒绝 → 本层以**同一拒绝码**被拒绝（后续 Then 不执行，Catch / Finally 仍执行）；
+    ///  - 子链兑现 → 先 `fnApply(spSelf, spChildCtx)` 把数据搬进本上下文，再兑现本层；
+    ///  - 子链无效（`fnCreate` 返回无效 promise）→ 本层以 `kStopped` 拒绝；
+    ///  - 上层被拒绝 → 本层不执行，拒绝原因原样透传（与 Then / ThenPromise 一致）；
+    ///  - 全程只登记回调、不占工作线程（单线程执行器也安全）。
+    ///
+    /// @warning `fnApply` 在**子链的结算线程**（典型：被调模块的线程）上执行 —— 通知不迁移。
+    ///          它只应做「把子上下文的数据搬进本上下文」，不要碰本模块的其他状态；
+    ///          要回到本模块线程干活，请放到桥接之后的层里（线程亲和会把它拉回本链执行器）。
+    ///
+    /// @param fnCreate 子链工厂：入参为本流程共享上下文，返回要等待的子 promise（上下文类型任意）。
+    /// @param fnApply 数据搬运：入参为本流程上下文与子链上下文（仅子链兑现时调用；不需要搬数据时传空 lambda）。
+    /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
+    /// @return 指向本层的 promise 句柄。
+    template <class TFnCreate, class TFnApply>
+    CPromise ThenBridge(TFnCreate fnCreate, TFnApply fnApply, const CSourceLoc& loc = CSourceLoc())
+    {
+        typedef decltype(std::declval<TFnCreate>()(std::declval<const std::shared_ptr<TContext>&>())) TChildPromise;
+        const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = m_pCore;
+
+        PromiseFactory fnFactory = [fnCreate, fnApply, pCore, loc](const std::shared_ptr<TContext>& spSelf) -> CPromise
+        {
+            TChildPromise promiseChild = fnCreate(spSelf);  // 起子链（抛异常 → Adopt 兜底为 kException）
+            if (!promiseChild.IsValid())
+            {
+                return CPromise();  // 没有可等待的子链 → 本层以 kStopped 收口（Adopt 处理）。
+            }
+
+            PromiseExecutor fnExecutor =
+                [promiseChild, fnApply, spSelf](const ResolveFn& fnResolve, const RejectFn& fnReject)
+            {
+                // 子链落定 → 搬数据 → 收口本层；OnSettled 保证送达（此处恒返回 true，不需检查）。
+                promiseChild.OnSettled([promiseChild, fnApply, spSelf, fnResolve, fnReject](CPromiseResult childResult)
+                {
+                    if (childResult.IsRejected())
+                    {
+                        fnReject(childResult.Code());  // 子链拒绝：原样透传拒绝码。
+                        return;
+                    }
+                    try
+                    {
+                        if (fnApply)
+                        {
+                            fnApply(spSelf, promiseChild.GetContext());  // 搬到本上下文（跨线程：见 @warning）。
+                        }
+                    }
+                    catch (...)
+                    {
+                        fnReject(kException);  // 搬运里抛异常 → 本层被拒绝（不向外抛）。
+                        return;
+                    }
+                    fnResolve();
+                });
+            };
+            return NewFromHandle(pCore->Handle(), spSelf, fnExecutor, loc);
+        };
+        return ThenPromise(fnFactory, loc);
+    }
+
     /// @brief onSettled：本层 settled（兑现或拒绝）时触发一次收尾通知。
     ///
     /// 不产生新层、不改变结果；等价「观察最终结果」。
@@ -904,6 +952,43 @@ class CPromise
     }
 
    private:
+    /// @brief 内部：用执行器**句柄**创建「由外部兑现 / 拒绝」的 promise（`New` 与 `ThenBridge` 共用）。
+    ///
+    /// 与 `New(executor, …)` 等价，区别只在拿的是句柄而不是执行器引用 ——
+    /// 桥接层（`ThenBridge`）在工厂里要用「本链执行器」的句柄，而那时已没有 `CAsyncExecutor&` 了。
+    ///
+    /// @param pHandle 执行器句柄（起链与续接投递用）。
+    /// @param spContext 共享上下文（本 promise 所有层共用该实例）。
+    /// @param fnExecutor 执行体（拿到 resolve / reject 句柄）。
+    /// @param loc 注册点源码位置。
+    /// @return 指向本 promise 的句柄（pending；由 fnExecutor 触发 settle）。
+    static CPromise NewFromHandle(const std::shared_ptr<detail::CExecutorHandle>& pHandle,
+                                  const std::shared_ptr<TContext>& spContext, const PromiseExecutor& fnExecutor,
+                                  const CSourceLoc& loc)
+    {
+        CPromise promise;
+        promise.m_pCore = std::make_shared<detail::CPromiseCore<TContext> >(pHandle, spContext);
+        promise.m_pState = std::make_shared<detail::CPromiseState>();  // 待定：等外部 settle。
+        promise.m_pState->SetLoc(loc);
+
+        const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = promise.m_pCore;
+        const std::shared_ptr<detail::CPromiseState> pState = promise.m_pState;
+
+        // 延迟启动链（BuildPromise）：executor 不立即执行，等 Start() 后轮到本层再发起。
+        if (pCore->Launch()->bDeferred)
+        {
+            pCore->Launch()->pFirst = pState;
+            pCore->Launch()->fnLaunch = [pCore, pState, fnExecutor]()
+            {
+                RunExternalExecutor(pState, fnExecutor);
+            };
+            return promise;
+        }
+
+        RunExternalExecutor(pState, fnExecutor);
+        return promise;
+    }
+
     /// @brief 内部：执行 promise 工厂并 adopt 子 promise（ThenPromise 的收口逻辑）。
     ///
     /// 子 promise settled 时把结果转交本层状态（只登记回调，不阻塞任何线程）。
