@@ -1,73 +1,15 @@
 #include "Async/AsyncExecutor.h"
 
-#include <cstdio>
-#include <mutex>
-
 // ====================================================================
-// 非模板成员定义（模板成员 NewPromise / CoStart 分别在 Promise.h /
-// Coroutine.h 内定义）。非模板类 CAsyncExecutor 的成员定义放本文件，
-// 避免头文件中定义导致多 TU 重复定义（ODR 违规）。
+// 非模板成员定义（模板成员 NewPromise / BuildPromise / CoStart / 组合器分别在
+// Promise.h / Coroutine.h / 本头文件的组合器一节内定义）。非模板类 CAsyncExecutor 的
+// 成员定义放本文件，避免头文件中定义导致多 TU 重复定义（ODR 违规）。
+//
+// 注：诊断钩子（SetDiagnosticHandler / ReportDiagnostic）已独立到 Async/Diagnostics.{h,cpp}。
 // ====================================================================
 
 namespace common {
 namespace async {
-
-namespace {
-
-/// @brief 诊断处理器槽（进程级；进程内共享一个，故加锁保护）。
-std::mutex& DiagnosticMutex()
-{
-    static std::mutex s_mutex;
-    return s_mutex;
-}
-
-/// @brief 当前诊断处理器（空 = 未设置，走默认策略）。
-DiagnosticHandler& DiagnosticSlot()
-{
-    static DiagnosticHandler s_fnHandler;
-    return s_fnHandler;
-}
-
-}  // namespace
-
-/// @brief 设置诊断处理器（线程安全）。
-///
-/// @param fnHandler 处理器；传 nullptr 恢复默认（debug 构建打印到 stderr，发布构建忽略）。
-void SetDiagnosticHandler(const DiagnosticHandler& fnHandler)
-{
-    std::lock_guard<std::mutex> lock(DiagnosticMutex());
-    DiagnosticSlot() = fnHandler;
-}
-
-/// @brief 报告一次诊断（框架内部用；没设处理器时按默认策略处理，自身不抛异常）。
-///
-/// @param strWhat 问题描述。
-void ReportDiagnostic(const char* strWhat)
-{
-    DiagnosticHandler fnHandler;
-    {
-        std::lock_guard<std::mutex> lock(DiagnosticMutex());
-        fnHandler = DiagnosticSlot();
-    }
-
-    if (fnHandler)
-    {
-        try
-        {
-            fnHandler(strWhat != nullptr ? strWhat : "(null)");
-        }
-        catch (...)
-        {
-            // 诊断处理器自己抛异常：忽略（报告问题的手段不能反过来弄坏框架）。
-        }
-        return;
-    }
-
-#if !defined(NDEBUG)
-    // 默认策略：debug 构建打印（让开发期一眼看到误用），发布构建安静。
-    std::fprintf(stderr, "[async] %s\n", strWhat != nullptr ? strWhat : "(null)");
-#endif
-}
 
 /// @brief 创建异步执行器（构造即建句柄与线程池对象：执行器和线程池一定不为空）。
 ///

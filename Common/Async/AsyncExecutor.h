@@ -7,6 +7,7 @@
 #include <mutex>
 #include <vector>
 
+#include "Async/Diagnostics.h"
 #include "Async/PromiseResult.h"
 #include "Async/PromiseTypes.h"
 #include "Async/SourceLoc.h"
@@ -185,18 +186,6 @@ inline bool DispatchInlineOrPost(
 }
 
 }  // namespace detail
-
-/// @brief 诊断处理器：接收一句「框架检测到的用法问题」描述（不带换行）。
-///
-/// 用途：把「不致命但肯定是 bug」的用法报告出来（通知里抛异常、在层内阻塞等待
-/// 未落定的层、在无效 promise 上挂层等）。应用可接日志 / 指标；测试可接断言。
-using DiagnosticHandler = std::function<void(const char* strWhat)>;
-
-// 设置诊断处理器（传 `nullptr` 恢复默认；完整说明见 AsyncExecutor.cpp）。
-void SetDiagnosticHandler(const DiagnosticHandler& fnHandler);
-
-// 报告一次诊断（框架内部用；未设处理器时按默认策略处理）。
-void ReportDiagnostic(const char* strWhat);
 
 /// @brief 异步执行器：工作线程池 + 投递入口。
 ///

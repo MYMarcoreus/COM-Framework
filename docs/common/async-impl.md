@@ -33,6 +33,7 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 | `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle`、`detail::IsInExecutorThread`、`detail::HandlerAffinity` / `ResolveExecHandle` / `ShouldInline` / `DispatchInlineOrPost`（**调度策略**：跑在哪条线程）、组合器 `detail::Gather*` |
 | `Promise.h` | `detail::CPromiseState`、`detail::CPromiseCore<TContext>`、`CPromise<TContext>`（**编排**：层语义 / 三态 / 桥接） |
 | `Coroutine.h` | `CCoroutine<TContext>` + `CO_*` 宏 |
+| `Diagnostics.h/.cpp` | 诊断钩子 `DiagnosticHandler` / `SetDiagnosticHandler` / `ReportDiagnostic`（进程级单槽；promise / 协程 / 执行器共用） |
 
 ## 2. 为什么固定签名 + 共享上下文
 
@@ -334,20 +335,18 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
     return pHandle != nullptr && CThreadPool::IsInPoolThread(pHandle->m_pPool.get());
 }
 
-// Common/Async/Promise.h：层处理器（层派发入口 CPromiseCore::RunHandler）
-const std::shared_ptr<CExecutorHandle> pExec =
-    (nAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pCore->Handle();  // 选执行器
-const bool bInline = (nAffinity == kAffinityInline) || IsInExecutorThread(pExec);        // 就地？
-if (bInline && InlineDepth() < kMaxInlineDepth)
+// Common/Async/AsyncExecutor.h（detail）：就地还是投递的**唯一**判定
+inline bool ShouldInline(HandlerAffinity eAffinity, const std::shared_ptr<CExecutorHandle>& pExec,
+                         bool bRequireIdle = false);  // 亲和档位 + 已在本线程？ + 深度未超限？(+ 线程池无积压？)
+inline bool DispatchInlineOrPost(HandlerAffinity eAffinity, const std::shared_ptr<CExecutorHandle>& pExec,
+                                 std::function<void()> fnTask);  // 就地内联或投递；执行器不可用 → false
+
+// Common/Async/Promise.h：层派发入口（只做「造任务体 + 失败收口」，策略全在执行器侧）
+const std::shared_ptr<CExecutorHandle> pExec = ResolveExecHandle(eAffinity, pTarget, Handle());  // 选执行器
+if (!DispatchInlineOrPost(eAffinity, pExec, std::move(fnRun)))
 {
-    ++InlineDepth();
-    fnRun();
-    --InlineDepth();
+    pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用 → 本层被拒绝
 }
-else if (!PostToHandle(pExec, std::move(fnRun)))
-{
-    pState->Settle(Reject(kStopped));
-}  // 投递目标执行器
 ```
 
 - `Append(fnHandler, loc, nMode, nAffinity, pTarget)`：亲和与目标句柄随注册的处理器一起捕获，
@@ -380,7 +379,7 @@ else if (!PostToHandle(pExec, std::move(fnRun)))
 | 层内 / 本链线程上 `Await()` 未落定的层（必死锁） | 无任何提示 | `ReportBlockingRisk()` 报诊断（**不硬失败**：等「别的线程 settle 的层」是合法的） |
 | 无效 promise 上挂层 | 静默返回无效句柄 | 报诊断（链根本不会跑，静默最难查） |
 
-诊断出口（`AsyncExecutor.cpp`，进程级单槽 + 锁；处理器自身抛异常也会被忽略）：
+诊断出口（`Async/Diagnostics.cpp`，进程级单槽 + 锁；处理器自身抛异常也会被忽略）：
 
 ```cpp
 using DiagnosticHandler = std::function<void(const char* strWhat)>;
@@ -392,6 +391,27 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 **边界与不变的约定**：`CThreadPool::WorkerLoop` 依旧**不捕获异常**（「任务自己兜异常」的契约不变，
 `ServerCore/Exec` 也是按这个契约自己 catch 的）；async 只在自己这层把**用户回调**包住，
 不让框架的用法错误上升成进程级故障。
+
+### 8.3 结算线程：谁 `Settle`，谁决定「本层跑在哪条线程」
+
+「本层跑在结算它的那条线程上」是亲和规则的基础，但**结算线程本身是不确定的**（二选一）：
+
+| 挂层时机 | 本层在哪里跑 |
+| --- | --- |
+| 上游**未** settle 时挂层（常态） | **结算线程**上（跨模块 = 被调模块的线程；`OnSettled` 通知也在那条线程） |
+| 上游**已** settle 后挂层 | 必然投递回**本链执行器**（`AddHandler` 的「已 settled → 投递」路径） |
+
+跨模块桥接会把二者搅在一起：子 promise 若在 `Adopt` 注册通知**之前**就已落定，那条通知会走
+「已 settled → 投递」→ 投递回**子 promise 自己的执行器**，于是桥接那一层的结算线程变成调用方自己的执行器，
+而不是被调模块的线程。链是「边跑边搭」的，所以这两条路径都可能出现。
+
+结论（写业务与写测试都适用）：
+
+- **不要**把「本层跑在哪条线程」当契约；要确定的线程就显式指定：`ThenOn(exec, …)` / `ThenInline(…)` /
+  `exec.Post(...)`（协程同理）；
+- 默认亲和仍提供有用保证：**本链的层恒在本链执行器线程上**（不论结算线程是谁）；
+- 测试如果要断言线程：让**用例自己指定结算线程**（自己建子 promise + 在选定执行器上投递结算），
+  不要靠固定延时抢时序 —— 踩坑记录见 [async-cross-module-findings.md](async-cross-module-findings.md) 末尾。
 
 ## 9. 源码位置调试（ASYNC_LOC）
 
@@ -443,7 +463,8 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 ```text
 1. Common/Async/PromiseResult.h     层结果（层间唯一信息）
 2. Common/Async/PromiseTypes.h      固定签名（ThenHandler / SettledHandler）
-3. Common/Async/AsyncExecutor.h     调度层与执行器句柄
+3. Common/Async/AsyncExecutor.h     调度层与执行器句柄（含 detail::ShouldInline / DispatchInlineOrPost）
+   Common/Async/Diagnostics.{h,cpp} 诊断钩子（与执行器无关的进程级出口）
 4. Common/Async/Promise.h           状态 + 核心 + promise（重点看 Append / Settle / RunHandler）
    （层派发策略细节在 Common/Async/AsyncExecutor.h：detail::DispatchInlineOrPost / ShouldInline）
 5. Common/Async/Coroutine.h         顺序化（Duff's device 状态机）

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Async/AsyncExecutor.h"
+#include "Async/Diagnostics.h"
 #include "Async/PromiseResult.h"
 #include "Async/PromiseTypes.h"
 #include "Async/SourceLoc.h"
