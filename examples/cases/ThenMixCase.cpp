@@ -342,7 +342,7 @@ private:
                     fnResolve();
                 });
         };
-        return common::async::CPromise<COrderContext>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }
 
     /// ④ 算折扣：满 3 件 9 折（模拟业务规则）。

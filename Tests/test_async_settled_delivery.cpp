@@ -175,7 +175,7 @@ private:
                     fnResolve();
                 });
         };
-        return common::async::CPromise<CCallerCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。

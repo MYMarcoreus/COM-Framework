@@ -371,7 +371,7 @@ private:
                 fnReject(common::async::kStopped);
             }
         };
-        return common::async::CPromise<CStressOrderCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }
 
     /// 回到本模块线程：跨模块回调里显式投递到本模块执行器再 settle。
@@ -390,7 +390,7 @@ private:
                 fnReject(common::async::kStopped);
             }
         };
-        return common::async::CPromise<CStressOrderCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }
 
     /// 分叉 + 汇聚：发起 nBranches 条跨模块分支，全部 settle 后 settle 本层（手写 when_all）。
@@ -444,7 +444,7 @@ private:
                 }
             }
         };
-        return common::async::CPromise<CStressOrderCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。

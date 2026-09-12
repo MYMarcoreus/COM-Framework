@@ -1103,7 +1103,7 @@ static common::async::CPromise<CDemoContext> BridgeQueryOther(
                 fnResolve();
             });
     };
-    return common::async::CPromise<CDemoContext>::New(exec, spCtx, fnExecutor, ASYNC_LOC);
+    return exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
 }
 
 /// ㉗ 跨模块组合：本模块的 then 链 + 别的模块的 promise（new Promise 桥接 + then-promise 接入）。

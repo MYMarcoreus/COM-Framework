@@ -239,8 +239,9 @@ TEST(Robust_AwaitForTimesOut)
     ASSERT_TRUE(exec.Start());
 
     auto spCtx = std::make_shared<CRobustCtx>();
-    common::async::CPromise<CRobustCtx> promisePending = common::async::CPromise<CRobustCtx>::New(
-        exec, spCtx,
+    common::async::CPromise<CRobustCtx> promisePending = exec.NewPromise(
+        spCtx,
+
         [](const common::async::CPromise<CRobustCtx>::ResolveFn&, const common::async::CPromise<CRobustCtx>::RejectFn&)
         {
             // 故意不 settle：模拟「对端永远不回」。

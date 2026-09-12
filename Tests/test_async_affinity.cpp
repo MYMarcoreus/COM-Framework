@@ -255,7 +255,7 @@ private:
                 fnReject(common::async::kStopped);
             }
         };
-        return common::async::CPromise<CAffinityOrderCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }
 
     /// 显式投递回本模块执行器（线程亲和已保证，这里是"显式强制"的写法对照）。
@@ -274,7 +274,7 @@ private:
                 fnReject(common::async::kStopped);
             }
         };
-        return common::async::CPromise<CAffinityOrderCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。

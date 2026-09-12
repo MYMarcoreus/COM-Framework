@@ -30,7 +30,7 @@ namespace serverexample {
 ///  - **本模块内的异步函数**复用：LoadUserAsync（读用户）被查询 / 改名 / 删除流程
 ///    直接串接（同上下文类型，追加 handler 即可，非阻塞）；
 ///  - **其他模块的异步函数**：数据访问模块（IUserTable）的读 / 写 / 改 / 删，用
-///    `CPromise::New`（等价 JS `new Promise((resolve, reject) => ...)`）桥接成本流程的
+///    `exec.NewPromise(spCtx, executor)`（等价 JS `new Promise((resolve, reject) => ...)`）桥接成本流程的
 ///    promise，再用 `ThenPromise`（等价 JS 的「then 的处理器返回 promise 时等待」）
 ///    接入流程 —— 全程回调驱动、零阻塞，两个模块的线程池互不占用；
 ///  - 失败即停（then）、catch 归一化 / 恢复、finally 审计收尾、跨模块拒绝码语义转换，

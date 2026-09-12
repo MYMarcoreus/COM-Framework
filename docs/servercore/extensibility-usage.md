@@ -113,8 +113,7 @@ class IMyService : public virtual sc::IUnknown
 common::async::CPromise<CMyOpContext> BridgeQueryOther(const CFlowDeps& deps,
                                                        const std::shared_ptr<CMyOpContext>& spCtx)
 {
-    return common::async::CPromise<CMyOpContext>::New(
-        *deps.spExec, spCtx, [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
+    return deps.spExec->NewPromise(spCtx, [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
     {
         deps.spOther
             ->QueryAsync(spCtx->spOtherOp)  // 其他模块的异步函数（另一套上下文）
@@ -124,7 +123,7 @@ common::async::CPromise<CMyOpContext> BridgeQueryOther(const CFlowDeps& deps,
             {
                 fnReject(kMyDbFailed);
                 return;
-            }                                        // 跨模块拒绝码 → 业务码
+            }  // 跨模块拒绝码 → 业务码
             spCtx->nRows = spCtx->spOtherOp->nRows;  // 取回数据
             fnResolve();
         });

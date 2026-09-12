@@ -199,7 +199,7 @@ private:
                 fnReject(common::async::kStopped);
             }
         };
-        return common::async::CPromise<COrderCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }
 
     /// ⑤ 回到本模块线程：跨模块回调里显式投递到本模块执行器，再 settle 本层。
@@ -223,7 +223,7 @@ private:
                 fnReject(common::async::kStopped);
             }
         };
-        return common::async::CPromise<COrderCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程；析构自动 Stop）。

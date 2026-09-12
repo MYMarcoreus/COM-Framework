@@ -6,13 +6,22 @@
 ## 1. 总体架构
 
 ```text
-CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start/Stop/Post/NewPromise）
+CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start/Stop/Post/NewPromise/BuildPromise/WhenAll 一族）
     │  Handle()（shared_ptr<CExecutorHandle>）
     ├── CPromise<TContext>     编排层：承诺状态（每层一个）+ 共享上下文
     │        │
     │        └── CPromiseResult  层结果（层间唯一传递的信息：兑现 / 拒绝）
     └── CCoroutine<TContext>   顺序层：用顺序代码 await 多条 promise（见 coroutine-impl）
 ```
+
+职责边界（「谁决定什么」）：
+
+- **起链**只在执行器上：`exec.NewPromise(spCtx, 首层)` / `exec.NewPromise(spCtx, executor)` /
+  `exec.BuildPromise(spCtx)` / `exec.CoStart<T>()`；`CPromise` 只提供「句柄 + 加层」，没有任何起链入口。
+- **调度**（跑在哪条线程：亲和 / 就地内联 / 投递 / 深度限额）在执行器侧：
+  `detail::HandlerAffinity`、`detail::ResolveExecHandle`、`detail::ShouldInline`、`detail::DispatchInlineOrPost`。
+- **编排**（层语义：then / catch / finally 三态、失败即停、桥接、通知）在 promise 侧，
+  其中 `RunHandler` / `PostHandler` 只做「造任务体 + 失败收口」。
 
 文件划分（`Common/Async/`）：
 
@@ -21,8 +30,8 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 | `PromiseResult.h` | `CPromiseResult`（兑现 / 拒绝 + 错误码）、`PromiseCode` 常量 |
 | `PromiseTypes.h` | `SettledHandler`、`detail::ThenHandler<TContext>`（处理器固定签名） |
 | `SourceLoc.h` | `CSourceLoc` + `ASYNC_LOC`（注册点调试信息，发布构建零开销） |
-| `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle` |
-| `Promise.h` | `detail::CPromiseState`、`detail::CPromiseCore<TContext>`、`CPromise<TContext>` |
+| `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle`、`detail::IsInExecutorThread`、`detail::HandlerAffinity` / `ResolveExecHandle` / `ShouldInline` / `DispatchInlineOrPost`（**调度策略**：跑在哪条线程）、组合器 `detail::Gather*` |
+| `Promise.h` | `detail::CPromiseState`、`detail::CPromiseCore<TContext>`、`CPromise<TContext>`（**编排**：层语义 / 三态 / 桥接） |
 | `Coroutine.h` | `CCoroutine<TContext>` + `CO_*` 宏 |
 
 ## 2. 为什么固定签名 + 共享上下文
@@ -51,8 +60,8 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 ```cpp
 struct CExecutorHandle
 {
-    std::shared_ptr<common::thread::CThreadPool> m_pPool; // 线程池（共享持有）
-    std::atomic<bool> m_bStopped;                         // 是否已停止（拒绝新投递）
+    std::shared_ptr<common::thread::CThreadPool> m_pPool;  // 线程池（共享持有）
+    std::atomic<bool> m_bStopped;                          // 是否已停止（拒绝新投递）
 };
 ```
 
@@ -111,7 +120,8 @@ class CPromiseState
 要点：
 
 - **首层必须投递**（`PostHandler`）：起 promise 的线程不执行任何业务代码；
-- **后续层级联**（`RunHandler`）：若当前线程已是本链执行器的线程 → 就地内联（省一次入队）；
+- **后续层级联**（`RunHandler` → `detail::DispatchInlineOrPost`）：若当前线程已是本链执行器的线程 → 就地内联
+  （省一次入队）；否则投递回本链执行器（判定集中在执行器侧的 `detail::ShouldInline`）；
   **否则（跨执行器，比如被调模块 settle 本链）投递回本链执行器** —— 见「线程亲和」；
 - **then 失败即停不调用处理器**：续接里 `upResult.IsRejected()` 直接 `Settle(upResult)`；
 - **catch / finally 走同一续接，但分派不同**（见下节）。
@@ -119,15 +129,17 @@ class CPromiseState
 ### 级联内联与深度限制（含线程亲和）
 
 ```cpp
-auto fnRun = MakeHandlerRunner(...);                       // 执行处理器 + settle 本层
-if (IsInExecutorThread(pCore->Handle())                    // ① 线程亲和：必须在本链执行器线程上
-    && InlineDepth() < kMaxInlineDepth)                    // ② 深度未超限（线程局部计数 64）
+auto fnRun = MakeHandlerRunner(...);     // 执行处理器 + settle 本层
+if (IsInExecutorThread(pCore->Handle())  // ① 线程亲和：必须在本链执行器线程上
+    && InlineDepth() < kMaxInlineDepth)  // ② 深度未超限（线程局部计数 64）
 {
-    ++InlineDepth(); fnRun(); --InlineDepth();              // 就地执行（省一次投递 + 唤醒）
+    ++InlineDepth();
+    fnRun();
+    --InlineDepth();  // 就地执行（省一次投递 + 唤醒）
 }
 else
 {
-    PostToHandle(pCore->Handle(), std::move(fnRun));        // 跨执行器 / 深度超限 → 投递回本链执行器
+    PostToHandle(pCore->Handle(), std::move(fnRun));  // 跨执行器 / 深度超限 → 投递回本链执行器
 }
 ```
 
@@ -144,8 +156,14 @@ else
 
 ```cpp
 // Common/Async/Promise.h
-extern struct CLaunchState { bool bDeferred; bool bStarted; std::function<void()> fnLaunch;
-                            std::shared_ptr<CPromiseState> pFirst; std::shared_ptr<CExecutorHandle> pTarget; };
+extern struct CLaunchState
+{
+    bool bDeferred;
+    bool bStarted;
+    std::function<void()> fnLaunch;
+    std::shared_ptr<CPromiseState> pFirst;
+    std::shared_ptr<CExecutorHandle> pTarget;
+};
 // Append / ThenPromise / New 在 bDeferred 时只登记启动动作；Start() 投递它（幂等）；
 // Await() 发现“延迟链未启动”则自动 Start()（兜底）。
 ```
@@ -164,7 +182,7 @@ extern struct CLaunchState { bool bDeferred; bool bStarted; std::function<void()
 
 ```cpp
 // Common/Async/Promise.h（detail）
-bool ShouldPassThrough(int nMode, const CPromiseResult& up);        // 本层跳过？→ 把 up 原样交给下一层
+bool ShouldPassThrough(int nMode, const CPromiseResult& up);  // 本层跳过？→ 把 up 原样交给下一层
 CPromiseResult ResolveLayerResult(int nMode, const CPromiseResult& up, const CPromiseResult& own);
 ```
 
@@ -187,7 +205,7 @@ CPromiseResult ResolveLayerResult(int nMode, const CPromiseResult& up, const CPr
 
 ```cpp
 const CPromiseResult ownResult = fnHandler(upResult, spContext);
-result = ResolveLayerResult(nMode, upResult, ownResult);   // finally 忽略 ownResult，原样透传
+result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownResult，原样透传
 ```
 
 - `then` / `catch`：返回值即本层结果 → 决定后续走向（catch 返回 `Resolve()` 即恢复）；
@@ -197,11 +215,11 @@ result = ResolveLayerResult(nMode, upResult, ownResult);   // finally 忽略 own
 **首层特例**：尚未起链时第一次 `Then` / `Catch` / `Finally` 即首层，起点结果视为「已兑现」。
 因此 `Catch` 作为首层不会执行（没有可处理的拒绝），直接以 `Resolve()` settle。
 
-### 6.1 跨模块组合的三个原语（`ThenPromise` / `CPromise::New` / `ThenBridge`）
+### 6.1 跨模块组合的三个原语（`exec.NewPromise(spCtx, executor)` / `ThenPromise` / `ThenBridge`）
 
 | API | JS 对照 | 实现要点 |
 | --- | --- | --- |
-| `CPromise<T>::New(exec, spCtx, executor, loc)` | `new Promise((resolve, reject) => …)` | 直接建 `CPromiseState` 并交出 `ResolveFn` / `RejectFn`（内部就是 `pState->Settle(...)`）；executor 同步执行（与 JS 一致），抛异常 → `Reject(kException)`；`Settle` 幂等，故重复 settle / settle 后异常都安全 |
+| `exec.NewPromise(spCtx, executor, loc)` | `new Promise((resolve, reject) => …)` | 直接建 `CPromiseState` 并交出 `ResolveFn` / `RejectFn`（内部就是 `pState->Settle(...)`）；executor 同步执行（与 JS 一致），抛异常 → `Reject(kException)`；`Settle` 幂等，故重复 settle / settle 后异常都安全 |
 | `CPromise<T>::ThenPromise(factory, loc)` | `then(处理器返回 promise)` 的 flatten | 建本层 state，在上游 state 上登记 handler：上游被拒 → 直接透传；上游兑现 → `Adopt()` |
 | `CPromise<T>::ThenBridge(fnCreate, fnApply, loc)` | `then` 里「等别的模块 + 取回数据」 | **上面两个原语的语法糖**：内部就是 `Adopt()` + `New`（改走句柄版 `NewFromHandle`）+ `OnSettled`，多出的只是「子链兑现时先 `fnApply` 搬数据」 |
 
@@ -290,8 +308,7 @@ ThenBridge(fnCreate, fnApply, loc)
 | 一条链的层不并发 | 状态只在 `Settle` 时按序触发一次处理器，级联在同一线程推进 |
 | 同一状态只 settle 一次 | `Settle` 锁内 `m_bSettled` 判定，后续调用直接返回 |
 | 处理器不在起链线程执行 | 首层固定走 `PostHandler` |
-| **每层都在本链执行器线程上** | 线程亲和：`RunHandler` 先判 `IsInExecutorThread`，不满足就投递回本链执行器 |
-| **跨模块返回的层回本模块** | 同上（被调模块 settle 本链时，本链层不在被调模块线程跑） |
+| **每层都在本链执行器线程上** | 线程亲和：`RunHandler` 先判 `IsInExecutorThread`，不满足就投递回本链执行器 || **跨模块返回的层回本模块** | 同上（被调模块 settle 本链时，本链层不在被调模块线程跑） |
 | 回调不持锁 | `Settle` 先换出处理器列表，再锁外调用 |
 | 无悬垂 | 句柄 / 状态 / 上下文均为 `shared_ptr`，被续接与句柄共同持有 |
 | 深链不爆栈 | `kMaxInlineDepth` 上限 + 改投递（且只在同一执行器线程内累加） |
@@ -308,7 +325,7 @@ ThenBridge(fnCreate, fnApply, loc)
 
 ```cpp
 // Common/Thread/ThreadPool：worker 线程打 thread_local 标记
-extern/static thread_local const CThreadPool* tl_pCurrentPool;   // WorkerLoop 进入设、退出清
+extern / static thread_local const CThreadPool* tl_pCurrentPool;  // WorkerLoop 进入设、退出清
 static bool CThreadPool::IsInPoolThread(const CThreadPool* pPool);
 
 // Common/Async/AsyncExecutor.h（detail）
@@ -317,12 +334,20 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
     return pHandle != nullptr && CThreadPool::IsInPoolThread(pHandle->m_pPool.get());
 }
 
-// Common/Async/Promise.h：层处理器（CPromiseCore::RunHandler）
+// Common/Async/Promise.h：层处理器（层派发入口 CPromiseCore::RunHandler）
 const std::shared_ptr<CExecutorHandle> pExec =
-    (nAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pCore->Handle();   // 选执行器
-const bool bInline = (nAffinity == kAffinityInline) || IsInExecutorThread(pExec);         // 就地？
-if (bInline && InlineDepth() < kMaxInlineDepth) { ++InlineDepth(); fnRun(); --InlineDepth(); }
-else if (!PostToHandle(pExec, std::move(fnRun))) { pState->Settle(Reject(kStopped)); }       // 投递目标执行器
+    (nAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pCore->Handle();  // 选执行器
+const bool bInline = (nAffinity == kAffinityInline) || IsInExecutorThread(pExec);        // 就地？
+if (bInline && InlineDepth() < kMaxInlineDepth)
+{
+    ++InlineDepth();
+    fnRun();
+    --InlineDepth();
+}
+else if (!PostToHandle(pExec, std::move(fnRun)))
+{
+    pState->Settle(Reject(kStopped));
+}  // 投递目标执行器
 ```
 
 - `Append(fnHandler, loc, nMode, nAffinity, pTarget)`：亲和与目标句柄随注册的处理器一起捕获，
@@ -350,7 +375,7 @@ else if (!PostToHandle(pExec, std::move(fnRun))) { pState->Settle(Reject(kStoppe
 | 层处理器抛异常 | `MakeHandlerRunner` 的 try/catch → 本层 `kException` | 不变（本来就安全） |
 | **通知**（`OnSettled` / `OnSettledOn`）抛异常 | 异常从 `CPromiseState::Settle` 逃出 → worker 无 catch → **`std::terminate`（进程挂掉）** | `detail::RunNotice` 兜住 + 报告诊断 |
 | `exec.Post(fn)` 的任务抛异常 | 同上（同样能弄死进程） | `CAsyncExecutor::Post` 包一层 guard 兜住 + 报告 |
-| `CPromise::New` 的 executor 抛异常 | `RunExternalExecutor` 兜住 → `kException` | 不变 |
+| `exec.NewPromise(spCtx, executor)` 的 executor 抛异常 | `RunExternalExecutor` 兜住 → `kException` | 不变 |
 | `Await()` 永久挂住 | 只能靠文档警告 | 新增 `AwaitFor(ms)`（超时返回 `kStopped`，不落定、不取消链） |
 | 层内 / 本链线程上 `Await()` 未落定的层（必死锁） | 无任何提示 | `ReportBlockingRisk()` 报诊断（**不硬失败**：等「别的线程 settle 的层」是合法的） |
 | 无效 promise 上挂层 | 静默返回无效句柄 | 报诊断（链根本不会跑，静默最难查） |
@@ -420,6 +445,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 2. Common/Async/PromiseTypes.h      固定签名（ThenHandler / SettledHandler）
 3. Common/Async/AsyncExecutor.h     调度层与执行器句柄
 4. Common/Async/Promise.h           状态 + 核心 + promise（重点看 Append / Settle / RunHandler）
+   （层派发策略细节在 Common/Async/AsyncExecutor.h：detail::DispatchInlineOrPost / ShouldInline）
 5. Common/Async/Coroutine.h         顺序化（Duff's device 状态机）
 6. Tests/test_async_chain.cpp       行为契约
 ```

@@ -11,7 +11,7 @@
 
 | JavaScript | 本框架 |
 |---|---|
-| `new Promise(executor)` | `exec.NewPromise(spCtx, 首层)`；由外部 settle 的用 `CPromise<Ctx>::New(exec, spCtx, executor)` |
+| `new Promise(executor)` | `exec.NewPromise(spCtx, 首层)`；由外部 settle 的用 `exec.NewPromise(spCtx, executor)` |
 | `p.then(onFulfilled)` | `p.Then(handler)` |
 | `onFulfilled` 返回 promise（自动等待） | `p.ThenPromise(factory)`（factory 返回一条子 promise） |
 | `p.catch(onRejected)` | `p.Catch(handler)` |
@@ -96,7 +96,7 @@ p.Then([&exec](common::async::CPromiseResult, const std::shared_ptr<Ctx>& sp)  /
 ```
 
 普通 `Then` 的处理器只能返回 `CPromiseResult`，里面起的链只能是旁支；要参与当前链必须 `ThenPromise`
-（同上下文直接把子链返回即可；**跨上下文**先 `CPromise::New` 桥接）。
+（同上下文直接把子链返回即可；**跨上下文**先 `exec.NewPromise(spCtx, executor)` 桥接）。
 
 ### 2.4 错误是错误码，不是异常对象
 
@@ -138,7 +138,7 @@ JS 里没人 `catch` 的 promise 拒绝会触发 `unhandledrejection`；本框�
 
 ### 2.7 其他差异
 
-- **无 `Promise.resolve` / thenable 探测**：跨库、跨回调式 API 的适配要显式写 `CPromise::New`；
+- **无 `Promise.resolve` / thenable 探测**：跨库、跨回调式 API 的适配要显式写 `exec.NewPromise(spCtx, executor)`；
 - **无 AbortController / 超时**：取消要么在每个层里检查上下文标志，要么用定时器 + `Reject(码)`；
 - **`Await()` 之外还有协程**：`CO_AWAIT` 是非阻塞挂起（不占 worker），`Await()` 是阻塞等待；
   生产代码里推荐前者，或干脆全回调（`OnSettled`）。

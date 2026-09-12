@@ -156,7 +156,7 @@ A2 批量消费、A4 work-stealing、B6 固定缓冲容器），证伪本身就�
 
 - 洞察：无脑内联失败在于"**无论负载都内联**"；关键变量是**线程池是否积压**；
 - 方案：`CThreadPool` 新增原子 `m_nPending` 计数 + `PendingCount()`；`CAsyncExecutor` 新增
-  `IsIdle()`（队列空）。`ResumeInline` **队列无积压时内联**（省投递、降延迟），**有积压时投递**
+  `detail::ShouldInline(..., bRequireIdle=true)`（线程池队列为空）。`ResumeInline` **队列无积压时内联**（省投递、降延迟），**有积压时投递**
   （保并行度）；用 thread_local 深度计数限 64 层防爆栈；
 - 结果（4 线程）：多线程协程吞吐 ~349K（无脑内联仅 114K，接近纯投递 385K）；
   切换 ~724 ns（纯投递 1004 ns，**-28%**）——两全其美。

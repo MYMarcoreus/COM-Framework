@@ -119,12 +119,12 @@ public:
         // 子 promise：挂在**旁路执行器**上，由本方法最后投递的那次调用结算。
         typedef common::async::CPromise<COverrideOrderCtx> COrderPromise;
         COrderPromise::ResolveFn fnSettleChild;
-        const COrderPromise promiseChild = COrderPromise::New(
-            m_execSide, spCtx,
-            [&fnSettleChild](const COrderPromise::ResolveFn& fnResolve, const COrderPromise::RejectFn&)
-            {
-                fnSettleChild = fnResolve;  // 先存起来，稍后在旁路线程上结算。
-            },
+        const COrderPromise promiseChild = m_execSide.NewPromise(spCtx,
+            COrderPromise::PromiseExecutor(
+                [&fnSettleChild](const COrderPromise::ResolveFn& fnResolve, const COrderPromise::RejectFn&)
+                {
+                    fnSettleChild = fnResolve;  // 先存起来，稍后在旁路线程上结算。
+                }),
             ASYNC_LOC);
 
         common::async::CPromise<COverrideOrderCtx> chain =
@@ -273,7 +273,7 @@ private:
                     fnResolve();
                 });
         };
-        return common::async::CPromise<COverrideOrderCtx>::New(m_execMain, spCtx, fnExecutor, ASYNC_LOC);
+        return m_execMain.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_execMain;  ///< 主执行器（链的主执行器）。

@@ -271,7 +271,7 @@ CUserPromise BridgeQueryUser(const CFlowDeps& deps, const std::shared_ptr<CUserO
                     fnReject(kUserDbUnavailable);
                 });
     };
-    return CUserPromise::New(*deps.spExec, spCtx, fnExecutor, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnExecutor, ASYNC_LOC);
 }
 
 /// @brief 桥接：插入用户（数据访问模块异步插入）。
@@ -310,7 +310,7 @@ CUserPromise BridgeInsertUser(const CFlowDeps& deps, const std::shared_ptr<CUser
                     fnReject(kUserDbUnavailable);
                 });
     };
-    return CUserPromise::New(*deps.spExec, spCtx, fnExecutor, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnExecutor, ASYNC_LOC);
 }
 
 /// @brief 更新尝试（乐观锁冲突时在回调里重试 —— 回调驱动，不阻塞、不占线程）。
@@ -373,7 +373,7 @@ CUserPromise BridgeUpdateUser(const CFlowDeps& deps, const std::shared_ptr<CUser
     {
         UpdateUserAttempt(deps, spCtx, fnResolve, fnReject, 1);
     };
-    return CUserPromise::New(*deps.spExec, spCtx, fnExecutor, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnExecutor, ASYNC_LOC);
 }
 
 /// @brief 桥接：删除用户（数据访问模块异步删除）。
@@ -408,7 +408,7 @@ CUserPromise BridgeDeleteUser(const CFlowDeps& deps, const std::shared_ptr<CUser
                     fnReject(kUserDbUnavailable);
                 });
     };
-    return CUserPromise::New(*deps.spExec, spCtx, fnExecutor, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnExecutor, ASYNC_LOC);
 }
 
 // ====================================================================
@@ -897,7 +897,7 @@ static CUserPromise MakeRejectedPromise(const CFlowDeps& deps, const std::shared
         spCtx->strError = "数据访问模块不可用";
         fnReject(kUserDbUnavailable);
     };
-    return CUserPromise::New(*deps.spExec, spCtx, fnExecutor, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnExecutor, ASYNC_LOC);
 }
 
 /// @brief 异步查询用户信息（读）。

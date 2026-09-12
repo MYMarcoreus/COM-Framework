@@ -5,7 +5,7 @@
 ///  - 一条链里混用：具名处理器 / lambda / ThenPromise（内层链）/ 旁支 / catch / finally；
 ///  - then 失败即停、catch 恢复或透传、finally 不改结果；
 ///  - ThenPromise 等子 promise（flatten）、内层拒绝码沿外层链透传；
-///  - CPromise::New（由外部回调 settle）：resolve / reject / executor 抛异常 / 空 executor；
+///  - `exec.NewPromise(spCtx, executor)`（由外部回调 settle）：resolve / reject / executor 抛异常 / 空 executor；
 ///  - 跨模块桥接：两个模块各持执行器，只通过 promise 交接；
 ///  - 处理器抛异常 → kException，finally / OnSettled 仍执行；
 ///  - OnSettled 旁路通知：不改结果、可多次登记；
@@ -266,7 +266,7 @@ TEST(Smoke_ThenPromiseDeepInner)
     exec.Stop();
 }
 
-// ==================== 3. CPromise::New：由外部回调 settle ====================
+// ==================== 3. exec.NewPromise(spCtx, executor)：由外部回调 settle ====================
 
 /// @brief New 的 executor 立即执行，resolve / reject 都由外部决定。
 TEST(Smoke_NewExternalSettle)
@@ -279,8 +279,9 @@ TEST(Smoke_NewExternalSettle)
         std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
         common::async::CPromise<CSmokeCtx>::RejectFn fnRejectHolder;
         common::async::CPromise<CSmokeCtx>::ResolveFn fnResolveHolder;
-        common::async::CPromise<CSmokeCtx> p = common::async::CPromise<CSmokeCtx>::New(
-            exec, spCtx,
+        common::async::CPromise<CSmokeCtx> p = exec.NewPromise(
+            spCtx,
+
             [&fnResolveHolder, &fnRejectHolder, spCtx](const common::async::CPromise<CSmokeCtx>::ResolveFn& fnResolve,
                 const common::async::CPromise<CSmokeCtx>::RejectFn& fnReject)
             {
@@ -302,8 +303,9 @@ TEST(Smoke_NewExternalSettle)
     {
         std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
         common::async::CPromise<CSmokeCtx>::RejectFn fnRejectHolder;
-        common::async::CPromise<CSmokeCtx> p = common::async::CPromise<CSmokeCtx>::New(
-            exec, spCtx,
+        common::async::CPromise<CSmokeCtx> p = exec.NewPromise(
+            spCtx,
+
             [&fnRejectHolder](const common::async::CPromise<CSmokeCtx>::ResolveFn& /*fnResolve*/,
                 const common::async::CPromise<CSmokeCtx>::RejectFn& fnReject)
             {
@@ -328,22 +330,23 @@ TEST(Smoke_NewBadExecutor)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtxThrow = std::make_shared<CSmokeCtx>();
-    const common::async::CPromiseResult rThrow = common::async::CPromise<CSmokeCtx>::New(
-        exec, spCtxThrow,
-        [](const common::async::CPromise<CSmokeCtx>::ResolveFn& /*fnResolve*/,
-            const common::async::CPromise<CSmokeCtx>::RejectFn& /*fnReject*/)
-        {
-            throw std::runtime_error("executor boom");
-        },
-        ASYNC_LOC)
-                                                     .Await();
+    const common::async::CPromiseResult rThrow =
+        exec.NewPromise(
+                spCtxThrow,
+
+                [](const common::async::CPromise<CSmokeCtx>::ResolveFn& /*fnResolve*/,
+                    const common::async::CPromise<CSmokeCtx>::RejectFn& /*fnReject*/)
+                {
+                    throw std::runtime_error("executor boom");
+                },
+                ASYNC_LOC)
+            .Await();
     ASSERT_TRUE(rThrow.IsRejected());
     ASSERT_EQ(rThrow.Code(), static_cast<int>(common::async::kException));
 
     std::shared_ptr<CSmokeCtx> spCtxEmpty = std::make_shared<CSmokeCtx>();
-    const common::async::CPromiseResult rEmpty = common::async::CPromise<CSmokeCtx>::New(
-        exec, spCtxEmpty, common::async::CPromise<CSmokeCtx>::PromiseExecutor(), ASYNC_LOC)
-                                                     .Await();
+    const common::async::CPromiseResult rEmpty =
+        exec.NewPromise(spCtxEmpty, common::async::CPromise<CSmokeCtx>::PromiseExecutor(), ASYNC_LOC).Await();
     ASSERT_TRUE(rEmpty.IsRejected());
     ASSERT_EQ(rEmpty.Code(), static_cast<int>(common::async::kRejected));
     exec.Stop();
@@ -570,7 +573,7 @@ TEST(Smoke_BridgeTwoModules)
     common::async::CPromise<CSmokeCtx>::PromiseFactory fnBridge = [&execOrder, &fnExecutor, spCtx](
                                                                       const std::shared_ptr<CSmokeCtx>& /*spSelf*/)
     {
-        return common::async::CPromise<CSmokeCtx>::New(execOrder, spCtx, fnExecutor, ASYNC_LOC);
+        return execOrder.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     };
 
     const common::async::CPromiseResult r = execOrder.NewPromise(spCtx, &StepAdd1, ASYNC_LOC)

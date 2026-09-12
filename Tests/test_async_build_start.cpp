@@ -204,7 +204,7 @@ private:
                     fnResolve();
                 });
         };
-        return common::async::CPromise<CStartCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
@@ -330,7 +330,7 @@ TEST(BuildStart_EmptyChain)
 
 /// @brief 延迟链 + `ThenBridge`：`Start()` 之前**连跨模块子链都不发起**（构链期零业务代码）。
 ///
-/// 回归点：`CPromise::New` 系列（含 `ThenBridge` 内部）恒为「立即启动」——
+/// 回归点：`exec.NewPromise(spCtx, executor)` 系列（含 `ThenBridge` 内部）恒为「立即启动」——
 /// 它的等待语义由「轮到该层」保证，不能被延迟链的 `bDeferred` 影响。
 TEST(BuildStart_BridgeWaitsForStart)
 {

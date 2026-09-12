@@ -29,6 +29,8 @@
 // JS 对照：
 //
 //   new Promise(executor)          →  auto p = exec.NewPromise(spCtx, StepA);   // 起链 + 首层（立即投递）
+//   new Promise((resolve, reject))  →  exec.NewPromise(spCtx, fnExecutor);     // 起链由外部 settle（回调式异步接进来）
+//     => { … 回调里 resolve()/reject()… }
 //   promise.then(onFulfilled)      →  p.Then(StepB);        // 兑现时执行，拒绝直接透传
 //   promise.catch(onRejected)      →  p.Catch(StepRollback);// 拒绝时执行，Resolve() 即恢复
 //   promise.finally(onFinally)     →  p.Finally(StepLog);   // 无论成败都执行，不改结果
@@ -36,7 +38,7 @@
 //   promise 已 settle              →  p.IsSettled()
 //   resolve() / reject(reason)     →  CPromiseResult::Resolve() / CPromiseResult::Reject(码)
 //   fulfilled / rejected           →  result.IsFulfilled() / result.IsRejected()
-//   new Promise((resolve, reject)    →  CPromise<Ctx>::New(exec, spCtx, executor, ASYNC_LOC);
+//   new Promise((resolve, reject)    →  exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
 //     => { … 回调里 resolve()/reject()… })   // 由外部（其他模块 / 回调）兑现或拒绝本 promise
 //   then(onFulfilled 返回 promise)  →  p.ThenPromise(FnFactory);   // 等子 promise（flatten）
 //   + 把子 promise 的数据搬回本上下文 →  p.ThenBridge(FnCreate, FnApply);  // 跨模块 / 跨上下文桥接（推荐）
@@ -66,7 +68,7 @@
 //      worker**，否则死锁（单线程执行器必死），只适合子流程很短且并发余量充足的场合。
 //
 // ⑤ 跨模块 / 跨上下文组合（**纯异步、零阻塞、不需要协程**）：把别的 promise 桥接进本流程 ——
-//      ① 用 `CPromise<CMyCtx>::New(exec, spCtx, executor)` 造一条「由外部 settle」的 promise
+//      ① 用 `exec.NewPromise(spCtx, executor)` 造一条「由外部 settle」的 promise
 //         （executor 里发起别的模块的调用，在其 OnSettled 回调里 resolve() / reject(码)）；
 //      ② 用 `p.ThenPromise([&]{ return bridgePromise; })` 把它接进本流程（then 的 promise 版）。
 //    ③ ①② 合一、不用写样板的简写：`p.ThenBridge(fnCreate, fnApply, ASYNC_LOC)` ——
@@ -118,10 +120,11 @@
 // @endcode
 //
 // 文件结构（便于定位）：
-//   一、detail 基础设施：CPromiseState（层状态机，含处理器登记策略）/ HandlerMode、HandlerAffinity、
-//       ResolveExecHandle（执行器选择与线程亲和）/ MakeHandlerRunner（任务体构造）/ CLaunchState
-//       （延迟启动）/ CPromiseCore（共享核心：上下文 + 执行器 + 启动状态，兼层调度策略 RunHandler /
-//       PostHandler）
+//   一、detail 基础设施：CPromiseState（层状态机，含处理器登记策略）/ HandlerMode、
+//       ShouldPassThrough・ResolveLayerResult（三态语义）/ MakeHandlerRunner（任务体构造）/ CLaunchState
+//       （延迟启动）/ CPromiseCore（共享核心：上下文 + 执行器 + 启动状态，兼层调度入口）
+//       注：执行器侧设施（CExecutorHandle、HandlerAffinity、ResolveExecHandle、DispatchInlineOrPost、
+//       内联深度）在 "Async/AsyncExecutor.h"。
 //   二、CPromise：对外句柄（构造 / Start / New / 层方法 / 结果与通知 / 内部实现）
 //   三、模板方法定义（执行器入口）：NewPromise、BuildPromise
 //
@@ -151,38 +154,6 @@ constexpr const char* kDiagInvalidAdopt =
 constexpr const char* kDiagAwaitRisk =
     "Await(): 层内（或本链执行器线程上）阻塞等待未落定的层 → 极可能死锁；"
     "请改用 ThenPromise / ThenBridge / OnSettled 回调续跑 / 协程 CO_AWAIT，或用 AwaitFor(ms) 兜底";
-
-/// @brief 级联内联深度（线程局部）：链逐层级联时最多连续内联多少层。
-///
-/// 超限则改为投递执行，避免超长链（数千层）在递归中爆栈。
-const int kMaxInlineDepth = 64;
-
-/// @brief 当前线程的级联内联深度。
-inline int& InlineDepth()
-{
-    static thread_local int s_nInlineDepth = 0;
-    return s_nInlineDepth;
-}
-
-/// @brief 内联深度的 RAII 守卫（构造 +1，析构 -1）。
-///
-/// 三处「就地内联」（层处理器 / 通知就地送达 / 协程续跑）都要配对增减；
-/// 用守卫可以避免异常或提前 `return` 漏减（漏减会让后续层被多投递，且会累积）。
-struct CInlineGuard
-{
-    CInlineGuard()
-    {
-        ++InlineDepth();
-    }
-
-    ~CInlineGuard()
-    {
-        --InlineDepth();
-    }
-
-    CInlineGuard(const CInlineGuard&) = delete;
-    CInlineGuard& operator=(const CInlineGuard&) = delete;
-};
 
 /// @brief 执行 settled 通知（异常兜底：通知里抛异常只报告，不向外抛）。
 ///
@@ -435,26 +406,6 @@ enum HandlerMode
     kModeFinally = 2  ///< finally(onFinally)：无论兑现或拒绝都执行；忽略返回值，透传上层结果。
 };
 
-/// @brief 层处理器的执行线程偏好（线程亲和，默认 `kAffinityChain`）。
-enum HandlerAffinity
-{
-    kAffinityChain = 0,  ///< 默认：本链执行器线程（同执行器内联；跨执行器投递回本链执行器）。
-    kAffinityInline = 1,  ///< 就地：在「结算本层的那条线程」上执行（不投递，不要求线程亲和）。
-    kAffinityExecutor = 2  ///< 指定执行器：在给定执行器线程上执行（同线程内联，否则投递）。
-};
-
-/// @brief 解析本层实际使用的执行器句柄（亲和三档）。
-///
-/// @param eAffinity 亲和三档（`kAffinityChain` / `kAffinityInline` / `kAffinityExecutor`）。
-/// @param pTarget 调用方指定的执行器（仅 `kAffinityExecutor` 且非空时生效）。
-/// @param pChainHandle 本链执行器句柄（默认值）。
-/// @return 本层应使用的执行器句柄。
-inline const std::shared_ptr<CExecutorHandle>& ResolveExecHandle(HandlerAffinity eAffinity,
-    const std::shared_ptr<CExecutorHandle>& pTarget, const std::shared_ptr<CExecutorHandle>& pChainHandle)
-{
-    return (eAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pChainHandle;
-}
-
 /// @brief 本层处理器是否跳过（JS 三态语义：then 被拒 / catch 已兑现 → 直接透传上一层结果）。
 ///
 /// @param eMode 处理器模式（then / catch / finally）。
@@ -527,14 +478,14 @@ struct CLaunchState
     {}
 };
 
-/// @brief promise 共享核心：共享上下文 + 执行器句柄 + **层调度策略**。
+/// @brief promise 共享核心：共享上下文 + 执行器句柄 + 启动状态。
 ///
 /// 一条链的所有层共用同一个核心（同一上下文 + 同一执行器），句柄持有者彼此
 /// 保活（执行器析构后链仍安全跑完）。
 ///
-/// 核心同时承担「本层怎么跑」的策略 —— 线程亲和（就地内联 / 投递回本链执行器）、
-/// 内联深度限额、投递失败以 `kStopped` 收口：这三件事只依赖「上下文 + 执行器句柄 +
-/// 层状态」，所以归在这里；`CPromise` 只管编排（挂层 / 收口 / 桥接）。
+/// 「本层怎么跑」的**调度策略**（线程亲和、就地内联 / 投递、内联深度限额）归属执行器侧
+/// （`detail::ResolveExecHandle` / `detail::DispatchInlineOrPost`，在 AsyncExecutor.h）；
+/// 这里只做两件事：**造任务体**（`MakeHandlerRunner`，层语义）与**失败收口**（`kStopped`）。
 template <typename TContext>
 class CPromiseCore
 {
@@ -605,18 +556,9 @@ public:
     {
         std::function<void()> fnRun = MakeHandlerRunner(Context(), pState, fnHandler, upResult, eMode);
 
-        // 选本层的执行器：默认本链执行器；kAffinityExecutor 用调用方指定的那个。
+        // 派发策略（就地 / 投递 / 深度限额 / 亲和解析）在执行器侧；这里只管「造任务体 + 失败收口」。
         const std::shared_ptr<CExecutorHandle> pExec = ResolveExecHandle(eAffinity, pTarget, Handle());
-
-        const bool bInline = (eAffinity == kAffinityInline) || IsInExecutorThread(pExec);
-        if (bInline && InlineDepth() < kMaxInlineDepth)
-        {
-            CInlineGuard guard;  // 深度 +1 / -1 成对（异常 / 提前 return 也不漏减）。
-            fnRun();
-            return;
-        }
-
-        if (!PostToHandle(pExec, std::move(fnRun)))
+        if (!DispatchInlineOrPost(eAffinity, pExec, std::move(fnRun)))
         {
             pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用 → 本层被拒绝。
         }
@@ -654,9 +596,9 @@ private:
 ///
 /// 一条 promise 链 = 共享核心（上下文 + 执行器）+ 一串状态（每层一个）。
 /// 本类只是「指向某一层」的句柄：
-///  - 起链只有三条公开路径（都在执行器 / 静态工厂上）：`exec.NewPromise`（立即投递首层）、
-///    `exec.BuildPromise`（先挂层、后 `Start()`）、`CPromise::New`（由外部回调 settle）；
-///    本类**不提供**「构造函数 + Then」的起链写法；
+///  - 起链只有**执行器上的**公开入口：`exec.NewPromise(spCtx, 首层处理器)`（立即投递首层）、
+///    `exec.NewPromise(spCtx, executor)`（由外部回调 settle）、`exec.BuildPromise(spCtx)`（先挂层、后 `Start()`）、
+///    `exec.CoStart<T>()`（协程）；本类**不提供**任何起链入口，只做「句柄 + 加层」；
 ///  - `Then` / `Catch` / `Finally` 追加一层并返回指向新层的句柄（等价 JS 的
 ///    `then` / `catch` / `finally`）；
 ///  - `Await` / `OnSettled` / `IsSettled` 作用于句柄所指的那一层。
@@ -691,7 +633,7 @@ public:
     /// @brief 创建无效 promise（未绑定执行器；供成员声明 / 后续赋值用）。
     ///
     /// 无效 promise 上 Then / Catch / Finally 为空操作，Await() 返回被拒绝（kStopped）。
-    /// 起链请用 `exec.NewPromise` / `exec.BuildPromise` / `CPromise::New`。
+    /// 起链请用 `exec.NewPromise` / `exec.BuildPromise` / `exec.NewPromise(spCtx, executor)`。
     CPromise() : m_pCore(), m_pState()
     {}
 
@@ -748,27 +690,6 @@ public:
         {
             pFirst->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用。
         }
-    }
-
-    //================ Factory ================
-
-    /// @brief 创建「由外部兑现 / 拒绝」的 promise（等价 JS `new Promise((resolve, reject) => ...)`）。
-    ///
-    /// 用途：把**其他模块 / 回调式**的异步接进本流程 —— executor 里发起调用并登记回调，
-    /// 由对方的完成回调调 `fnResolve()` 兑现或 `fnReject(码)` 拒绝（非阻塞，不占 worker）。
-    ///
-    /// 与 JS 一致：executor **立即（同步）执行**，因此只应做「发起 + 登记回调」，不要做重活；
-    /// 本 promise 在 settle 之前处于 pending，之后可正常 Then / Catch / Finally / ThenPromise。
-    ///
-    /// @param executor 执行器（起链与续接投递用）。
-    /// @param spContext 共享上下文（本 promise 所有层共用该实例）。
-    /// @param fnExecutor 执行体（对齐 JS executor：拿到 resolve / reject 句柄）。
-    /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
-    /// @return 指向本 promise 的句柄（pending；由 fnExecutor 触发 settle）。
-    static CPromise New(CAsyncExecutor& executor, const std::shared_ptr<TContext>& spContext,
-        const PromiseExecutor& fnExecutor, const CSourceLoc& loc = CSourceLoc())
-    {
-        return NewFromHandle(executor.Handle(), spContext, fnExecutor, loc);
     }
 
     //================ Layer ================
@@ -859,7 +780,7 @@ public:
     ///
     /// 全程只登记回调、不占工作线程，**不阻塞**（单线程执行器也安全）——
     /// 这是「纯异步下调用其他模块 / 另一套上下文的异步函数」的标准写法：
-    /// 子 promise 由 `CPromise::New` 桥接而来（见文件头「嵌套用法⑤」）。
+    /// 子 promise 由 `exec.NewPromise(spCtx, executor)` 桥接而来（见文件头「嵌套用法⑤」）。
     /// 尚未起链时本调用即首层（起点结果视为已兑现）。
     ///
     /// @param fnFactory 子 promise 工厂（入参为本流程共享上下文）。
@@ -1034,7 +955,7 @@ public:
     ///          Await() 会占住一个 worker，若线程池已无空闲 worker，被等待的 promise
     ///          就无人执行 → **死锁**（单线程执行器必然死锁）。
     ///          要在异步流程里等异步，请优先用：
-    ///           - `ThenPromise` / `CPromise::New`（纯异步、非阻塞，推荐，不需要协程）；
+    ///           - `ThenPromise` / `exec.NewPromise(spCtx, executor)`（纯异步、非阻塞，推荐，不需要协程）；
     ///           - 协程的 CO_AWAIT / CO_AWAIT_ALL（非阻塞挂起）；
     ///           - 层内「起子 promise 后由 OnSettled 回调续跑」（非阻塞，回调驱动）；
     ///           - 层内「先并行起、后续层里再等」（此时子 promise 多已完成，几乎不阻塞）。
@@ -1091,7 +1012,7 @@ private:
 
     /// @brief 创建「未起链」的 promise 句柄（`exec.BuildPromise` 用；上下文可懒创建）。
     ///
-    /// 不对外：起链只有 `exec.NewPromise` / `exec.BuildPromise` / `CPromise::New` 三条路径，
+    /// 不对外：起链只有 `exec.NewPromise` / `exec.BuildPromise` / `exec.NewPromise(spCtx, executor)` 三条路径，
     /// 所以构造路径收在这里，由 `CAsyncExecutor`（友元）调用。
     ///
     /// @param executor 执行器（起链与续接投递用）。
@@ -1226,10 +1147,10 @@ private:
             });
     }
 
-    /// @brief 内部：用执行器**句柄**创建「由外部兑现 / 拒绝」的 promise（`New` 与 `ThenBridge` 共用）。
+    /// @brief 内部：用执行器**句柄**创建「由外部兑现 / 拒绝」的 promise（`NewPromise` 的 executor 版与 `ThenBridge` 共用）。
     ///
-    /// 与 `New(executor, …)` 等价，区别只在拿的是句柄而不是执行器引用 ——
-    /// 桥接层（`ThenBridge`）在工厂里要用「本链执行器」的句柄，而那时已没有 `CAsyncExecutor&` 了。
+    /// 拿的是句柄而不是执行器引用 —— 桥接层（`ThenBridge`）在工厂里要用「本链执行器」的句柄，
+    /// 而那时已没有 `CAsyncExecutor&` 了。
     ///
     /// @param pHandle 执行器句柄（起链与续接投递用）。
     /// @param spContext 共享上下文（本 promise 所有层共用该实例）。
@@ -1289,7 +1210,7 @@ private:
             });
     }
 
-    /// @brief 内部：执行外部 settle 体（`CPromise::New` 的 executor），把 resolve / reject 交给它。
+    /// @brief 内部：执行外部 settle 体（`exec.NewPromise(spCtx, executor)` 的 executor），把 resolve / reject 交给它。
     ///
     /// @param pState 本层状态（executor 通过 resolve / reject 收口它）。
     /// @param fnExecutor 执行体。
@@ -1443,7 +1364,7 @@ private:
 //  - 起链：`NewPromise` / `BuildPromise`。
 //
 // 为什么定义留在这里，而不是 AsyncExecutor.h：这两者都要**造 `CPromise` 实例**
-// （用到注入点 `CPromise::New` 等内部构造路径），与 promise 机制放在一起读才完整。
+// （用到注入点 `exec.NewPromise(spCtx, executor)` 等内部构造路径），与 promise 机制放在一起读才完整。
 // `CoStart`（定义在 Coroutine.h）同样遵循「声明在执行器头、实现跟着机制走」。
 //
 // 组合器（`WhenAll` 一族）不在此节：它们不碰 `CPromise` 的私有构造路径，
@@ -1462,6 +1383,24 @@ CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& s
 {
     CPromise<TContext> promise(*this, spContext);  // 私有构造：起链入口只在本类上。
     return promise.Then(fnHandler, loc);           // 首个 Then 即首层（立即投递）。
+}
+
+/// @brief 起链实现（对齐 JS `new Promise(executor)`）：由 `fnExecutor` 里的 resolve / reject 兑现。
+///
+/// 用途：把**其他模块 / 回调式**的异步接进本流程 —— executor 里发起调用并登记回调，
+/// 由对方的完成回调调 `fnResolve()` 兑现或 `fnReject(码)` 拒绝（非阻塞，不占 worker）。
+/// 与 JS 一致：executor **立即（同步）执行**，因此只应做「发起 + 登记回调」，不要做重活。
+///
+/// @tparam TContext 上下文类型（由 spContext 推导）。
+/// @param spContext 共享上下文（本 promise 所有层共用该实例）。
+/// @param fnExecutor 执行体（对齐 JS executor：拿到 resolve / reject 句柄）。
+/// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
+/// @return 指向本 promise 的句柄（pending；由 fnExecutor 触发 settle）。
+template <typename TContext>
+CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& spContext,
+    const typename CPromise<TContext>::PromiseExecutor& fnExecutor, const CSourceLoc& loc /* = CSourceLoc() */)
+{
+    return CPromise<TContext>::NewFromHandle(Handle(), spContext, fnExecutor, loc);
 }
 
 /// @brief 建一条「延迟启动」的 promise 链（先挂完层，再 Start）。

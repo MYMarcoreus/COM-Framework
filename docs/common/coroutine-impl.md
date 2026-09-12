@@ -9,13 +9,23 @@
 并 `return` 让出线程，promise settled 后从该 `case` 继续执行。
 
 ```cpp
-#define CO_BEGIN()  switch (Step()) { case 0:;
+#define CO_BEGIN()  \
+    switch (Step()) \
+    {               \
+        case 0:;
 
-#define CO_AWAIT(expr) \
-    AwaitWait(__LINE__, (expr)); \                 // 注册 settled 通知（挂起）
-    return; \                                      // 让出线程
-    case __LINE__: \                               // ← 恢复点
-    if (IsTerminated()) { CompleteTerminated(); return; }
+#define CO_AWAIT(expr)           \
+    AwaitWait(__LINE__, (expr)); \
+    \  // 注册 settled 通知（挂起）
+return;
+\  // 让出线程
+    case __LINE__:
+\  // ← 恢复点
+    if (IsTerminated())
+{
+    CompleteTerminated();
+    return;
+}
 ```
 
 要点：
@@ -30,11 +40,11 @@
 template <typename TContext>
 class CCoroutine
 {
-    std::shared_ptr<detail::CPromiseCore<TContext> > m_pCore; // 执行器句柄 + 共享上下文
-    std::shared_ptr<detail::CPromiseState> m_pSegment;        // 协程完成状态（AsPromise 暴露）
-    CAsyncExecutor* m_pExec;                                  // 调度（Resume + 子 promise 投递）
-    std::weak_ptr<void> m_wpSelf;                             // 自持弱引用（生命周期加固）
-    CHotState m_hot;                                          // 步号 / 终止标志 / 拒绝码
+    std::shared_ptr<detail::CPromiseCore<TContext> > m_pCore;  // 执行器句柄 + 共享上下文
+    std::shared_ptr<detail::CPromiseState> m_pSegment;         // 协程完成状态（AsPromise 暴露）
+    CAsyncExecutor* m_pExec;                                   // 调度（Resume + 子 promise 投递）
+    std::weak_ptr<void> m_wpSelf;                              // 自持弱引用（生命周期加固）
+    CHotState m_hot;                                           // 步号 / 终止标志 / 拒绝码
 };
 ```
 
@@ -59,8 +69,14 @@ struct CHotState
 
 ```cpp
 std::shared_ptr<void> spSelf = m_wpSelf.lock();
-promise.OnSettled([spSelf, this](CPromiseResult r) { ... });   // 回调期间对象保活
-m_pExec->Post([spSelf, this]() { Resume(); });
+promise.OnSettled([spSelf, this](CPromiseResult r)
+{
+    ...
+});  // 回调期间对象保活
+m_pExec->Post([spSelf, this]()
+{
+    Resume();
+});
 ```
 
 因此调用方即使提前释放 `CoStart` 返回的 `shared_ptr`，协程对象也会存活到最后一个
@@ -85,14 +101,20 @@ exec.CoStart<TCoroutine>(args...)
 ```cpp
 void AwaitWait(int nLine, const CPromise<TContext>& promise)
 {
-    m_hot.nStep.store(nLine);                          // 记恢复点
+    m_hot.nStep.store(nLine);  // 记恢复点
     std::shared_ptr<void> spSelf = m_wpSelf.lock();
     bool bOk = promise.OnSettled([spSelf, this](CPromiseResult r)
     {
-        if (r.IsRejected()) { MarkTerminated(r); }      // 被等待的 promise 被拒绝 → 标记终止
-        ResumeInline();                                 // 线程亲和 + 负载感知：内联或投递
+        if (r.IsRejected())
+        {
+            MarkTerminated(r);
+        }                // 被等待的 promise 被拒绝 → 标记终止
+        ResumeInline();  // 线程亲和 + 负载感知：内联或投递
     });
-    if (!bOk) { Terminate(CPromiseResult::Reject(kStopped)); }   // 注册失败：同步终止并 settle
+    if (!bOk)
+    {
+        Terminate(CPromiseResult::Reject(kStopped));
+    }  // 注册失败：同步终止并 settle
 }
 ```
 
@@ -104,10 +126,10 @@ void AwaitWait(int nLine, const CPromise<TContext>& promise)
 
 ```cpp
 if (m_pExec->IsInExecutorThread()                            // ① 线程亲和：必须在本协程自己的执行器线程上
-    && m_pExec->IsIdle() && detail::InlineDepth() < detail::kMaxInlineDepth)   // ② 无积压 + 深度未超限
+    && detail::ShouldInline(kAffinityChain, m_pExec->Handle(), /* bRequireIdle = */ true)  // ② 无积压 + 深度未超限
 {
     ++detail::InlineDepth();
-    Resume();                 // 在当前线程直接继续（省一次入队 + 唤醒）
+    Resume();  // 在当前线程直接继续（省一次入队 + 唤醒）
     --detail::InlineDepth();
     return;
 }
@@ -159,12 +181,14 @@ struct CAwaitAllGroup
 
 ```cpp
 CPromise<TContext> AsPromise() const
-{ return CPromise<TContext>::Make(m_pCore, m_pSegment); }
+{
+    return CPromise<TContext>::Make(m_pCore, m_pSegment);
+}
 
 CPromise<TContext> NewPromise(const ThenHandler& fnHandler, const CSourceLoc& loc) const
 {
     CPromise<TContext> promise = CPromise<TContext>::Make(m_pCore, std::shared_ptr<detail::CPromiseState>());
-    promise.Then(fnHandler, loc);       // 首个 Then 即首层（起点结果视为已兑现）
+    promise.Then(fnHandler, loc);  // 首个 Then 即首层（起点结果视为已兑现）
     return promise;
 }
 ```

@@ -10,7 +10,7 @@
 | JS | 本框架 |
 | --- | --- |
 | `new Promise((resolve, reject) => {...})` | `exec.NewPromise(spCtx, 首层)` |
-| `new Promise` **由外部回调 settle** | `CPromise<Ctx>::New(exec, spCtx, executor)`（executor 里拿到 resolve / reject 句柄） |
+| `new Promise` **由外部回调 settle** | `exec.NewPromise(spCtx, executor)`（executor 里拿到 resolve / reject 句柄） |
 | `promise.then(onFulfilled)` | `p.Then(处理器)` |
 | `then` 的处理器**返回 promise**（flatten） | `p.ThenPromise(子 promise 工厂)` |
 | `then` 里**等另一个模块的 promise 并把数据取回来** | `p.ThenBridge(起子链, 搬数据)`（简写，等价下行两行） |
@@ -167,7 +167,7 @@ p2.Then(StepA).Then(StepB);
 | --- | --- | --- | --- |
 | 协程内 await（**推荐**） | `CO_AWAIT(NewPromise(StepSub))`、`CO_AWAIT(pChild->AsPromise())`、`CO_AWAIT(exec.NewPromise(spOther, StepX))` | 否（挂起让出线程） | 任何「等一段异步再往下走」的场合 |
 | 协程内并行 await | `CO_AWAIT_ALL(a, b, c)` | 否 | 多段异步并行 + 汇聚 |
-| **跨模块组合**（不用协程） | `p.ThenPromise(工厂)` + `CPromise<Ctx>::New(...)` | 否 | 调用**其他模块 / 另一套上下文**的异步函数，且要拿到完整结果 |
+| **跨模块组合**（不用协程） | `p.ThenPromise(工厂)` + `exec.NewPromise(spCtx, executor)` | 否 | 调用**其他模块 / 另一套上下文**的异步函数，且要拿到完整结果 |
 | 层内非阻塞嵌套 | 层里起子 promise，由它的 `OnSettled` 回调接着写上下文 / 起后续 | 否 | 层里「顺手起一段异步」，不关心何时回来 |
 | 层内 Post | `exec.Post(重活)` | 否 | fire-and-forget 重活下沉 |
 | 层内阻塞等待 | 层里 `sub.Await()` | **是**（占住一个 worker） | 仅当线程池还有空闲 worker（**单线程执行器必死锁**） |
@@ -223,7 +223,7 @@ exec.NewPromise(spCtx, [&exec, spSub](common::async::CPromiseResult up, const st
 }, ASYNC_LOC);
 ```
 
-### 6.3 跨模块组合：`ThenBridge`（推荐）/ `ThenPromise` + `CPromise::New`
+### 6.3 跨模块组合：`ThenBridge`（推荐）/ `ThenPromise` + `exec.NewPromise(spCtx, executor)`
 
 场景：模块 A 的业务流程要调「**模块 B（另一套上下文类型）**」的异步函数，
 且模块 A 的调用方希望拿到的 promise 反映**含 B 在内的完整结果**。
@@ -265,7 +265,7 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
 - 需要因业务规则拒绝（如「库存不足」）时，请在**桥接之后的层**里 `return CPromiseResult::Reject(码)`，
   不要塞进 `fnApply`（它没有返回值，也不该做业务分支）。
 
-#### 等价的手写版：`ThenPromise` + `CPromise::New`（`ThenBridge` 内部就是这两步）
+#### 等价的手写版：`ThenPromise` + `exec.NewPromise(spCtx, executor)`（`ThenBridge` 内部就是这两步）
 
 两步写出来就是 JS 的组合方式：
 
@@ -273,8 +273,7 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
 // ① 桥接：new Promise((resolve, reject) => ...) —— 由模块 B 的完成回调 settle
 common::async::CPromise<CMyContext> BridgeQueryOther(const CDeps& deps, const std::shared_ptr<CMyContext>& spCtx)
 {
-    return common::async::CPromise<CMyContext>::New(*deps.spExec, spCtx,
-                                                    [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
+    return deps.spExec->NewPromise(spCtx, [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
     {
         deps.spOther
             ->QueryAsync(spCtx->spOtherOp)  // 模块 B 的 promise（另一套上下文）
@@ -285,7 +284,7 @@ common::async::CPromise<CMyContext> BridgeQueryOther(const CDeps& deps, const st
             {
                 fnReject(码);
                 return;
-            }                                        // 跨模块拒绝码 → 业务码
+            }  // 跨模块拒绝码 → 业务码
             spCtx->nRows = spCtx->spOtherOp->nRows;  // 取回数据
             fnResolve();
         });
@@ -315,7 +314,7 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
   —— 被调模块 settle 本链时，这一层会被投递回本模块执行器（同执行器内仍然就地内联，不多花一次入队）。
   所以回调里可以直接改本模块状态，无需再显式 `exec.Post(...)`（想显式强制也仍然可用）；
   但 **`OnSettled` 通知不迁移**：它仍在结算线程（= 被调模块线程）上触发，只对「层」做亲和；
-  `CPromise::New` 的 executor 是「发起」语义，仍在调用线程上同步执行。
+  `exec.NewPromise(spCtx, executor)` 的 executor 是「发起」语义，仍在调用线程上同步执行。
   背景与实测：见 [async-cross-module-findings.md](async-cross-module-findings.md)；
 - **`OnSettled` 保证送达**（2026-09-11 框架修复）：子 promise 已 settled 且它的执行器不可用
   （被调模块已停止 / 拒绝投递）时，通知改为在**调用线程**上就地执行 —— 调用方**不需要**检查返回值，
@@ -323,11 +322,11 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
   注意「层」的语义不变：`Then` / `Catch` / `Finally` 在同样情况下仍以 `kStopped` 收口
   （停了的执行器不再跑新层）。背景见 [async-cross-module-findings.md](async-cross-module-findings.md)；
 - 子 promise 可以是**任意 promise**：同一 `TContext` 的 then 链**直接返回**就会被 adopt（无需桥接）；
-  跨上下文才需要 `CPromise::New` 桥接（本节写法）。内层链被拒绝时，拒绝码会作为本层拒绝
+  跨上下文才需要 `exec.NewPromise(spCtx, executor)` 桥接（本节写法）。内层链被拒绝时，拒绝码会作为本层拒绝
   沿**外层链**透传（外层后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
 - `ThenPromise` 的语义与 `Then` 一致（上层被拒绝则本层不执行），差别是**本层等子 promise**：
   子 promise 兑现 → 本层兑现；子 promise 被拒绝 → 本层以**同一拒绝码**被拒绝（`Catch` / `Finally` 仍会执行）；
-- `CPromise::New` 的 executor **立即（同步）执行**（与 JS 一致），只应做「发起 + 登记回调」，
+- `exec.NewPromise(spCtx, executor)` 的 executor **立即（同步）执行**（与 JS 一致），只应做「发起 + 登记回调」，
   由回调调 `fnResolve()` / `fnReject(码)`；
 - 桥接处是**唯一**做「跨模块拒绝码 → 业务码」语义转换的地方（例如把数据访问层的
   `kDbRowNotFound` 归一化成「兑现 + bFound=false」，把 `kException` 映射成业务码）；
@@ -446,7 +445,6 @@ common::async::SetDiagnosticHandler([](const char*)
 common::async::CAsyncExecutor exec(4);   // 4 个工作线程
 exec.Start();                            // 启动（未启动时起 promise 立即被拒绝 kStopped）
 exec.Post([]() { /* 无返回值任务 */ });  // fire-and-forget（返回是否提交成功）
-exec.IsIdle();                           // 队列是否为空（协程内联续接判断用）
 exec.Stop();                             // 停止并等待已投递任务完成
 ```
 
@@ -625,7 +623,7 @@ common::async::CPromise<Ctx> p =
 | `OnSuccess / OnNone` | `Then` / `Catch`（统一用 `CPromiseResult` 判断） |
 | `Get()` | `Await()` |
 | `NOTHROW_LOC` | `ASYNC_LOC` |
-| flatMap（层返回 `CTask`） | 同上下文：`ThenPromise`（处理器返回 promise，框架自动等）；跨上下文：`CPromise::New` 桥接（见 6.3 / 协程文档） |
+| flatMap（层返回 `CTask`） | 同上下文：`ThenPromise`（处理器返回 promise，框架自动等）；跨上下文：`exec.NewPromise(spCtx, executor)` 桥接（见 6.3 / 协程文档） |
 
 ## 14. 测试与示例
 

@@ -1133,8 +1133,9 @@ TEST(Promise_BridgeForeignPromise)
                 [&exec, spForeign](const std::shared_ptr<CTestContext>& spCtxSelf)
                 {
                     // new Promise：由「别的模块」的完成回调兑现 / 拒绝本 promise（非阻塞桥接）。
-                    return common::async::CPromise<CTestContext>::New(
-                        exec, spCtxSelf,
+                    return exec.NewPromise(
+                        spCtxSelf,
+
                         [spForeign, spCtxSelf](const common::async::CPromise<CTestContext>::ResolveFn& fnResolve,
                             const common::async::CPromise<CTestContext>::RejectFn& fnReject)
                         {
@@ -1179,8 +1180,9 @@ TEST(Promise_BridgeForeignRejected)
             .ThenPromise(
                 [&exec, spForeign](const std::shared_ptr<CTestContext>& spCtxSelf)
                 {
-                    return common::async::CPromise<CTestContext>::New(
-                        exec, spCtxSelf,
+                    return exec.NewPromise(
+                        spCtxSelf,
+
                         [spForeign](const common::async::CPromise<CTestContext>::ResolveFn& fnResolve,
                             const common::async::CPromise<CTestContext>::RejectFn& fnReject)
                         {

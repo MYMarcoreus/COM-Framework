@@ -115,7 +115,7 @@ else if (!PostToHandle(pCore->Handle(), std::move(fnRun)))
 }
 
 // Common/Async/Coroutine.h：协程续跑（ResumeInline）用同一判定
-if (m_pExec->IsInExecutorThread() && m_pExec->IsIdle() && detail::InlineDepth() < detail::kMaxInlineDepth)
+if (detail::ShouldInline(detail::kAffinityChain, m_pExec->Handle(), true))
 {
     Resume();
 }
@@ -132,7 +132,7 @@ else
 - 代价：每次跨执行器的续接多一次入队 + 唤醒（微秒级）；同执行器内仍完全内联，不受影响；
   内联深度也只在同一执行器线程内累加，跳模块不会涨栈；
 - 边界（**亲和只作用于"层"**）：`OnSettled` 是通知 → 仍在**结算线程**（跨模块时=被调模块线程）上触发；
-  `CPromise::New` 的 executor 是"发起"语义 → 仍在调用线程上同步执行；`Await()` 仍占住调用线程；
+  `exec.NewPromise(spCtx, executor)` 的 executor 是"发起"语义 → 仍在调用线程上同步执行；`Await()` 仍占住调用线程；
 - 验收：`Tests/test_async_affinity.cpp`（5 例：0 延迟 / 慢被调 / 50 轮往返 / 协程跨模块 await /
   4 条并发链），以及被改紧的原极限用例（`ModuleStress_*`）。
 
@@ -197,7 +197,7 @@ promiseStock.OnSettled([...](common::async::CPromiseResult result) { /* 回调 *
 2. 调用方紧接着 `OnSettled(...)`，此时子 promise **已经 settled** → `CPromiseState::AddHandler` 走路径 ②
    → `PostToHandle(pHandle, ...)` 用的是**被调模块的执行器**（已停止）→ 返回 `false`，
    **回调永远不会执行**；
-3. 桥接层（`CPromise::New` 出来的那一层）**没有任何人去 settle 它** → 永久 pending；
+3. 桥接层（`exec.NewPromise(spCtx, executor)` 出来的那一层）**没有任何人去 settle 它** → 永久 pending；
 4. 上层 `Await()` 阻塞在 `CPromiseState::Await` 的条件变量上，`m_cv.wait(...)` 永不唤醒 → **死等**。
 
 修复前 `OnSettled` 的文档就是这么写的（"返回 `false`：本层已 settled 但执行器不可用，通知不执行"），

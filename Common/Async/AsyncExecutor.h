@@ -86,6 +86,104 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
     return pHandle != nullptr && common::thread::CThreadPool::IsInPoolThread(pHandle->m_pPool.get());
 }
 
+/// @brief 层处理器的执行线程偏好（线程亲和，默认 `kAffinityChain`）。
+///
+/// 属于**调度**（跑在哪条线程上），所以归执行器侧；`HandlerMode`（then / catch / finally）
+/// 描述的是「层语义」，归 promise 侧。
+enum HandlerAffinity
+{
+    kAffinityChain = 0,  ///< 默认：本链执行器线程（同执行器内联；跨执行器投递回本链执行器）。
+    kAffinityInline = 1,  ///< 就地：在「结算本层的那条线程」上执行（不投递，不要求线程亲和）。
+    kAffinityExecutor = 2  ///< 指定执行器：在给定执行器线程上执行（同线程内联，否则投递）。
+};
+
+/// @brief 级联内联深度（线程局部）：链逐层级联时最多连续内联多少层。
+///
+/// 超限则改为投递执行，避免超长链（数千层）在递归中爆栈。
+const int kMaxInlineDepth = 64;
+
+/// @brief 当前线程的级联内联深度。
+inline int& InlineDepth()
+{
+    static thread_local int s_nInlineDepth = 0;
+    return s_nInlineDepth;
+}
+
+/// @brief 内联深度的 RAII 守卫（构造 +1，析构 -1）。
+///
+/// 三处「就地内联」（层处理器 / 通知就地送达 / 协程续跑）都要配对增减；
+/// 用守卫可以避免异常或提前 `return` 漏减（漏减会让后续层被多投递，且会累积）。
+struct CInlineGuard
+{
+    CInlineGuard()
+    {
+        ++InlineDepth();
+    }
+
+    ~CInlineGuard()
+    {
+        --InlineDepth();
+    }
+
+    CInlineGuard(const CInlineGuard&) = delete;
+    CInlineGuard& operator=(const CInlineGuard&) = delete;
+};
+
+/// @brief 解析本层实际使用的执行器句柄（亲和三档）。
+///
+/// @param eAffinity 亲和三档（`kAffinityChain` / `kAffinityInline` / `kAffinityExecutor`）。
+/// @param pTarget 调用方指定的执行器（仅 `kAffinityExecutor` 且非空时生效）。
+/// @param pChainHandle 本链执行器句柄（默认值）。
+/// @return 本层应使用的执行器句柄。
+inline const std::shared_ptr<CExecutorHandle>& ResolveExecHandle(HandlerAffinity eAffinity,
+    const std::shared_ptr<CExecutorHandle>& pTarget, const std::shared_ptr<CExecutorHandle>& pChainHandle)
+{
+    return (eAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pChainHandle;
+}
+
+/// @brief 是否应当**就地内联**（不投递、在当前线程上接着跑）。
+///
+/// 「就地还是投递」的唯一判定处（promise 的层派发与协程的续跑共用）：
+///  - `kAffinityInline`：无条件就地（在结算线程上跑）；
+///  - 其余档位：仅当已在目标执行器线程上时就地（省一次入队 + 保序）；
+///  - 连续内联超过 `kMaxInlineDepth`：内联（防超长链爆栈）；
+///  - `bRequireIdle`：还要求线程池无积压（协程续跑用 —— 有积压时投递，保住并行度）。
+///
+/// @param eAffinity 亲和三档。
+/// @param pExec 目标执行器句柄（调用方已用 `ResolveExecHandle` 解析好）。
+/// @param bRequireIdle 是否要求线程池无积压才内联。
+/// @return true = 调用方应当直接执行任务体；false = 应当投递。
+inline bool ShouldInline(
+    HandlerAffinity eAffinity, const std::shared_ptr<CExecutorHandle>& pExec, bool bRequireIdle = false)
+{
+    const bool bInline = (eAffinity == kAffinityInline) || IsInExecutorThread(pExec);
+    if (!bInline || InlineDepth() >= kMaxInlineDepth)
+    {
+        return false;
+    }
+    return !bRequireIdle || (pExec != nullptr && pExec->m_pPool != nullptr && pExec->m_pPool->PendingCount() == 0);
+}
+
+/// @brief 按线程亲和派发一个任务体：就地内联 / 投递执行器。
+///
+/// 判定见 `ShouldInline`（就地）与 `PostToHandle`（投递）。
+///
+/// @param eAffinity 亲和三档。
+/// @param pExec 目标执行器句柄（调用方已用 `ResolveExecHandle` 解析好）。
+/// @param fnTask 任务体（按值接收：就地执行或移动投递）。
+/// @return true 已就地执行 / 已投递；false 执行器不可用（调用方以 `kStopped` 收口本层）。
+inline bool DispatchInlineOrPost(
+    HandlerAffinity eAffinity, const std::shared_ptr<CExecutorHandle>& pExec, std::function<void()> fnTask)
+{
+    if (ShouldInline(eAffinity, pExec))
+    {
+        CInlineGuard guard;  // 深度 +1 / -1 成对（异常 / 提前 return 也不漏减）。
+        fnTask();
+        return true;
+    }
+    return PostToHandle(pExec, std::move(fnTask));
+}
+
 }  // namespace detail
 
 /// @brief 诊断处理器：接收一句「框架检测到的用法问题」描述（不带换行）。
@@ -130,12 +228,6 @@ public:
     // 是否已停止（停止后拒绝新投递）。
     bool IsStopped() const;
 
-    // 当前线程是否本执行器的工作线程（线程亲和判定）。
-    bool IsInExecutorThread() const
-    {
-        return detail::IsInExecutorThread(m_pHandle);
-    }
-
     //================ Post ================
 
     // 投递无返回值任务（fire-and-forget）。
@@ -147,6 +239,11 @@ public:
     template <typename TContext>
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
         typename CPromise<TContext>::ThenHandler fnHandler, const CSourceLoc& loc = CSourceLoc());
+
+    // 起 promise（对齐 JS `new Promise((resolve, reject) => ...)`）：由 fnExecutor 内部的 resolve / reject 兑现。
+    template <typename TContext>
+    CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
+        const typename CPromise<TContext>::PromiseExecutor& fnExecutor, const CSourceLoc& loc = CSourceLoc());
 
     // 建一条「延迟启动」的 promise 链（先挂完所有层，再 `Start()`；上下文可为空 → 懒创建）。
     template <typename TContext>
@@ -185,8 +282,11 @@ private:
     template <typename TContext>
     friend class CCoroutine;  // 取执行器句柄 + 空闲判定（子 promise 投递 / 内联续接）。
 
-    // 线程池是否空闲（无排队任务；协程内联续接判断用）。
-    bool IsIdle() const;
+    // 当前线程是否本执行器的工作线程（线程亲和判定；框架内部用）。
+    bool IsInExecutorThread() const
+    {
+        return detail::IsInExecutorThread(m_pHandle);
+    }
 
     // 执行器句柄（promise / 协程持有，生命周期加固用）。
     const std::shared_ptr<detail::CExecutorHandle>& Handle() const
@@ -421,7 +521,7 @@ void AppendGatherBindings(std::vector<std::function<void(const std::shared_ptr<C
 /// 参数可为单个子 promise（`CPromise<任意上下文>`），也可为 `std::vector<CPromise<同上下文>>`
 /// （数量运行时确定时用），两者可混用 —— 展开后按参数顺序登记。
 ///
-/// 聚合链的当前层用 `CPromise::New` 造（由外部 settle）：executor 里只做「逐个登记子 promise」，
+/// 聚合链的当前层用 `exec.NewPromise(spCtx, executor)` 造（由外部 settle）：executor 里只做「逐个登记子 promise」，
 /// 不做重活、不阻塞 —— 子 promise 落在哪个线程都不会占住聚合链的线程。
 ///
 /// 一处子 promise 都没有时直接在此收口（对齐 JS）：`all` / `allSettled` 立即兑现；
@@ -449,29 +549,32 @@ CPromise<TContext> Gather(
     {
         // 一处子 promise 都没有：按策略直接收口（语义只有 `ResolveEmptyGather` 一处）。
         const CPromiseResult emptyResult = ResolveEmptyGather(ePolicy);
-        return CPromise<TContext>::New(executor, spContext,
-            [emptyResult](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
-            {
-                if (emptyResult.IsFulfilled())
+        return executor.NewPromise(spContext,
+            typename CPromise<TContext>::PromiseExecutor(
+                [emptyResult](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
                 {
-                    fnResolve();
-                    return;
-                }
-                fnReject(emptyResult.Code());
-            });
+                    if (emptyResult.IsFulfilled())
+                    {
+                        fnResolve();
+                        return;
+                    }
+                    fnReject(emptyResult.Code());
+                }));
     }
 
     const int nTotal = static_cast<int>(vecBindings.size());
-    return CPromise<TContext>::New(executor, spContext,
-        [ePolicy, nTotal, vecBindings](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
-        {
-            const std::shared_ptr<CGatherState> pGather =
-                std::make_shared<CGatherState>(ePolicy, nTotal, fnResolve, fnReject);
-            for (size_t i = 0; i < vecBindings.size(); ++i)
-            {
-                vecBindings[i](pGather);  // 登记动作恒非空。
-            }
-        });
+    return executor.NewPromise(
+        spContext, typename CPromise<TContext>::PromiseExecutor(
+                       [ePolicy, nTotal, vecBindings](
+                           const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
+                       {
+                           const std::shared_ptr<CGatherState> pGather =
+                               std::make_shared<CGatherState>(ePolicy, nTotal, fnResolve, fnReject);
+                           for (size_t i = 0; i < vecBindings.size(); ++i)
+                           {
+                               vecBindings[i](pGather);  // 登记动作恒非空。
+                           }
+                       }));
 }
 
 }  // namespace detail
