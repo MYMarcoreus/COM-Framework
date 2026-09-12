@@ -526,7 +526,7 @@ TEST(Smoke_FirstLayerCatchFinally)
 
     // 独立的 promise：Catch 直接作首层（起点兑现 → 不执行）
     std::shared_ptr<CSmokeCtx> spCtx2 = std::make_shared<CSmokeCtx>();
-    common::async::CPromise<CSmokeCtx> p2(exec, spCtx2);
+    common::async::CPromise<CSmokeCtx> p2 = exec.BuildPromise<CSmokeCtx>(spCtx2);
     const common::async::CPromiseResult r2 = p2.Catch(&StepCatchRecover, ASYNC_LOC).Await();
     ASSERT_TRUE(r2.IsFulfilled());
     ASSERT_EQ(spCtx2->nCatchRuns, 0);

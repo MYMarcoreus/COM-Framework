@@ -9,7 +9,7 @@
 
 | JS | 本框架 |
 | --- | --- |
-| `new Promise((resolve, reject) => {...})` | `exec.NewPromise(spCtx, 首层)` 或 `CPromise<Ctx> p(exec, spCtx, 首层)` |
+| `new Promise((resolve, reject) => {...})` | `exec.NewPromise(spCtx, 首层)` |
 | `new Promise` **由外部回调 settle** | `CPromise<Ctx>::New(exec, spCtx, executor)`（executor 里拿到 resolve / reject 句柄） |
 | `promise.then(onFulfilled)` | `p.Then(处理器)` |
 | `then` 的处理器**返回 promise**（flatten） | `p.ThenPromise(子 promise 工厂)` |
@@ -144,11 +144,11 @@ auto t2 = exec.NewPromise(spCtx, StepLoad)
 // 方式 A：外部准备数据后注入
 std::shared_ptr<CMyContext> spCtx = std::make_shared<CMyContext>();
 spCtx->strRequestId = GetRequestId();
-common::async::CPromise<CMyContext> p(exec, spCtx);
+common::async::CPromise<CMyContext> p = exec.BuildPromise<CMyContext>(spCtx);
 
 // 方式 B：promise 内部懒创建（首次 GetContext() 时构造，恒非空）
-common::async::CPromise<CMyContext> p2(exec);
-p2.GetContext()->nRetry = 3;  // 起 promise 前先填数据
+common::async::CPromise<CMyContext> p2 = exec.BuildPromise<CMyContext>();
+p2.GetContext()->nRetry = 3;  // 挂层前先填数据
 p2.Then(StepA).Then(StepB);
 ```
 
@@ -598,9 +598,9 @@ common::async::CPromise<Ctx> b2 = head.Then(StepC, ASYNC_LOC);
 common::async::CPromise<Ctx> tAll = exec.WhenAll(spCtx, b1, b2).Then(StepGather, ASYNC_LOC);
 common::async::CPromiseResult rAll = exec.WhenAllSettled(spCtx, b1, b2).AwaitFor(500);
 
-// 惰性上下文 / 外部注入
-common::async::CPromise<Ctx> c1(exec);         // 链内创建
-common::async::CPromise<Ctx> c2(exec, spCtx);  // 外部注入
+// 惰性上下文 / 外部注入（延迟链：取上下文 → 挂层 → Start）
+common::async::CPromise<Ctx> c1 = exec.BuildPromise<Ctx>();       // 链内懒创建
+common::async::CPromise<Ctx> c2 = exec.BuildPromise<Ctx>(spCtx);  // 外部注入
 
 // 跨模块组合（纯异步、零阻塞）：桥接 + then-promise 接入（详见 6.3）
 auto fnCreateOther = [deps](const std::shared_ptr<Ctx>& sp)

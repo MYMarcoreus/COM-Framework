@@ -447,8 +447,8 @@ void DemoContextCreation()
     common::async::CAsyncExecutor exec(2);
     ASSERT(exec.Start());
 
-    // 9.1 链内懒创建：先取上下文填初始数据，再起 promise
-    common::async::CPromise<CDemoContext> chain(exec);
+    // 9.1 链内懒创建：先取上下文填初始数据，再挂层
+    common::async::CPromise<CDemoContext> chain = exec.BuildPromise<CDemoContext>();
     ASSERT(chain.GetContext() != nullptr);  // 懒创建，恒非空
     chain.GetContext()->nBase = 20;
     common::async::CPromise<CDemoContext> tail = chain.Then(&StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC);
@@ -458,7 +458,7 @@ void DemoContextCreation()
     // 9.2 外部注入：链内所有层共用外部实例（不做拷贝）
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     spCtx->nBase = 5;
-    common::async::CPromise<CDemoContext> chain2(exec, spCtx);
+    common::async::CPromise<CDemoContext> chain2 = exec.BuildPromise<CDemoContext>(spCtx);
     ASSERT(chain2.GetContext() == spCtx);
     ASSERT(chain2.Then(&StepScale, ASYNC_LOC).Await().IsFulfilled());
     ASSERT(spCtx->nScaled == 15);

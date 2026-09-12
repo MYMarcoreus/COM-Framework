@@ -36,7 +36,10 @@ namespace common {
 namespace async {
 
 template <typename TContext>
-class CPromise;  // 前置声明（NewPromise 返回 promise 句柄）。
+class CPromise;  // 前置声明（NewPromise / BuildPromise / WhenAll 返回 promise 句柄）。
+
+template <typename TContext>
+class CCoroutine;  // 前置声明（CoStart 返回协程句柄）。
 
 namespace detail {
 
@@ -127,9 +130,6 @@ public:
     // 是否已停止（停止后拒绝新投递）。
     bool IsStopped() const;
 
-    // 线程池是否空闲（无排队任务；协程内联续接判断用）。
-    bool IsIdle() const;
-
     // 当前线程是否本执行器的工作线程（线程亲和判定）。
     bool IsInExecutorThread() const
     {
@@ -148,9 +148,9 @@ public:
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
         typename CPromise<TContext>::ThenHandler fnHandler, const CSourceLoc& loc = CSourceLoc());
 
-    // 建一条「延迟启动」的 promise 链（先挂完所有层，再 `Start()`）。
+    // 建一条「延迟启动」的 promise 链（先挂完所有层，再 `Start()`；上下文可为空 → 懒创建）。
     template <typename TContext>
-    CPromise<TContext> BuildPromise(const std::shared_ptr<TContext>& spContext);
+    CPromise<TContext> BuildPromise(const std::shared_ptr<TContext>& spContext = std::shared_ptr<TContext>());
 
     //================ Combine ================
 
@@ -176,7 +176,17 @@ public:
     template <typename TCoroutine, typename... TArgs>
     std::shared_ptr<TCoroutine> CoStart(TArgs&&... args);
 
+private:
     //================ Internal ================
+
+    template <typename TContext>
+    friend class CPromise;  // 取执行器句柄（起链 / 逐层亲和 / 通知投递）。
+
+    template <typename TContext>
+    friend class CCoroutine;  // 取执行器句柄 + 空闲判定（子 promise 投递 / 内联续接）。
+
+    // 线程池是否空闲（无排队任务；协程内联续接判断用）。
+    bool IsIdle() const;
 
     // 执行器句柄（promise / 协程持有，生命周期加固用）。
     const std::shared_ptr<detail::CExecutorHandle>& Handle() const
@@ -184,7 +194,6 @@ public:
         return m_pHandle;
     }
 
-private:
     std::shared_ptr<detail::CExecutorHandle> m_pHandle;  ///< 执行器句柄（promise / 协程共享）。
     size_t m_nThreadCount;                               ///< 工作线程数。
 };
@@ -222,11 +231,11 @@ enum GatherPolicy
 /// `all` / `allSettled` 视为成功（没有要等的东西）；`race` / `any` 不可能有结果 →
 /// 以 `kRejected` 拒绝（否则聚合链永久 pending，`Await()` 会死等）。
 ///
-/// @param nPolicy 策略（GatherPolicy 四档）。
+/// @param ePolicy 策略（GatherPolicy 四档）。
 /// @return 空集合应立即采用的最终结果。
-inline CPromiseResult ResolveEmptyGather(int nPolicy)
+inline CPromiseResult ResolveEmptyGather(GatherPolicy ePolicy)
 {
-    return (nPolicy == kGatherAll || nPolicy == kGatherAllSettled) ? CPromiseResult::Resolve()
+    return (ePolicy == kGatherAll || ePolicy == kGatherAllSettled) ? CPromiseResult::Resolve()
                                                                    : CPromiseResult::Reject(kRejected);
 }
 
@@ -241,13 +250,13 @@ class CGatherState
 public:
     /// @brief 创建聚合状态。
     ///
-    /// @param nPolicy 策略（GatherPolicy 四档）。
+    /// @param ePolicy 策略（GatherPolicy 四档）。
     /// @param nTotal 子 promise 总数（> 0；空集合由调用方在收口前先处理）。
     /// @param fnResolve 兑现聚合链的当前层。
     /// @param fnReject 拒绝聚合链的当前层。
-    CGatherState(
-        int nPolicy, int nTotal, const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
-        : m_nPolicy(nPolicy),
+    CGatherState(GatherPolicy ePolicy, int nTotal, const std::function<void()>& fnResolve,
+        const std::function<void(int)>& fnReject)
+        : m_ePolicy(ePolicy),
           m_nPending(nTotal),
           m_bRejectSeen(false),
           m_bDone(false),
@@ -278,7 +287,7 @@ public:
                 m_nFirstRejectCode = result.Code();  // `any` 在全部拒绝时用它收口。
             }
 
-            switch (m_nPolicy)
+            switch (m_ePolicy)
             {
                 case kGatherAll:
                     // 任一拒绝 → 立即收口（及时失败）；全部兑现 → 才兑现。
@@ -337,7 +346,7 @@ public:
 
 private:
     std::mutex m_mutex;                   ///< 保护下面的计数（子 promise 在不同线程上落定）。
-    int m_nPolicy;                        ///< 策略（GatherPolicy 四档）。
+    GatherPolicy m_ePolicy;               ///< 策略（GatherPolicy 四档）。
     int m_nPending;                       ///< 尚未落定的子 promise 数。
     bool m_bRejectSeen;                   ///< 是否已见过拒绝（`any` 收口要用首个拒绝码）。
     bool m_bDone;                         ///< 聚合是否已收口（收口后忽略迟到的子 promise）。
@@ -425,12 +434,12 @@ void AppendGatherBindings(std::vector<std::function<void(const std::shared_ptr<C
 /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
 /// @param executor 聚合链的执行器。
 /// @param spContext 聚合 promise 的共享上下文。
-/// @param nPolicy 策略（GatherPolicy 四档）。
+/// @param ePolicy 策略（GatherPolicy 四档）。
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`。
 /// @return 聚合 promise 句柄（pending；由子 promise 的落定驱动）。
 template <typename TContext, typename... TChild>
 CPromise<TContext> Gather(
-    CAsyncExecutor& executor, const std::shared_ptr<TContext>& spContext, int nPolicy, const TChild&... child)
+    CAsyncExecutor& executor, const std::shared_ptr<TContext>& spContext, GatherPolicy ePolicy, const TChild&... child)
 {
     std::vector<std::function<void(const std::shared_ptr<CGatherState>&)> > vecBindings;
     const int nUnused[] = {0, (AppendGatherBindings(vecBindings, child), 0)...};
@@ -439,7 +448,7 @@ CPromise<TContext> Gather(
     if (vecBindings.empty())
     {
         // 一处子 promise 都没有：按策略直接收口（语义只有 `ResolveEmptyGather` 一处）。
-        const CPromiseResult emptyResult = ResolveEmptyGather(nPolicy);
+        const CPromiseResult emptyResult = ResolveEmptyGather(ePolicy);
         return CPromise<TContext>::New(executor, spContext,
             [emptyResult](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
             {
@@ -454,10 +463,10 @@ CPromise<TContext> Gather(
 
     const int nTotal = static_cast<int>(vecBindings.size());
     return CPromise<TContext>::New(executor, spContext,
-        [nPolicy, nTotal, vecBindings](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
+        [ePolicy, nTotal, vecBindings](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
         {
             const std::shared_ptr<CGatherState> pGather =
-                std::make_shared<CGatherState>(nPolicy, nTotal, fnResolve, fnReject);
+                std::make_shared<CGatherState>(ePolicy, nTotal, fnResolve, fnReject);
             for (size_t i = 0; i < vecBindings.size(); ++i)
             {
                 vecBindings[i](pGather);  // 登记动作恒非空。

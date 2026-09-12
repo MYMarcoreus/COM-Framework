@@ -190,8 +190,8 @@ TEST(Promise_LazyContext)
     common::async::CAsyncExecutor exec(2);
     ASSERT_TRUE(exec.Start());
 
-    common::async::CPromise<CTestContext> chain(exec);
-    ASSERT_TRUE(chain.GetContext() != nullptr);  // 懒创建，恒非空
+    common::async::CPromise<CTestContext> chain = exec.BuildPromise<CTestContext>();  // 上下文懒创建
+    ASSERT_TRUE(chain.GetContext() != nullptr);                                       // 懒创建，恒非空
     chain.GetContext()->nValue = 100;
 
     common::async::CPromise<CTestContext> tail = chain.Then(&StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC);
@@ -207,7 +207,7 @@ TEST(Promise_ExternalContext)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
-    common::async::CPromise<CTestContext> chain(exec, spCtx);
+    common::async::CPromise<CTestContext> chain = exec.BuildPromise<CTestContext>(spCtx);
     ASSERT_TRUE(chain.GetContext() == spCtx);  // 同一实例，不做拷贝
 
     ASSERT_TRUE(chain.Then(&StepAdd10, ASYNC_LOC).Await().IsFulfilled());
@@ -840,7 +840,7 @@ TEST(Coro_NotStarted)
     ASSERT_EQ(r.Code(), static_cast<int>(common::async::kStopped));
 }
 
-/// @brief 协程可重复启动（Reset 后重新执行）。
+/// @brief 协程可重复启动（每次 CoStart 都是一个新对象，复用同一上下文）。
 TEST(Coro_Restart)
 {
     common::async::CAsyncExecutor exec(2);
@@ -851,8 +851,9 @@ TEST(Coro_Restart)
     ASSERT_TRUE(pCoro->Await().IsFulfilled());
     ASSERT_EQ(spCtx->nValue, 11);
 
-    pCoro->Start(&exec);  // 复用同一协程对象再次执行
-    ASSERT_TRUE(pCoro->Await().IsFulfilled());
+    // 再次启动：内部会先复位状态再投递首次执行（对外只有 CoStart 一条启动路径）。
+    std::shared_ptr<CSequentialCoro> pCoroAgain = exec.CoStart<CSequentialCoro>(spCtx);
+    ASSERT_TRUE(pCoroAgain->Await().IsFulfilled());
     ASSERT_EQ(spCtx->nValue, 22);
     exec.Stop();
 }
@@ -937,14 +938,14 @@ TEST(Promise_FinallyKeepsResult)
     exec.Stop();
 }
 
-/// @brief 构造即起链：CPromise(exec, spCtx, 首层) 等价 new Promise(executor)。
-TEST(Promise_ConstructorStarts)
+/// @brief 起链即投递首层：exec.NewPromise(spCtx, 首层) 等价 JS new Promise(executor)。
+TEST(Promise_NewPromiseStarts)
 {
     common::async::CAsyncExecutor exec(2);
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
-    common::async::CPromise<CTestContext> p(exec, spCtx, &StepAdd1, ASYNC_LOC);  // 构造即投递首层
+    common::async::CPromise<CTestContext> p = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC);  // 起链即投递首层
     ASSERT_EQ(p.Await().Code(), static_cast<int>(common::async::kFulfilled));
     ASSERT_EQ(spCtx->nValue, 1);
 

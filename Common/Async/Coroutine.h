@@ -167,32 +167,6 @@ public:
         return promise;
     }
 
-    //================ Startup ================
-
-    /// @brief 在指定执行器上启动协程（绑定 + 复位 + 投递首次执行）。
-    ///
-    /// 由 CAsyncExecutor::CoStart 调用；执行器须存活于协程生命周期
-    /// （未启动 / 已停止时协程立即以 kStopped 被拒绝）。
-    ///
-    /// @param pExec 执行器指针。
-    void Start(CAsyncExecutor* pExec)
-    {
-        BindExecutor(pExec);
-        Reset();
-        PostResume();
-    }
-
-    /// @brief 注入自持弱引用（CoStart 调用；Resume / 回调生命周期加固）。
-    ///
-    /// 使已投递的 Resume 与 await 回调捕获强引用：调用方提前释放 shared_ptr
-    /// 后，协程对象仍存活到最后一个 Resume 执行完毕（不悬垂）。
-    ///
-    /// @param sp 协程对象的 shared_ptr（CoStart 返回的那个）。
-    void SetSelf(const std::shared_ptr<void>& sp)
-    {
-        m_wpSelf = sp;
-    }
-
 protected:
     //================ Macro API ================
 
@@ -291,6 +265,32 @@ protected:
 private:
     //================ Internal ================
 
+    friend class CAsyncExecutor;  // Start / SetSelf（CoStart 启动路径）。
+
+    /// @brief 在指定执行器上启动协程（绑定 + 复位 + 投递首次执行）。
+    ///
+    /// 由 CAsyncExecutor::CoStart 调用；执行器须存活于协程生命周期
+    /// （未启动 / 已停止时协程立即以 kStopped 被拒绝）。
+    ///
+    /// @param pExec 执行器指针。
+    void Start(CAsyncExecutor* pExec)
+    {
+        BindExecutor(pExec);
+        Reset();
+        PostResume();
+    }
+
+    /// @brief 注入自持弱引用（CoStart 调用；Resume / 回调生命周期加固）。
+    ///
+    /// 使已投递的 Resume 与 await 回调捕获强引用：调用方提前释放 shared_ptr
+    /// 后，协程对象仍存活到最后一个 Resume 执行完毕（不悬垂）。
+    ///
+    /// @param sp 协程对象的 shared_ptr（CoStart 返回的那个）。
+    void SetSelf(const std::shared_ptr<void>& sp)
+    {
+        m_wpSelf = sp;
+    }
+
     /// @brief 协程热状态：步号 / 终止标志 / 拒绝码（紧邻打包，减少跨线程迁移的 cache line 数）。
     struct CHotState
     {
@@ -314,7 +314,7 @@ private:
         }
     }
 
-    /// @brief 复位状态（Start 调用；同一协程对象可重新 CoStart）。
+    /// @brief 复位状态（Start 调用；启动前清空上一次运行的状态）。
     void Reset()
     {
         m_pSegment = std::make_shared<detail::CPromiseState>();
