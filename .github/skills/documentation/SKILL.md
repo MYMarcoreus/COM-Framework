@@ -86,6 +86,40 @@ bool Initialize();
 
 > **函数声明处只保留简单说明，函数定义处提供完整 Doxygen 文档。**
 
+**header-only 代码（模板成员 / 类内内联定义）的同一规则**：声明与定义在同一处，完整 Doxygen
+只写**定义处那一份**，声明处写一行 `//` 简单说明即可，不要两处各写一份（两份会漂移）。
+非模板成员的定义在 `.cpp` 里时，头文件只留一行 `//` 简单说明。
+
+```cpp
+// 头文件里的声明（非模板成员，完整文档在 .cpp）
+class CAsyncExecutor
+{
+public:
+    // 启动工作线程。
+    bool Start();
+
+    // 起 promise（等价 JS new Promise(executor)）：创建 promise 并投递首层。
+    template <typename TContext>
+    CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
+        typename CPromise<TContext>::ThenHandler fnHandler, const CSourceLoc& loc = CSourceLoc());
+};
+```
+
+```cpp
+// 同一文件末尾的定义（模板成员）：完整 Doxygen 写在这里
+/// @brief 起 promise（等价 JS `new Promise(executor)`）：创建 promise 并投递首层。
+///
+/// @tparam TContext 上下文类型（由 spContext 推导）。
+/// @param spContext promise 的共享上下文（所有层共用同一实例）。
+/// @param fnHandler 首层处理器（固定签名）。
+/// @return 指向首层的 promise 句柄。
+template <typename TContext>
+CPromise<TContext> CAsyncExecutor::NewPromise(...)
+{
+    ...
+}
+```
+
 ---
 
 # 4. 函数声明处的注释

@@ -95,8 +95,12 @@ template <typename TContext>
 class CCoroutine
 {
 public:
+    //================ Types ================
+
     /// 处理器类型（与 promise 一致：固定签名）。
     using ThenHandler = detail::ThenHandler<TContext>;
+
+    //================ Lifecycle ================
 
     /// @brief 创建协程（未绑定执行器；经 CAsyncExecutor::CoStart 启动）。
     ///
@@ -120,6 +124,8 @@ public:
 
     /// @brief 协程体（派生类实现，用 CO_BEGIN / ... / CO_END 宏）。
     virtual void Run() = 0;
+
+    //================ Context & Await ================
 
     /// @brief await：阻塞获取协程最终结果（JS await 的阻塞版，不抛异常）。
     ///
@@ -161,6 +167,8 @@ public:
         return promise;
     }
 
+    //================ Startup ================
+
     /// @brief 在指定执行器上启动协程（绑定 + 复位 + 投递首次执行）。
     ///
     /// 由 CAsyncExecutor::CoStart 调用；执行器须存活于协程生命周期
@@ -186,7 +194,7 @@ public:
     }
 
 protected:
-    // ---------------- 宏接口 ----------------
+    //================ Macro API ================
 
     /// @brief 当前恢复点（状态机步号；CO_BEGIN 的 switch 用）。
     int Step() const
@@ -281,6 +289,8 @@ protected:
     }
 
 private:
+    //================ Internal ================
+
     /// @brief 协程热状态：步号 / 终止标志 / 拒绝码（紧邻打包，减少跨线程迁移的 cache line 数）。
     struct CHotState
     {

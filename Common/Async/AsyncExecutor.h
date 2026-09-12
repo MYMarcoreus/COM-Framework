@@ -91,15 +91,10 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
 /// 未落定的层、在无效 promise 上挂层等）。应用可接日志 / 指标；测试可接断言。
 using DiagnosticHandler = std::function<void(const char* strWhat)>;
 
-/// @brief 设置诊断处理器（线程安全）。
-///
-/// @param fnHandler 处理器；传 `nullptr` 恢复默认（debug 构建打印到 stderr，发布构建忽略）；
-///                  想完全关闭传一个空 lambda。
+// 设置诊断处理器（传 `nullptr` 恢复默认；完整说明见 AsyncExecutor.cpp）。
 void SetDiagnosticHandler(const DiagnosticHandler& fnHandler);
 
-/// @brief 报告一次诊断（框架内部用；未设处理器时按默认策略处理，不会抛异常）。
-///
-/// @param strWhat 问题描述（静态字符串，生命周期无要求）。
+// 报告一次诊断（框架内部用；未设处理器时按默认策略处理）。
 void ReportDiagnostic(const char* strWhat);
 
 /// @brief 异步执行器：工作线程池 + 投递入口。
@@ -108,177 +103,82 @@ void ReportDiagnostic(const char* strWhat);
 class CAsyncExecutor
 {
 public:
-    /// @brief 创建执行器。
-    ///
-    /// @param nThreadCount 工作线程数（默认 1）。
+    //================ Lifecycle ================
+
+    // 创建执行器（线程数默认 1）。
     explicit CAsyncExecutor(size_t nThreadCount = 1);
 
-    /// @brief 不可拷贝（拷贝会共享线程池，Stop 相互影响）。
+    // 不可拷贝（拷贝会共享线程池，Stop 相互影响）。
     CAsyncExecutor(const CAsyncExecutor&) = delete;
     CAsyncExecutor& operator=(const CAsyncExecutor&) = delete;
 
-    /// @brief 销毁执行器（停止线程池并等待已投递任务完成）。
+    // 销毁执行器（停止线程池并等待已投递任务完成）。
     ~CAsyncExecutor();
 
-    /// @brief 启动工作线程。
-    ///
-    /// @return true 启动成功；false 已启动或线程数为 0。
+    // 启动工作线程。
     bool Start();
 
-    /// @brief 停止并等待任务完成（优雅关闭）。
+    // 停止并等待任务完成（优雅关闭）。
     void Stop();
 
-    /// @brief 是否正在运行。
+    // 是否正在运行。
     bool IsRunning() const;
 
-    /// @brief 是否已停止（停止后拒绝新投递）。
+    // 是否已停止（停止后拒绝新投递）。
     bool IsStopped() const;
 
-    /// @brief 线程池是否空闲（无排队任务；协程内联续接判断用）。
+    // 线程池是否空闲（无排队任务；协程内联续接判断用）。
     bool IsIdle() const;
 
-    /// @brief 当前线程是否本执行器的工作线程（线程亲和判定）。
-    ///
-    /// 层处理器与协程续跑只在本执行器线程上就地执行，否则投递回本执行器。
-    ///
-    /// @return true 当前线程是本执行器的工作线程。
+    // 当前线程是否本执行器的工作线程（线程亲和判定）。
     bool IsInExecutorThread() const
     {
         return detail::IsInExecutorThread(m_pHandle);
     }
 
-    /// @brief 投递无返回值任务（fire-and-forget）。
-    ///
-    /// @param fnTask 任务函数（按值接收，移动投递避免拷贝）。
-    /// @return true 提交成功；false 执行器未启动 / 已停止。
+    //================ Post ================
+
+    // 投递无返回值任务（fire-and-forget）。
     bool Post(std::function<void()> fnTask);
 
-    /// @brief 起 promise（等价 JS `new Promise(executor)`）：创建 promise 并投递首层。
-    ///
-    /// 数据经共享上下文（spContext）在层间共享；层与层之间只传兑现 / 拒绝。
-    /// 首层在调用返回后异步执行，不在调用线程上执行。
-    ///
-    /// 需要「由外部回调兑现 / 拒绝」（把其他模块 / 回调式异步接进来）时用
-    /// `CPromise<TContext>::New(exec, spCtx, executor, loc)`（见 Promise.h）。
-    ///
-    /// @tparam TContext 上下文类型（由 spContext 推导）。
-    /// @param spContext promise 的共享上下文（所有层共用同一实例）。
-    /// @param fnHandler 首层处理器（固定签名）。
-    /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
-    /// @return 指向首层的 promise 句柄；执行器不可用时首层立即被拒绝（kStopped）。
+    //================ Chain ================
+
+    // 起 promise（等价 JS `new Promise(executor)`）：创建 promise 并投递首层。
     template <typename TContext>
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
         typename CPromise<TContext>::ThenHandler fnHandler, const CSourceLoc& loc = CSourceLoc());
 
-    /// @brief 建一条「延迟启动」的 promise 链（先挂完所有层，再 `Start()`）。
-    ///
-    /// 与 `NewPromise` 的差别：**追加层只登记，不投递**；`Start()`（或首次 `Await()`）后
-    /// 首层才投递执行。好处：
-    ///  - 构链期间不跑任何业务代码（可放心初始化上下文 / 挂完所有层）；
-    ///  - 所有层都在首层开跑前登记完毕 → 跨模块续接不再出现“补登记”的时序差异。
-    ///
-    /// 用法：
-    /// @code
-    /// auto p = exec.BuildPromise(spCtx, ASYNC_LOC).Then(StepA).ThenPromise(fnCallOther).Then(StepB);
-    /// p.Start();            // 此刻才开始跑（不调 Start 直接 Await 也行，会自动启动）
-    /// p.Await();
-    /// @endcode
-    ///
-    /// @tparam TContext 上下文类型（由 spContext 推导）。
-    /// @param spContext 共享上下文（所有层共用）。
-    /// @return 未启动的链句柄。
+    // 建一条「延迟启动」的 promise 链（先挂完所有层，再 `Start()`）。
     template <typename TContext>
     CPromise<TContext> BuildPromise(const std::shared_ptr<TContext>& spContext);
 
-    /// @brief 组合器（对齐 JS `Promise.all`）：等一组子 promise **全部兑现**；
-    ///        任一拒绝 → 立即以该拒绝码拒绝（其余分支继续跑完，结果被忽略）。
-    ///
-    /// 用途：并行分支 / 并行调用多个模块（子 promise **可跨上下文类型**），全部完成后继续本链。
-    /// 聚合 promise 只关心分支成败，**不传值**：数据请让各分支写进自己的共享上下文
-    /// （同上下文时共用一个实例即可）。
-    ///
-    /// 语义：
-    ///  - 全部兑现 → 聚合兑现；
-    ///  - **任一拒绝 → 立即以该拒绝码拒绝**（对齐 JS：及时失败；其余分支继续跑完，结果被忽略）；
-    ///  - 已落定的子 promise 直接计入；无效子 promise（未绑定执行器）视为已拒绝 `kStopped`；
-    ///  - 一处子 promise 都没给 → 立即兑现。
-    ///
-    /// @note 本执行器只用于**聚合 promise 自己的层**（`.Then(...)` 等）；各子 promise 仍跑在
-    ///       它们各自的执行器上。组合器只有这四个执行器入口（没有 `CPromise` 成员形态）；
-    ///       声明、实现与文档均在本文件（实现见文件末尾「组合器」一节）。
-    ///
-    /// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
-    /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
-    /// @param spContext 聚合 promise 的共享上下文（可为空 → 首次取用时懒创建）。
-    /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
-    /// @return 聚合 promise 句柄（pending；由子 promise 的落定驱动）。
+    //================ Combine ================
+
+    // 组合器（对齐 JS `Promise.all`）：全部兑现才兑现；任一拒绝立即以该拒绝码拒绝。
     template <typename TContext, typename... TChild>
     CPromise<TContext> WhenAll(const std::shared_ptr<TContext>& spContext, const TChild&... child);
 
-    /// @brief 组合器（对齐 JS `Promise.allSettled`）：等一组子 promise **全部落定**后兑现（恒兑现）。
-    ///
-    /// 与 `WhenAll` 的差别：**不因任何分支被拒绝而失败** —— 「并行发起 N 件事，全部有结论后再继续」
-    /// 用它（典型：批量通知 / 收尾清理 / 并行上报，个别失败不影响整体）。
-    ///
-    /// 各分支的成败在本框架里没有值通道，调用方自己读：此时各子句柄都已落定，
-    /// `child.Await()` 会立即返回该分支的 `CPromiseResult`（不阻塞），或事先挂 `OnSettled`。
-    ///
-    /// @note 其余语义（跨上下文类型、无效子 promise 计为 `kStopped`、空集合立即兑现）同 `WhenAll`。
-    ///
-    /// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
-    /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
-    /// @param spContext 聚合 promise 的共享上下文（可为空 → 首次取用时懒创建）。
-    /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
-    /// @return 聚合 promise 句柄（恒兑现；由子 promise 的落定驱动）。
+    // 组合器（对齐 JS `Promise.allSettled`）：全部落定即兑现（恒兑现）。
     template <typename TContext, typename... TChild>
     CPromise<TContext> WhenAllSettled(const std::shared_ptr<TContext>& spContext, const TChild&... child);
 
-    /// @brief 组合器（对齐 JS `Promise.race`）：**首个落定**的子 promise 定结果（兑现 / 拒绝皆可）。
-    ///
-    /// 用法：并行发起多条路径，谁先有结论就用谁（典型：主链路 + 备用链路取先到者）。
-    /// 与 `WhenAny` 的差别：race 里「先失败」也算结论，any 只认「先兑现」。
-    ///
-    /// @warning 「先到」取决于各子 promise 实际落定的时刻与送达顺序（跨执行器时不保证与参数顺序一致）。
-    ///          框架不取消落败的分支，它们会继续跑完（结果被忽略）。
-    ///
-    /// @note 其余语义同 `WhenAll`；空集合 → 立即以 `kRejected` 拒绝（race 无结果可用）。
-    ///
-    /// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
-    /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
-    /// @param spContext 聚合 promise 的共享上下文（可为空 → 首次取用时懒创建）。
-    /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
-    /// @return 聚合 promise 句柄（由首个落定的子 promise 驱动）。
+    // 组合器（对齐 JS `Promise.race`）：首个落定者定结果（兑现 / 拒绝皆可）。
     template <typename TContext, typename... TChild>
     CPromise<TContext> WhenRace(const std::shared_ptr<TContext>& spContext, const TChild&... child);
 
-    /// @brief 组合器（对齐 JS `Promise.any`）：**首个兑现**的子 promise 定结果；全部拒绝才失败。
-    ///
-    /// 用法：多条等价路径取「第一个成功的」（典型：多副本 / 多后端取先返回成功者）；
-    /// 全部失败时以**首个拒绝码**收口（JS 是 AggregateError，本框架用码表达）。
-    ///
-    /// @note 其余语义同 `WhenAll`；空集合 → 立即以 `kRejected` 拒绝（不可能有兑现者）。
-    ///
-    /// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
-    /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
-    /// @param spContext 聚合 promise 的共享上下文（可为空 → 首次取用时懒创建）。
-    /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
-    /// @return 聚合 promise 句柄（由首个兑现的子 promise 驱动）。
+    // 组合器（对齐 JS `Promise.any`）：首个兑现者定结果；全部拒绝才失败。
     template <typename TContext, typename... TChild>
     CPromise<TContext> WhenAny(const std::shared_ptr<TContext>& spContext, const TChild&... child);
 
-    /// @brief 创建并启动协程（投递首次 Resume；返回 shared_ptr 管理生命周期）。
-    ///
-    /// 协程类型须继承 common::async::CCoroutine<TContext> 并实现 Run()。
-    /// 定义见 "Async/Coroutine.h"。
-    ///
-    /// @tparam TCoroutine 协程类型。
-    /// @tparam TArgs 协程构造参数类型。
-    /// @param args 转发给 TCoroutine 构造函数的参数。
-    /// @return 协程对象；调用方须持有直到完成（Await() 取结果），勿丢弃。
+    //================ Coroutine ================
+
+    // 创建并启动协程（投递首次 Resume；返回 shared_ptr 管理生命周期）。
     template <typename TCoroutine, typename... TArgs>
     std::shared_ptr<TCoroutine> CoStart(TArgs&&... args);
 
-    /// @brief 内部：执行器句柄（promise / 协程持有，生命周期加固用）。
+    //================ Internal ================
+
+    // 执行器句柄（promise / 协程持有，生命周期加固用）。
     const std::shared_ptr<detail::CExecutorHandle>& Handle() const
     {
         return m_pHandle;
@@ -289,11 +189,12 @@ private:
     size_t m_nThreadCount;                               ///< 工作线程数。
 };
 
-// ====================================================================
+//================ Combine ================
+
 // 组合器（`exec.WhenAll` 一族：把多个子 promise 汇成一条**聚合链**）
 //
 // 对齐 JS `Promise.all` / `allSettled` / `race` / `any`：新造一条「由子 promise 的落定驱动」的
-// 聚合链，与 `NewPromise` / `BuildPromise` 同族的起链入口（四个入口的完整语义文档在类声明处）。
+// 聚合链，与 `NewPromise` / `BuildPromise` 同族的起链入口（完整语义文档见本节各入口定义）。
 //
 // 为什么实现能放在本文件（这里只前置声明了 `CPromise`）：对 `CPromise` 的每一处使用都落在
 // **模板的依赖上下文**里（`promiseChild.IsValid()` / `OnSettled(...)`、限定名
@@ -303,7 +204,7 @@ private:
 // 聚合状态是纯状态（不碰上下文类型），所以跨模块 / 跨上下文类型的分支能汇到同一个聚合上；
 // 子 promise 的落定可能发生在**任意线程**上，故「锁内判定、锁外收口」。框架不提供取消：
 // fail-fast / race 收口后，其余子 promise 照旧跑完（结果被忽略）。
-// ====================================================================
+
 
 namespace detail {
 
@@ -566,28 +467,87 @@ CPromise<TContext> Gather(
 
 }  // namespace detail
 
-/// @brief 组合器实现（对齐 JS `Promise.all`）：等一组子 promise 全部兑现，任一拒绝以该拒绝码收口。
+/// @brief 组合器（对齐 JS `Promise.all`）：等一组子 promise **全部兑现**；
+///        任一拒绝 → 立即以该拒绝码拒绝（其余分支继续跑完，结果被忽略）。
+///
+/// 用途：并行分支 / 并行调用多个模块（子 promise **可跨上下文类型**），全部完成后继续本链。
+/// 聚合 promise 只关心分支成败，**不传值**：数据请让各分支写进自己的共享上下文
+/// （同上下文时共用一个实例即可）。
+///
+/// 语义：
+///  - 全部兑现 → 聚合兑现；
+///  - **任一拒绝 → 立即以该拒绝码拒绝**（对齐 JS：及时失败；其余分支继续跑完，结果被忽略）；
+///  - 已落定的子 promise 直接计入；无效子 promise（未绑定执行器）视为已拒绝 `kStopped`；
+///  - 一处子 promise 都没给 → 立即兑现。
+///
+/// @note 本执行器只用于**聚合 promise 自己的层**（`.Then(...)` 等）；各子 promise 仍跑在
+///       它们各自的执行器上。组合器只有这四个执行器入口（没有 `CPromise` 成员形态）。
+///
+/// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
+/// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
+/// @param spContext 聚合 promise 的共享上下文（可为空 → 首次取用时懒创建）。
+/// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
+/// @return 聚合 promise 句柄（pending；由子 promise 的落定驱动）。
 template <typename TContext, typename... TChild>
 CPromise<TContext> CAsyncExecutor::WhenAll(const std::shared_ptr<TContext>& spContext, const TChild&... child)
 {
     return detail::Gather(*this, spContext, detail::kGatherAll, child...);
 }
 
-/// @brief 组合器实现（对齐 JS `Promise.allSettled`）：等一组子 promise 全部落定后兑现（恒兑现）。
+/// @brief 组合器（对齐 JS `Promise.allSettled`）：等一组子 promise **全部落定**后兑现（恒兑现）。
+///
+/// 与 `WhenAll` 的差别：**不因任何分支被拒绝而失败** —— 「并行发起 N 件事，全部有结论后再继续」
+/// 用它（典型：批量通知 / 收尾清理 / 并行上报，个别失败不影响整体）。
+///
+/// 各分支的成败在本框架里没有值通道，调用方自己读：此时各子句柄都已落定，
+/// `child.Await()` 会立即返回该分支的 `CPromiseResult`（不阻塞），或事先挂 `OnSettled`。
+///
+/// @note 其余语义（跨上下文类型、无效子 promise 计为 `kStopped`、空集合立即兑现）同 `WhenAll`。
+///
+/// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
+/// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
+/// @param spContext 聚合 promise 的共享上下文（可为空 → 首次取用时懒创建）。
+/// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
+/// @return 聚合 promise 句柄（恒兑现；由子 promise 的落定驱动）。
 template <typename TContext, typename... TChild>
 CPromise<TContext> CAsyncExecutor::WhenAllSettled(const std::shared_ptr<TContext>& spContext, const TChild&... child)
 {
     return detail::Gather(*this, spContext, detail::kGatherAllSettled, child...);
 }
 
-/// @brief 组合器实现（对齐 JS `Promise.race`）：首个落定的子 promise 定结果（兑现 / 拒绝均算）。
+/// @brief 组合器（对齐 JS `Promise.race`）：**首个落定**的子 promise 定结果（兑现 / 拒绝皆可）。
+///
+/// 用法：并行发起多条路径，谁先有结论就用谁（典型：主链路 + 备用链路取先到者）。
+/// 与 `WhenAny` 的差别：race 里「先失败」也算结论，any 只认「先兑现」。
+///
+/// @warning 「先到」取决于各子 promise 实际落定的时刻与送达顺序（跨执行器时不保证与参数顺序一致）。
+///          框架不取消落败的分支，它们会继续跑完（结果被忽略）。
+///
+/// @note 其余语义同 `WhenAll`；空集合 → 立即以 `kRejected` 拒绝（race 无结果可用）。
+///
+/// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
+/// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
+/// @param spContext 聚合 promise 的共享上下文（可为空 → 首次取用时懒创建）。
+/// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
+/// @return 聚合 promise 句柄（由首个落定的子 promise 驱动）。
 template <typename TContext, typename... TChild>
 CPromise<TContext> CAsyncExecutor::WhenRace(const std::shared_ptr<TContext>& spContext, const TChild&... child)
 {
     return detail::Gather(*this, spContext, detail::kGatherRace, child...);
 }
 
-/// @brief 组合器实现（对齐 JS `Promise.any`）：首个兑现的子 promise 定结果；全部拒绝才失败。
+/// @brief 组合器（对齐 JS `Promise.any`）：**首个兑现**的子 promise 定结果；全部拒绝才失败。
+///
+/// 用法：多条等价路径取「第一个成功的」（典型：多副本 / 多后端取先返回成功者）；
+/// 全部失败时以**首个拒绝码**收口（JS 是 AggregateError，本框架用码表达）。
+///
+/// @note 其余语义同 `WhenAll`；空集合 → 立即以 `kRejected` 拒绝（不可能有兑现者）。
+///
+/// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
+/// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
+/// @param spContext 聚合 promise 的共享上下文（可为空 → 首次取用时懒创建）。
+/// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
+/// @return 聚合 promise 句柄（由首个兑现的子 promise 驱动）。
 template <typename TContext, typename... TChild>
 CPromise<TContext> CAsyncExecutor::WhenAny(const std::shared_ptr<TContext>& spContext, const TChild&... child)
 {

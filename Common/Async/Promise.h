@@ -138,9 +138,7 @@ class CPromise;
 template <typename TContext>
 class CCoroutine;
 
-// ====================================================================
-// 一、detail 基础设施
-// ====================================================================
+//================ 一、detail 基础设施 ================
 
 namespace detail {
 
@@ -650,9 +648,7 @@ private:
 
 }  // namespace detail
 
-// ====================================================================
-// 二、CPromise：对外句柄
-// ====================================================================
+//================ 二、CPromise：对外句柄 ================
 
 /// @brief 异步 promise 句柄（浅句柄：拷贝共享同一条 promise 链的同一层）。
 ///
@@ -668,6 +664,8 @@ template <typename TContext>
 class CPromise
 {
 public:
+    //================ Types ================
+
     /// 处理器类型（固定签名：上一层结果 + 共享上下文 → 本层结果）。
     using ThenHandler = detail::ThenHandler<TContext>;
 
@@ -685,6 +683,8 @@ public:
 
     /// promise 工厂（ThenPromise 用）：返回一条需要等待的子 promise。
     using PromiseFactory = std::function<CPromise(const std::shared_ptr<TContext>& spContext)>;
+
+    //================ Construction ================
 
     /// @brief 创建无效 promise（未绑定执行器；供成员声明 / 后续赋值用）。
     ///
@@ -725,6 +725,8 @@ public:
     {
         Append(fnHandler, loc, detail::kModeThen);
     }
+
+    //================ Lifecycle ================
 
     /// @brief 是否有效（已绑定执行器）。
     bool IsValid() const
@@ -779,6 +781,8 @@ public:
         }
     }
 
+    //================ Factory ================
+
     /// @brief 创建「由外部兑现 / 拒绝」的 promise（等价 JS `new Promise((resolve, reject) => ...)`）。
     ///
     /// 用途：把**其他模块 / 回调式**的异步接进本流程 —— executor 里发起调用并登记回调，
@@ -797,6 +801,8 @@ public:
     {
         return NewFromHandle(executor.Handle(), spContext, fnExecutor, loc);
     }
+
+    //================ Layer ================
 
     /// @brief then：上一层**兑现**时执行 fnHandler，被拒绝时直接透传（失败即停）。
     ///
@@ -991,6 +997,8 @@ public:
         return ThenPromise(fnFactory, loc);
     }
 
+    //================ Result ================
+
     /// @brief onSettled：本层 settled（兑现或拒绝）时触发一次收尾通知。
     ///
     /// 不产生新层、不改变结果；等价「观察最终结果」。
@@ -1110,6 +1118,8 @@ public:
     }
 
 private:
+    //================ Internal ================
+
     /// @brief 阻塞等待前的「死锁预警」（**不改变行为**，只报告，便于开发期定位）。
     ///
     /// 两种形态都报：
@@ -1446,8 +1456,7 @@ private:
     std::shared_ptr<detail::CPromiseState> m_pState;           ///< 当前层对应的状态。
 };
 
-// ====================================================================
-// 三、模板方法定义（执行器入口）
+//================ 三、模板方法定义（执行器入口） ================
 //
 // 这里放 `CAsyncExecutor` 模板成员的**定义**（声明与完整文档在 AsyncExecutor.h）：
 //  - 起链：`NewPromise` / `BuildPromise`。
@@ -1458,7 +1467,6 @@ private:
 //
 // 组合器（`WhenAll` 一族）不在此节：它们不碰 `CPromise` 的私有构造路径，
 // 声明与实现都在 AsyncExecutor.h（该文件里对 `CPromise` 的使用全落在模板的依赖上下文）。
-// ====================================================================
 
 /// @brief 起链实现（执行器入口，等价 JS `new Promise(executor)`）。
 ///
