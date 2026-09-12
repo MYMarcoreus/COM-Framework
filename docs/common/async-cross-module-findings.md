@@ -1,7 +1,7 @@
 # 跨模块异步的两个真问题（实测记录）
 
 `Tests/test_async_modules.cpp` / `Tests/test_async_modules_stress.cpp` / `Tests/test_async_affinity.cpp`
-用「每个模块自持 1 线程执行器、跨模块只交换 promise + 上下文」的方式压了一轮（共 21 个用例），
+用「每个模块自持 1 线程执行器、跨模块只交换 promise + 上下文」的方式压了一轮（共 20 个用例），
 暴露了两个此前没写下来的真问题。两个都是**实测复现**、不是推理，记录在这里备查。
 问题 ① 已由改进 A（线程亲和）修复；② 已由框架层的「通知送达保证」修复（调用方不再需要写兜底代码）。
 
@@ -163,7 +163,7 @@ else
 - **C（build-then-start）**：全链挂完再投递首层 —— **已完成（2026-09-11）**：
   新增 `CAsyncExecutor::BuildPromise(spCtx)` + `CPromise::Start()`（幂等；`Await()` 对未启动的延迟链
   自动 `Start()` 兜底；`New(...)` 的 executor 也延后到轮到该层才执行；首层启动尊重 `ThenOn` 的目标执行器）。
-  验收：`Tests/test_async_build_start.cpp`（6 例）；文档：async-usage §9.2、async-impl §5.1。
+  验收：`Tests/test_async_build_start.cpp`（7 例）；文档：async-usage §9.2、async-impl §5.1。
 
 ---
 
@@ -255,8 +255,8 @@ if (!bOk)
 
 ### 3.1 共享测试脚手架（`Tests/AsyncTestKit.h`）
 
-三个跨模块测试文件（`test_async_*modules*.cpp` / `_affinity.cpp`）原本各写一份「观测工具 + 被调
-模块」，现已抽到 `Tests/AsyncTestKit.h`（`namespace asynctest`）：
+五个跨模块测试文件（`test_async_*modules*.cpp` / `_affinity.cpp` / `_combine.cpp` / `_robustness.cpp`）
+原本各写一份「观测工具 + 被调模块」，现已抽到 `Tests/AsyncTestKit.h`（`namespace asynctest`）：
 
 | 组件 | 作用 |
 |---|---|
@@ -281,14 +281,14 @@ if (!bOk)
 | `ModuleStress_LateAppendRunsOnOwnExecutor` | 落定后再挂层 → 必然回本链执行器（问题 ① 的另一面） |
 | `ModuleStress_DeepSingleChain` | 5000 层单链：压 `kMaxInlineDepth` 防爆栈 |
 | `ModuleStress_ConcurrentAwaitSameChain` | 8 线程并发 `Await` 同一条链：`notify_all`、链只跑一遍 |
-| `ModuleStress_FanOutJoin` | 一层分叉 64 分支 + 手写汇聚：全完成、库存串行 |
+| `ModuleStress_FanOutJoin` | 一层分叉 64 分支 + 手写汇聚：全完成、库存串行（纯 async 可用 `exec.WhenAll` 直接写） |
 | `ModuleStress_MixedRejections` | 100 条链一半被拒：成功/失败互不串 |
 | `ModuleStress_StopMidFlight` | 半路 `Stop()` 被调模块 → `kStopped` 退化（问题 ②） |
 | `Tests/test_async_settled_delivery.cpp`（5 例） | 问题 ② 的修复验收：通知送达保证 + 层的语义不变（含“漏检返回值不死等”回归） |
 
 ```bash
 # 跑全部测试（含以上用例）
-./build.sh --debug Tests && ./build/debug/tests        # total=131 pass=131 fail=0
+./build.sh --debug Tests && ./build/debug/tests        # total=158 pass=158 fail=0
 
 # 数据竞争检查（异步测试文件 + 异步框架 + 线程池）
 g++ -std=c++11 -fsanitize=thread -g -O1 -pthread -ICommon -ITests \

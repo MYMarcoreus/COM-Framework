@@ -234,9 +234,14 @@ if (r.IsRejected())
 
 选择建议：**层内是同步逻辑 → 用 promise；需要在多个异步步骤之间保持顺序与局部状态 → 用协程。**
 
+并行汇聚有两条路：promise 侧用执行器上的 `exec.WhenAll` / `WhenAllSettled` / `WhenRace` / `WhenAny`
+（聚合链，见 [async-usage.md §10](async-usage.md)）；协程侧用 `CO_AWAIT_ALL`（等全部落定、
+首个拒绝码终止协程）。多步骤且需局部状态时用协程；只需等一群分支收口时用组合器。
+
 ## 10. 测试与示例
 
 - 单元测试：`Tests/test_async_chain.cpp` 的 `Coro_*` 共 10 个用例
-  （顺序 / 并行 / await 拒绝 / 主动拒绝 / 嵌套 / 跨上下文嵌套 / 未启动 / 重启 / settled 通知）；
+  （顺序 / 并行 / await 拒绝 / 主动拒绝 / 嵌套 / 跨上下文嵌套 / 未启动 / 重启 /
+  settled 通知 / 跨上下文并行 await）；
 - 示例：`examples/main.cpp` 的 ⑯–⑲；业务侧见 `ServerExample/Module/ExampleAsyncModule.cpp`；
 - 基准：`Benchmark/cases/CoroutineCase.cpp`、`ResumableCase.cpp`。

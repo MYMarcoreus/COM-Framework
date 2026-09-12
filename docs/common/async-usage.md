@@ -21,7 +21,10 @@
 | `resolve()` / `reject(reason)` | `CPromiseResult::Resolve()` / `CPromiseResult::Reject(码)` |
 | `fulfilled` / `rejected` | `result.IsFulfilled()` / `result.IsRejected()` |
 | 状态 pending → settled | 每个 then/catch/finally 都返回「指向新一层的 promise」 |
-| `Promise.all([a, b])` | 协程的 `CO_AWAIT_ALL(a, b)` |
+| `Promise.all([a, b])` | `exec.WhenAll(spCtx, a, b)`（详见 §10）；协程内并行也可用 `CO_AWAIT_ALL(a, b)` |
+| `Promise.allSettled([a, b])` | `exec.WhenAllSettled(spCtx, a, b)` |
+| `Promise.race([a, b])` | `exec.WhenRace(spCtx, a, b)` |
+| `Promise.any([a, b])` | `exec.WhenAny(spCtx, a, b)` |
 
 ## 2. 与「传值版任务链」的区别
 
@@ -484,7 +487,50 @@ no::CPromiseResult r = p.Await();
 
 好处：构链期间可放心初始化上下文；所有层都在首层开跑前登记完毕（跨模块续接不会出现“补登”的时序差异）。
 
-## 10. 线程模型与生命周期
+## 10. 组合器：并行汇聚（`WhenAll` / `WhenAllSettled` / `WhenRace` / `WhenAny`）
+
+对齐 JS 的 `Promise.all` / `allSettled` / `race` / `any`：把多条子 promise 汇成**一条聚合链**，
+之后照常 `Then` / `Catch` / `Finally` / `Await` / `OnSettled`。它们是**执行器**上的起链入口
+（与 `exec.NewPromise` 同族），`CPromise` 侧没有成员形态。
+
+| 入口 | 何时兑现 | 何时拒绝 | 一个子 promise 都不给 |
+| --- | --- | --- | --- |
+| `exec.WhenAll` | 全部子 promise **兑现** | **任一拒绝 → 立即以该拒绝码拒绝**（对齐 JS 及时失败；其余分支跑完，结果被忽略） | 立即兑现 |
+| `exec.WhenAllSettled` | 全部子 promise **落定**（恒兑现） | 不会拒绝 | 立即兑现 |
+| `exec.WhenRace` | **首个落定者**兑现 | 首个落定者是拒绝 → 以该拒绝码拒绝 | 立即以 `kRejected` 拒绝 |
+| `exec.WhenAny` | **首个兑现者**兑现 | 全部拒绝 → 以**首个拒绝码**拒绝 | 立即以 `kRejected` 拒绝 |
+
+共性语义：
+
+- 子 promise **可跨上下文类型**（各自跑在自己的执行器上）；聚合链自己的层跑在**本执行器**上；
+- 数量**运行时确定**时传 `std::vector<CPromise<同上下文> >`，可与单个子 promise **混用**；
+- 聚合只关心分支**成败、不传值** —— 数据写各自的共享上下文（同上下文时共用一个实例）；
+- 全程只登记回调、**不占工作线程**（单线程执行器也安全）；
+- 已落定的子 promise 直接计入；**无效子 promise（未绑定执行器）按已拒绝 `kStopped` 计**；
+- 框架**不取消**分支：收口后落败 / 剩余分支继续跑完（结果被忽略）。
+
+```cpp
+// ① 全部兑现才继续（任一拒绝 → 立即失败）
+no::CPromise<COrderCtx> p = exec.WhenAll(spCtx, pStock, pBilling).Then(StepGather, ASYNC_LOC);
+
+// ② 数量运行时确定：标量 + 列表可混用
+std::vector<no::CPromise<COrderCtx> > vecChild = BuildChildren(spCtx);
+no::CPromiseResult r = exec.WhenAllSettled(spCtx, pHead, vecChild).AwaitFor(1000);
+
+// ③ 多副本取「第一个成功的」
+no::CPromise<COrderCtx> pAny = exec.WhenAny(spCtx, pReplicaA, pReplicaB);
+
+// ④ 主链路 + 备用链路，谁先有结论用谁（拒绝也算结论）
+no::CPromise<COrderCtx> pRace = exec.WhenRace(spCtx, pPrimary, pBackup);
+```
+
+各分支的成败从**子句柄**读：组合器收口时子句柄都已落定，`child.Await()` 立即返回（不阻塞），
+也可以事先给子句柄挂 `OnSettled`。
+
+协程里的等价能力是 `CO_AWAIT_ALL`（并行 await，首个拒绝码终止协程）—— 两条路怎么选见
+[coroutine-usage.md 第 9 节](coroutine-usage.md)。
+
+## 11. 线程模型与生命周期
 
 | 事实 | 说明 |
 | --- | --- |
@@ -497,7 +543,7 @@ no::CPromiseResult r = p.Await();
 | 分叉 | 同一层可注册多个 `Then`，各自独立延续（按序在同一执行器上推进） |
 | 生命周期 | 句柄是浅句柄；promise 通过共享句柄引用线程池，**执行器析构后已起的 promise 仍安全跑完** |
 
-## 11. 常见用法速查
+## 12. 常见用法速查
 
 ```cpp
 // 单层
@@ -523,6 +569,10 @@ no::CPromise<Ctx> head = exec.NewPromise(spCtx, StepA, ASYNC_LOC);
 no::CPromise<Ctx> b1 = head.Then(StepB, ASYNC_LOC);
 no::CPromise<Ctx> b2 = head.Then(StepC, ASYNC_LOC);
 
+// 并行汇聚（详见 §10）：全部兑现 / 全部落定 / 首个落定 / 首个兑现
+no::CPromise<Ctx> tAll = exec.WhenAll(spCtx, b1, b2).Then(StepGather, ASYNC_LOC);
+no::CPromiseResult rAll = exec.WhenAllSettled(spCtx, b1, b2).AwaitFor(500);
+
 // 惰性上下文 / 外部注入
 no::CPromise<Ctx> c1(exec);            // 链内创建
 no::CPromise<Ctx> c2(exec, spCtx);     // 外部注入
@@ -538,7 +588,7 @@ no::CPromise<Ctx> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC)
                          .Then(StepB, ASYNC_LOC);
 ```
 
-## 12. 与旧版（传值版 `CTask`）的迁移对照
+## 13. 与旧版（传值版 `CTask`）的迁移对照
 
 | 旧写法（已移除） | 新写法 |
 | --- | --- |
@@ -550,11 +600,16 @@ no::CPromise<Ctx> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC)
 | `NOTHROW_LOC` | `ASYNC_LOC` |
 | flatMap（层返回 `CTask`） | 同上下文：`ThenPromise`（处理器返回 promise，框架自动等）；跨上下文：`CPromise::New` 桥接（见 6.3 / 协程文档） |
 
-## 13. 测试与示例
+## 14. 测试与示例
 
 - 示例：`examples/main.cpp`（28 个演示：then / catch / finally / 分叉 / 深链 / 协程 / **嵌套** / **跨模块组合** / **多种 then 混用**）；
 - 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
 - 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞）；
-- 单元测试：`Tests/test_async_chain.cpp`（promise 27 例 + 协程 10 例，含跨模块组合 2 例）；
+- 单元测试（异步共 **112 例**，全量 158 例）：`test_async_smoke.cpp`（17）对外用法逐条冒烟、
+  `test_async_chain.cpp`（37）promise 契约 + 协程、`test_async_combine.cpp`（13）组合器、
+  `test_async_modules.cpp`（7）+ `test_async_modules_stress.cpp`（8）跨模块与极限、
+  `test_async_affinity.cpp`（5）+ `test_async_affinity_override.cpp`（4）线程亲和，
+  `test_async_build_start.cpp`（7）延迟启动、`test_async_settled_delivery.cpp`（5）通知送达、
+  `test_async_robustness.cpp`（7）健壮性与诊断、`test_async_layer_rules.cpp`（2）三态语义白盒；
 - 基准：`Benchmark/cases/ChainCase.cpp`、`CoroutineCase.cpp`、`ResumableCase.cpp`、`StressCase.cpp`；
 - 运行：`./build.sh --tests`、`./build/debug/examples`。

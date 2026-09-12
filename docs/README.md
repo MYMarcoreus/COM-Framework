@@ -33,6 +33,7 @@
 | 序列化 | [serialization-usage.md](common/serialization-usage.md) | [serialization-impl.md](common/serialization-impl.md) |
 | 异步 promise（CAsyncExecutor / CPromise） | [async-usage.md](common/async-usage.md) | [async-impl.md](common/async-impl.md) |
 | 协程库（CCoroutine） | [coroutine-usage.md](common/coroutine-usage.md) | [coroutine-impl.md](common/coroutine-impl.md) |
+| 组合器（`WhenAll` / `AllSettled` / `Race` / `Any`） | [async-usage.md §10](common/async-usage.md) | [async-impl.md](common/async-impl.md) |
 
 ### 示例（`docs/common/`）
 
@@ -56,7 +57,7 @@
 
 | 文档 | 内容 |
 |---|---|
-| [async-cross-module-findings.md](common/async-cross-module-findings.md) | 跨模块异步的两个真问题（续跑线程二选一、`OnSettled` 返回值漏检导致挂死）：现象 / 复现 / 根因 / 规避 |
+| [async-cross-module-findings.md](common/async-cross-module-findings.md) | 跨模块异步的两个真问题（续跑线程二选一、`OnSettled` 返回值漏检导致挂死）：现象 / 复现 / 根因 / 规避 —— **两个问题均已在框架层修复**（见正文「已修复」标记） |
 
 ## 其他
 

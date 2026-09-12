@@ -247,6 +247,26 @@ ThenBridge(fnCreate, fnApply, loc)
 - 为什么需要 `NewFromHandle`：工厂里只有「本链执行器**句柄**」（`pCore->Handle()`），
   没有 `CAsyncExecutor&`，故把 `New` 的建 state / 投递逻辑抽成句柄版供两者共用。
 
+### 6.2 组合器（`WhenAll` 一族）的实现
+
+四个入口（`WhenAll` / `WhenAllSettled` / `WhenRace` / `WhenAny`）**只差一个策略位**，共用
+`detail::Gather(executor, spContext, nPolicy, child...)`：
+
+- **聚合状态是纯状态**：`detail::CGatherState` 不碰上下文类型（只关心子 promise 的成败与拒绝码），
+  所以**跨模块 / 跨上下文类型**的分支能汇到同一个聚合上，无需额外机制；
+- **登记路径只有一条**：`detail::BindChildGather` 给每个子 promise 挂 `OnSettled`（送达保证），
+  已落定的子 promise 直接计入；无效子 promise 按已拒绝 `kStopped` 计（否则聚合永久 pending）；
+- **参数包摊平**：C++11 的 lambda 捕获列表不能展开参数包，所以先用
+  `detail::AppendGatherBindings` 把每个子 promise 变成一个「登记动作」（标量 / `std::vector` 两个重载），
+  再由聚合链的 executor 逐个执行；
+- **锁内判定、锁外收口**：子 promise 可能在**任意线程**上落定，`OnChildSettled` 持锁更新计数与
+  收口标志，`settle` 聚合层则在锁外调用（聚合层的下一层可能就地执行，持锁会死锁）；
+- **不取消**：收口后迟到的子 promise 直接被忽略，但它们自己继续跑完。
+
+> 实现位置：`Common/Async/AsyncExecutor.h`（声明、实现与文档同文件）。该头只**前置声明**
+> `CPromise`，里面所有对它的使用都落在模板的依赖上下文（`CPromise<TContext>::New`、按值返回），
+> 名字查找与类型完备性检查推迟到**实例化点**（调用方 TU 必然已 include `Promise.h`）。
+
 ## 7. 两种注册时机
 
 | 注册时刻 | 路径 | 执行线程 |

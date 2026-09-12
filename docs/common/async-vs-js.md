@@ -20,8 +20,10 @@
 | `fulfilled` / `rejected` | `result.IsFulfilled()` / `result.IsRejected()` |
 | `await p` | `p.Await()`（阻塞，占住一个 worker）；脚本外更推荐协程 `CO_AWAIT(p)`（非阻塞挂起） |
 | `p` 已完成 | `p.IsSettled()` |
-| `Promise.all([a, b, c])` | 协程 `CO_AWAIT_ALL(a, b, c)`；纯异步下用计数 + `OnSettled` 自己汇总 |
-| `Promise.allSettled` / `race` / `any` | 无内建；按同样思路用 `OnSettled` + 计数器/标志位实现 |
+| `Promise.all([a, b, c])` | `exec.WhenAll(spCtx, a, b, c)`（全部兑现才继续，任一拒绝立即失败）；协程内也可 `CO_AWAIT_ALL(a, b, c)` |
+| `Promise.allSettled([a, b, c])` | `exec.WhenAllSettled(spCtx, ...)`（全部落定即兑现，不看成败） |
+| `Promise.race([a, b])` | `exec.WhenRace(spCtx, a, b)`（首个落定者定结果，拒绝也算结论） |
+| `Promise.any([a, b])` | `exec.WhenAny(spCtx, a, b)`（首个兑现者定结果，全拒绝才失败） |
 | `Promise.resolve(x)` / `Promise.reject(e)` | `CPromiseResult::Resolve()` / `Reject(码)`（结构化的层结果，不是通用工具函数） |
 | `async function` | 协程函数（`Common/Async/Coroutine.h`），或纯异步的「层函数 + 链」 |
 | `setTimeout(fn, ms)` | `exec.Post(fn)`（下一轮投递）/ 定时器组件 |
