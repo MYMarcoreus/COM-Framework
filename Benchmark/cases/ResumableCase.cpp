@@ -13,13 +13,11 @@
 
 namespace {
 
-namespace no = common::async;
-
 /// 协程：3 次顺序 await（批量伸缩测试的载荷）。
-class BenchCoroSeq3 : public no::CCoroutine<bench::CChainContext>
+class BenchCoroSeq3 : public common::async::CCoroutine<bench::CChainContext>
 {
 public:
-    using no::CCoroutine<bench::CChainContext>::CCoroutine;
+    using common::async::CCoroutine<bench::CChainContext>::CCoroutine;
 
     void Run() override
     {
@@ -33,10 +31,10 @@ public:
 };
 
 /// 协程：20 次顺序 await（长协程：测每次挂起 / 恢复的摊销成本）。
-class BenchCoroSeq20 : public no::CCoroutine<bench::CChainContext>
+class BenchCoroSeq20 : public common::async::CCoroutine<bench::CChainContext>
 {
 public:
-    using no::CCoroutine<bench::CChainContext>::CCoroutine;
+    using common::async::CCoroutine<bench::CChainContext>::CCoroutine;
 
     void Run() override
     {
@@ -70,7 +68,7 @@ public:
 ///
 /// 协程对象经自持弱引用保活（框架内部 Resume 回调持强引用），
 /// 这里不额外持有 shared_ptr（与真实业务「起完即走」的用法一致）。
-inline int RunCoroBatch(no::CAsyncExecutor& exec, int nCoros)
+inline int RunCoroBatch(common::async::CAsyncExecutor& exec, int nCoros)
 {
     std::atomic<int> nDone(0);
     for (int i = 0; i < nCoros; ++i)
@@ -78,7 +76,7 @@ inline int RunCoroBatch(no::CAsyncExecutor& exec, int nCoros)
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
         std::shared_ptr<BenchCoroSeq3> pCoro = exec.CoStart<BenchCoroSeq3>(spCtx);
         pCoro->AsPromise().OnSettled(
-            [&nDone](no::CPromiseResult r)
+            [&nDone](common::async::CPromiseResult r)
             {
                 if (r.IsFulfilled())
                 {
@@ -101,7 +99,7 @@ void RunResumableCases()
 
     // 长协程：单协程 20 次挂起 / 恢复全程成本（1 线程）。
     {
-        no::CAsyncExecutor exec(1);
+        common::async::CAsyncExecutor exec(1);
         exec.Start();
 
         {
@@ -130,7 +128,7 @@ void RunResumableCases()
     const int nThreads[] = {1, 2, 4};
     for (size_t i = 0; i < 3; ++i)
     {
-        no::CAsyncExecutor exec(static_cast<size_t>(nThreads[i]));
+        common::async::CAsyncExecutor exec(static_cast<size_t>(nThreads[i]));
         exec.Start();
 
         benchmark::SanityCheck(group,

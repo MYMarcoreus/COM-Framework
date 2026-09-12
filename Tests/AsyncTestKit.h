@@ -25,8 +25,6 @@
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
 
-namespace no = common::async;
-
 namespace asynctest {
 
 /// @brief 步骤轨迹 + 每步所在线程（跨模块共享，写入加锁）。
@@ -215,7 +213,7 @@ struct CCalleeCtx
     std::thread::id idConnect;            ///< 第一步所在线程。
     std::thread::id idRead;               ///< 第二步所在线程。
 
-    CCalleeCtx() : nSku(0), nAvail(5), nDelayMs(0), bReject(false), nRejectCode(no::kBusinessBase)
+    CCalleeCtx() : nSku(0), nAvail(5), nDelayMs(0), bReject(false), nRejectCode(common::async::kBusinessBase)
     {}
 };
 
@@ -239,14 +237,15 @@ public:
     /// @param spCtx 本模块上下文。
     ///
     /// @return 本层链的 promise。
-    no::CPromise<CCalleeCtx> QueryStockAsync(const std::shared_ptr<CCalleeCtx>& spCtx)
+    common::async::CPromise<CCalleeCtx> QueryStockAsync(const std::shared_ptr<CCalleeCtx>& spCtx)
     {
         return m_exec.NewPromise(spCtx, &StepConnect, ASYNC_LOC).Then(&StepRead, ASYNC_LOC);
     }
 
 private:
     /// 第一步：模拟连库。
-    static no::CPromiseResult StepConnect(no::CPromiseResult /*upResult*/, const std::shared_ptr<CCalleeCtx>& spCtx)
+    static common::async::CPromiseResult StepConnect(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CCalleeCtx>& spCtx)
     {
         EnterStockStep(spCtx->pProbe);
         spCtx->idConnect = std::this_thread::get_id();
@@ -256,11 +255,12 @@ private:
         }
         SleepMs(spCtx->nDelayMs);
         LeaveStockStep(spCtx->pProbe);
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// 第二步：读库存（与第一步串行、同线程）；`bReject` 时以 `nRejectCode` 拒绝。
-    static no::CPromiseResult StepRead(no::CPromiseResult /*upResult*/, const std::shared_ptr<CCalleeCtx>& spCtx)
+    static common::async::CPromiseResult StepRead(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CCalleeCtx>& spCtx)
     {
         EnterStockStep(spCtx->pProbe);
         spCtx->idRead = std::this_thread::get_id();
@@ -272,13 +272,13 @@ private:
         LeaveStockStep(spCtx->pProbe);
         if (spCtx->bReject)
         {
-            return no::CPromiseResult::Reject(spCtx->nRejectCode);
+            return common::async::CPromiseResult::Reject(spCtx->nRejectCode);
         }
         spCtx->nAvail = 5;
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
-    no::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
+    common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
 };
 
 }  // namespace asynctest

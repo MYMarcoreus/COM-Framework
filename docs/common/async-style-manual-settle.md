@@ -4,13 +4,16 @@ async_promise 的写法：`make_promise([](resolve, reject) { … })` 里显式�
 或 `resolve(值)`；`then` 回调里返回 promise 会被展平，`.fail(...)` 统一兜底。
 
 ```cpp
-async::promise<Order> checkRiskAsync(const std::vector<Order>& orders) {
-    return async::make_promise([orders](auto resolve, auto reject) {
-        if (orders.empty()) {
-            reject(RejectReason{"NO_ORDERS", "没有订单可处理"});   // ✅ 显式 reject
+async::promise<Order> checkRiskAsync(const std::vector<Order>& orders)
+{
+    return async::make_promise([orders](auto resolve, auto reject)
+    {
+        if (orders.empty())
+        {
+            reject(RejectReason{"NO_ORDERS", "没有订单可处理"});  // ✅ 显式 reject
             return;
         }
-        resolve(orders[0]);                                       // ✅ 显式 resolve
+        resolve(orders[0]);  // ✅ 显式 resolve
     });
 }
 ```
@@ -26,8 +29,6 @@ async::promise<Order> checkRiskAsync(const std::vector<Order>& orders) {
 
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
-
-namespace no = common::async;
 
 /// 上下文：等价这些写法里沿链流动的值（user / orders / order / payment / total）。
 struct CFlowCtx
@@ -46,7 +47,7 @@ struct CFlowCtx
 /// 业务拒绝码（从 kBusinessBase 起取；等价 RejectReason.code）。
 enum
 {
-    kNoOrders = no::kBusinessBase,
+    kNoOrders = common::async::kBusinessBase,
     kTooMany
 };
 
@@ -59,7 +60,7 @@ static const char* CodeText(int nCode)
             return "没有订单可处理";
         case kTooMany:
             return "订单过多，需人工审核";
-        case no::kException:
+        case common::async::kException:
             return "系统错误";
         default:
             return "未知错误";
@@ -67,15 +68,17 @@ static const char* CodeText(int nCode)
 }
 
 /// fetchUserAsync(id)
-static no::CPromiseResult StepFetchUser(no::CPromiseResult /*upResult*/, const std::shared_ptr<CFlowCtx>& spCtx)
+static common::async::CPromiseResult StepFetchUser(common::async::CPromiseResult /*upResult*/,
+                                                   const std::shared_ptr<CFlowCtx>& spCtx)
 {
     spCtx->strUserName = "Alice";
     std::printf("用户: %s\n", spCtx->strUserName.c_str());
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// fetchOrdersAsync(user)
-static no::CPromiseResult StepFetchOrders(no::CPromiseResult /*upResult*/, const std::shared_ptr<CFlowCtx>& spCtx)
+static common::async::CPromiseResult StepFetchOrders(common::async::CPromiseResult /*upResult*/,
+                                                     const std::shared_ptr<CFlowCtx>& spCtx)
 {
     if (!spCtx->bNoOrders)
     {
@@ -83,14 +86,16 @@ static no::CPromiseResult StepFetchOrders(no::CPromiseResult /*upResult*/, const
         spCtx->vecOrders.push_back("order2");
     }
     std::printf("订单数: %zu\n", spCtx->vecOrders.size());
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// checkRiskAsync：等价 `make_promise([](resolve, reject) { … })` —— 显式兑现 / 拒绝本层
-static no::CPromise<CFlowCtx> CheckRiskAsync(no::CAsyncExecutor& exec, const std::shared_ptr<CFlowCtx>& spCtx)
+static common::async::CPromise<CFlowCtx> CheckRiskAsync(common::async::CAsyncExecutor& exec,
+                                                        const std::shared_ptr<CFlowCtx>& spCtx)
 {
-    no::CPromise<CFlowCtx>::PromiseExecutor fnExecutive =
-        [spCtx](const no::CPromise<CFlowCtx>::ResolveFn& fnResolve, const no::CPromise<CFlowCtx>::RejectFn& fnReject)
+    common::async::CPromise<CFlowCtx>::PromiseExecutor fnExecutive =
+        [spCtx](const common::async::CPromise<CFlowCtx>::ResolveFn& fnResolve,
+                const common::async::CPromise<CFlowCtx>::RejectFn& fnReject)
     {
         if (spCtx->vecOrders.empty())
         {
@@ -107,26 +112,29 @@ static no::CPromise<CFlowCtx> CheckRiskAsync(no::CAsyncExecutor& exec, const std
         fnResolve();  // 等价 resolve(orders[0])
     };
 
-    return no::CPromise<CFlowCtx>::New(exec, spCtx, fnExecutive, ASYNC_LOC);
+    return common::async::CPromise<CFlowCtx>::New(exec, spCtx, fnExecutive, ASYNC_LOC);
 }
 
 /// fetchPaymentAsync(order) —— 只有 checkRisk 兑现才会执行
-static no::CPromiseResult StepFetchPayment(no::CPromiseResult /*upResult*/, const std::shared_ptr<CFlowCtx>& spCtx)
+static common::async::CPromiseResult StepFetchPayment(common::async::CPromiseResult /*upResult*/,
+                                                      const std::shared_ptr<CFlowCtx>& spCtx)
 {
     spCtx->nTotal = 99;
     std::printf("支付: %d\n", spCtx->nTotal);
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// `.then(total => …)`
-static no::CPromiseResult StepPrintTotal(no::CPromiseResult /*upResult*/, const std::shared_ptr<CFlowCtx>& spCtx)
+static common::async::CPromiseResult StepPrintTotal(common::async::CPromiseResult /*upResult*/,
+                                                    const std::shared_ptr<CFlowCtx>& spCtx)
 {
     std::printf("最终总额: %d\n", spCtx->nTotal);
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// `.fail(...)`：只在被拒绝时执行
-static no::CPromiseResult OnReject(no::CPromiseResult upResult, const std::shared_ptr<CFlowCtx>& /*spCtx*/)
+static common::async::CPromiseResult OnReject(common::async::CPromiseResult upResult,
+                                              const std::shared_ptr<CFlowCtx>& /*spCtx*/)
 {
     std::fprintf(stderr, "流程中断 [%d]: %s\n", upResult.Code(), CodeText(upResult.Code()));
     return upResult;  // 原样返回：拒绝继续往后传
@@ -134,7 +142,7 @@ static no::CPromiseResult OnReject(no::CPromiseResult upResult, const std::share
 
 int main()
 {
-    no::CAsyncExecutor exec(2);
+    common::async::CAsyncExecutor exec(2);
     exec.Start();
 
     for (bool bFail : {false, true})  // 第二遍走风控拒绝分支
@@ -144,7 +152,7 @@ int main()
         spCtx->bNoOrders = bFail;
 
         // checkRisk 返回一条子 promise（等价 then 回调里返回 promise）
-        no::CPromise<CFlowCtx>::PromiseFactory fnCheckRisk = [&exec](const std::shared_ptr<CFlowCtx>& spSelf)
+        common::async::CPromise<CFlowCtx>::PromiseFactory fnCheckRisk = [&exec](const std::shared_ptr<CFlowCtx>& spSelf)
         {
             return CheckRiskAsync(exec, spSelf);
         };

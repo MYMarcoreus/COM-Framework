@@ -20,8 +20,6 @@
 #include "Async/PromiseResult.h"
 #include "TestFramework.h"
 
-namespace no = common::async;
-
 // 跨模块桥接（ThenBridge）用例会用到延迟链：证明「Start 之前连子链都不发起」。
 
 // ==================== 被调模块（1 线程） ====================
@@ -51,21 +49,22 @@ public:
     /// @param spCtx 本模块上下文。
     ///
     /// @return 本层 promise。
-    no::CPromise<CStartCalleeCtx> QueryAsync(const std::shared_ptr<CStartCalleeCtx>& spCtx)
+    common::async::CPromise<CStartCalleeCtx> QueryAsync(const std::shared_ptr<CStartCalleeCtx>& spCtx)
     {
         return m_exec.NewPromise(spCtx, &StepQuery, ASYNC_LOC);
     }
 
 private:
     /// 层处理器。
-    static no::CPromiseResult StepQuery(no::CPromiseResult /*upResult*/, const std::shared_ptr<CStartCalleeCtx>& spCtx)
+    static common::async::CPromiseResult StepQuery(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStartCalleeCtx>& spCtx)
     {
         ++spCtx->nSteps;
         spCtx->idStep = std::this_thread::get_id();
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
-    no::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
+    common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
 };
 
 // ==================== 调用方模块（1 线程） ====================
@@ -100,10 +99,11 @@ public:
     /// @param spCallee 被调模块。
     ///
     /// @return 未启动的链句柄。
-    no::CPromise<CStartCtx> BuildChain(
+    common::async::CPromise<CStartCtx> BuildChain(
         const std::shared_ptr<CStartCtx>& spCtx, const std::shared_ptr<CStartCalleeModule>& spCallee)
     {
-        no::CPromise<CStartCtx>::PromiseFactory fnCall = [this, spCallee](const std::shared_ptr<CStartCtx>& spSelf)
+        common::async::CPromise<CStartCtx>::PromiseFactory fnCall = [this, spCallee](
+                                                                        const std::shared_ptr<CStartCtx>& spSelf)
         {
             return BridgeCall(spSelf, spCallee);
         };
@@ -121,9 +121,9 @@ public:
     /// @param nLayers 层数。
     ///
     /// @return 未启动的链句柄。
-    no::CPromise<CStartCtx> BuildDeepChain(const std::shared_ptr<CStartCtx>& spCtx, int nLayers)
+    common::async::CPromise<CStartCtx> BuildDeepChain(const std::shared_ptr<CStartCtx>& spCtx, int nLayers)
     {
-        no::CPromise<CStartCtx> promise = m_exec.BuildPromise(spCtx).Then(&StepCount, ASYNC_LOC);
+        common::async::CPromise<CStartCtx> promise = m_exec.BuildPromise(spCtx).Then(&StepCount, ASYNC_LOC);
         for (int i = 1; i < nLayers; ++i)
         {
             promise = promise.Then(&StepCount, ASYNC_LOC);
@@ -136,59 +136,63 @@ public:
     /// @param promise 当前链尾句柄（按值传入，因为要在它上面追加层）。
     ///
     /// @return 追加后的新层句柄。
-    no::CPromise<CStartCtx> AppendFinal(no::CPromise<CStartCtx> promise)
+    common::async::CPromise<CStartCtx> AppendFinal(common::async::CPromise<CStartCtx> promise)
     {
         return promise.Then(&StepFinal, ASYNC_LOC);
     }
 
 private:
     /// ① 本模块自有层。
-    static no::CPromiseResult StepLoad(no::CPromiseResult /*upResult*/, const std::shared_ptr<CStartCtx>& spCtx)
+    static common::async::CPromiseResult StepLoad(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStartCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->idFirst = std::this_thread::get_id();
         spCtx->idLastOwn = spCtx->idFirst;
         spCtx->strTrace += "A1;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// ③ 跨模块返回后的层（默认亲和 → 回本模块执行器）。
-    static no::CPromiseResult StepAfterBridge(no::CPromiseResult /*upResult*/, const std::shared_ptr<CStartCtx>& spCtx)
+    static common::async::CPromiseResult StepAfterBridge(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStartCtx>& spCtx)
     {
         spCtx->idAfterBridge = std::this_thread::get_id();
         spCtx->strTrace += "A2;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// ④ 收尾层。
-    static no::CPromiseResult StepFinal(no::CPromiseResult /*upResult*/, const std::shared_ptr<CStartCtx>& spCtx)
+    static common::async::CPromiseResult StepFinal(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStartCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->idLastOwn = std::this_thread::get_id();
         spCtx->strTrace += "A3;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// 深链计数层。
-    static no::CPromiseResult StepCount(no::CPromiseResult /*upResult*/, const std::shared_ptr<CStartCtx>& spCtx)
+    static common::async::CPromiseResult StepCount(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStartCtx>& spCtx)
     {
         ++spCtx->nCountSteps;
         spCtx->idLastOwn = std::this_thread::get_id();
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// 跨模块桥接层（本层属于本模块；被调模块在自己执行器上跑）。
-    no::CPromise<CStartCtx> BridgeCall(
+    common::async::CPromise<CStartCtx> BridgeCall(
         const std::shared_ptr<CStartCtx>& spCtx, const std::shared_ptr<CStartCalleeModule>& spCallee)
     {
-        no::CPromise<CStartCtx>::PromiseExecutor fnExecutor =
-            [spCallee, spCtx](
-                const no::CPromise<CStartCtx>::ResolveFn& fnResolve, const no::CPromise<CStartCtx>::RejectFn& fnReject)
+        common::async::CPromise<CStartCtx>::PromiseExecutor fnExecutor =
+            [spCallee, spCtx](const common::async::CPromise<CStartCtx>::ResolveFn& fnResolve,
+                const common::async::CPromise<CStartCtx>::RejectFn& fnReject)
         {
             auto spCalleeCtx = std::make_shared<CStartCalleeCtx>();
-            no::CPromise<CStartCalleeCtx> promiseCallee = spCallee->QueryAsync(spCalleeCtx);
+            common::async::CPromise<CStartCalleeCtx> promiseCallee = spCallee->QueryAsync(spCalleeCtx);
             promiseCallee.OnSettled(
-                [spCtx, spCalleeCtx, fnResolve, fnReject](no::CPromiseResult result)
+                [spCtx, spCalleeCtx, fnResolve, fnReject](common::async::CPromiseResult result)
                 {
                     if (result.IsRejected())
                     {
@@ -200,10 +204,10 @@ private:
                     fnResolve();
                 });
         };
-        return no::CPromise<CStartCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return common::async::CPromise<CStartCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
     }
 
-    no::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
+    common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
 };
 
 // ==================== 用例 ====================
@@ -215,7 +219,7 @@ TEST(BuildStart_NothingRunsBeforeStart)
     auto spOrder = std::make_shared<CStartOrderModule>();
     auto spCtx = std::make_shared<CStartCtx>();
 
-    no::CPromise<CStartCtx> promise = spOrder->BuildChain(spCtx, spCallee);
+    common::async::CPromise<CStartCtx> promise = spOrder->BuildChain(spCtx, spCallee);
 
     ASSERT_TRUE(promise.IsDeferred());
     ASSERT_TRUE(promise.IsStarted() == false);
@@ -244,7 +248,7 @@ TEST(BuildStart_StartIsIdempotent)
     auto spOrder = std::make_shared<CStartOrderModule>();
     auto spCtx = std::make_shared<CStartCtx>();
 
-    no::CPromise<CStartCtx> promise = spOrder->BuildChain(spCtx, spCallee);
+    common::async::CPromise<CStartCtx> promise = spOrder->BuildChain(spCtx, spCallee);
     promise.Start();
     promise.Start();
     promise.Start();
@@ -261,7 +265,7 @@ TEST(BuildStart_AwaitAutoStarts)
     auto spOrder = std::make_shared<CStartOrderModule>();
     auto spCtx = std::make_shared<CStartCtx>();
 
-    no::CPromise<CStartCtx> promise = spOrder->BuildChain(spCtx, spCallee);
+    common::async::CPromise<CStartCtx> promise = spOrder->BuildChain(spCtx, spCallee);
     ASSERT_TRUE(promise.IsStarted() == false);
 
     ASSERT_TRUE(promise.Await().IsFulfilled());  // 未显式 Start
@@ -278,11 +282,11 @@ TEST(BuildStart_LateAppendAfterStart)
     auto spOrder = std::make_shared<CStartOrderModule>();
     auto spCtx = std::make_shared<CStartCtx>();
 
-    no::CPromise<CStartCtx> promise = spOrder->BuildChain(spCtx, spCallee);
+    common::async::CPromise<CStartCtx> promise = spOrder->BuildChain(spCtx, spCallee);
     promise.Start();
 
     // 启动后追加一层（上一层可能已 settled，也可能还在跑）
-    no::CPromise<CStartCtx> promiseTail = spOrder->AppendFinal(promise);
+    common::async::CPromise<CStartCtx> promiseTail = spOrder->AppendFinal(promise);
 
     ASSERT_TRUE(promiseTail.Await().IsFulfilled());
     ASSERT_EQ(spCtx->strTrace, std::string("A1;B1;A2;A3;A3;"));
@@ -298,7 +302,7 @@ TEST(BuildStart_DeepChain)
     auto spOrder = std::make_shared<CStartOrderModule>();
     auto spCtx = std::make_shared<CStartCtx>();
 
-    no::CPromise<CStartCtx> promise = spOrder->BuildDeepChain(spCtx, nLayers);
+    common::async::CPromise<CStartCtx> promise = spOrder->BuildDeepChain(spCtx, nLayers);
 
     ASSERT_EQ(spCtx->nCountSteps, 0);  // 构链期没跑
     promise.Start();
@@ -314,14 +318,14 @@ TEST(BuildStart_EmptyChain)
     auto spOrder = std::make_shared<CStartOrderModule>();
     auto spCtx = std::make_shared<CStartCtx>();
 
-    no::CAsyncExecutor execUnused(1);
-    no::CPromise<CStartCtx> promiseEmpty = execUnused.BuildPromise(spCtx);  // 没挂任何层
+    common::async::CAsyncExecutor execUnused(1);
+    common::async::CPromise<CStartCtx> promiseEmpty = execUnused.BuildPromise(spCtx);  // 没挂任何层
     promiseEmpty.Start();
     promiseEmpty.Start();  // 幂等
 
-    const no::CPromiseResult result = promiseEmpty.Await();
+    const common::async::CPromiseResult result = promiseEmpty.Await();
     ASSERT_TRUE(result.IsRejected());
-    ASSERT_EQ(result.Code(), no::kStopped);  // 空链 = 没有层（句柄无状态）
+    ASSERT_EQ(result.Code(), common::async::kStopped);  // 空链 = 没有层（句柄无状态）
 }
 
 /// @brief 延迟链 + `ThenBridge`：`Start()` 之前**连跨模块子链都不发起**（构链期零业务代码）。
@@ -331,20 +335,22 @@ TEST(BuildStart_EmptyChain)
 TEST(BuildStart_BridgeWaitsForStart)
 {
     auto spCallee = std::make_shared<CStartCalleeModule>();
-    no::CAsyncExecutor exec(1);
+    common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
 
     auto spCtx = std::make_shared<CStartCtx>();
     auto spCalleeCtx = std::make_shared<CStartCalleeCtx>();
 
-    no::CPromise<CStartCtx>::ThenHandler fnFirst = [](no::CPromiseResult, const std::shared_ptr<CStartCtx>& spCtx)
+    common::async::CPromise<CStartCtx>::ThenHandler fnFirst =
+        [](common::async::CPromiseResult, const std::shared_ptr<CStartCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->strTrace += "A1;";
         spCtx->idFirst = std::this_thread::get_id();
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     };
-    auto fnCreateCallee = [spCallee, spCalleeCtx](const std::shared_ptr<CStartCtx>&) -> no::CPromise<CStartCalleeCtx>
+    auto fnCreateCallee = [spCallee, spCalleeCtx](
+                              const std::shared_ptr<CStartCtx>&) -> common::async::CPromise<CStartCalleeCtx>
     {
         return spCallee->QueryAsync(spCalleeCtx);  // 只有 Start 之后才会被调用
     };
@@ -352,18 +358,19 @@ TEST(BuildStart_BridgeWaitsForStart)
     {
         spSelf->nStock = spOther->nAvail;
     };
-    no::CPromise<CStartCtx>::ThenHandler fnAppend = [](no::CPromiseResult, const std::shared_ptr<CStartCtx>& spCtx)
+    common::async::CPromise<CStartCtx>::ThenHandler fnAppend =
+        [](common::async::CPromiseResult, const std::shared_ptr<CStartCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->strTrace += "A2;";
         spCtx->idAfterBridge = std::this_thread::get_id();
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     };
 
-    no::CPromise<CStartCtx> promise = exec.BuildPromise(spCtx)
-                                          .Then(fnFirst, ASYNC_LOC)
-                                          .ThenBridge(fnCreateCallee, fnApplyCallee, ASYNC_LOC)
-                                          .Then(fnAppend, ASYNC_LOC);
+    common::async::CPromise<CStartCtx> promise = exec.BuildPromise(spCtx)
+                                                     .Then(fnFirst, ASYNC_LOC)
+                                                     .ThenBridge(fnCreateCallee, fnApplyCallee, ASYNC_LOC)
+                                                     .Then(fnAppend, ASYNC_LOC);
 
     ASSERT_TRUE(promise.IsDeferred());
     ASSERT_TRUE(!promise.IsStarted());

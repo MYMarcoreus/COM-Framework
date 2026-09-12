@@ -26,6 +26,9 @@ description: 本项目命名规范：以 MFC（Microsoft Foundation Classes）�
   - `servera`：~~ServerA 项目~~（已改名 ServerTemplate）
   - `servertemplate`：ServerTemplate 项目
 - 命名空间内标识符不得依赖外部命名空间的未限定符号（用 `using` 或显式限定）。
+- **不引入短命名空间别名**：示例 / 测试 / 文档代码统一写全限定名（如 `common::async::CPromise`）。
+  历史上曾用 `namespace no = common::async;` 缩短书写（2026-09-12 全仓移除：别名在 27 处各自声明、
+  却无任何地方定义其含义，读者会误以为 `no::` 属于框架的一部分）。
 
 ---
 

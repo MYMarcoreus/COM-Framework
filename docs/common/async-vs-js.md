@@ -43,10 +43,11 @@ return applyDiscount(order);   // 值沿链流动
 
 ```cpp
 // 本框架：数据写进 spCtx，层间只传 CPromiseResult
-static no::CPromiseResult StepLoad(no::CPromiseResult /*up*/, const std::shared_ptr<COrderCtx>& spCtx)
+static common::async::CPromiseResult StepLoad(common::async::CPromiseResult /*up*/,
+                                              const std::shared_ptr<COrderCtx>& spCtx)
 {
     spCtx->nTotal = 12 * spCtx->nQty;
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 ```
 
@@ -63,7 +64,10 @@ static no::CPromiseResult StepLoad(no::CPromiseResult /*up*/, const std::shared_
 
 ```cpp
 // 冗余：上游被拒绝时本层根本不会被调用
-if (upResult.IsRejected()) { return upResult; }
+if (upResult.IsRejected())
+{
+    return upResult;
+}
 ```
 
 ### 2.3 「等子 promise」要显式写 ThenPromise
@@ -77,11 +81,18 @@ p.then(v => { fetchStock(v); });                         // JS：不等（旁支
 ```
 
 ```cpp
-p.ThenPromise([&exec](const std::shared_ptr<Ctx>& sp) { return BridgeQuery(exec, sp); }, ASYNC_LOC)  // 等
- .Then(&StepSave, ASYNC_LOC);
+p.ThenPromise(
+     [&exec](const std::shared_ptr<Ctx>& sp)
+{
+    return BridgeQuery(exec, sp);
+}, ASYNC_LOC)  // 等
+    .Then(&StepSave, ASYNC_LOC);
 
-p.Then([&exec](no::CPromiseResult, const std::shared_ptr<Ctx>& sp)                                  // 不等（旁支）
-       { exec.NewPromise(sp, &StepLog, ASYNC_LOC); return no::CPromiseResult::Resolve(); }, ASYNC_LOC);
+p.Then([&exec](common::async::CPromiseResult, const std::shared_ptr<Ctx>& sp)  // 不等（旁支）
+{
+    exec.NewPromise(sp, &StepLog, ASYNC_LOC);
+    return common::async::CPromiseResult::Resolve();
+}, ASYNC_LOC);
 ```
 
 普通 `Then` 的处理器只能返回 `CPromiseResult`，里面起的链只能是旁支；要参与当前链必须 `ThenPromise`
@@ -148,13 +159,13 @@ loadOrder()
 ```cpp
 // 本框架
 return m_exec
-    .NewPromise(spCtx, &StepLoad, ASYNC_LOC)        // ① 读订单
-    .Then(&StepValidate, ASYNC_LOC)                 // ② 校验
-    .ThenPromise(fnQueryStock, ASYNC_LOC)           // ③ 查库存（ThenPromise：等它）
-    .Then(&StepWriteLog, ASYNC_LOC)                 // ④ 旁支（普通 Then，不等）
-    .Then(&StepSaveOrder, ASYNC_LOC)                // ⑤ 落库
-    .Catch(&StepCompensate, ASYNC_LOC)              // catch：仅被拒绝时执行
-    .Finally(&StepAudit, ASYNC_LOC);                // finally：成败都跑、不改结果
+    .NewPromise(spCtx, &StepLoad, ASYNC_LOC)  // ① 读订单
+    .Then(&StepValidate, ASYNC_LOC)           // ② 校验
+    .ThenPromise(fnQueryStock, ASYNC_LOC)     // ③ 查库存（ThenPromise：等它）
+    .Then(&StepWriteLog, ASYNC_LOC)           // ④ 旁支（普通 Then，不等）
+    .Then(&StepSaveOrder, ASYNC_LOC)          // ⑤ 落库
+    .Catch(&StepCompensate, ASYNC_LOC)        // catch：仅被拒绝时执行
+    .Finally(&StepAudit, ASYNC_LOC);          // finally：成败都跑、不改结果
 ```
 
 完整可编译版本见 [async-mixed-then-example.md](async-mixed-then-example.md)
@@ -212,8 +223,6 @@ fetchUser(123)
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 
-namespace no = common::async;
-
 /// 上下文：JS 里沿链流动的值，本框架都放这里（层间只传兑现 / 拒绝码）。
 struct CTradeCtx
 {
@@ -236,10 +245,10 @@ class CTradeModule
     }
 
     /// @brief 等价 JS：fetchUser(123).then(user => { return 内层链 }).then(total => …)
-    no::CPromise<CTradeCtx> RunAsync(const std::shared_ptr<CTradeCtx>& spCtx)
+    common::async::CPromise<CTradeCtx> RunAsync(const std::shared_ptr<CTradeCtx>& spCtx)
     {
         // 等价 `return fetchOrders(user).then(…)`：这一层要等内层链，必须用 ThenPromise
-        no::CPromise<CTradeCtx>::PromiseFactory fnInner = [this](const std::shared_ptr<CTradeCtx>& spSelf)
+        common::async::CPromise<CTradeCtx>::PromiseFactory fnInner = [this](const std::shared_ptr<CTradeCtx>& spSelf)
         {
             return FetchOrdersAsync(spSelf);
         };
@@ -251,9 +260,9 @@ class CTradeModule
     }
 
     /// @brief 内层链：等价 JS `return fetchOrders(user).then(…).then(…)`。
-    no::CPromise<CTradeCtx> FetchOrdersAsync(const std::shared_ptr<CTradeCtx>& spCtx)
+    common::async::CPromise<CTradeCtx> FetchOrdersAsync(const std::shared_ptr<CTradeCtx>& spCtx)
     {
-        no::CPromise<CTradeCtx>::PromiseFactory fnPayment = [this](const std::shared_ptr<CTradeCtx>& spSelf)
+        common::async::CPromise<CTradeCtx>::PromiseFactory fnPayment = [this](const std::shared_ptr<CTradeCtx>& spSelf)
         {
             return m_exec.NewPromise(spSelf, &StepFetchPayment, ASYNC_LOC);
         };
@@ -263,15 +272,17 @@ class CTradeModule
 
    private:
     /// ① fetchUser(id)：结果写进上下文
-    static no::CPromiseResult StepFetchUser(no::CPromiseResult /*upResult*/, const std::shared_ptr<CTradeCtx>& spCtx)
+    static common::async::CPromiseResult StepFetchUser(common::async::CPromiseResult /*upResult*/,
+                                                       const std::shared_ptr<CTradeCtx>& spCtx)
     {
         spCtx->strUserName = "Alice";
         std::printf("用户: %d %s\n", spCtx->nUserId, spCtx->strUserName.c_str());
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// ② fetchOrders(user)：等价 `.then(orders => …)`
-    static no::CPromiseResult StepFetchOrders(no::CPromiseResult /*upResult*/, const std::shared_ptr<CTradeCtx>& spCtx)
+    static common::async::CPromiseResult StepFetchOrders(common::async::CPromiseResult /*upResult*/,
+                                                         const std::shared_ptr<CTradeCtx>& spCtx)
     {
         spCtx->vecOrders.push_back("order1");
         spCtx->vecOrders.push_back("order2");
@@ -281,25 +292,27 @@ class CTradeModule
             std::printf(" %s", strOrder.c_str());
         }
         std::printf("\n");
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// ③ fetchPayment(orders[0])：等价 `.then(payment => …)`
-    static no::CPromiseResult StepFetchPayment(no::CPromiseResult /*upResult*/, const std::shared_ptr<CTradeCtx>& spCtx)
+    static common::async::CPromiseResult StepFetchPayment(common::async::CPromiseResult /*upResult*/,
+                                                          const std::shared_ptr<CTradeCtx>& spCtx)
     {
         spCtx->nTotal = 99;
         std::printf("支付: %d\n", spCtx->nTotal);
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// ④ .then(total => …)：内层链全部完成后才执行
-    static no::CPromiseResult StepPrintTotal(no::CPromiseResult /*upResult*/, const std::shared_ptr<CTradeCtx>& spCtx)
+    static common::async::CPromiseResult StepPrintTotal(common::async::CPromiseResult /*upResult*/,
+                                                        const std::shared_ptr<CTradeCtx>& spCtx)
     {
         std::printf("最终总额: %d\n", spCtx->nTotal);
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
-    no::CAsyncExecutor m_exec;  ///< 模块私有执行器。
+    common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器。
 };
 
 int main()
@@ -309,7 +322,7 @@ int main()
     auto spCtx = std::make_shared<CTradeCtx>();
     spCtx->nUserId = 123;  // fetchUser(123)
 
-    const no::CPromiseResult result = spModule->RunAsync(spCtx).Await();
+    const common::async::CPromiseResult result = spModule->RunAsync(spCtx).Await();
     std::printf("结果: %s\n", result.IsFulfilled() ? "兑现" : "拒绝");
     return 0;
 }

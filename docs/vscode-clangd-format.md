@@ -47,32 +47,33 @@ lambda 体再缩进一级，结尾 `});` 与 lambda 起始列对齐，不需要�
 
 ```cpp
 // 推荐：lambda 需要在多处复用时才先赋给具名变量（类型用 ThenHandler / PromiseFactory / PromiseExecutor）
-COrderPromise::ThenHandler fnValidate = [](no::CPromiseResult upResult, const std::shared_ptr<COrderContext>& spCtx)
+COrderPromise::ThenHandler fnValidate =
+    [](common::async::CPromiseResult upResult, const std::shared_ptr<COrderContext>& spCtx)
 {
     if (upResult.IsRejected())
     {
         return upResult;
     }
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 };
 
-return exec.NewPromise(spCtx, &StepLoadOrder, ASYNC_LOC)  // ① 具名异步函数
-    .Then(fnValidate, ASYNC_LOC)                          // ② lambda
-    .ThenPromise(fnQueryStock, ASYNC_LOC)                 // ③ 内部执行其他异步函数（等它）
+return exec
+    .NewPromise(spCtx, &StepLoadOrder, ASYNC_LOC)  // ① 具名异步函数
+    .Then(fnValidate, ASYNC_LOC)                   // ② lambda
+    .ThenPromise(fnQueryStock, ASYNC_LOC)          // ③ 内部执行其他异步函数（等它）
     .Finally(&StepAudit, ASYNC_LOC);
 ```
 
 ```cpp
 // 同样推荐：只用一次时直接内联 —— 实参缩进一级、lambda 体再缩进一级、`});` 与 lambda 对齐
-const bool bOk = pUpState->AddHandler(pCore->Handle(),
-    [pCore, pNextState, fnFactory](const CPromiseResult& upResult)
+const bool bOk = pUpState->AddHandler(pCore->Handle(), [pCore, pNextState, fnFactory](const CPromiseResult& upResult)
+{
+    if (upResult.IsRejected())
     {
-        if (upResult.IsRejected())
-        {
-            return;  // 失败即停。
-        }
-        Adopt(pCore, pNextState, fnFactory);
-    });
+        return;  // 失败即停。
+    }
+    Adopt(pCore, pNextState, fnFactory);
+});
 ```
 
 ## 5. 函数体不写单行 + 每层标号
@@ -85,8 +86,14 @@ const bool bOk = pUpState->AddHandler(pCore->Handle(),
 
 ```cpp
 // 不推荐（仓库内尚有存量，改到哪个文件顺便展开）
-CStockModule() : m_exec(1) { m_exec.Start(); }
-COrderP::PromiseFactory fnQueryStock = [&](const std::shared_ptr<COrderCtx>& sp) { return Bridge(sp); };
+CStockModule() : m_exec(1)
+{
+    m_exec.Start();
+}
+COrderP::PromiseFactory fnQueryStock = [&](const std::shared_ptr<COrderCtx>& sp)
+{
+    return Bridge(sp);
+};
 
 // 推荐
 CStockModule() : m_exec(1)
@@ -104,14 +111,14 @@ COrderP::PromiseFactory fnQueryStock = [&exec](const std::shared_ptr<COrderCtx>&
    链上每行行尾写同一个号：
 
 ```cpp
-    return exec
-        .NewPromise(sp, &StepLoad, ASYNC_LOC)  // ① 具名异步函数
-        .Then(fnValidate, ASYNC_LOC)           // ② lambda：校验
-        .ThenPromise(fnQueryStock, ASYNC_LOC)  // ③ 调库存模块（等它）
-        .ThenPromise(fnReserve, ASYNC_LOC)     // ④ 内层链（等它）
-        .Then(fnBilling, ASYNC_LOC)            // ⑤ 旁支（不等它）
-        .Catch(fnCompensate, ASYNC_LOC)        // catch：仅被拒绝时执行
-        .Finally(fnAudit, ASYNC_LOC);          // finally：成败都跑
+return exec
+    .NewPromise(sp, &StepLoad, ASYNC_LOC)  // ① 具名异步函数
+    .Then(fnValidate, ASYNC_LOC)           // ② lambda：校验
+    .ThenPromise(fnQueryStock, ASYNC_LOC)  // ③ 调库存模块（等它）
+    .ThenPromise(fnReserve, ASYNC_LOC)     // ④ 内层链（等它）
+    .Then(fnBilling, ASYNC_LOC)            // ⑤ 旁支（不等它）
+    .Catch(fnCompensate, ASYNC_LOC)        // catch：仅被拒绝时执行
+    .Finally(fnAudit, ASYNC_LOC);          // finally：成败都跑
 ```
 
 完整示例见 `examples/cases/ThenMixCase.cpp`（一条链里混用具名 handler / lambda / lambda 内执行其他异步函数），
@@ -133,9 +140,9 @@ COrderP::PromiseFactory fnQueryStock = [&exec](const std::shared_ptr<COrderCtx>&
 函数形参随之也缩进一级 —— 这是刻意的取舍，不是遗漏：
 
 ```cpp
-    void RunHandler(const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
-        const CPromiseResult& upResult, int nMode, int nAffinity = kAffinityChain,
-        const std::shared_ptr<CExecutorHandle>& pTarget = nullptr) const
+void RunHandler(const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
+                const CPromiseResult& upResult, int nMode, int nAffinity = kAffinityChain,
+                const std::shared_ptr<CExecutorHandle>& pTarget = nullptr) const
 ```
 
 ### 6.1 试过、但不可靠/不成立的变通（不要再试）

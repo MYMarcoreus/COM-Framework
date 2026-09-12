@@ -36,8 +36,6 @@
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 
-namespace no = common::async;
-
 namespace {
 
 // ==================== 三套上下文：本流程 / 库存模块 / 记账模块
@@ -98,9 +96,9 @@ struct CBillingContext
 /// 本用例的业务错误码（业务码从 kBusinessBase 起取）。
 enum ThenMixCode
 {
-    kCodeOutOfStock = no::kBusinessBase + 1,    ///< 库存不足。
-    kCodeBadOrder = no::kBusinessBase + 2,      ///< 订单参数非法（单笔最多 10 件）。
-    kCodeReserveFailed = no::kBusinessBase + 3  ///< 内层链：确认预占失败。
+    kCodeOutOfStock = common::async::kBusinessBase + 1,    ///< 库存不足。
+    kCodeBadOrder = common::async::kBusinessBase + 2,      ///< 订单参数非法（单笔最多 10 件）。
+    kCodeReserveFailed = common::async::kBusinessBase + 3  ///< 内层链：确认预占失败。
 };
 
 /// @brief 断言助手：失败时打印原因，返回本条的通过状态。
@@ -137,7 +135,7 @@ public:
     /// @param nSku 商品编码。
     ///
     /// @return 库存模块自己上下文的 promise（调用方只能等它，拿不到执行器）。
-    no::CPromise<CStockContext> QueryStockAsync(int nSku)
+    common::async::CPromise<CStockContext> QueryStockAsync(int nSku)
     {
         std::shared_ptr<CStockContext> spStock = std::make_shared<CStockContext>();
         spStock->nSku = nSku;
@@ -146,22 +144,24 @@ public:
 
 private:
     /// 层 1：建连（模拟握手）。
-    static no::CPromiseResult StepConnect(no::CPromiseResult /*upResult*/, const std::shared_ptr<CStockContext>& spCtx)
+    static common::async::CPromiseResult StepConnect(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStockContext>& spCtx)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         spCtx->strTrace += "连库存;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// 层 2：读可售量。
-    static no::CPromiseResult StepRead(no::CPromiseResult /*upResult*/, const std::shared_ptr<CStockContext>& spCtx)
+    static common::async::CPromiseResult StepRead(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStockContext>& spCtx)
     {
         spCtx->nAvail = 5;  // 演示数据：只有 5 件可售
         spCtx->strTrace += "读库存;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
-    no::CAsyncExecutor m_exec;  ///< 模块私有执行器（析构自动 Stop）。
+    common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（析构自动 Stop）。
 };
 
 // ====================================================================
@@ -183,7 +183,7 @@ public:
     /// @param nAmount 金额（分）。
     ///
     /// @return 记账模块自己上下文的 promise。
-    no::CPromise<CBillingContext> WriteBillingAsync(int nOrderId, int nAmount)
+    common::async::CPromise<CBillingContext> WriteBillingAsync(int nOrderId, int nAmount)
     {
         std::shared_ptr<CBillingContext> spBill = std::make_shared<CBillingContext>();
         spBill->nOrderId = nOrderId;
@@ -193,14 +193,15 @@ public:
 
 private:
     /// 唯一一步：写流水（模拟 IO）。
-    static no::CPromiseResult StepWrite(no::CPromiseResult /*upResult*/, const std::shared_ptr<CBillingContext>& spCtx)
+    static common::async::CPromiseResult StepWrite(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CBillingContext>& spCtx)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(4));
         spCtx->strTrace += "写流水;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
-    no::CAsyncExecutor m_exec;  ///< 模块私有执行器（析构自动 Stop）。
+    common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（析构自动 Stop）。
 };
 
 // ====================================================================
@@ -223,32 +224,34 @@ public:
     /// @param spBillingModule 记账模块（自持执行器；旁支用）。
     ///
     /// @return 指向 finally 层的 promise 句柄。
-    no::CPromise<COrderContext> PlaceOrderAsync(const std::shared_ptr<COrderContext>& spCtx,
+    common::async::CPromise<COrderContext> PlaceOrderAsync(const std::shared_ptr<COrderContext>& spCtx,
         const std::shared_ptr<CStockModule>& spStockModule, const std::shared_ptr<CBillingModule>& spBillingModule)
     {
         // ③ 工厂：then 内部执行其他模块的异步函数，并等它（跨上下文 → 桥接）。
-        no::CPromise<COrderContext>::PromiseFactory fnQueryStock = [this, spStockModule](
-                                                                       const std::shared_ptr<COrderContext>& spCtxSelf)
+        common::async::CPromise<COrderContext>::PromiseFactory fnQueryStock =
+            [this, spStockModule](const std::shared_ptr<COrderContext>& spCtxSelf)
         {
             return BridgeQueryStock(spCtxSelf, spStockModule);
         };
 
         // ④ 工厂：在 lambda 里现搭一条内层 then 链，让它参与当前链（同上下文 → 直接 adopt）。
-        no::CPromise<COrderContext>::PromiseFactory fnReserveInner =
+        common::async::CPromise<COrderContext>::PromiseFactory fnReserveInner =
             [this](const std::shared_ptr<COrderContext>& spCtxSelf)
         {
             return m_exec.NewPromise(spCtxSelf, &StepReserveStock, ASYNC_LOC).Then(&StepReserveConfirm, ASYNC_LOC);
         };
 
         // ⑤ 旁支：then 内部执行其他异步函数，但不等它（fire-and-forget）。
-        no::CPromise<COrderContext>::ThenHandler fnBillingSideBranch =
-            [spBillingModule](no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtxSelf)
+        common::async::CPromise<COrderContext>::ThenHandler fnBillingSideBranch =
+            [spBillingModule](
+                common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtxSelf)
         {
             const int nOrderId = spCtxSelf->nSku * 1000 + spCtxSelf->nQty;
-            no::CPromise<CBillingContext> promiseBill = spBillingModule->WriteBillingAsync(nOrderId, spCtxSelf->nTotal);
+            common::async::CPromise<CBillingContext> promiseBill =
+                spBillingModule->WriteBillingAsync(nOrderId, spCtxSelf->nTotal);
             // 旁支的收尾通知跑在记账模块的线程上 → 只写原子，不做重活。
             promiseBill.OnSettled(
-                [spCtxSelf](no::CPromiseResult result)
+                [spCtxSelf](common::async::CPromiseResult result)
                 {
                     if (result.IsFulfilled())
                     {
@@ -256,7 +259,7 @@ public:
                     }
                 });
             spCtxSelf->strTrace += "记账已发起(不等);";
-            return no::CPromiseResult::Resolve();  // 主链继续，不等待记账。
+            return common::async::CPromiseResult::Resolve();  // 主链继续，不等待记账。
         };
 
         return m_exec
@@ -273,29 +276,31 @@ public:
 
 private:
     /// ① 读订单：取单价（模拟一次 IO）。
-    static no::CPromiseResult StepLoad(no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
+    static common::async::CPromiseResult StepLoad(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         spCtx->nUnitPrice = 1250;  // 12.50 元
         spCtx->strTrace += "读订单;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// ② 校验（不需要捕获，写成静态成员函数）。
-    static no::CPromiseResult StepValidate(no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
+    static common::async::CPromiseResult StepValidate(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
     {
         if (spCtx->nSku <= 0 || spCtx->nQty <= 0)
         {
             spCtx->strTrace += "校验失败(参数非法);";
-            return no::CPromiseResult::Reject(kCodeBadOrder);
+            return common::async::CPromiseResult::Reject(kCodeBadOrder);
         }
         if (spCtx->nQty > 10)
         {
             spCtx->strTrace += "校验失败(单笔最多 10 件);";
-            return no::CPromiseResult::Reject(kCodeBadOrder);
+            return common::async::CPromiseResult::Reject(kCodeBadOrder);
         }
         spCtx->strTrace += "校验通过;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// ③ 桥接：把库存模块的 promise 接进本流程（等价 JS 的 new Promise）。
@@ -306,18 +311,18 @@ private:
     /// @param spStockModule 库存模块。
     ///
     /// @return 由库存模块的回调 settle 的本流程 promise。
-    no::CPromise<COrderContext> BridgeQueryStock(
+    common::async::CPromise<COrderContext> BridgeQueryStock(
         const std::shared_ptr<COrderContext>& spCtx, const std::shared_ptr<CStockModule>& spStockModule)
     {
-        no::CPromise<COrderContext>::PromiseExecutor fnExecutor =
-            [spStockModule, spCtx](const no::CPromise<COrderContext>::ResolveFn& fnResolve,
-                const no::CPromise<COrderContext>::RejectFn& fnReject)
+        common::async::CPromise<COrderContext>::PromiseExecutor fnExecutor =
+            [spStockModule, spCtx](const common::async::CPromise<COrderContext>::ResolveFn& fnResolve,
+                const common::async::CPromise<COrderContext>::RejectFn& fnReject)
         {
             // 发起跨模块调用：拿到的是库存模块上下文的 promise，执行器在模块内部。
-            no::CPromise<CStockContext> promiseStock = spStockModule->QueryStockAsync(spCtx->nSku);
+            common::async::CPromise<CStockContext> promiseStock = spStockModule->QueryStockAsync(spCtx->nSku);
             const std::shared_ptr<CStockContext> spStock = promiseStock.GetContext();
             promiseStock.OnSettled(
-                [spCtx, spStock, fnResolve, fnReject](no::CPromiseResult result)
+                [spCtx, spStock, fnResolve, fnReject](common::async::CPromiseResult result)
                 {
                     // 本回调在库存模块的线程上：只做语义转换 + 改上下文 + settle。
                     if (result.IsRejected())
@@ -337,12 +342,12 @@ private:
                     fnResolve();
                 });
         };
-        return no::CPromise<COrderContext>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return common::async::CPromise<COrderContext>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
     }
 
     /// ④ 算折扣：满 3 件 9 折（模拟业务规则）。
-    static no::CPromiseResult StepApplyDiscount(
-        no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
+    static common::async::CPromiseResult StepApplyDiscount(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
     {
         spCtx->nTotal = spCtx->nUnitPrice * spCtx->nQty;
         if (spCtx->nQty >= 3)
@@ -354,42 +359,43 @@ private:
         {
             spCtx->strTrace += "无折扣;";
         }
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// ④+ 内层链第 1 步：预占库存。
-    static no::CPromiseResult StepReserveStock(
-        no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
+    static common::async::CPromiseResult StepReserveStock(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
     {
         spCtx->strTrace += "预占;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// ④+ 内层链第 2 步：确认预占（bFailReserve 时拒绝，用来看拒绝如何透传）。
-    static no::CPromiseResult StepReserveConfirm(
-        no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
+    static common::async::CPromiseResult StepReserveConfirm(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
     {
         if (spCtx->bFailReserve)
         {
-            return no::CPromiseResult::Reject(kCodeReserveFailed);
+            return common::async::CPromiseResult::Reject(kCodeReserveFailed);
         }
         spCtx->strTrace += "确认预占;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// ⑥ 落库：保存订单（模拟一次写库）。
-    static no::CPromiseResult StepSaveOrder(
-        no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
+    static common::async::CPromiseResult StepSaveOrder(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         spCtx->strTrace += "落库;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// catch 补偿：库存不足时补偿（只在上一层被拒绝时执行）。
     ///
     /// 这里透传拒绝（return upResult）；若补偿后可以继续，返回 Resolve() 吞掉拒绝。
-    static no::CPromiseResult StepCompensate(no::CPromiseResult upResult, const std::shared_ptr<COrderContext>& spCtx)
+    static common::async::CPromiseResult StepCompensate(
+        common::async::CPromiseResult upResult, const std::shared_ptr<COrderContext>& spCtx)
     {
         if (upResult.Code() == kCodeOutOfStock)  // 只有库存不足需要释放 / 回滚
         {
@@ -400,14 +406,15 @@ private:
     }
 
     /// finally 审计：成败都执行，返回值被忽略（原样透传上一层结果）。
-    static no::CPromiseResult StepAudit(no::CPromiseResult upResult, const std::shared_ptr<COrderContext>& spCtx)
+    static common::async::CPromiseResult StepAudit(
+        common::async::CPromiseResult upResult, const std::shared_ptr<COrderContext>& spCtx)
     {
         spCtx->bAudited = true;
         spCtx->strTrace += "审计;";
         return upResult;
     }
 
-    no::CAsyncExecutor m_exec;  ///< 模块私有执行器（析构自动 Stop）。
+    common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（析构自动 Stop）。
 };
 
 /// @brief 等旁支（记账）完成：旁支是 fire-and-forget，断言前等一下。
@@ -445,7 +452,8 @@ bool RunThenMixCase()
     spOk->nSku = 88;
     spOk->nQty = 3;  // 满 3 件 → ④ 打折
 
-    const no::CPromiseResult resultOk = spOrderModule->PlaceOrderAsync(spOk, spStockModule, spBillingModule).Await();
+    const common::async::CPromiseResult resultOk =
+        spOrderModule->PlaceOrderAsync(spOk, spStockModule, spBillingModule).Await();
     WaitSideBranch(spOk, 1000);  // ⑤ 是旁支：主链不等它，这里等一下再断言
 
     const bool bOkStock = (spOk->nStock == 5 && spOk->bStockEnough);
@@ -467,7 +475,8 @@ bool RunThenMixCase()
     spOut->nSku = 88;
     spOut->nQty = 8;  // 库存只有 5 件 → ③ 查库存后拒绝
 
-    const no::CPromiseResult resultOut = spOrderModule->PlaceOrderAsync(spOut, spStockModule, spBillingModule).Await();
+    const common::async::CPromiseResult resultOut =
+        spOrderModule->PlaceOrderAsync(spOut, spStockModule, spBillingModule).Await();
 
     const bool bOkOutCode = (resultOut.IsRejected() && resultOut.Code() == static_cast<int>(kCodeOutOfStock));
     const bool bOkOutTrace = (spOut->strTrace == "读订单;校验通过;查库存(5);库存不足;补偿;审计;");
@@ -483,7 +492,8 @@ bool RunThenMixCase()
     spBad->nSku = 88;
     spBad->nQty = 50;  // 单笔最多 10 件 → ② 直接拒绝
 
-    const no::CPromiseResult resultBad = spOrderModule->PlaceOrderAsync(spBad, spStockModule, spBillingModule).Await();
+    const common::async::CPromiseResult resultBad =
+        spOrderModule->PlaceOrderAsync(spBad, spStockModule, spBillingModule).Await();
 
     const bool bOkBadCode = (resultBad.IsRejected() && resultBad.Code() == static_cast<int>(kCodeBadOrder));
     const bool bOkBadTrace = (spBad->strTrace == "读订单;校验失败(单笔最多 10 件);审计;");
@@ -500,7 +510,7 @@ bool RunThenMixCase()
     spInner->nQty = 2;             // 不触发折扣，也不缺库存
     spInner->bFailReserve = true;  // 内层链第 2 步（确认预占）拒绝
 
-    const no::CPromiseResult resultInner =
+    const common::async::CPromiseResult resultInner =
         spOrderModule->PlaceOrderAsync(spInner, spStockModule, spBillingModule).Await();
 
     const bool bOkInnerCode = (resultInner.IsRejected() && resultInner.Code() == static_cast<int>(kCodeReserveFailed));

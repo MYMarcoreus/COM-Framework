@@ -18,10 +18,8 @@ namespace serverexample {
 
 namespace {
 
-namespace no = common::async;
-
 /// @brief 本流程的 promise 与 resolve / reject 句柄别名（减少模板噪音，便于阅读）。
-using CUserPromise = no::CPromise<CUserOpContext>;
+using CUserPromise = common::async::CPromise<CUserOpContext>;
 using ResolveFn = CUserPromise::ResolveFn;
 using RejectFn = CUserPromise::RejectFn;
 
@@ -32,7 +30,7 @@ const std::size_t kMaxNameLength = 32;
 const int kMaxUpdateAttempts = 3;
 
 /// @brief 结果描述（供日志使用）。
-std::string DescribeResult(const no::CPromiseResult& result)
+std::string DescribeResult(const common::async::CPromiseResult& result)
 {
     if (result.IsFulfilled())
     {
@@ -76,8 +74,8 @@ bool IsValidUserName(const std::string& strName)
 /// 这也让流程函数成为不接触模块实例的纯函数，回调在哪个线程上都安全。
 struct CFlowDeps
 {
-    std::shared_ptr<no::CAsyncExecutor> spExec;  ///< 本模块执行器。
-    sc::ScopedInterfacePtr<IUserTable> spTable;  ///< 数据访问模块接口。
+    std::shared_ptr<common::async::CAsyncExecutor> spExec;  ///< 本模块执行器。
+    sc::ScopedInterfacePtr<IUserTable> spTable;             ///< 数据访问模块接口。
 
     /// @brief 依赖是否齐备。
     bool IsReady() const
@@ -100,15 +98,16 @@ struct CFlowDeps
 /// @param spCtx 业务上下文。
 ///
 /// @return 兑现；id 非法返回 kUserInvalidParam。
-no::CPromiseResult StepValidateUserId(no::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
+common::async::CPromiseResult StepValidateUserId(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     spCtx->strTrace += "校验参数;";
     if (spCtx->nUserId == 0)
     {
         spCtx->strError = "用户 id 非法";
-        return no::CPromiseResult::Reject(kUserInvalidParam);
+        return common::async::CPromiseResult::Reject(kUserInvalidParam);
     }
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// @brief 处理器：校验注册入参（用户名 / 邮箱 / 等级）。
@@ -118,25 +117,26 @@ no::CPromiseResult StepValidateUserId(no::CPromiseResult /*upResult*/, const std
 /// @param spCtx 业务上下文（recRequest 为入参）。
 ///
 /// @return 兑现；入参非法返回 kUserInvalidParam（失败即停，后续层不再执行）。
-no::CPromiseResult StepValidateRecord(no::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
+common::async::CPromiseResult StepValidateRecord(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     spCtx->strTrace += "校验参数;";
     if (!IsValidUserName(spCtx->recRequest.strName))
     {
         spCtx->strError = "用户名非法（1-" + std::to_string(kMaxNameLength) + " 个字母 / 数字 / 下划线 / 连字符）";
-        return no::CPromiseResult::Reject(kUserInvalidParam);
+        return common::async::CPromiseResult::Reject(kUserInvalidParam);
     }
     if (spCtx->recRequest.strMail.find('@') == std::string::npos)
     {
         spCtx->strError = "邮箱格式非法";
-        return no::CPromiseResult::Reject(kUserInvalidParam);
+        return common::async::CPromiseResult::Reject(kUserInvalidParam);
     }
     if (spCtx->recRequest.nLevel <= 0)
     {
         spCtx->strError = "用户等级非法";
-        return no::CPromiseResult::Reject(kUserInvalidParam);
+        return common::async::CPromiseResult::Reject(kUserInvalidParam);
     }
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// @brief 处理器：用户不存在则本层拒绝。
@@ -146,15 +146,16 @@ no::CPromiseResult StepValidateRecord(no::CPromiseResult /*upResult*/, const std
 /// @param spCtx 业务上下文（读 bExists）。
 ///
 /// @return 存在兑现；不存在返回 kUserNotFound（失败即停，后续层不执行）。
-no::CPromiseResult StepRejectIfAbsent(no::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
+common::async::CPromiseResult StepRejectIfAbsent(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     if (!spCtx->bExists)
     {
         spCtx->strError = "用户不存在";
         spCtx->strTrace += "拒绝(用户不存在);";
-        return no::CPromiseResult::Reject(kUserNotFound);
+        return common::async::CPromiseResult::Reject(kUserNotFound);
     }
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// @brief 处理器：用户已存在则本层拒绝（注册流程的查重分支）。
@@ -164,15 +165,16 @@ no::CPromiseResult StepRejectIfAbsent(no::CPromiseResult /*upResult*/, const std
 /// @param spCtx 业务上下文（读 bExists）。
 ///
 /// @return 不存在兑现；已存在返回 kUserDuplicate。
-no::CPromiseResult StepRejectIfExists(no::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
+common::async::CPromiseResult StepRejectIfExists(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     if (spCtx->bExists)
     {
         spCtx->strError = "用户已存在";
         spCtx->strTrace += "拒绝(用户已存在);";
-        return no::CPromiseResult::Reject(kUserDuplicate);
+        return common::async::CPromiseResult::Reject(kUserDuplicate);
     }
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// @brief 处理器：组装更新请求（用库中当前版本 + 本次要改的名字）。
@@ -182,12 +184,13 @@ no::CPromiseResult StepRejectIfExists(no::CPromiseResult /*upResult*/, const std
 /// @param spCtx 业务上下文（recResult 为库中当前行）。
 ///
 /// @return 兑现（此时 recRequest 已带合法期望版本）。
-no::CPromiseResult StepPrepareRename(no::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
+common::async::CPromiseResult StepPrepareRename(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     if (!spCtx->bExists)
     {
         spCtx->strError = "用户不存在";
-        return no::CPromiseResult::Reject(kUserNotFound);
+        return common::async::CPromiseResult::Reject(kUserNotFound);
     }
 
     CUserRecord recRequest = spCtx->recResult;  // 沿用库中其余字段。
@@ -195,7 +198,7 @@ no::CPromiseResult StepPrepareRename(no::CPromiseResult /*upResult*/, const std:
     recRequest.nVersion = spCtx->recResult.nVersion;  // 期望版本 = 读到的版本（乐观锁）。
     spCtx->recRequest = recRequest;
     spCtx->strTrace += "组装更新(期望版本=" + std::to_string(recRequest.nVersion) + ");";
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// @brief 处理器（finally）：审计日志（无论成败都执行，结果原样透传）。
@@ -204,7 +207,8 @@ no::CPromiseResult StepPrepareRename(no::CPromiseResult /*upResult*/, const std:
 /// @param spCtx 业务上下文。
 ///
 /// @return upResult（finally 忽略返回值，不改变链的走向）。
-no::CPromiseResult StepAudit(no::CPromiseResult upResult, const std::shared_ptr<CUserOpContext>& spCtx)
+common::async::CPromiseResult StepAudit(
+    common::async::CPromiseResult upResult, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     // finally 层：成败都执行，upResult 可能是拒绝（返回值被忽略，原样透传）。
     spCtx->strTrace += "审计;";
@@ -245,7 +249,7 @@ CUserPromise BridgeQueryUser(const CFlowDeps& deps, const std::shared_ptr<CUserO
         spCtx->spDbOp->bFound = false;
         deps.spTable->QueryUserAsync(spCtx->spDbOp)
             .OnSettled(
-                [spCtx, fnResolve, fnReject](no::CPromiseResult result)
+                [spCtx, fnResolve, fnReject](common::async::CPromiseResult result)
                 {
                     if (result.IsFulfilled())
                     {
@@ -284,7 +288,7 @@ CUserPromise BridgeInsertUser(const CFlowDeps& deps, const std::shared_ptr<CUser
         spCtx->spDbOp->recRequest = spCtx->recRequest;
         deps.spTable->InsertUserAsync(spCtx->spDbOp)
             .OnSettled(
-                [spCtx, fnResolve, fnReject](no::CPromiseResult result)
+                [spCtx, fnResolve, fnReject](common::async::CPromiseResult result)
                 {
                     if (result.IsFulfilled())
                     {
@@ -328,7 +332,7 @@ void UpdateUserAttempt(const CFlowDeps& deps, const std::shared_ptr<CUserOpConte
     spCtx->spDbOp->recRequest = spCtx->recRequest;
     deps.spTable->UpdateUserAsync(spCtx->spDbOp)
         .OnSettled(
-            [deps, spCtx, fnResolve, fnReject, nAttempt](no::CPromiseResult result)
+            [deps, spCtx, fnResolve, fnReject, nAttempt](common::async::CPromiseResult result)
             {
                 if (result.IsFulfilled())
                 {
@@ -385,7 +389,7 @@ CUserPromise BridgeDeleteUser(const CFlowDeps& deps, const std::shared_ptr<CUser
         spCtx->spDbOp->nUserId = spCtx->nUserId;
         deps.spTable->DeleteUserAsync(spCtx->spDbOp)
             .OnSettled(
-                [spCtx, fnResolve, fnReject](no::CPromiseResult result)
+                [spCtx, fnResolve, fnReject](common::async::CPromiseResult result)
                 {
                     if (result.IsFulfilled())
                     {
@@ -547,8 +551,8 @@ private:
     /// @param strScenario 场景名。
     /// @param result 本场景最终结果。
     /// @param spCtx 本场景上下文。
-    void LogScenario(
-        const std::string& strScenario, const no::CPromiseResult& result, const std::shared_ptr<CUserOpContext>& spCtx)
+    void LogScenario(const std::string& strScenario, const common::async::CPromiseResult& result,
+        const std::shared_ptr<CUserOpContext>& spCtx)
     {
         const std::string strLine = "[" + strScenario + "] " + DescribeResult(result) +
                                     (spCtx->strError.empty() ? std::string() : (" 说明=" + spCtx->strError)) +
@@ -575,7 +579,7 @@ private:
         const std::shared_ptr<CUserOpContext> spCtx = promise.GetContext();
         std::shared_ptr<CDemoDriver> spSelf = shared_from_this();
         promise.OnSettled(
-            [spSelf, spCtx](no::CPromiseResult result)
+            [spSelf, spCtx](common::async::CPromiseResult result)
             {
                 spSelf->m_nUserId = spCtx->nUserId;
                 spSelf->LogScenario("演示① 注册用户", result, spCtx);
@@ -601,7 +605,7 @@ private:
         const std::shared_ptr<CUserOpContext> spCtx = promise.GetContext();
         std::shared_ptr<CDemoDriver> spSelf = shared_from_this();
         promise.OnSettled(
-            [spSelf, spCtx](no::CPromiseResult result)
+            [spSelf, spCtx](common::async::CPromiseResult result)
             {
                 spSelf->LogScenario("演示② 重复注册（查重命中）", result, spCtx);
                 spSelf->RunQuery();
@@ -615,7 +619,7 @@ private:
         const std::shared_ptr<CUserOpContext> spCtx = promise.GetContext();
         std::shared_ptr<CDemoDriver> spSelf = shared_from_this();
         promise.OnSettled(
-            [spSelf, spCtx](no::CPromiseResult result)
+            [spSelf, spCtx](common::async::CPromiseResult result)
             {
                 spSelf->LogScenario("演示③ 查询用户 名字=" + spCtx->recResult.strName +
                                         " 等级=" + std::to_string(spCtx->recResult.nLevel),
@@ -646,7 +650,7 @@ private:
         const std::shared_ptr<CUserOpContext> spCtx = promise.GetContext();
         std::shared_ptr<CDemoDriver> spSelf = shared_from_this();
         promise.OnSettled(
-            [spSelf, spCtx, strTag](no::CPromiseResult result)
+            [spSelf, spCtx, strTag](common::async::CPromiseResult result)
             {
                 const std::string strLine = strTag + "=" + DescribeResult(result) +
                                             " 尝试=" + std::to_string(spCtx->nAttempt) + " 轨迹=" + spCtx->strTrace;
@@ -679,7 +683,7 @@ private:
         const std::shared_ptr<CUserOpContext> spCtx = promise.GetContext();
         std::shared_ptr<CDemoDriver> spSelf = shared_from_this();
         promise.OnSettled(
-            [spSelf, spCtx](no::CPromiseResult result)
+            [spSelf, spCtx](common::async::CPromiseResult result)
             {
                 spSelf->LogScenario("演示⑤ 删除用户", result, spCtx);
                 spSelf->RunRemoveAgain();
@@ -693,7 +697,7 @@ private:
         const std::shared_ptr<CUserOpContext> spCtx = promise.GetContext();
         std::shared_ptr<CDemoDriver> spSelf = shared_from_this();
         promise.OnSettled(
-            [spSelf, spCtx](no::CPromiseResult result)
+            [spSelf, spCtx](common::async::CPromiseResult result)
             {
                 spSelf->LogScenario("演示⑥ 重复删除（已不存在）", result, spCtx);
                 spSelf->RunInvalidParam();
@@ -711,7 +715,7 @@ private:
         const std::shared_ptr<CUserOpContext> spCtx = promise.GetContext();
         std::shared_ptr<CDemoDriver> spSelf = shared_from_this();
         promise.OnSettled(
-            [spSelf, spCtx](no::CPromiseResult result)
+            [spSelf, spCtx](common::async::CPromiseResult result)
             {
                 spSelf->LogScenario("演示⑦ 非法入参", result, spCtx);
                 spSelf->RunDbError();
@@ -729,10 +733,10 @@ private:
         spDbOp->bSimulateDbError = true;
         std::shared_ptr<CDemoDriver> spSelf = shared_from_this();
         m_spTable->QueryUserAsync(spDbOp).OnSettled(
-            [spSelf, spDbOp](no::CPromiseResult result)
+            [spSelf, spDbOp](common::async::CPromiseResult result)
             {
                 common::log::CLogger::Instance().Warn("[演示⑧] 数据访问层内异常 " + DescribeResult(result) +
-                                                      "（kException=" + std::to_string(no::kException) +
+                                                      "（kException=" + std::to_string(common::async::kException) +
                                                       "）轨迹=" + spDbOp->strTrace);
                 common::log::CLogger::Instance().Info(
                     "=========== 用户业务演示结束（全流程回调驱动，未阻塞任何线程）===========");

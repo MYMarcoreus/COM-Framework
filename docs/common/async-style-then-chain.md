@@ -27,8 +27,6 @@ fetchUser(123)
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 
-namespace no = common::async;
-
 /// 上下文：等价这些写法里沿链流动的值（user / orders / order / payment / total）。
 struct CFlowCtx
 {
@@ -46,7 +44,7 @@ struct CFlowCtx
 /// 业务拒绝码（从 kBusinessBase 起取；等价 reject reason 里的 code）。
 enum
 {
-    kNoOrders = no::kBusinessBase,
+    kNoOrders = common::async::kBusinessBase,
     kTooMany
 };
 
@@ -59,7 +57,7 @@ static const char* CodeText(int nCode)
             return "没有订单可处理";
         case kTooMany:
             return "订单过多，需人工审核";
-        case no::kException:
+        case common::async::kException:
             return "系统错误";
         default:
             return "未知错误";
@@ -67,15 +65,17 @@ static const char* CodeText(int nCode)
 }
 
 /// 步骤 A：fetchUser(123)
-static no::CPromiseResult StepFetchUser(no::CPromiseResult /*upResult*/, const std::shared_ptr<CFlowCtx>& spCtx)
+static common::async::CPromiseResult StepFetchUser(common::async::CPromiseResult /*upResult*/,
+                                                   const std::shared_ptr<CFlowCtx>& spCtx)
 {
     spCtx->strUserName = "Alice";
     std::printf("用户: %s\n", spCtx->strUserName.c_str());
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// 步骤 B：fetchOrders(user)
-static no::CPromiseResult StepFetchOrders(no::CPromiseResult /*upResult*/, const std::shared_ptr<CFlowCtx>& spCtx)
+static common::async::CPromiseResult StepFetchOrders(common::async::CPromiseResult /*upResult*/,
+                                                     const std::shared_ptr<CFlowCtx>& spCtx)
 {
     if (!spCtx->bNoOrders)
     {
@@ -83,42 +83,46 @@ static no::CPromiseResult StepFetchOrders(no::CPromiseResult /*upResult*/, const
         spCtx->vecOrders.push_back("order2");
     }
     std::printf("订单数: %zu\n", spCtx->vecOrders.size());
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// 步骤 C：checkRisk(orders) —— 条件不满足时返回 Reject（等价 `return Promise.reject(reason)`）
-static no::CPromiseResult StepCheckRisk(no::CPromiseResult /*upResult*/, const std::shared_ptr<CFlowCtx>& spCtx)
+static common::async::CPromiseResult StepCheckRisk(common::async::CPromiseResult /*upResult*/,
+                                                   const std::shared_ptr<CFlowCtx>& spCtx)
 {
     if (spCtx->vecOrders.empty())
     {
-        return no::CPromiseResult::Reject(kNoOrders);
+        return common::async::CPromiseResult::Reject(kNoOrders);
     }
     if (spCtx->vecOrders.size() > 10)
     {
-        return no::CPromiseResult::Reject(kTooMany);
+        return common::async::CPromiseResult::Reject(kTooMany);
     }
     spCtx->strOrderId = spCtx->vecOrders.front();
     std::printf("通过风控，订单: %s\n", spCtx->strOrderId.c_str());
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// 步骤 D：fetchPayment(order) —— 只有 checkRisk 兑现才会执行
-static no::CPromiseResult StepFetchPayment(no::CPromiseResult /*upResult*/, const std::shared_ptr<CFlowCtx>& spCtx)
+static common::async::CPromiseResult StepFetchPayment(common::async::CPromiseResult /*upResult*/,
+                                                      const std::shared_ptr<CFlowCtx>& spCtx)
 {
     spCtx->nTotal = 99;
     std::printf("支付: %d\n", spCtx->nTotal);
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// 步骤 E：`.then(total => …)`
-static no::CPromiseResult StepPrintTotal(no::CPromiseResult /*upResult*/, const std::shared_ptr<CFlowCtx>& spCtx)
+static common::async::CPromiseResult StepPrintTotal(common::async::CPromiseResult /*upResult*/,
+                                                    const std::shared_ptr<CFlowCtx>& spCtx)
 {
     std::printf("最终总额: %d\n", spCtx->nTotal);
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// `.catch(reason => …)`：只在被拒绝时执行
-static no::CPromiseResult OnReject(no::CPromiseResult upResult, const std::shared_ptr<CFlowCtx>& /*spCtx*/)
+static common::async::CPromiseResult OnReject(common::async::CPromiseResult upResult,
+                                              const std::shared_ptr<CFlowCtx>& /*spCtx*/)
 {
     std::fprintf(stderr, "流程中断 [%d]: %s\n", upResult.Code(), CodeText(upResult.Code()));
     return upResult;  // 原样返回：拒绝继续往后传（等价 catch 里没吞掉）
@@ -126,7 +130,7 @@ static no::CPromiseResult OnReject(no::CPromiseResult upResult, const std::share
 
 int main()
 {
-    no::CAsyncExecutor exec(2);
+    common::async::CAsyncExecutor exec(2);
     exec.Start();
 
     for (bool bFail : {false, true})  // 第二遍走风控拒绝分支
@@ -136,7 +140,7 @@ int main()
         spCtx->bNoOrders = bFail;
 
         // `.then(user => { return 内层链 })`：内层链 = fetchOrders → checkRisk → fetchPayment → total
-        no::CPromise<CFlowCtx>::PromiseFactory fnInner = [&exec](const std::shared_ptr<CFlowCtx>& spSelf)
+        common::async::CPromise<CFlowCtx>::PromiseFactory fnInner = [&exec](const std::shared_ptr<CFlowCtx>& spSelf)
         {
             return exec.NewPromise(spSelf, &StepFetchOrders, ASYNC_LOC)
                 .Then(&StepCheckRisk, ASYNC_LOC)

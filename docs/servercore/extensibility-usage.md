@@ -42,7 +42,7 @@ MyModule/
 ```cpp
 bool CMyApp::RegisterModules()
 {
-    if (!CMyApplication::RegisterModules()) return false; // IConfig/ILogger/IMetrics
+    if (!CMyApplication::RegisterModules()) return false;  // IConfig/ILogger/IMetrics
 
     // 基础设施（先注册，保证先初始化）
     if (!m_moduleManager.RegisterModule(sc::IID_IAsyncExecutor(), new sc::CAsyncExecutorModule(2))) return false;
@@ -87,7 +87,7 @@ inline const sc::InterfaceId& IID_IMyService()
 
 class IMyService : public virtual sc::IUnknown
 {
-public:
+   public:
     virtual common::async::CPromise<CMyOpContext> QueryAsync(std::uint64_t id) = 0;  // 异步函数
 };
 ```
@@ -110,30 +110,38 @@ public:
 
 ```cpp
 /// 桥接：把其他模块的 promise 接进本流程（等价 JS 的 new Promise）
-no::CPromise<CMyOpContext> BridgeQueryOther(const CFlowDeps& deps, const std::shared_ptr<CMyOpContext>& spCtx)
+common::async::CPromise<CMyOpContext> BridgeQueryOther(const CFlowDeps& deps,
+                                                       const std::shared_ptr<CMyOpContext>& spCtx)
 {
-    return no::CPromise<CMyOpContext>::New(
-        *deps.spExec, spCtx,
-        [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
+    return common::async::CPromise<CMyOpContext>::New(
+        *deps.spExec, spCtx, [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
+    {
+        deps.spOther
+            ->QueryAsync(spCtx->spOtherOp)  // 其他模块的异步函数（另一套上下文）
+            .OnSettled([spCtx, fnResolve, fnReject](common::async::CPromiseResult result)
         {
-            deps.spOther->QueryAsync(spCtx->spOtherOp)        // 其他模块的异步函数（另一套上下文）
-                .OnSettled([spCtx, fnResolve, fnReject](no::CPromiseResult result)
-                {
-                    if (result.IsRejected()) { fnReject(kMyDbFailed); return; }  // 跨模块拒绝码 → 业务码
-                    spCtx->nRows = spCtx->spOtherOp->nRows;                     // 取回数据
-                    fnResolve();
-                });
-        },
-        ASYNC_LOC);
+            if (result.IsRejected())
+            {
+                fnReject(kMyDbFailed);
+                return;
+            }                                        // 跨模块拒绝码 → 业务码
+            spCtx->nRows = spCtx->spOtherOp->nRows;  // 取回数据
+            fnResolve();
+        });
+    }, ASYNC_LOC);
 }
 
 // 本流程：本模块层 → 跨模块桥接 → 本模块层（全程只登记回调，不阻塞任何线程）
-no::CPromise<CMyOpContext> BuildFlow(const CFlowDeps& deps, const std::shared_ptr<CMyOpContext>& spCtx)
+common::async::CPromise<CMyOpContext> BuildFlow(const CFlowDeps& deps, const std::shared_ptr<CMyOpContext>& spCtx)
 {
     return deps.spExec->NewPromise(spCtx, &StepValidate, ASYNC_LOC)
-        .ThenPromise([deps](const std::shared_ptr<CMyOpContext>& sp) { return BridgeQueryOther(deps, sp); }, ASYNC_LOC)
+        .ThenPromise(
+            [deps](const std::shared_ptr<CMyOpContext>& sp)
+    {
+        return BridgeQueryOther(deps, sp);
+    }, ASYNC_LOC)
         .Then(&StepUseRows, ASYNC_LOC)
-        .Finally(&StepAudit, ASYNC_LOC);   // 收尾：失败也执行，且不改变结果
+        .Finally(&StepAudit, ASYNC_LOC);  // 收尾：失败也执行，且不改变结果
 }
 ```
 

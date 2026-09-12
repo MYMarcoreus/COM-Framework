@@ -24,8 +24,6 @@
 #include "AsyncTestKit.h"
 #include "TestFramework.h"
 
-namespace no = common::async;
-
 using asynctest::CCalleeCtx;
 using asynctest::CCalleeModule;
 
@@ -53,7 +51,7 @@ class CDiagnosticCapture
 public:
     CDiagnosticCapture()
     {
-        no::SetDiagnosticHandler(
+        common::async::SetDiagnosticHandler(
             [this](const char* strWhat)
             {
                 Append(strWhat);
@@ -62,7 +60,7 @@ public:
 
     ~CDiagnosticCapture()
     {
-        no::SetDiagnosticHandler(nullptr);  // 恢复默认（debug 打印 stderr，发布忽略）。
+        common::async::SetDiagnosticHandler(nullptr);  // 恢复默认（debug 打印 stderr，发布忽略）。
     }
 
     /// @brief 是否捕获到**完全等于**某文案的诊断（精确断言：文案改了就红，而不是默默通过）。
@@ -122,10 +120,11 @@ struct CRobustCtx
 };
 
 /// @brief 首层：+1。
-static no::CPromiseResult StepBump(no::CPromiseResult /*upResult*/, const std::shared_ptr<CRobustCtx>& spCtx)
+static common::async::CPromiseResult StepBump(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CRobustCtx>& spCtx)
 {
     ++spCtx->nValue;
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 // ==================== 用例：用户回调异常不终止进程 ====================
@@ -135,21 +134,21 @@ TEST(Robust_NoticeThrowIsContained)
 {
     CDiagnosticCapture capture;
 
-    no::CAsyncExecutor exec(1);
+    common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
 
     auto spCtx = std::make_shared<CRobustCtx>();
-    no::CPromise<CRobustCtx> p = exec.NewPromise(spCtx, &StepBump, ASYNC_LOC);
+    common::async::CPromise<CRobustCtx> p = exec.NewPromise(spCtx, &StepBump, ASYNC_LOC);
 
     std::atomic<bool> bNoticeRan(false);
     ASSERT_TRUE(p.OnSettled(
-        [&bNoticeRan](no::CPromiseResult)
+        [&bNoticeRan](common::async::CPromiseResult)
         {
             bNoticeRan.store(true);
             throw std::runtime_error("通知里抛异常");  // 以前：逃出 settle → std::terminate。
         }));
 
-    const no::CPromiseResult result = p.Await();
+    const common::async::CPromiseResult result = p.Await();
     ASSERT_TRUE(result.IsFulfilled());
     ASSERT_EQ(spCtx->nValue, 1);
 
@@ -162,7 +161,7 @@ TEST(Robust_NoticeThrowIsContained)
     ASSERT_TRUE(WaitFor(
         [&capture]()
         {
-            return capture.Has(no::detail::kDiagNoticeThrow);
+            return capture.Has(common::async::detail::kDiagNoticeThrow);
         }));
     exec.Stop();
 }
@@ -173,15 +172,15 @@ TEST(Robust_NoticeThrowOnGuaranteedDeliveryPath)
     CDiagnosticCapture capture;
 
     auto spCtx = std::make_shared<CRobustCtx>();
-    no::CAsyncExecutor exec(1);
+    common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
-    no::CPromise<CRobustCtx> p = exec.NewPromise(spCtx, &StepBump, ASYNC_LOC);
+    common::async::CPromise<CRobustCtx> p = exec.NewPromise(spCtx, &StepBump, ASYNC_LOC);
     ASSERT_TRUE(p.Await().IsFulfilled());
     exec.Stop();  // 执行器已停 → 通知只能就地送达。
 
     std::atomic<bool> bNoticeRan(false);
     ASSERT_TRUE(p.OnSettled(
-        [&bNoticeRan](no::CPromiseResult)
+        [&bNoticeRan](common::async::CPromiseResult)
         {
             bNoticeRan.store(true);
             throw std::runtime_error("就地送达的通知里抛异常");
@@ -194,7 +193,7 @@ TEST(Robust_NoticeThrowOnGuaranteedDeliveryPath)
     ASSERT_TRUE(WaitFor(
         [&capture]()
         {
-            return capture.Has(no::detail::kDiagNoticeThrow);
+            return capture.Has(common::async::detail::kDiagNoticeThrow);
         }));
 }
 
@@ -203,7 +202,7 @@ TEST(Robust_PostedTaskThrowIsContained)
 {
     CDiagnosticCapture capture;
 
-    no::CAsyncExecutor exec(1);
+    common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
 
     std::atomic<bool> bSecondRan(false);
@@ -223,11 +222,11 @@ TEST(Robust_PostedTaskThrowIsContained)
         {
             return bSecondRan.load();
         }));
-    ASSERT_TRUE(capture.Has(no::detail::kDiagPostThrow));
+    ASSERT_TRUE(capture.Has(common::async::detail::kDiagPostThrow));
 
     // 空任务：不提交 + 报告（不再返回 true 却什么也不做）。
     ASSERT_TRUE(!exec.Post(nullptr));
-    ASSERT_TRUE(capture.Has(no::detail::kDiagPostEmpty));
+    ASSERT_TRUE(capture.Has(common::async::detail::kDiagPostEmpty));
     exec.Stop();
 }
 
@@ -236,32 +235,32 @@ TEST(Robust_PostedTaskThrowIsContained)
 /// @brief 永不落定的层：`AwaitFor(ms)` 按超时返回 kStopped，不再永久挂住。
 TEST(Robust_AwaitForTimesOut)
 {
-    no::CAsyncExecutor exec(1);
+    common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
 
     auto spCtx = std::make_shared<CRobustCtx>();
-    no::CPromise<CRobustCtx> promisePending = no::CPromise<CRobustCtx>::New(
+    common::async::CPromise<CRobustCtx> promisePending = common::async::CPromise<CRobustCtx>::New(
         exec, spCtx,
-        [](const no::CPromise<CRobustCtx>::ResolveFn&, const no::CPromise<CRobustCtx>::RejectFn&)
+        [](const common::async::CPromise<CRobustCtx>::ResolveFn&, const common::async::CPromise<CRobustCtx>::RejectFn&)
         {
             // 故意不 settle：模拟「对端永远不回」。
         },
         ASYNC_LOC);
 
     const auto tBegin = std::chrono::steady_clock::now();
-    const no::CPromiseResult result = promisePending.AwaitFor(50);
+    const common::async::CPromiseResult result = promisePending.AwaitFor(50);
     const int nElapsedMs = static_cast<int>(
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - tBegin).count());
 
     ASSERT_TRUE(result.IsRejected());
-    ASSERT_EQ(result.Code(), no::kStopped);    // 超时：只向调用方报「没等到」。
-    ASSERT_TRUE(nElapsedMs >= 40);             // 确实等到了超时（不是立即返回）
-    ASSERT_TRUE(nElapsedMs < 2000);            // 也没有挂死
-    ASSERT_TRUE(!promisePending.IsSettled());  // 超时不落定本层（链仍在后台 pending）
+    ASSERT_EQ(result.Code(), common::async::kStopped);  // 超时：只向调用方报「没等到」。
+    ASSERT_TRUE(nElapsedMs >= 40);                      // 确实等到了超时（不是立即返回）
+    ASSERT_TRUE(nElapsedMs < 2000);                     // 也没有挂死
+    ASSERT_TRUE(!promisePending.IsSettled());           // 超时不落定本层（链仍在后台 pending）
 
     // 负超时 = 无限等待；已落定的层再 AwaitFor 立即拿结果。
     auto spDone = std::make_shared<CRobustCtx>();
-    no::CPromise<CRobustCtx> promiseDone = exec.NewPromise(spDone, &StepBump, ASYNC_LOC);
+    common::async::CPromise<CRobustCtx> promiseDone = exec.NewPromise(spDone, &StepBump, ASYNC_LOC);
     ASSERT_TRUE(promiseDone.AwaitFor(-1).IsFulfilled());
     ASSERT_TRUE(promiseDone.AwaitFor(0).IsFulfilled());
     exec.Stop();
@@ -275,27 +274,27 @@ TEST(Robust_AwaitInsideLayerReportsRisk)
     auto spCallee = std::make_shared<CCalleeModule>();
     auto spCalleeCtx = std::make_shared<CCalleeCtx>();
     spCalleeCtx->nDelayMs = 100;  // 保证「层开始等的时候子链还没落定」（在对方线程上跑）。
-    no::CPromise<CCalleeCtx> promiseCallee = spCallee->QueryStockAsync(spCalleeCtx);
+    common::async::CPromise<CCalleeCtx> promiseCallee = spCallee->QueryStockAsync(spCalleeCtx);
 
-    no::CAsyncExecutor exec(1);
+    common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
 
     auto spCtx = std::make_shared<CRobustCtx>();
-    no::CPromise<CRobustCtx>::ThenHandler fnWaitInsideLayer =
-        [promiseCallee](no::CPromiseResult /*upResult*/, const std::shared_ptr<CRobustCtx>& spCtx)
+    common::async::CPromise<CRobustCtx>::ThenHandler fnWaitInsideLayer =
+        [promiseCallee](common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CRobustCtx>& spCtx)
     {
         // 危险写法（但此处能返回：子链在对方模块线程上落定）：框架应给出预警。
-        const no::CPromiseResult childResult = promiseCallee.Await();
+        const common::async::CPromiseResult childResult = promiseCallee.Await();
         spCtx->bCaught = childResult.IsFulfilled();
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     };
 
-    const no::CPromiseResult result =
+    const common::async::CPromiseResult result =
         exec.NewPromise(spCtx, &StepBump, ASYNC_LOC).Then(fnWaitInsideLayer, ASYNC_LOC).Await();
 
     ASSERT_TRUE(result.IsFulfilled());
     ASSERT_TRUE(spCtx->bCaught);
-    ASSERT_TRUE(capture.Has(no::detail::kDiagAwaitRisk));  // 死锁预警已报告
+    ASSERT_TRUE(capture.Has(common::async::detail::kDiagAwaitRisk));  // 死锁预警已报告
     exec.Stop();
 }
 
@@ -306,34 +305,35 @@ TEST(Robust_InvalidPromiseAppendReports)
 {
     CDiagnosticCapture capture;
 
-    no::CPromise<CRobustCtx> promiseInvalid;  // 未绑定执行器
+    common::async::CPromise<CRobustCtx> promiseInvalid;  // 未绑定执行器
     ASSERT_TRUE(!promiseInvalid.IsValid());
 
-    no::CPromise<CRobustCtx>::ThenHandler fnStep = [](no::CPromiseResult, const std::shared_ptr<CRobustCtx>&)
+    common::async::CPromise<CRobustCtx>::ThenHandler fnStep =
+        [](common::async::CPromiseResult, const std::shared_ptr<CRobustCtx>&)
     {
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     };
-    auto fnCreateInvalid = [](const std::shared_ptr<CRobustCtx>&) -> no::CPromise<CCalleeCtx>
+    auto fnCreateInvalid = [](const std::shared_ptr<CRobustCtx>&) -> common::async::CPromise<CCalleeCtx>
     {
-        return no::CPromise<CCalleeCtx>();
+        return common::async::CPromise<CCalleeCtx>();
     };
     auto fnApplyInvalid = [](const std::shared_ptr<CRobustCtx>&, const std::shared_ptr<CCalleeCtx>&)
     {
     };
 
-    const no::CPromise<CRobustCtx> promiseAfterThen = promiseInvalid.Then(fnStep, ASYNC_LOC);
-    const no::CPromise<CRobustCtx> promiseAfterBridge =
+    const common::async::CPromise<CRobustCtx> promiseAfterThen = promiseInvalid.Then(fnStep, ASYNC_LOC);
+    const common::async::CPromise<CRobustCtx> promiseAfterBridge =
         promiseInvalid.ThenBridge(fnCreateInvalid, fnApplyInvalid, ASYNC_LOC);
 
     ASSERT_TRUE(!promiseAfterThen.IsValid());
     ASSERT_TRUE(!promiseAfterBridge.IsValid());
-    ASSERT_EQ(promiseAfterThen.Await().Code(), no::kStopped);  // 既有语义不变
+    ASSERT_EQ(promiseAfterThen.Await().Code(), common::async::kStopped);  // 既有语义不变
     ASSERT_TRUE(!promiseInvalid.OnSettled(
-        [](no::CPromiseResult)
+        [](common::async::CPromiseResult)
         {
-        }));                                                  // 无效 promise 注册失败
-    ASSERT_TRUE(capture.Has(no::detail::kDiagInvalidLayer));  // Then 路径
-    ASSERT_TRUE(capture.Count() >= 2);                        // Then + ThenBridge 各一次
+        }));                                                             // 无效 promise 注册失败
+    ASSERT_TRUE(capture.Has(common::async::detail::kDiagInvalidLayer));  // Then 路径
+    ASSERT_TRUE(capture.Count() >= 2);                                   // Then + ThenBridge 各一次
 }
 
 // ==================== 用例：OnSettledOn（通知落到指定执行器） ====================
@@ -343,9 +343,9 @@ TEST(Robust_OnSettledOnRunsOnTargetExecutor)
 {
     auto spCallee = std::make_shared<CCalleeModule>();
     auto spCalleeCtx = std::make_shared<CCalleeCtx>();
-    no::CPromise<CCalleeCtx> promiseCallee = spCallee->QueryStockAsync(spCalleeCtx);  // 在对方模块线程上落定
+    common::async::CPromise<CCalleeCtx> promiseCallee = spCallee->QueryStockAsync(spCalleeCtx);  // 在对方模块线程上落定
 
-    no::CAsyncExecutor ownExec(1);  // 「本模块」的执行器
+    common::async::CAsyncExecutor ownExec(1);  // 「本模块」的执行器
     ASSERT_TRUE(ownExec.Start());
 
     // 先取本执行器的线程 id（用同样走 Post 的方式）。
@@ -366,7 +366,7 @@ TEST(Robust_OnSettledOnRunsOnTargetExecutor)
     std::atomic<bool> bNoticeRan(false);
     std::thread::id idNoticeThread;
     ASSERT_TRUE(promiseCallee.OnSettledOn(ownExec,
-        [&bNoticeRan, &idNoticeThread](no::CPromiseResult)
+        [&bNoticeRan, &idNoticeThread](common::async::CPromiseResult)
         {
             idNoticeThread = std::this_thread::get_id();
             bNoticeRan.store(true);
@@ -385,7 +385,7 @@ TEST(Robust_OnSettledOnRunsOnTargetExecutor)
     ownExec.Stop();
     std::atomic<bool> bDeliveredAfterStop(false);
     ASSERT_TRUE(promiseCallee.OnSettledOn(ownExec,
-        [&bDeliveredAfterStop](no::CPromiseResult)
+        [&bDeliveredAfterStop](common::async::CPromiseResult)
         {
             bDeliveredAfterStop.store(true);
         }));

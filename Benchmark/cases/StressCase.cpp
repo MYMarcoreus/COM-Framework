@@ -17,8 +17,6 @@
 
 namespace {
 
-namespace no = common::async;
-
 /// 对某引擎跑一次窗口式压力测试。
 inline void RunStressFor(const std::string& group, const std::string& name,
     const std::function<void(const std::function<void()>&)>& submit, const std::function<void()>& stop, int window,
@@ -41,20 +39,20 @@ inline void RunStressFor(const std::string& group, const std::string& name,
 inline void RunChainStress(const std::string& group, const std::string& name, int nThreads, int nLayers, int window,
     int ms, const std::string& note)
 {
-    no::CAsyncExecutor exec(static_cast<size_t>(nThreads));
+    common::async::CAsyncExecutor exec(static_cast<size_t>(nThreads));
     exec.Start();
 
     std::atomic<uint64_t> done(0);
     std::function<void()> startOne = [&exec, &done, nLayers]()
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-        no::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc);
+        common::async::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc);
         for (int k = 1; k < nLayers; ++k)
         {
             tail = tail.Then(&bench::StepInc);
         }
         tail.OnSettled(
-            [&done](no::CPromiseResult)
+            [&done](common::async::CPromiseResult)
             {
                 done.fetch_add(1, std::memory_order_release);
             });
@@ -64,10 +62,10 @@ inline void RunChainStress(const std::string& group, const std::string& name, in
 }
 
 /// 压力协程：2 次 await 后完成（完成时 AsPromise().OnSettled 计数）。
-class StressCoro : public no::CCoroutine<bench::CChainContext>
+class StressCoro : public common::async::CCoroutine<bench::CChainContext>
 {
 public:
-    using no::CCoroutine<bench::CChainContext>::CCoroutine;
+    using common::async::CCoroutine<bench::CChainContext>::CCoroutine;
 
     void Run() override
     {
@@ -83,7 +81,7 @@ public:
 inline void RunCoroStress(
     const std::string& group, const std::string& name, int nThreads, int window, int ms, const std::string& note)
 {
-    no::CAsyncExecutor exec(static_cast<size_t>(nThreads));
+    common::async::CAsyncExecutor exec(static_cast<size_t>(nThreads));
     exec.Start();
 
     std::atomic<uint64_t> done(0);
@@ -93,7 +91,7 @@ inline void RunCoroStress(
         std::shared_ptr<StressCoro> pCoro = exec.CoStart<StressCoro>(spCtx);
         // 协程对象由框架自持弱引用保活；这里只挂完成通知用于计数。
         if (!pCoro->AsPromise().OnSettled(
-                [&done](no::CPromiseResult)
+                [&done](common::async::CPromiseResult)
                 {
                     done.fetch_add(1, std::memory_order_release);
                 }))
@@ -109,7 +107,7 @@ inline void RunCoroStress(
 inline void RunMixedLoad(const std::string& group, const std::string& name, int nProducers, uint64_t nPerProducer,
     const std::string& note, int nThreads)
 {
-    no::CAsyncExecutor exec(static_cast<size_t>(nThreads));
+    common::async::CAsyncExecutor exec(static_cast<size_t>(nThreads));
     exec.Start();
 
     std::atomic<uint64_t> done(0);
@@ -122,7 +120,7 @@ inline void RunMixedLoad(const std::string& group, const std::string& name, int 
             exec.NewPromise(spCtx, &bench::StepInc)
                 .Then(&bench::StepInc)
                 .OnSettled(
-                    [&done](no::CPromiseResult)
+                    [&done](common::async::CPromiseResult)
                     {
                         done.fetch_add(1);
                     });
@@ -147,7 +145,7 @@ inline void RunMixedLoad(const std::string& group, const std::string& name, int 
                         exec.NewPromise(spCtx, &bench::StepInc)
                             .Then(&bench::StepInc)
                             .OnSettled(
-                                [&done](no::CPromiseResult)
+                                [&done](common::async::CPromiseResult)
                                 {
                                     done.fetch_add(1);
                                 });
@@ -158,7 +156,7 @@ inline void RunMixedLoad(const std::string& group, const std::string& name, int 
                         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
                         std::shared_ptr<StressCoro> pCoro = exec.CoStart<StressCoro>(spCtx);
                         pCoro->AsPromise().OnSettled(
-                            [&done](no::CPromiseResult)
+                            [&done](common::async::CPromiseResult)
                             {
                                 done.fetch_add(1);
                             });

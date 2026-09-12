@@ -22,8 +22,6 @@
 #include "Async/PromiseResult.h"
 #include "TestFramework.h"
 
-namespace no = common::async;
-
 // ==================== 被调模块（1 线程） ====================
 
 /// @brief 被调模块上下文。
@@ -52,22 +50,22 @@ public:
     /// @param spCtx 本模块上下文。
     ///
     /// @return 本层 promise。
-    no::CPromise<COverrideCalleeCtx> QueryAsync(const std::shared_ptr<COverrideCalleeCtx>& spCtx)
+    common::async::CPromise<COverrideCalleeCtx> QueryAsync(const std::shared_ptr<COverrideCalleeCtx>& spCtx)
     {
         return m_exec.NewPromise(spCtx, &StepQuery, ASYNC_LOC);
     }
 
 private:
     /// 层处理器：记录线程与次数。
-    static no::CPromiseResult StepQuery(
-        no::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideCalleeCtx>& spCtx)
+    static common::async::CPromiseResult StepQuery(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideCalleeCtx>& spCtx)
     {
         ++spCtx->nSteps;
         spCtx->idStep = std::this_thread::get_id();
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
-    no::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
+    common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
 };
 
 // ==================== 调用方模块（主 + 旁路两个执行器） ====================
@@ -108,7 +106,7 @@ public:
     }
 
     /// @brief 用 `ThenInline` 覆盖：跨模块返回后那一层就地跑在被调模块线程上。
-    no::CPromise<COverrideOrderCtx> RunInlineAsync(
+    common::async::CPromise<COverrideOrderCtx> RunInlineAsync(
         const std::shared_ptr<COverrideOrderCtx>& spCtx, const std::shared_ptr<COverrideCalleeModule>& spCallee)
     {
         return m_execMain.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
@@ -119,7 +117,7 @@ public:
     }
 
     /// @brief 对照：同样位置用默认 `Then`（应回主执行器线程）。
-    no::CPromise<COverrideOrderCtx> RunDefaultAsync(
+    common::async::CPromise<COverrideOrderCtx> RunDefaultAsync(
         const std::shared_ptr<COverrideOrderCtx>& spCtx, const std::shared_ptr<COverrideCalleeModule>& spCallee)
     {
         return m_execMain.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
@@ -129,7 +127,7 @@ public:
     }
 
     /// @brief 用 `ThenOn` 指定旁路执行器：该层跑在旁路执行器线程上，之后的层切回主执行器。
-    no::CPromise<COverrideOrderCtx> RunOnSideAsync(
+    common::async::CPromise<COverrideOrderCtx> RunOnSideAsync(
         const std::shared_ptr<COverrideOrderCtx>& spCtx, const std::shared_ptr<COverrideCalleeModule>& spCallee)
     {
         return m_execMain.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
@@ -140,7 +138,7 @@ public:
     }
 
     /// @brief 用 `ThenOn` 指定一个**已停止**的执行器：本层应以 kStopped 收口。
-    no::CPromise<COverrideOrderCtx> RunOnStoppedAsync(const std::shared_ptr<COverrideOrderCtx>& spCtx)
+    common::async::CPromise<COverrideOrderCtx> RunOnStoppedAsync(const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
         return m_execMain.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
             .ThenOn(m_execSide, &StepOnSide, ASYNC_LOC)  // 旁路执行器已 Stop
@@ -150,7 +148,7 @@ public:
 
 private:
     /// 跨模块桥接层的工厂（本层属于本模块；被调模块在自己执行器上跑）。
-    no::CPromise<COverrideOrderCtx>::PromiseFactory MakeCallFactory(
+    common::async::CPromise<COverrideOrderCtx>::PromiseFactory MakeCallFactory(
         const std::shared_ptr<COverrideCalleeModule>& spCallee)
     {
         return [this, spCallee](const std::shared_ptr<COverrideOrderCtx>& spSelf)
@@ -160,58 +158,59 @@ private:
     }
 
     /// ① 本模块自有层（主执行器）。
-    static no::CPromiseResult StepOrderLoad(
-        no::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderLoad(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->idFirst = std::this_thread::get_id();
         spCtx->idLastOwn = spCtx->idFirst;
         spCtx->strTrace += "A1;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// ③ `ThenInline` 层：应在被调模块线程上（就地）。
-    static no::CPromiseResult StepAfterBridgeInline(
-        no::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepAfterBridgeInline(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
         spCtx->idAfterBridgeInline = std::this_thread::get_id();
         spCtx->strTrace += "A2i;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// ④ 默认亲和层：应回主执行器线程。
-    static no::CPromiseResult StepAfterBridgeDefault(
-        no::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepAfterBridgeDefault(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->idAfterBridgeDefault = std::this_thread::get_id();
         spCtx->idLastOwn = spCtx->idAfterBridgeDefault;
         spCtx->strTrace += "A3;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// `ThenOn(旁路执行器)` 层：应在旁路执行器线程上。
-    static no::CPromiseResult StepOnSide(
-        no::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepOnSide(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
         spCtx->idOnSide = std::this_thread::get_id();
         spCtx->strTrace += "S;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// `ThenOn` 之后那一层：应切回主执行器线程。
-    static no::CPromiseResult StepAfterSide(
-        no::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepAfterSide(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->idAfterSide = std::this_thread::get_id();
         spCtx->idLastOwn = spCtx->idAfterSide;
         spCtx->strTrace += "A3;";
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// 兜底层。
-    static no::CPromiseResult StepCatch(no::CPromiseResult upResult, const std::shared_ptr<COverrideOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepCatch(
+        common::async::CPromiseResult upResult, const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
         ++spCtx->nCatchRuns;
         spCtx->nCaughtCode = upResult.Code();
@@ -220,18 +219,18 @@ private:
     }
 
     /// 桥接层：把被调模块的 promise 接进本流程（不检查 OnSettled 返回值也安全）。
-    no::CPromise<COverrideOrderCtx> BridgeCallCallee(
+    common::async::CPromise<COverrideOrderCtx> BridgeCallCallee(
         const std::shared_ptr<COverrideOrderCtx>& spCtx, const std::shared_ptr<COverrideCalleeModule>& spCallee)
     {
-        no::CPromise<COverrideOrderCtx>::PromiseExecutor fnExecutor =
-            [spCallee, spCtx](const no::CPromise<COverrideOrderCtx>::ResolveFn& fnResolve,
-                const no::CPromise<COverrideOrderCtx>::RejectFn& fnReject)
+        common::async::CPromise<COverrideOrderCtx>::PromiseExecutor fnExecutor =
+            [spCallee, spCtx](const common::async::CPromise<COverrideOrderCtx>::ResolveFn& fnResolve,
+                const common::async::CPromise<COverrideOrderCtx>::RejectFn& fnReject)
         {
             auto spCalleeCtx = std::make_shared<COverrideCalleeCtx>();
             spCalleeCtx->nDelayMs = spCtx->nCalleeDelayMs;
-            no::CPromise<COverrideCalleeCtx> promiseCallee = spCallee->QueryAsync(spCalleeCtx);
+            common::async::CPromise<COverrideCalleeCtx> promiseCallee = spCallee->QueryAsync(spCalleeCtx);
             promiseCallee.OnSettled(
-                [spCtx, spCalleeCtx, fnResolve, fnReject](no::CPromiseResult result)
+                [spCtx, spCalleeCtx, fnResolve, fnReject](common::async::CPromiseResult result)
                 {
                     if (result.IsRejected())
                     {
@@ -242,11 +241,11 @@ private:
                     fnResolve();
                 });
         };
-        return no::CPromise<COverrideOrderCtx>::New(m_execMain, spCtx, fnExecutor, ASYNC_LOC);
+        return common::async::CPromise<COverrideOrderCtx>::New(m_execMain, spCtx, fnExecutor, ASYNC_LOC);
     }
 
-    no::CAsyncExecutor m_execMain;  ///< 主执行器（链的主执行器）。
-    no::CAsyncExecutor m_execSide;  ///< 旁路执行器（`ThenOn` 用）。
+    common::async::CAsyncExecutor m_execMain;  ///< 主执行器（链的主执行器）。
+    common::async::CAsyncExecutor m_execSide;  ///< 旁路执行器（`ThenOn` 用）。
 };
 
 // ==================== 用例 ====================
@@ -306,12 +305,12 @@ TEST(AffinityOverride_ThenOnStoppedExecutorRejects)
 
     spOrder->StopSide();  // 旁路执行器不可用
 
-    const no::CPromiseResult result = spOrder->RunOnStoppedAsync(spCtx).Await();
+    const common::async::CPromiseResult result = spOrder->RunOnStoppedAsync(spCtx).Await();
 
     ASSERT_TRUE(result.IsRejected());
-    ASSERT_EQ(result.Code(), no::kStopped);
+    ASSERT_EQ(result.Code(), common::async::kStopped);
     ASSERT_EQ(spCtx->strTrace, std::string("A1;C;"));
     ASSERT_EQ(spCtx->nOwnSteps, 1);  // 只有 StepOrderLoad 执行（S / A3 都没跑）
     ASSERT_EQ(spCtx->nCatchRuns, 1);
-    ASSERT_EQ(spCtx->nCaughtCode, no::kStopped);
+    ASSERT_EQ(spCtx->nCaughtCode, common::async::kStopped);
 }

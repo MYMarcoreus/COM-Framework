@@ -11,8 +11,6 @@ namespace serverexample {
 
 namespace {
 
-namespace no = common::async;
-
 /// @brief 种子数据：启动时装载到表中（模拟数据库里已有的数据行）。
 const std::uint64_t kSeedUserIdAlice = 1001;
 const std::uint64_t kSeedUserIdBob = 1002;

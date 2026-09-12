@@ -50,7 +50,10 @@ if (!m_bSettled.load(std::memory_order_relaxed))
 bFireNow = true;
 result = m_result;
 // ② 已 settled：投递到「本链执行器」异步执行
-if (PostToHandle(pHandle, std::move(fnRun))) { return true; }
+if (PostToHandle(pHandle, std::move(fnRun)))
+{
+    return true;
+}
 return false;  // 已 settled 但执行器不可用 → 处理器不会执行
 ```
 
@@ -59,7 +62,7 @@ return false;  // 已 settled 但执行器不可用 → 处理器不会执行
 m_cv.notify_all();
 for (size_t i = 0; i < vecHandlers.size(); ++i)
 {
-    vecHandlers[i](result);   // 在「结算线程」上按注册顺序内联跑完 → 逐层级联
+    vecHandlers[i](result);  // 在「结算线程」上按注册顺序内联跑完 → 逐层级联
 }
 ```
 
@@ -102,11 +105,13 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
 // Common/Async/Promise.h：层处理器（CPromiseCore::RunHandler）
 if (IsInExecutorThread(pCore->Handle()) && InlineDepth() < kMaxInlineDepth)
 {
-    ++InlineDepth(); fnRun(); --InlineDepth();      // 同执行器：就地内联
+    ++InlineDepth();
+    fnRun();
+    --InlineDepth();  // 同执行器：就地内联
 }
 else if (!PostToHandle(pCore->Handle(), std::move(fnRun)))
 {
-    pState->Settle(CPromiseResult::Reject(kStopped)); // 跨执行器：投递回本链执行器；不可用则拒绝
+    pState->Settle(CPromiseResult::Reject(kStopped));  // 跨执行器：投递回本链执行器；不可用则拒绝
 }
 
 // Common/Async/Coroutine.h：协程续跑（ResumeInline）用同一判定
@@ -181,8 +186,8 @@ else
 
 ```cpp
 // 调用方（桥接层）：把被调模块的 promise 接进本流程
-no::CPromise<CStockCtx> promiseStock = spStockModule->QueryStockAsync(spStock);   // ①
-promiseStock.OnSettled([...](no::CPromiseResult result) { /* 回调 */ });          // ② 返回值被丢弃 ← 病灶
+common::async::CPromise<CStockCtx> promiseStock = spStockModule->QueryStockAsync(spStock);  // ①
+promiseStock.OnSettled([...](common::async::CPromiseResult result) { /* 回调 */ });  // ② 返回值被丢弃 ← 病灶
 ```
 
 链路一步步是：
@@ -210,8 +215,7 @@ promiseStock.OnSettled([...](no::CPromiseResult result) { /* 回调 */ });      
 bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler);
 
 // ② 通知（OnSettled）：送达保证（同一个 AddHandler，多传一个策略位）
-bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler,
-                bool bGuaranteedDelivery);
+bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler, bool bGuaranteedDelivery);
 // AddHandler(..., /* bGuaranteedDelivery = */ true) → 已 settled 且执行器不可用时就地送达
 ```
 
@@ -239,10 +243,10 @@ bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandl
 检查返回值已是冗余保险，但保留也无害（不再有“漏检就挂死”的风险）：
 
 ```cpp
-const bool bOk = promiseStock.OnSettled([...](no::CPromiseResult result) { /* 桥接回调 */ });
+const bool bOk = promiseStock.OnSettled([...](common::async::CPromiseResult result) { /* 桥接回调 */ });
 if (!bOk)
 {
-    fnReject(no::kStopped);   // 现只会在 promise 无效时触发；留作防御
+    fnReject(common::async::kStopped);  // 现只会在 promise 无效时触发；留作防御
 }
 ```
 

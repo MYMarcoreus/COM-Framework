@@ -111,7 +111,7 @@
 // (void)r;
 //
 // 需要「先把链完全搭好、再开跑」时（等价 build-then-start）：
-//   no::CPromise<CLoginContext> q = exec.BuildPromise(spCtx)   // 追加层只登记，不投递
+//   common::async::CPromise<CLoginContext> q = exec.BuildPromise(spCtx)   // 追加层只登记，不投递
 //       .Then(StepReadParam, ASYNC_LOC)
 //       .Then(StepVerify, ASYNC_LOC);
 //   q.Start();                     // 此刻才投递首层（幂等；漏写则首次 Await 自动启动）

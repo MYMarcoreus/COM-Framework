@@ -21,8 +21,6 @@
 #include "Async/PromiseResult.h"
 #include "TestFramework.h"
 
-namespace no = common::async;
-
 // ==================== 可停止的被调模块（1 线程） ====================
 
 /// @brief 被调模块上下文。
@@ -56,27 +54,29 @@ public:
     /// @param spCtx 本模块上下文。
     ///
     /// @return 本层 promise。
-    no::CPromise<CDeliveryCtx> QueryAsync(const std::shared_ptr<CDeliveryCtx>& spCtx)
+    common::async::CPromise<CDeliveryCtx> QueryAsync(const std::shared_ptr<CDeliveryCtx>& spCtx)
     {
         return m_exec.NewPromise(spCtx, &StepQuery, ASYNC_LOC);
     }
 
 private:
     /// 层处理器：记录执行次数。
-    static no::CPromiseResult StepQuery(no::CPromiseResult /*upResult*/, const std::shared_ptr<CDeliveryCtx>& spCtx)
+    static common::async::CPromiseResult StepQuery(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CDeliveryCtx>& spCtx)
     {
         ++spCtx->nStepRuns;
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
-    no::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
+    common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
 };
 
 /// @brief 测试用追加层（记录执行次数）。
-static no::CPromiseResult StepMark(no::CPromiseResult /*upResult*/, const std::shared_ptr<CDeliveryCtx>& spCtx)
+static common::async::CPromiseResult StepMark(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CDeliveryCtx>& spCtx)
 {
     ++spCtx->nMarkRuns;
-    return no::CPromiseResult::Resolve();
+    return common::async::CPromiseResult::Resolve();
 }
 
 // ==================== 调用方模块（桥接里故意不检查返回值） ====================
@@ -108,10 +108,11 @@ public:
     /// @param spCallee 被调模块（可为已停止的模块）。
     ///
     /// @return 指向最后一层的 promise。
-    no::CPromise<CCallerCtx> RunAsync(
+    common::async::CPromise<CCallerCtx> RunAsync(
         const std::shared_ptr<CCallerCtx>& spCtx, const std::shared_ptr<CDeliveryModule>& spCallee)
     {
-        no::CPromise<CCallerCtx>::PromiseFactory fnCall = [this, spCallee](const std::shared_ptr<CCallerCtx>& spSelf)
+        common::async::CPromise<CCallerCtx>::PromiseFactory fnCall = [this, spCallee](
+                                                                         const std::shared_ptr<CCallerCtx>& spSelf)
         {
             return BridgeCallCallee(spSelf, spCallee);
         };
@@ -124,21 +125,24 @@ public:
 
 private:
     /// ① 本模块自有层。
-    static no::CPromiseResult StepOrderA(no::CPromiseResult /*upResult*/, const std::shared_ptr<CCallerCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderA(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CCallerCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// ③ 跨模块返回后的层（只有被调模块兑现才会执行）。
-    static no::CPromiseResult StepOrderB(no::CPromiseResult /*upResult*/, const std::shared_ptr<CCallerCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderB(
+        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CCallerCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
-        return no::CPromiseResult::Resolve();
+        return common::async::CPromiseResult::Resolve();
     }
 
     /// 兜底：记录拒绝码。
-    static no::CPromiseResult StepCatch(no::CPromiseResult upResult, const std::shared_ptr<CCallerCtx>& spCtx)
+    static common::async::CPromiseResult StepCatch(
+        common::async::CPromiseResult upResult, const std::shared_ptr<CCallerCtx>& spCtx)
     {
         spCtx->bCaught = true;
         spCtx->nCaughtCode = upResult.Code();
@@ -148,19 +152,19 @@ private:
     /// ② 桥接层：**故意不检查** `promiseCallee.OnSettled(...)` 的返回值。
     ///
     /// 框架已保证送达（执行器不可用时就地执行），因此这里漏检也不会永久 pending。
-    no::CPromise<CCallerCtx> BridgeCallCallee(
+    common::async::CPromise<CCallerCtx> BridgeCallCallee(
         const std::shared_ptr<CCallerCtx>& spCtx, const std::shared_ptr<CDeliveryModule>& spCallee)
     {
-        no::CPromise<CCallerCtx>::PromiseExecutor fnExecutor = [spCallee, spCtx](
-                                                                   const no::CPromise<CCallerCtx>::ResolveFn& fnResolve,
-                                                                   const no::CPromise<CCallerCtx>::RejectFn& fnReject)
+        common::async::CPromise<CCallerCtx>::PromiseExecutor fnExecutor =
+            [spCallee, spCtx](const common::async::CPromise<CCallerCtx>::ResolveFn& fnResolve,
+                const common::async::CPromise<CCallerCtx>::RejectFn& fnReject)
         {
             auto spCalleeCtx = std::make_shared<CDeliveryCtx>();
-            no::CPromise<CDeliveryCtx> promiseCallee = spCallee->QueryAsync(spCalleeCtx);
+            common::async::CPromise<CDeliveryCtx> promiseCallee = spCallee->QueryAsync(spCalleeCtx);
 
             // 注意：返回值被丢弃（模拟漏检的调用方代码）
             promiseCallee.OnSettled(
-                [spCtx, fnResolve, fnReject](no::CPromiseResult result)
+                [spCtx, fnResolve, fnReject](common::async::CPromiseResult result)
                 {
                     ++spCtx->nNotify;
                     if (result.IsRejected())
@@ -171,10 +175,10 @@ private:
                     fnResolve();
                 });
         };
-        return no::CPromise<CCallerCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
+        return common::async::CPromise<CCallerCtx>::New(m_exec, spCtx, fnExecutor, ASYNC_LOC);
     }
 
-    no::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
+    common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
 };
 
 // ==================== 用例 ====================
@@ -188,18 +192,18 @@ TEST(SettledNotice_DeliveredEvenIfExecutorStopped)
     auto spCtx = std::make_shared<CDeliveryCtx>();
 
     spModule->Stop();  // 先停：后续投递一律被拒绝
-    no::CPromise<CDeliveryCtx> promise = spModule->QueryAsync(spCtx);
+    common::async::CPromise<CDeliveryCtx> promise = spModule->QueryAsync(spCtx);
 
-    const no::CPromiseResult result = promise.Await();
+    const common::async::CPromiseResult result = promise.Await();
     ASSERT_TRUE(result.IsRejected());
-    ASSERT_EQ(result.Code(), no::kStopped);
+    ASSERT_EQ(result.Code(), common::async::kStopped);
     ASSERT_EQ(spCtx->nStepRuns.load(), 0);  // 首层没跑（投递失败）
 
     // 在「已 settled + 执行器不可用」的层上注册通知：必须被送达
     int nNotify = 0;
     std::thread::id idNotified;
     const bool bOk = promise.OnSettled(
-        [&nNotify, &idNotified](no::CPromiseResult r)
+        [&nNotify, &idNotified](common::async::CPromiseResult r)
         {
             ++nNotify;
             idNotified = std::this_thread::get_id();
@@ -222,7 +226,7 @@ TEST(SettledNotice_ManyRegistrationsAllDelivered)
     auto spCtx = std::make_shared<CDeliveryCtx>();
 
     spModule->Stop();
-    no::CPromise<CDeliveryCtx> promise = spModule->QueryAsync(spCtx);
+    common::async::CPromise<CDeliveryCtx> promise = spModule->QueryAsync(spCtx);
     ASSERT_TRUE(promise.Await().IsRejected());
 
     int nNotify = 0;
@@ -233,7 +237,7 @@ TEST(SettledNotice_ManyRegistrationsAllDelivered)
         std::string strSeq = std::to_string(i);
         strSeq += ';';
         const bool bOk = promise.OnSettled(
-            [&nNotify, &strOrder, &idNotified, strSeq](no::CPromiseResult /*r*/)
+            [&nNotify, &strOrder, &idNotified, strSeq](common::async::CPromiseResult /*r*/)
             {
                 ++nNotify;
                 strOrder += strSeq;
@@ -257,9 +261,9 @@ TEST(SettledNotice_ManyRegistrationsAllDelivered)
 TEST(SettledNotice_InvalidPromiseReturnsFalse)
 {
     int nNotify = 0;
-    no::CPromise<CDeliveryCtx> promiseInvalid;  // 默认构造：无效
+    common::async::CPromise<CDeliveryCtx> promiseInvalid;  // 默认构造：无效
     const bool bOk = promiseInvalid.OnSettled(
-        [&nNotify](no::CPromiseResult /*r*/)
+        [&nNotify](common::async::CPromiseResult /*r*/)
         {
             ++nNotify;
         });
@@ -279,13 +283,13 @@ TEST(SettledNotice_BridgeWithoutReturnCheckNoDeadlock)
     spCallee->Stop();  // 被调模块先停：桥接里的 OnSettled 落在"已 settled + 执行器不可用"这条路径上
 
     // 修复前：这里会永久阻塞（桥接层永久 pending）
-    const no::CPromiseResult result = spCaller->RunAsync(spCtx, spCallee).Await();
+    const common::async::CPromiseResult result = spCaller->RunAsync(spCtx, spCallee).Await();
 
     ASSERT_TRUE(result.IsRejected());
-    ASSERT_EQ(result.Code(), no::kStopped);  // 被调模块的拒绝码原样透传
-    ASSERT_EQ(spCtx->nNotify, 1);            // 桥接通知被送达
-    ASSERT_TRUE(spCtx->bCaught);             // 兜底执行
-    ASSERT_EQ(spCtx->nCaughtCode, no::kStopped);
+    ASSERT_EQ(result.Code(), common::async::kStopped);  // 被调模块的拒绝码原样透传
+    ASSERT_EQ(spCtx->nNotify, 1);                       // 桥接通知被送达
+    ASSERT_TRUE(spCtx->bCaught);                        // 兜底执行
+    ASSERT_EQ(spCtx->nCaughtCode, common::async::kStopped);
     ASSERT_EQ(spCtx->nOwnSteps, 1);  // 只有 StepOrderA 执行（跨模块之后的层被跳过）
 }
 
@@ -295,16 +299,16 @@ TEST(SettledNotice_LayerStillRejectedWhenExecutorUnavailable)
     auto spModule = std::make_shared<CDeliveryModule>();
     auto spCtx = std::make_shared<CDeliveryCtx>();
 
-    no::CPromise<CDeliveryCtx> promise = spModule->QueryAsync(spCtx);
+    common::async::CPromise<CDeliveryCtx> promise = spModule->QueryAsync(spCtx);
     ASSERT_TRUE(promise.Await().IsFulfilled());
     ASSERT_EQ(spCtx->nStepRuns.load(), 1);
 
     spModule->Stop();  // 之后执行器不可用
 
     // 已 settled + 执行器不可用：追加层 → 本层以 kStopped 结算（不是就地执行）
-    const no::CPromiseResult result = promise.Then(&StepMark, ASYNC_LOC).Await();
+    const common::async::CPromiseResult result = promise.Then(&StepMark, ASYNC_LOC).Await();
 
     ASSERT_TRUE(result.IsRejected());
-    ASSERT_EQ(result.Code(), no::kStopped);
+    ASSERT_EQ(result.Code(), common::async::kStopped);
     ASSERT_EQ(spCtx->nMarkRuns, 0);  // "停了的执行器不再跑新层"
 }

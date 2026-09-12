@@ -22,11 +22,7 @@
 
 namespace serverexample {
 
-namespace {
-
-namespace no = common::async;
-
-}  // namespace
+namespace {}  // namespace
 
 /// @brief 创建 ServerExample 服务器应用程序。
 ///
@@ -203,10 +199,10 @@ bool CExampleApplication::OnStart()
         recApp.nLevel = 1;
 
         // 异步函数立即返回 promise 句柄：操作数据从上下文取（回调捕获上下文保活）。
-        no::CPromise<CUserOpContext> promise = m_pUserService->RegisterUserAsync(recApp);
+        common::async::CPromise<CUserOpContext> promise = m_pUserService->RegisterUserAsync(recApp);
         std::shared_ptr<CUserOpContext> spCtx = promise.GetContext();
         promise.OnSettled(
-            [spCtx](no::CPromiseResult result)
+            [spCtx](common::async::CPromiseResult result)
             {
                 common::log::CLogger::Instance().Info(
                     "[应用] 外部异步调用完成：" + std::string(result.IsFulfilled() ? "兑现" : "拒绝") +
