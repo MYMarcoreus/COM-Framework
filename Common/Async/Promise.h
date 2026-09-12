@@ -200,6 +200,32 @@ inline void RunNotice(const SettledHandler& fnSettled, const CPromiseResult& res
     }
 }
 
+/// @brief 在指定执行器上执行 settled 通知（`OnSettledOn` 用）——与 `RunNotice` 对称。
+///
+/// 已在该执行器线程 → 就地；否则投递过去；执行器不可用 → 就地送达
+/// （与「保证送达」一致，绝不丢通知）；异常兜底交给 `RunNotice`。
+///
+/// @param pTarget 目标执行器句柄。
+/// @param fnSettled 通知处理器（可为空）。
+/// @param result 本层最终结果。
+inline void RunNoticeOn(const std::shared_ptr<CExecutorHandle>& pTarget, const SettledHandler& fnSettled,
+                        const CPromiseResult& result)
+{
+    if (!fnSettled)
+    {
+        return;
+    }
+
+    std::function<void()> fnRun = [fnSettled, result]()
+    {
+        RunNotice(fnSettled, result);
+    };
+    if (IsInExecutorThread(pTarget) || !PostToHandle(pTarget, std::move(fnRun)))
+    {
+        RunNotice(fnSettled, result);  // 已在目标线程 / 目标执行器不可用 → 就地（送达保证）。
+    }
+}
+
 /// @brief promise 状态（对应 JS 中「每个 then 返回的新 promise」的状态）。
 ///
 /// 一道 promise 链由若干状态串成，一个状态对应一层。状态是单向开关：
@@ -1009,16 +1035,8 @@ public:
             pTarget,
             [pTarget, fnSettled](const CPromiseResult& result)
             {
-                // 已在目标线程 → 就地；否则投递过去；执行器不可用 → 就地送达（绝不丢通知）。
-                std::function<void()> fnRun = [fnSettled, result]()
-                {
-                    detail::RunNotice(fnSettled, result);
-                };
-                if (!detail::IsInExecutorThread(pTarget) && detail::PostToHandle(pTarget, std::move(fnRun)))
-                {
-                    return;  // 已投递：在目标执行器线程上执行。
-                }
-                detail::RunNotice(fnSettled, result);
+                // 与 OnSettled 对称：通知路径各一行，差异只在「去哪条线程」。
+                detail::RunNoticeOn(pTarget, fnSettled, result);
             },
             /* bGuaranteedDelivery = */ true);
         return true;
