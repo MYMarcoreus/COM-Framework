@@ -31,6 +31,7 @@ make -C Tests/Linux run   # 或通过 Makefile
 | `test_servercore.cpp` | 模块生命周期 / 管理器编排 / 事件 / 消息路由 / 自持引用 |
 | `test_infra.cpp` | 拓扑排序 / 多实例注册 / 配置热加载 / 指标 / 连接上下文 / 异步事件 |
 | `test_async_chain.cpp` | 异步 promise 与协程（then/catch/finally、失败语义、生命周期、并发、深链） |
+| `test_async_alloc.cpp` | 异步链每层堆分配预算（覆盖全局 `new`/`delete` 计数护栏） |
 | `test_serialization.cpp` | 二进制序列化 |
 
 ## 2. 测试模块的依赖注入

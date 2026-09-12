@@ -292,15 +292,14 @@ if (!bOk)
 
 ```bash
 # 跑全部测试（含以上用例）
-./build.sh --debug Tests && ./build/debug/tests        # total=158 pass=158 fail=0
+./build.sh --debug Tests && ./build/debug/tests        # total=160 pass=160 fail=0
 
 # 数据竞争检查（异步测试文件 + 异步框架 + 线程池）
 g++ -std=c++11 -fsanitize=thread -g -O1 -pthread -ICommon -ITests \
     Tests/main.cpp Tests/TestFramework.cpp \
-    Tests/test_async_modules.cpp Tests/test_async_modules_stress.cpp \
-    Tests/test_async_affinity.cpp Tests/test_async_affinity_override.cpp \
-    Tests/test_async_build_start.cpp Tests/test_async_settled_delivery.cpp \
-    Common/Async/AsyncExecutor.cpp Common/Thread/ThreadPool.cpp -o /tmp/tsan_async
+    Tests/test_async_*.cpp \
+    Common/Async/AsyncExecutor.cpp Common/Async/Diagnostics.cpp \
+    Common/Thread/ThreadPool.cpp -o /tmp/tsan_async
 /tmp/tsan_async                                       # 0 条 data race
 ```
 
@@ -316,4 +315,4 @@ g++ -std=c++11 -fsanitize=thread -g -O1 -pthread -ICommon -ITests \
 >   注册通知前就落定，通知会被投递回本链执行器）。已改为由用例**自己指定结算线程**（子 promise 建在
 >   旁路执行器上，挂完层后再投递结算），断言从「不是本链线程」升级为「等于结算线程」。
 >   跨模块的真实形状由 `RunDefaultAsync` / `RunOnSideAsync` 与 `test_async_affinity.cpp` 覆盖。
->   验证：TSan 连跑 5 轮，0 竞争、异步 112 例全绿。
+>   验证：TSan 连跑 5 轮，0 竞争、异步 114 例全绿。

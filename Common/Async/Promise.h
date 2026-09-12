@@ -230,6 +230,7 @@ public:
     /// @param result 本层最终结果（已兑现 / 已拒绝）。
     void Settle(const CPromiseResult& result)
     {
+        Handler handlerInline;
         std::vector<Handler> vecHandlers;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
@@ -239,12 +240,17 @@ public:
             }
             m_result = result;
             m_bSettled.store(true, std::memory_order_relaxed);  // 锁内写；relaxed 即可。
-            vecHandlers.swap(m_vecHandlers);
+            handlerInline = std::move(m_handlerInline);         // 第一个（1:1 链的常态）。
+            vecHandlers.swap(m_vecHandlers);                    // 分叉出来的其余（登记序）。
         }
 
         // 支持多线程等待同一 promise（并发 Await）：notify_all 唤醒所有等待者。
         m_cv.notify_all();
 
+        if (handlerInline)
+        {
+            handlerInline(result);
+        }
         for (size_t i = 0; i < vecHandlers.size(); ++i)
         {
             if (vecHandlers[i])
@@ -277,7 +283,15 @@ public:
             std::lock_guard<std::mutex> lock(m_mutex);
             if (!m_bSettled.load(std::memory_order_relaxed))
             {
-                m_vecHandlers.push_back(std::move(fnHandler));
+                // 第一个处理器就地存（1:1 链的常态，免一次 vector 分配）；分叉的才进 vector。
+                if (!m_handlerInline)
+                {
+                    m_handlerInline = std::move(fnHandler);
+                }
+                else
+                {
+                    m_vecHandlers.push_back(std::move(fnHandler));
+                }
                 return true;  // pending：已登记，settle 时触发（在结算线程上）。
             }
             bFireNow = true;
@@ -391,7 +405,8 @@ public:
 private:
     std::mutex m_mutex;                  ///< 保护结果与处理器列表。
     std::condition_variable m_cv;        ///< 通知等待者。
-    std::vector<Handler> m_vecHandlers;  ///< 处理器列表（pending 时登记）。
+    Handler m_handlerInline;             ///< 第一个处理器（1:1 链常态，免 vector 分配）。
+    std::vector<Handler> m_vecHandlers;  ///< 第二个起（同层分叉）才用。
     std::atomic<bool> m_bSettled;        ///< 是否已 settled（自旋读用）。
     CPromiseResult m_result;             ///< 最终结果（settled 后有效）。
 #if defined(ASYNC_DEBUG_TRACE)
@@ -469,13 +484,12 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spConte
 /// 于是「链跑起来」与「挂层」分开，跨模块续接的登记时机不再与执行赛跑。
 struct CLaunchState
 {
-    bool bDeferred;                            ///< 是否延迟启动链。
     bool bStarted;                             ///< 是否已启动（Start 幂等）。
     std::function<void()> fnLaunch;            ///< 首层启动动作（Start 时投递到执行器执行）。
     std::shared_ptr<CPromiseState> pFirst;     ///< 首层状态（启动无法投递时以 kStopped 收口它）。
     std::shared_ptr<CExecutorHandle> pTarget;  ///< 启动投递的目标执行器（为空 = 本链执行器）。
 
-    CLaunchState() : bDeferred(false), bStarted(false)
+    CLaunchState() : bStarted(false)
     {}
 };
 
@@ -496,20 +510,20 @@ public:
     /// @param pHandle 执行器句柄（可为空：无效 promise）。
     /// @param spContext 共享上下文（可为空：首次 GetContext() 时懒创建）。
     CPromiseCore(const std::shared_ptr<CExecutorHandle>& pHandle, const std::shared_ptr<TContext>& spContext)
-        : m_pHandle(pHandle), m_spContext(spContext)
+        : m_pHandle(pHandle), m_spContext(spContext), m_spLazyContext(), m_bDeferred(false), m_pLaunch()
     {}
 
-    /// @brief 共享上下文（懒创建，恒非空）。
+    /// @brief 共享上下文（恒非空）。
     ///
-    /// 外部传入上下文时直接返回该实例；未传入时首次调用创建（默认构造）。
+    /// 外部传入上下文时**构造后不再变**，所以热路径（每层都会取一次）走无锁快路径；
+    /// 只有没传上下文的链（`BuildPromise<T>()` / 未传 ctx 的协程）才加锁懒创建。
     std::shared_ptr<TContext> Context() const
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (!m_spContext)
+        if (m_spContext != nullptr)
         {
-            m_spContext = std::make_shared<TContext>();
+            return m_spContext;  // 无锁：构造后只读。
         }
-        return m_spContext;
+        return LazyContext();  // 冷路径：仅「未传上下文」时走。
     }
 
     /// @brief 执行器句柄（投递用）。
@@ -526,16 +540,27 @@ public:
         m_pHandle = pHandle;
     }
 
-    /// @brief 延迟启动状态（懒创建，整条链共享）。
+    /// @brief 是否「延迟启动」链（`BuildPromise` 建的链）。
     ///
-    /// @return 启动状态（非空）。
-    std::shared_ptr<CLaunchState> Launch() const
+    /// 无锁读：普通链（绝大多数）**不再因每层查询而加锁、也不再分配延迟启动载荷**。
+    bool IsDeferred() const
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (!m_pLaunch)
+        return m_bDeferred.load(std::memory_order_acquire);
+    }
+
+    /// @brief 标记为延迟启动链（并把延迟启动载荷备好）。
+    void MarkDeferred()
+    {
+        if (m_pLaunch == nullptr)
         {
             m_pLaunch = std::make_shared<CLaunchState>();
         }
+        m_bDeferred.store(true, std::memory_order_release);
+    }
+
+    /// @brief 延迟启动载荷（**仅延迟链非空**；调用方应先判 `IsDeferred()`）。
+    const std::shared_ptr<CLaunchState>& Launch() const
+    {
         return m_pLaunch;
     }
 
@@ -583,10 +608,23 @@ public:
     }
 
 private:
-    mutable std::mutex m_mutex;                       ///< 保护上下文与启动状态的懒创建。
-    std::shared_ptr<CExecutorHandle> m_pHandle;       ///< 执行器句柄。
-    mutable std::shared_ptr<TContext> m_spContext;    ///< 共享上下文。
-    mutable std::shared_ptr<CLaunchState> m_pLaunch;  ///< 延迟启动状态（BuildPromise 链用）。
+    /// @brief 懒创建共享上下文（冷路径：只有未传 ctx 的链才会走到）。
+    std::shared_ptr<TContext> LazyContext() const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_spLazyContext)
+        {
+            m_spLazyContext = std::make_shared<TContext>();
+        }
+        return m_spLazyContext;
+    }
+
+    mutable std::mutex m_mutex;                         ///< 只保护下面的懒创建（热路径不经过它）。
+    std::shared_ptr<CExecutorHandle> m_pHandle;         ///< 执行器句柄。
+    std::shared_ptr<TContext> m_spContext;              ///< 共享上下文（构造后只读；可为空）。
+    mutable std::shared_ptr<TContext> m_spLazyContext;  ///< 懒创建出来的上下文（未传 ctx 时用）。
+    std::atomic<bool> m_bDeferred;                      ///< 是否延迟启动链（无锁读）。
+    std::shared_ptr<CLaunchState> m_pLaunch;            ///< 延迟启动载荷（仅延迟链非空）。
 };
 
 }  // namespace detail
@@ -649,13 +687,18 @@ public:
     /// @brief 本链是否「延迟启动」（`BuildPromise` 建的链）。
     bool IsDeferred() const
     {
-        return m_pCore != nullptr && m_pCore->Launch()->bDeferred;
+        return m_pCore != nullptr && m_pCore->IsDeferred();
     }
 
     /// @brief 本链是否已启动（普通链恒为 true）。
     bool IsStarted() const
     {
-        return m_pCore == nullptr || !m_pCore->Launch()->bDeferred || m_pCore->Launch()->bStarted;
+        if (m_pCore == nullptr || !m_pCore->IsDeferred())
+        {
+            return true;  // 无效句柄 / 普通链：无「未启动」状态。
+        }
+        const std::shared_ptr<detail::CLaunchState>& pLaunch = m_pCore->Launch();
+        return pLaunch != nullptr && pLaunch->bStarted;
     }
 
     /// @brief 启动「延迟链」：此刻才把首层投递到执行器（幂等；普通链调用无副作用）。
@@ -671,7 +714,7 @@ public:
         }
 
         const std::shared_ptr<detail::CLaunchState> pLaunch = m_pCore->Launch();
-        if (!pLaunch->bDeferred || pLaunch->bStarted)
+        if (!m_pCore->IsDeferred() || pLaunch == nullptr || pLaunch->bStarted)
         {
             return;  // 非延迟链 / 已启动：幂等。
         }
@@ -808,7 +851,7 @@ public:
             };
 
             // 延迟启动链（BuildPromise）：只登记，等 Start() 再投递。
-            if (pCore->Launch()->bDeferred)
+            if (pCore->IsDeferred())
             {
                 RegisterFirstLayer(fnAdopt);
                 return *this;
@@ -1105,7 +1148,7 @@ private:
             return CPromiseResult::Reject(kStopped);  // 无效 promise：无结果可等。
         }
         ReportBlockingRisk();  // 死锁预警（不改变行为，只报告）。
-        if (m_pCore != nullptr && m_pCore->Launch()->bDeferred && !m_pCore->Launch()->bStarted)
+        if (m_pCore != nullptr && m_pCore->IsDeferred() && !IsStarted())
         {
             const_cast<CPromise*>(this)->Start();  // 兜底：漏写 Start() 也不会死等。
         }
@@ -1248,7 +1291,7 @@ private:
     {
         if (m_pCore != nullptr)
         {
-            m_pCore->Launch()->bDeferred = true;
+            m_pCore->MarkDeferred();
         }
     }
 
@@ -1282,7 +1325,7 @@ private:
             *this = NewLayer(loc);  // 首层：本次调用即本链的第一层。
 
             // 延迟启动链（BuildPromise）：只登记首层动作，等 Start() 再投递。
-            if (m_pCore->Launch()->bDeferred)
+            if (m_pCore->IsDeferred())
             {
                 m_pCore->Launch()->pTarget = (eAffinity == detail::kAffinityExecutor) ? pTarget : nullptr;
                 if (eMode == detail::kModeCatch)

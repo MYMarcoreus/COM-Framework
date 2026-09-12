@@ -83,7 +83,8 @@ class CPromiseState
 {
     std::mutex m_mutex;
     std::condition_variable m_cv;
-    std::vector<Handler> m_vecHandlers;  // pending 时登记
+    Handler m_handlerInline;             // 第一个处理器（1:1 链的常态，免 vector 缓冲分配）
+    std::vector<Handler> m_vecHandlers;  // 第二个起（同层分叉）才用
     std::atomic<bool> m_bSettled;        // 自旋读 + 等待谓词
     CPromiseResult m_result;             // settled 后有效
     CSourceLoc m_loc;                    // 注册点（仅调试构建）
@@ -92,15 +93,17 @@ class CPromiseState
 
 | 成员 | 语义 |
 | --- | --- |
-| `Settle(result)` | 首次生效：锁内置结果与 `m_bSettled`，换出处理器列表，`notify_all` 后在**锁外**按序调用 |
-| `AddHandler(handle, cb)` | pending → 登记返回 true；已 settled → 投递 `cb` 到执行器异步触发；已 settled 且执行器不可用 → false |
+| `Settle(result)` | 首次生效：锁内置结果与 `m_bSettled`，换出「内联槽 + 处理器列表」，`notify_all` 后在**锁外**按序调用（内联槽在前） |
+| `AddHandler(handle, cb)` | pending → 登记返回 true（第一个进内联槽，其余进列表）；已 settled → 投递 `cb` 到执行器异步触发；已 settled 且执行器不可用 → false |
 | `Await()` | 先自旋 50μs，再在条件变量上阻塞；`notify_all` 支持多线程等待同一 promise |
 | `SetLoc/Loc` | 注册点源码位置（发布构建空实现） |
 
-两个关键设计：
+三个关键设计：
 
 1. **处理器在锁外调用**：处理器内部可能触发下一层的级联，持锁调用会因重入造成死锁；
-2. **已 settled 再注册走投递**：与 JS 一致 —— 注册方（可能是业务线程）不被回调阻塞。
+2. **已 settled 再注册走投递**：与 JS 一致 —— 注册方（可能是业务线程）不被回调阻塞；
+3. **第一个处理器就地存**（`m_handlerInline`）：`Then` 只加一个续接的 1:1 链是最常见的形状，
+   用内联槽替代 `std::vector`（其缓冲要单独堆分配）→ 每层少一次堆分配（见 §12）。
 
 ## 5. 一次 promise 链的完整生命周期
 
@@ -159,13 +162,14 @@ else
 // Common/Async/Promise.h
 extern struct CLaunchState
 {
-    bool bDeferred;
     bool bStarted;
     std::function<void()> fnLaunch;
     std::shared_ptr<CPromiseState> pFirst;
     std::shared_ptr<CExecutorHandle> pTarget;
 };
-// Append / ThenPromise / New 在 bDeferred 时只登记启动动作；Start() 投递它（幂等）；
+// 核心侧：std::atomic<bool> m_bDeferred —— 无锁回答「是不是延迟链」；
+//         std::shared_ptr<CLaunchState> m_pLaunch —— 载荷，**仅延迟链非空**（普通链一份都不分配）；
+// Append / ThenPromise / New 在 IsDeferred() 时只登记启动动作；Start() 投递它（幂等）；
 // Await() 发现“延迟链未启动”则自动 Start()（兜底）。
 ```
 
@@ -175,7 +179,7 @@ extern struct CLaunchState
 - 所有层都在首层开跑前登记完毕 → 跨模块续接不再出现“补登”的时序差异（对第 7 节的两种注册时机是个限定）；
 - 首层启动仍尊重 `kAffinityExecutor`（`pTarget`），启动失败（执行器已停）以 `kStopped` 收口首层；
 - `Await()` 对未启动的延迟链自动 `Start()`，所以漏写 `Start()` 不会死等；
-- 普通链行为完全不变（`bDeferred == false`）。
+- 普通链行为完全不变（`IsDeferred() == false`），且不付延迟链的任何存储代价。
 
 ## 6. 处理器模式分派（then / catch / finally）
 
@@ -454,9 +458,83 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
     then 与 catch 互补、构造即起链、异常、settled 通知、分叉、settled 后追加、未启动 / 停止 /
     重启、工作线程、析构后完成、并发 Await、多链条并行、深链 300 层、400 条压力、Post 行为；
   - 协程 9 例（见 coroutine-impl.md）；
+- **分配护栏**：`Tests/test_async_alloc.cpp`（2 例，见 §12）——每次改动异步热路径都应让它保持绿；
 - 基准：`Benchmark/cases/ChainCase.cpp`（层数 1/5/20/100、深链 256、失败即停）、
   `CoroutineCase.cpp`、`ResumableCase.cpp`、`StressCase.cpp`；
+  `Benchmark/results/benchmark-report.md` 由 `./build/release/benchmark` 直接改写，跑完记得一起提交。
 - 示例：`examples/main.cpp`；业务侧用法见 `ServerExample/Module/ExampleAsyncModule.cpp`。
+
+## 12. 性能账本（分配预算）
+
+### 为什么盯「分配次数」而不是「锁」
+
+同机微基准（release / `-O2`）：无竞争 `mutex` lock+unlock ≈ **2.4 ns**，而 `make_shared`（136 字节）≈ **15 ns**。
+一层的开销几乎全在堆分配上，所以优化目标是**减少分配次数**，而不是先动锁。
+
+### 每层预算（`Tests/test_async_alloc.cpp` 守着它）
+
+| 阶段 | 次数/层 | 内容 |
+| --- | --- | --- |
+| 建链（`BuildPromise` + `Then` × N） | **2** | `make_shared<CPromiseState>`（层状态，168B）+ 处理器 `std::function`（88B） |
+| 跑链（`Start` + `Await`） | **1** | 投递给执行器的任务体（`MakeHandlerRunner`，72B） |
+
+字节数建链 ≈ **257 字节/层**（release；debug 多一份 `CSourceLoc` → ≈ 281 字节/层），
+跑链的任务体 72 字节。另加每链常数 ≤ 8 次分配（核心、延迟载荷、首层 runner 等）。
+历史上建链是 **3 次/层**（多一次 `std::vector` 缓冲 32B），现已削到 2 次。
+
+### 已落地的两处优化
+
+1. **热路径去锁**（`detail::CPromiseCore`）：
+   - `m_spContext` 构造后只读 → `Context()` 有一条**无锁快路径**（非空直接返回），
+     锁只留给「未传 ctx、懒创建」的冷路径（`m_spLazyContext`）；
+   - 「是否延迟链」由 `std::atomic<bool> m_bDeferred` 无锁回答（不再是加载 `CLaunchState` 才能读到）；
+   - `CLaunchState` 只在延迟链上分配 —— **普通链不再为它分配**；
+2. **handler 内联槽**（`detail::CPromiseState`）：第一个处理器就地存（§4），
+   1:1 链每层省掉 `std::vector` 的缓冲分配。
+
+合计效果：建链 **3 → 2 次分配/层**（字节数基本持平 —— 层状态多了 32B 内联槽，正好抵掉 32B 的 vector 缓冲）。
+
+### 实测收益（release，同机三次取中位数，A/B 同一构建脚本）
+
+| 基准项 | 优化前 | 优化后 | 变化 |
+| --- | --- | --- | --- |
+| `CPromise x100` | 60.50 µs | 55.94 µs | **-7.5%** |
+| `CPromise deep x256` | 147.34 µs | 125.22 µs | **-15.0%** |
+| `CCoroutine start+await` | 1.19 µs | 1.01 µs | **-15.1%** |
+| `CPromise fail-fast x20` | 17.71 µs | 16.29 µs | -8.0% |
+
+链越长收益越明显，因为省下的正是与层数成正比的那一次分配。
+
+### 护栏怎么写的
+
+`Tests/test_async_alloc.cpp` 覆盖全局 `operator new` / `operator delete`（含 `[]`、nothrow、sized 变体），
+只在 `CAllocCounter` 的窗口内计数（窗口外只多一次 relaxed 读，不影响其它用例）：
+
+```cpp
+CAllocCounter counter;  // 开表
+common::async::CPromise<CCtx> tail = exec.BuildPromise<CCtx>(spCtx);
+for (int i = 0; i < nLayers; ++i)
+{
+    tail = tail.Then(&StepBump, ASYNC_LOC);
+}
+counter.Stop();  // 关表
+ASSERT_TRUE(counter.Counts() <= 2 * nLayers + 8);
+```
+
+两条经验：
+
+- **只设上限，不设下限**：后续把每层做到 1 次（把任务体也塞进层状态）也应照样通过；
+- 用 100 层与 500 层的**差值**再断言一次「每多一层 ≤ 2 次」，避免每链常数掩盖线性增长；
+- 测量窗口里不能打印 / 构造容器，否则会把无关分配算进去；用**延迟起链**（`BuildPromise`）取值，
+  普通起链（`NewPromise`）首层会立刻开跑，worker 的执行分配会掺进窗口，结果不确定。
+
+### 还没做的（按收益排序）
+
+1. **层状态瘦身（P3）**：`mutex` + `condition_variable`（合计 ~120B）在绝大多数层里从未被等待 →
+   可挪进「首次 `Await()` 才创建」的等待槽，层状态 330 → ~130 字节/层；
+2. **任务体去分配（P4）**：跑链的 1 次/层来自 `std::function<void()>` 任务类型，
+   换成 16 字节可调用体（核心指针 + 状态指针）可再去掉一次/层；
+3. 取消（`kCancelled` + 令牌沿层 / 组合器 / 协程穿透）、诊断带上注册点 `CSourceLoc`。
 
 ## 附：代码阅读顺序
 
@@ -469,4 +547,5 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
    （层派发策略细节在 Common/Async/AsyncExecutor.h：detail::DispatchInlineOrPost / ShouldInline）
 5. Common/Coroutine/Coroutine.h    顺序化（Duff's device 状态机）—— 另一个模块，只依赖 Async
 6. Tests/test_async_chain.cpp       行为契约
+7. Tests/test_async_alloc.cpp       分配预算护栏（改了热路径先看它）
 ```

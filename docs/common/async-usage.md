@@ -630,11 +630,12 @@ common::async::CPromise<Ctx> p =
 - 示例：`examples/main.cpp`（28 个演示：then / catch / finally / 分叉 / 深链 / 协程 / **嵌套** / **跨模块组合** / **多种 then 混用**）；
 - 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
 - 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞）；
-- 单元测试（异步共 **112 例**，全量 158 例）：`test_async_smoke.cpp`（17）对外用法逐条冒烟、
+- 单元测试（异步共 **114 例**，全量 160 例）：`test_async_smoke.cpp`（17）对外用法逐条冒烟、
   `test_async_chain.cpp`（37）promise 契约 + 协程、`test_async_combine.cpp`（13）组合器、
   `test_async_modules.cpp`（7）+ `test_async_modules_stress.cpp`（8）跨模块与极限、
   `test_async_affinity.cpp`（5）+ `test_async_affinity_override.cpp`（4）线程亲和，
   `test_async_build_start.cpp`（7）延迟启动、`test_async_settled_delivery.cpp`（5）通知送达、
-  `test_async_robustness.cpp`（7）健壮性与诊断、`test_async_layer_rules.cpp`（2）三态语义白盒；
+  `test_async_robustness.cpp`（7）健壮性与诊断、`test_async_layer_rules.cpp`（2）三态语义白盒、
+  `test_async_alloc.cpp`（2）每层分配预算护栏；
 - 基准：`Benchmark/cases/ChainCase.cpp`、`CoroutineCase.cpp`、`ResumableCase.cpp`、`StressCase.cpp`；
 - 运行：`./build.sh --tests`、`./build/debug/examples`。
