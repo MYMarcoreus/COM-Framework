@@ -52,6 +52,32 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 `FRAMEWORK_DEBUG` 是**全框架唯一的调试判定**：`Common/Async/SourceLoc.h`（`ASYNC_LOC`
 注册点）与 `Common/Async/Diagnostics.cpp`（诊断默认打印）都用它，不要在各处另写一套。
 
+### 3.1 坑：发布构建**不求值** → 断言里不能写「动作」
+
+`(void)sizeof(expr)` 只做类型检查，**不执行 `expr`**。所以带副作用的调用一旦写进断言，
+release 下就会**静默不执行**：
+
+```cpp
+ASSERT(exec.Start());                   // release：执行器根本没启动
+ASSERT(promise.Await().IsFulfilled());  // release：根本没等
+ASSERT(RunThenMixCase());               // release：用例根本没跑
+```
+
+`examples/main.cpp` 曾因此整体失效（release 版所有演示结果都是 0，最后卡在一个永远等不到的
+层上而挂住）。修法是把「动作」留在断言外，判断依旧交给 ASSERT：
+
+```cpp
+StartOrFail(exec);                // 动作在断言外：helper 里先 Start()、再 ASSERT 结果
+AwaitOk(promise.Await());         // 同理：先阻塞等，再断言兑现
+const bool bMixOk = RunThenMixCase();  // 先跑 …… 再断言结果
+ASSERT(bMixOk);
+```
+
+另有一条相关限制：**lambda 字面量**不能出现在未求值上下文（C++11），
+`ASSERT(exec.Post([]{ … }))` 只有 debug 构建编得过 —— 任务体先收进 `std::function`。
+
+一句话：**断言只描述「应该是什么」，不负责「让它发生」**。
+
 ## 4. 什么时候该用 / 不该用
 
 | 场景 | 用什么 |
@@ -74,7 +100,7 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 | `Common/Async/PromiseResult.h`：`Reject` | 拒绝码不是 0（0 是兑现码） |
 | `Common/Coroutine/Coroutine.h`：构造 / `Await` / `AsPromise` / `AwaitWait` / `AwaitEach` | 上下文非空；必须在 `CoStart` 之后 |
 | `ServerExample/Module/Example{Db,Async}Module.cpp` | 模块已启动、入参非空（业务侧示范） |
-| `examples/main.cpp` | 示例自校验（与框架同一套断言） |
+| `examples/main.cpp` | 示例自校验：判断用 `ASSERT`，动作（`Start` / `Await` / `Post`）一律留在断言外（见 §3.1） |
 
 ## 6. 相关取舍
 

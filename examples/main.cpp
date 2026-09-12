@@ -253,11 +253,38 @@ static common::async::CPromiseResult StepForkBranch(
     return common::async::CPromiseResult::Resolve();
 }
 
+// ============================================================
+// 示例自校验的小工具：把「动作」留在断言外
+//
+// 框架 `ASSERT(expr)` 在发布构建里展开为 `(void)sizeof(expr)` —— **不求值**（见
+// Common/Assert.h 与 docs/common/assert-usage.md）。所以**带副作用的调用不能直接写进 ASSERT**：
+//
+//     ASSERT(exec.Start());                   // release：执行器根本没启动
+//     ASSERT(promise.Await().IsFulfilled());  // release：根本没等
+//
+// 这样写出来的示例在 release 下会静默跑空（examples 曾因此在 release 里卡住）。下面两个 helper
+// 把「动作」留在断言外、把「判断」交给 ASSERT，调用处仍然是一行一个检查。
+// ============================================================
+
+/// @brief 启动执行器（启动失败即断言失败）。
+static void StartOrFail(common::async::CAsyncExecutor& exec)
+{
+    const bool bStarted = exec.Start();
+    ASSERT(bStarted);
+}
+
+/// @brief 阻塞取结果并断言「兑现」：副作用（Await）在断言外，release 下照样会等。
+static void AwaitOk(const common::async::CPromiseResult& result)
+{
+    const bool bFulfilled = result.IsFulfilled();
+    ASSERT(bFulfilled);
+}
+
 // ① 最基本：起 promise（NewPromise）+ 阻塞取结果（Await）
 void DemoNewPromiseAndAwait()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     spCtx->nBase = 42;
@@ -273,7 +300,7 @@ void DemoNewPromiseAndAwait()
 void DemoChainThen()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     spCtx->nBase = 10;
@@ -290,7 +317,7 @@ void DemoChainThen()
 void DemoCatchSeesRejection()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     // 落库失败 → catch 层仍执行，且 upResult.IsRejected() 为真
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
@@ -311,7 +338,7 @@ void DemoCatchSeesRejection()
 void DemoThenFailFast()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     spCtx->bFailParam = true;  // 读参数层失败
@@ -332,7 +359,7 @@ void DemoThenFailFast()
 void DemoCatchRollbackAndRecover()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     // 5.1 回滚后透传失败 → 后续层仍不执行
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
@@ -363,7 +390,7 @@ void DemoCatchRollbackAndRecover()
 void DemoExceptionToFailed()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepThrow, ASYNC_LOC)
@@ -380,7 +407,7 @@ void DemoExceptionToFailed()
 void DemoOnSettledCallback()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     spCtx->bFailStore = true;
@@ -411,7 +438,7 @@ void DemoOnSettledCallback()
 void DemoFork()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     common::async::CPromise<CDemoContext> head = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC);
@@ -430,8 +457,8 @@ void DemoFork()
             nDone.fetch_add(1);
         });
 
-    ASSERT(branchA.Await().IsFulfilled());
-    ASSERT(branchB.Await().IsFulfilled());
+    AwaitOk(branchA.Await());
+    AwaitOk(branchB.Await());
     while (nDone.load() < 2)
     {
         std::this_thread::yield();
@@ -446,14 +473,14 @@ void DemoFork()
 void DemoContextCreation()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     // 9.1 多层层链：先备好上下文（含初始数据），再起链
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     spCtx->nBase = 20;
     common::async::CPromise<CDemoContext> tail = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC);
     ASSERT(tail.GetContext() == spCtx);  // 恒非空，且就是传入的那个实例
-    ASSERT(tail.Await().IsFulfilled());
+    AwaitOk(tail.Await());
     ASSERT(spCtx->nScaled == 60);
 
     // 9.2 单层链：同一个上下文实例贯穿全部层（不做拷贝）
@@ -461,7 +488,7 @@ void DemoContextCreation()
     spCtx2->nBase = 5;
     common::async::CPromise<CDemoContext> chain2 = exec.NewPromise(spCtx2, &StepScale, ASYNC_LOC);
     ASSERT(chain2.GetContext() == spCtx2);
-    ASSERT(chain2.Await().IsFulfilled());
+    AwaitOk(chain2.Await());
     ASSERT(spCtx2->nScaled == 15);
     std::printf("⑨ 上下文: 两层链=%d 单层链=%d\n", spCtx->nScaled, spCtx2->nScaled);
     exec.Stop();
@@ -471,9 +498,8 @@ void DemoContextCreation()
 void DemoPost()
 {
     common::async::CAsyncExecutor exec(2);
-    // 注意：任务体要先收进 std::function 再交给 ASSERT —— 发布构建里 `ASSERT(expr)` 展开为
-    // `(void)sizeof(expr)`（**不求值**，见 Assert.h），而 lambda 字面量在 C++11 里不能出现在
-    // 未求值上下文（直接用 `ASSERT(exec.Post([]{ … }))` 只有 debug 构建编得过）。
+    // 注意：`Post` 是**动作**、不是断言，所以返回值先取出来、再断言；任务体也先收进 std::function
+    // （lambda 字面量不能出现在 `(void)sizeof(expr)` 这种未求值上下文里，C++11）。
     std::atomic<int> nDone(0);
     const std::function<void()> fnNoop = []()
     {
@@ -483,13 +509,16 @@ void DemoPost()
         nDone.fetch_add(1);
     };
 
-    ASSERT(!exec.Post(fnNoop));  // 未启动：拒绝
+    const bool bPostedBeforeStart = exec.Post(fnNoop);  // 未启动：应当拒绝
+    ASSERT(!bPostedBeforeStart);
 
-    ASSERT(exec.Start());
-    ASSERT(exec.Post(fnCount));
+    StartOrFail(exec);
+    const bool bPosted = exec.Post(fnCount);
+    ASSERT(bPosted);
     exec.Stop();  // 等待任务完成
     ASSERT(nDone.load() == 1);
-    ASSERT(!exec.Post(fnCount));  // 已停止：拒绝
+    const bool bPostedAfterStop = exec.Post(fnCount);  // 已停止：应当拒绝
+    ASSERT(!bPostedAfterStop);
     std::printf("⑩ Post: 完成=%d（未启动 / 已停止均被拒绝）\n", nDone.load());
 }
 
@@ -497,7 +526,7 @@ void DemoPost()
 void DemoConcurrent()
 {
     common::async::CAsyncExecutor exec(4);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     // 11.1 多条链并行（各链独立上下文）
     const int kChains = 16;
@@ -553,13 +582,13 @@ void DemoLifetime()
     std::shared_ptr<common::async::CPromise<CDemoContext> > spTail;
     {
         common::async::CAsyncExecutor exec(2);
-        ASSERT(exec.Start());
+        StartOrFail(exec);
         spTail = std::make_shared<common::async::CPromise<CDemoContext> >(
             exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC));
         exec.Stop();  // 停止并等待已投递任务完成
     }  // 执行器析构：链通过共享句柄保活线程池，不悬垂
 
-    ASSERT(spTail->Await().IsFulfilled());
+    AwaitOk(spTail->Await());
     ASSERT(spCtx->nScaled == 30);
     std::printf("⑫ 生命周期: 执行器析构后仍完成，缩放=%d\n", spCtx->nScaled);
 }
@@ -580,7 +609,7 @@ void DemoNotStarted()
 void DemoDeepChain()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     const int kLayers = 256;  // > detail::kMaxInlineDepth（64）
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
@@ -589,7 +618,7 @@ void DemoDeepChain()
     {
         tail = tail.Then(&StepScale, ASYNC_LOC);
     }
-    ASSERT(tail.Await().IsFulfilled());
+    AwaitOk(tail.Await());
     ASSERT(spCtx->nScaled == 30);  // 缩放层重复执行，结果不变
     std::printf("⑭ 深链: %d 层全部执行完成\n", kLayers + 1);
     exec.Stop();
@@ -599,7 +628,7 @@ void DemoDeepChain()
 void DemoSourceLoc()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     common::async::CPromise<CDemoContext> tail = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC);
@@ -607,7 +636,7 @@ void DemoSourceLoc()
     (void)loc;  // 调试构建下：loc.szFunction / szFile / nLine 指向注册点
     std::printf(
         "⑮ 注册点源码位置: 调试构建下 tail.Loc() = %s:%d\n", loc.szFile != NULL ? loc.szFile : "(发布构建为空)", loc.nLine);
-    ASSERT(tail.Await().IsFulfilled());
+    AwaitOk(tail.Await());
     exec.Stop();
 }
 
@@ -706,7 +735,7 @@ private:
 void DemoCoroutineSequential()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     spCtx->nBase = 7;
@@ -724,12 +753,12 @@ void DemoCoroutineSequential()
 void DemoCoroutineParallel()
 {
     common::async::CAsyncExecutor exec(4);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     spCtx->nBase = 7;
     std::shared_ptr<CParallelCoroutine> pCoro = exec.CoStart<CParallelCoroutine>(spCtx);
-    ASSERT(pCoro->Await().IsFulfilled());
+    AwaitOk(pCoro->Await());
     ASSERT(spCtx->nParDone.load() == 3);  // 三条子链都跑完（并行，先后不定）
     std::printf("⑰ 协程并行 await: 并行分支完成=%d\n", spCtx->nParDone.load());
     exec.Stop();
@@ -739,7 +768,7 @@ void DemoCoroutineParallel()
 void DemoCoroutineAwaitRejected()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     spCtx->bFailStore = true;
@@ -756,7 +785,7 @@ void DemoCoroutineAwaitRejected()
 void DemoCoroutineNested()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     spCtx->nBase = 4;
@@ -777,7 +806,7 @@ void DemoCoroutineNested()
 void DemoNestedBlockingInLayer()
 {
     common::async::CAsyncExecutor exec(2);  // 关键前提：≥ 2 个工作线程
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     std::shared_ptr<CSubContext> spSub = std::make_shared<CSubContext>();
@@ -819,7 +848,7 @@ void DemoNestedBlockingInLayer()
 void DemoNestedCallbackDrivenInLayer()
 {
     common::async::CAsyncExecutor exec(1);  // 单线程也安全：全程不阻塞
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     std::shared_ptr<CSubContext> spSub = std::make_shared<CSubContext>();
@@ -847,7 +876,7 @@ void DemoNestedCallbackDrivenInLayer()
         },
         ASYNC_LOC);
 
-    ASSERT(outer.Await().IsFulfilled());
+    AwaitOk(outer.Await());
     while (!bSubDone.load())
     {
         std::this_thread::yield();  // 等子流程回调（演示用；真实业务无需等待）
@@ -861,7 +890,7 @@ void DemoNestedCallbackDrivenInLayer()
 void DemoNestedPostInLayer()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     std::atomic<bool> bDone(false);
@@ -929,7 +958,7 @@ private:
 void DemoCoroutineNestedContext()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     std::shared_ptr<CNestedContextCoroutine> pCoro = exec.CoStart<CNestedContextCoroutine>(spCtx, &exec);
@@ -982,7 +1011,7 @@ private:
 void DemoCoroutineParallelNested()
 {
     common::async::CAsyncExecutor exec(4);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     std::shared_ptr<CParallelNestedCoroutine> pCoro = exec.CoStart<CParallelNestedCoroutine>(spCtx, &exec);
@@ -1026,7 +1055,7 @@ private:
 void DemoForkAndCoroutineFanIn()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     std::shared_ptr<CFanInCoroutine> pCoro = exec.CoStart<CFanInCoroutine>(spCtx, &exec);
@@ -1118,7 +1147,7 @@ static common::async::CPromise<CDemoContext> BridgeQueryOther(
 void DemoBridgeOtherModule()
 {
     common::async::CAsyncExecutor exec(1);  // 单线程执行器：本形态不靠占线程来等，因此安全
-    ASSERT(exec.Start());
+    StartOrFail(exec);
 
     // ① 成功路径：本模块层 → 桥接（别的模块）→ 本模块层继续跑
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
@@ -1185,7 +1214,10 @@ int main()
     DemoCoroutineParallelNested();
     DemoForkAndCoroutineFanIn();
     DemoBridgeOtherModule();
-    ASSERT(RunThenMixCase());  // 单独的例子：一条链里混用多种 then（见 cases/ThenMixCase.cpp）
+
+    // 单独的例子：一条链里混用多种 then（见 cases/ThenMixCase.cpp）—— 先跑、再断言结果。
+    const bool bThenMixOk = RunThenMixCase();
+    ASSERT(bThenMixOk);
 
     std::printf("全部演示通过 ✔（自校验用通用 ASSERT：失败会立即打印位置并中止）\n");
     return 0;
