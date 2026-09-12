@@ -21,8 +21,8 @@ namespace no = common::async;
 
 /// 对某引擎跑一次窗口式压力测试。
 inline void RunStressFor(const std::string& group, const std::string& name,
-                         const std::function<void(const std::function<void()>&)>& submit,
-                         const std::function<void()>& stop, int window, int ms, const std::string& note)
+    const std::function<void(const std::function<void()>&)>& submit, const std::function<void()>& stop, int window,
+    int ms, const std::string& note)
 {
     std::atomic<uint64_t> done(0);
     std::function<void()> wrap = [&]()
@@ -39,7 +39,7 @@ inline void RunStressFor(const std::string& group, const std::string& name,
 
 /// promise 压力：窗口内持续起「nLayers 层 promise」并等其完成（每完成一条 done+1）。
 inline void RunChainStress(const std::string& group, const std::string& name, int nThreads, int nLayers, int window,
-                           int ms, const std::string& note)
+    int ms, const std::string& note)
 {
     no::CAsyncExecutor exec(static_cast<size_t>(nThreads));
     exec.Start();
@@ -80,8 +80,8 @@ public:
 };
 
 /// 协程压力：窗口内持续起协程（每个 2 次 await）并等其完成。
-inline void RunCoroStress(const std::string& group, const std::string& name, int nThreads, int window, int ms,
-                          const std::string& note)
+inline void RunCoroStress(
+    const std::string& group, const std::string& name, int nThreads, int window, int ms, const std::string& note)
 {
     no::CAsyncExecutor exec(static_cast<size_t>(nThreads));
     exec.Start();
@@ -107,7 +107,7 @@ inline void RunCoroStress(const std::string& group, const std::string& name, int
 
 /// 混合负载：链 / 协程 / Post 三路生产者并行，统计总完成吞吐。
 inline void RunMixedLoad(const std::string& group, const std::string& name, int nProducers, uint64_t nPerProducer,
-                         const std::string& note, int nThreads)
+    const std::string& note, int nThreads)
 {
     no::CAsyncExecutor exec(static_cast<size_t>(nThreads));
     exec.Start();
@@ -257,10 +257,10 @@ void RunStressCases()
     RunChainStress(group, "CPromise x8 (4 threads)", kThreads, 8, kWindow, kMs, "窗口 1000 条 promise（各 8 层）");
 
     // 协程压力：每个协程 2 次 await。
-    RunCoroStress(group, "CCoroutine x2 await (4 threads)", kThreads, kWindow, kMs,
-                  "窗口 1000 个协程（各 2 次 await）");
+    RunCoroStress(
+        group, "CCoroutine x2 await (4 threads)", kThreads, kWindow, kMs, "窗口 1000 个协程（各 2 次 await）");
 
     // 混合负载：链 + 协程 + Post 并行。
     RunMixedLoad(group, "mixed chain+coro+post (4 producers)", 4, 20000, "4 生产者 × 20000（链 / 协程 / Post 各 1/3）",
-                 kThreads);
+        kThreads);
 }

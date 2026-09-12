@@ -36,8 +36,8 @@ common::timer::TimerId CTimerModule::AddTimer(std::int64_t delayMs, const common
 }
 
 /// @brief 添加周期性定时器。
-common::timer::TimerId CTimerModule::AddPeriodicTimer(std::int64_t intervalMs,
-                                                      const common::timer::TimerCallback& callback)
+common::timer::TimerId CTimerModule::AddPeriodicTimer(
+    std::int64_t intervalMs, const common::timer::TimerCallback& callback)
 {
     return m_timer.AddPeriodicTimer(intervalMs, callback);
 }

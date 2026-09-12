@@ -208,8 +208,8 @@ inline void RunNotice(const SettledHandler& fnSettled, const CPromiseResult& res
 /// @param pTarget 目标执行器句柄。
 /// @param fnSettled 通知处理器（可为空）。
 /// @param result 本层最终结果。
-inline void RunNoticeOn(const std::shared_ptr<CExecutorHandle>& pTarget, const SettledHandler& fnSettled,
-                        const CPromiseResult& result)
+inline void RunNoticeOn(
+    const std::shared_ptr<CExecutorHandle>& pTarget, const SettledHandler& fnSettled, const CPromiseResult& result)
 {
     if (!fnSettled)
     {
@@ -288,8 +288,8 @@ public:
     /// @param fnHandler 处理器（按值接收，登记时移动存储避免拷贝）。
     /// @param bGuaranteedDelivery 是否要求「送达保证」（通知用 true）。
     /// @return true 已登记 / 已投递 / 已就地送达；false 仅当层处理器已 settled 且执行器不可用。
-    bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler,
-                    bool bGuaranteedDelivery = false)
+    bool AddHandler(
+        const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler, bool bGuaranteedDelivery = false)
     {
         bool bFireNow = false;
         CPromiseResult result;
@@ -346,10 +346,10 @@ public:
 
         std::unique_lock<std::mutex> lock(m_mutex);
         m_cv.wait(lock,
-                  [this]()
-                  {
-                      return m_bSettled.load(std::memory_order_relaxed);
-                  });
+            [this]()
+            {
+                return m_bSettled.load(std::memory_order_relaxed);
+            });
         return m_result;
     }
 
@@ -370,10 +370,10 @@ public:
 
         std::unique_lock<std::mutex> lock(m_mutex);
         if (!m_cv.wait_for(lock, std::chrono::milliseconds(nTimeoutMs),
-                           [this]()
-                           {
-                               return m_bSettled.load(std::memory_order_relaxed);
-                           }))
+                [this]()
+                {
+                    return m_bSettled.load(std::memory_order_relaxed);
+                }))
         {
             return CPromiseResult::Reject(kStopped);  // 超时：不落定本层，只向调用方报「没等到」。
         }
@@ -442,8 +442,7 @@ enum HandlerAffinity
 /// @param pChainHandle 本链执行器句柄（默认值）。
 /// @return 本层应使用的执行器句柄。
 inline const std::shared_ptr<CExecutorHandle>& ResolveExecHandle(int nAffinity,
-                                                                 const std::shared_ptr<CExecutorHandle>& pTarget,
-                                                                 const std::shared_ptr<CExecutorHandle>& pChainHandle)
+    const std::shared_ptr<CExecutorHandle>& pTarget, const std::shared_ptr<CExecutorHandle>& pChainHandle)
 {
     return (nAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pChainHandle;
 }
@@ -483,9 +482,8 @@ inline CPromiseResult ResolveLayerResult(int nMode, const CPromiseResult& upResu
 /// @return 任务体（在工作线程上执行处理器并 settle 本层状态）。
 template <typename TContext>
 std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spContext,
-                                        const std::shared_ptr<CPromiseState>& pState,
-                                        const ThenHandler<TContext>& fnHandler, const CPromiseResult& upResult,
-                                        int nMode)
+    const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
+    const CPromiseResult& upResult, int nMode)
 {
     return [spContext, pState, fnHandler, upResult, nMode]()
     {
@@ -593,8 +591,8 @@ public:
     /// @param nAffinity 执行线程偏好（默认本链执行器；`kAffinityInline` 就地；`kAffinityExecutor` 用 pTarget）。
     /// @param pTarget 指定执行器句柄（`kAffinityExecutor` 时有效）。
     void RunHandler(const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
-                    const CPromiseResult& upResult, int nMode, int nAffinity = kAffinityChain,
-                    const std::shared_ptr<CExecutorHandle>& pTarget = nullptr) const
+        const CPromiseResult& upResult, int nMode, int nAffinity = kAffinityChain,
+        const std::shared_ptr<CExecutorHandle>& pTarget = nullptr) const
     {
         std::function<void()> fnRun = MakeHandlerRunner(Context(), pState, fnHandler, upResult, nMode);
 
@@ -623,7 +621,7 @@ public:
     /// @param nMode 处理器模式。
     /// @param pExec 目标执行器句柄（调用方已按亲和解析好，恒非空）。
     void PostHandler(const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
-                     const CPromiseResult& upResult, int nMode, const std::shared_ptr<CExecutorHandle>& pExec) const
+        const CPromiseResult& upResult, int nMode, const std::shared_ptr<CExecutorHandle>& pExec) const
     {
         std::function<void()> fnRun = MakeHandlerRunner(Context(), pState, fnHandler, upResult, nMode);
         if (!PostToHandle(pExec, std::move(fnRun)))
@@ -711,7 +709,7 @@ public:
     /// @param fnHandler 首层处理器（固定签名）。
     /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
     CPromise(CAsyncExecutor& executor, const std::shared_ptr<TContext>& spContext, const ThenHandler& fnHandler,
-             const CSourceLoc& loc = CSourceLoc())
+        const CSourceLoc& loc = CSourceLoc())
         : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(executor.Handle(), spContext)), m_pState()
     {
         Append(fnHandler, loc, detail::kModeThen);
@@ -784,7 +782,7 @@ public:
     /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
     /// @return 指向本 promise 的句柄（pending；由 fnExecutor 触发 settle）。
     static CPromise New(CAsyncExecutor& executor, const std::shared_ptr<TContext>& spContext,
-                        const PromiseExecutor& fnExecutor, const CSourceLoc& loc = CSourceLoc())
+        const PromiseExecutor& fnExecutor, const CSourceLoc& loc = CSourceLoc())
     {
         return NewFromHandle(executor.Handle(), spContext, fnExecutor, loc);
     }
@@ -921,15 +919,15 @@ public:
 
         const std::shared_ptr<detail::CPromiseState> pUpState = m_pState;
         const bool bOk = pUpState->AddHandler(pCore->Handle(),
-                                              [pCore, pNextState, fnFactory](const CPromiseResult& upResult)
-                                              {
-                                                  if (upResult.IsRejected())
-                                                  {
-                                                      pNextState->Settle(upResult);  // 失败即停（与 Then 一致）。
-                                                      return;
-                                                  }
-                                                  Adopt(pCore, pNextState, fnFactory);
-                                              });
+            [pCore, pNextState, fnFactory](const CPromiseResult& upResult)
+            {
+                if (upResult.IsRejected())
+                {
+                    pNextState->Settle(upResult);  // 失败即停（与 Then 一致）。
+                    return;
+                }
+                Adopt(pCore, pNextState, fnFactory);
+            });
 
         if (!bOk)
         {
@@ -972,8 +970,8 @@ public:
                 return CPromise();  // 没有可等待的子链 → 本层以 kStopped 收口（Adopt 处理）。
             }
 
-            PromiseExecutor fnExecutor =
-                [promiseChild, fnApply, spSelf](const ResolveFn& fnResolve, const RejectFn& fnReject)
+            PromiseExecutor fnExecutor = [promiseChild, fnApply, spSelf](
+                                             const ResolveFn& fnResolve, const RejectFn& fnReject)
             {
                 BindChildSettle(promiseChild, fnApply, spSelf, fnResolve, fnReject);  // 规则只有一份。
             };
@@ -1155,8 +1153,8 @@ private:
     /// @param pState 目标层状态。
     /// @param result 落定结果。
     /// @return 任务体。
-    static std::function<void()> MakeSettleRunner(const std::shared_ptr<detail::CPromiseState>& pState,
-                                                  const CPromiseResult& result)
+    static std::function<void()> MakeSettleRunner(
+        const std::shared_ptr<detail::CPromiseState>& pState, const CPromiseResult& result)
     {
         return [pState, result]()
         {
@@ -1203,8 +1201,7 @@ private:
     /// @param fnReject 失败收口动作（子链拒绝码 / 搬运异常的 kException）。
     template <class TChildContext, class TFnApply>
     static void BindChildSettle(const CPromise<TChildContext>& promiseChild, TFnApply fnApply,
-                                const std::shared_ptr<TContext>& spSelf, const ResolveFn& fnResolve,
-                                const RejectFn& fnReject)
+        const std::shared_ptr<TContext>& spSelf, const ResolveFn& fnResolve, const RejectFn& fnReject)
     {
         const std::shared_ptr<TChildContext> spChildCtx = promiseChild.GetContext();  // 有效 promise 恒非空。
         promiseChild.OnSettled(
@@ -1239,8 +1236,7 @@ private:
     /// @param loc 注册点源码位置。
     /// @return 指向本 promise 的句柄（pending；由 fnExecutor 触发 settle）。
     static CPromise NewFromHandle(const std::shared_ptr<detail::CExecutorHandle>& pHandle,
-                                  const std::shared_ptr<TContext>& spContext, const PromiseExecutor& fnExecutor,
-                                  const CSourceLoc& loc)
+        const std::shared_ptr<TContext>& spContext, const PromiseExecutor& fnExecutor, const CSourceLoc& loc)
     {
         CPromise promise;
         promise.m_pCore = std::make_shared<detail::CPromiseCore<TContext> >(pHandle, spContext);
@@ -1262,7 +1258,7 @@ private:
     /// @param pState 本层状态（子 promise settle 后收口）。
     /// @param fnFactory 子 promise 工厂。
     static void Adopt(const std::shared_ptr<detail::CPromiseCore<TContext> >& pCore,
-                      const std::shared_ptr<detail::CPromiseState>& pState, const PromiseFactory& fnFactory)
+        const std::shared_ptr<detail::CPromiseState>& pState, const PromiseFactory& fnFactory)
     {
         CPromise promiseChild;
         try
@@ -1296,8 +1292,8 @@ private:
     ///
     /// @param pState 本层状态（executor 通过 resolve / reject 收口它）。
     /// @param fnExecutor 执行体。
-    static void RunExternalExecutor(const std::shared_ptr<detail::CPromiseState>& pState,
-                                    const PromiseExecutor& fnExecutor)
+    static void RunExternalExecutor(
+        const std::shared_ptr<detail::CPromiseState>& pState, const PromiseExecutor& fnExecutor)
     {
         ResolveFn fnResolve = [pState]()
         {
@@ -1342,8 +1338,7 @@ private:
     /// @param pTarget 指定执行器句柄（kAffinityExecutor 时有效）。
     /// @return 指向本层的 promise 句柄（无效 promise 返回无效句柄）。
     CPromise Append(const ThenHandler& fnHandler, const CSourceLoc& loc, int nMode,
-                    int nAffinity = detail::kAffinityChain,
-                    const std::shared_ptr<detail::CExecutorHandle>& pTarget = nullptr)
+        int nAffinity = detail::kAffinityChain, const std::shared_ptr<detail::CExecutorHandle>& pTarget = nullptr)
     {
         if (m_pCore == nullptr)
         {
@@ -1373,8 +1368,8 @@ private:
                 }
                 else
                 {
-                    RegisterFirstLayer(detail::MakeHandlerRunner(m_pCore->Context(), m_pState, fnHandler,
-                                                                 CPromiseResult::Resolve(), nMode));
+                    RegisterFirstLayer(detail::MakeHandlerRunner(
+                        m_pCore->Context(), m_pState, fnHandler, CPromiseResult::Resolve(), nMode));
                 }
                 return *this;
             }
@@ -1399,8 +1394,7 @@ private:
         const std::shared_ptr<detail::CPromiseState> pUpState = m_pState;
         const std::shared_ptr<detail::CExecutorHandle> pTargetExec = pTarget;
 
-        const bool bOk = pUpState->AddHandler(
-            pExec,
+        const bool bOk = pUpState->AddHandler(pExec,
             [pCore, pNextState, fnHandler, nMode, nAffinity, pTargetExec](const CPromiseResult& upResult)
             {
                 // 三态语义：该跳过的层直接透传上一层结果（then 被拒 / catch 已兑现）。
@@ -1426,7 +1420,7 @@ private:
     /// @param pState 状态（本句柄指向的层）。
     /// @return 指向该层的 promise 句柄。
     static CPromise Make(const std::shared_ptr<detail::CPromiseCore<TContext> >& pCore,
-                         const std::shared_ptr<detail::CPromiseState>& pState)
+        const std::shared_ptr<detail::CPromiseState>& pState)
     {
         CPromise promise;
         promise.m_pCore = pCore;
@@ -1454,8 +1448,7 @@ private:
 
 template <typename TContext>
 CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& spContext,
-                                              typename CPromise<TContext>::ThenHandler fnHandler,
-                                              const CSourceLoc& loc /* = CSourceLoc() */)
+    typename CPromise<TContext>::ThenHandler fnHandler, const CSourceLoc& loc /* = CSourceLoc() */)
 {
     return CPromise<TContext>(*this, spContext, fnHandler, loc);
 }

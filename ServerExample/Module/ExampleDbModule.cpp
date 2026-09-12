@@ -101,8 +101,8 @@ bool CExampleDbModule::Start()
         return false;
     }
 
-    common::log::CLogger::Instance().Info("[数据访问] 模拟数据库已启动（种子数据 2 行，单次 IO 延迟 " +
-                                          std::to_string(m_nLatencyMs) + "ms）");
+    common::log::CLogger::Instance().Info(
+        "[数据访问] 模拟数据库已启动（种子数据 2 行，单次 IO 延迟 " + std::to_string(m_nLatencyMs) + "ms）");
     return true;
 }
 
@@ -231,8 +231,8 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::LoadRowAsync(const std::
 /// @param spOp 操作上下文（追加轨迹）。
 ///
 /// @return 兑现。
-common::async::CPromiseResult CExampleDbModule::StepAcquireConn(common::async::CPromiseResult /*upResult*/,
-                                                                const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepAcquireConn(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
 {
     spOp->strTrace += "取连接;";
     SimulateDbIo(m_nLatencyMs);
@@ -245,8 +245,8 @@ common::async::CPromiseResult CExampleDbModule::StepAcquireConn(common::async::C
 /// @param spOp 操作上下文（命中写 recResult / bFound；演示开关触发驱动异常）。
 ///
 /// @return 命中兑现；未命中返回 kDbRowNotFound；驱动异常抛出（框架转为 kException）。
-common::async::CPromiseResult CExampleDbModule::StepLoadRow(common::async::CPromiseResult /*upResult*/,
-                                                            const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepLoadRow(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
 {
     SimulateDbIo(m_nLatencyMs);
 
@@ -286,8 +286,8 @@ common::async::CPromiseResult CExampleDbModule::StepLoadRow(common::async::CProm
 /// @param spOp 操作上下文（追加轨迹）。
 ///
 /// @return 上一层为 kDbRowNotFound 时返回 Resolve()（吞掉该拒绝）；否则原样透传。
-common::async::CPromiseResult CExampleDbModule::StepAcceptNotFound(common::async::CPromiseResult upResult,
-                                                                   const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepAcceptNotFound(
+    common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp)
 {
     // catch 层：只在被拒绝时执行，upResult 必定是拒绝 —— 只有这里才必须看它。
     if (upResult.Code() == kDbRowNotFound)
@@ -304,8 +304,8 @@ common::async::CPromiseResult CExampleDbModule::StepAcceptNotFound(common::async
 /// @param spOp 操作上下文（读 bFound）。
 ///
 /// @return 不存在兑现；存在返回 kDbDuplicateKey。
-common::async::CPromiseResult CExampleDbModule::StepRejectIfExists(common::async::CPromiseResult /*upResult*/,
-                                                                   const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepRejectIfExists(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
 {
     if (spOp->bFound)
     {
@@ -321,8 +321,8 @@ common::async::CPromiseResult CExampleDbModule::StepRejectIfExists(common::async
 /// @param spOp 操作上下文（写入 recResult / nUserId）。
 ///
 /// @return 兑现；主键冲突返回 kDbDuplicateKey。
-common::async::CPromiseResult CExampleDbModule::StepInsertRow(common::async::CPromiseResult /*upResult*/,
-                                                              const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepInsertRow(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
 {
     SimulateDbIo(m_nLatencyMs);
 
@@ -356,8 +356,8 @@ common::async::CPromiseResult CExampleDbModule::StepInsertRow(common::async::CPr
 ///
 /// @return 兑现（版本 +1）；不存在返回 kDbRowNotFound；版本不匹配返回
 ///         kDbVersionConflict，并把库中最新行写入 recResult 供上层重试。
-common::async::CPromiseResult CExampleDbModule::StepApplyUpdate(common::async::CPromiseResult /*upResult*/,
-                                                                const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepApplyUpdate(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
 {
     SimulateDbIo(m_nLatencyMs);
 
@@ -391,8 +391,8 @@ common::async::CPromiseResult CExampleDbModule::StepApplyUpdate(common::async::C
 /// @param spOp 操作上下文（nUserId 为目标用户）。
 ///
 /// @return 兑现；不存在返回 kDbRowNotFound。
-common::async::CPromiseResult CExampleDbModule::StepEraseRow(common::async::CPromiseResult /*upResult*/,
-                                                             const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepEraseRow(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
 {
     SimulateDbIo(m_nLatencyMs);
 
@@ -414,8 +414,8 @@ common::async::CPromiseResult CExampleDbModule::StepEraseRow(common::async::CPro
 /// @param spOp 操作上下文（追加轨迹）。
 ///
 /// @return upResult（finally 忽略返回值，结果原样透传）。
-common::async::CPromiseResult CExampleDbModule::StepReleaseConn(common::async::CPromiseResult upResult,
-                                                                const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepReleaseConn(
+    common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp)
 {
     // finally 层：成败都执行，upResult 可能是拒绝（返回值被忽略，原样透传）。
     spOp->strTrace += "放连接;";

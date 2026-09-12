@@ -64,9 +64,9 @@ void RunSubmitCases()
             [&eng]()
             {
                 RunOneWithDone(eng,
-                               []()
-                               {
-                               });
+                    []()
+                    {
+                    });
             },
             7, "mutex+condvar 线程池，提交→执行→唤醒");
         eng.Stop();
@@ -81,9 +81,9 @@ void RunSubmitCases()
             [&eng]()
             {
                 RunOneWithDone(eng,
-                               []()
-                               {
-                               });
+                    []()
+                    {
+                    });
             },
             7, "异步执行器 fire-and-forget（与链共用同一线程池）");
         eng.Stop();
@@ -98,9 +98,9 @@ void RunSubmitCases()
             [&eng]()
             {
                 RunOneWithDone(eng,
-                               []()
-                               {
-                               });
+                    []()
+                    {
+                    });
             },
             7, "行业标准异步库（本项目自带）");
         eng.Stop();

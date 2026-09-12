@@ -59,8 +59,8 @@ public:
 
 private:
     /// 层处理器：记录线程与次数。
-    static no::CPromiseResult StepQuery(no::CPromiseResult /*upResult*/,
-                                        const std::shared_ptr<COverrideCalleeCtx>& spCtx)
+    static no::CPromiseResult StepQuery(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideCalleeCtx>& spCtx)
     {
         ++spCtx->nSteps;
         spCtx->idStep = std::this_thread::get_id();
@@ -108,8 +108,8 @@ public:
     }
 
     /// @brief 用 `ThenInline` 覆盖：跨模块返回后那一层就地跑在被调模块线程上。
-    no::CPromise<COverrideOrderCtx> RunInlineAsync(const std::shared_ptr<COverrideOrderCtx>& spCtx,
-                                                   const std::shared_ptr<COverrideCalleeModule>& spCallee)
+    no::CPromise<COverrideOrderCtx> RunInlineAsync(
+        const std::shared_ptr<COverrideOrderCtx>& spCtx, const std::shared_ptr<COverrideCalleeModule>& spCallee)
     {
         return m_execMain.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
             .ThenPromise(MakeCallFactory(spCallee), ASYNC_LOC)
@@ -119,8 +119,8 @@ public:
     }
 
     /// @brief 对照：同样位置用默认 `Then`（应回主执行器线程）。
-    no::CPromise<COverrideOrderCtx> RunDefaultAsync(const std::shared_ptr<COverrideOrderCtx>& spCtx,
-                                                    const std::shared_ptr<COverrideCalleeModule>& spCallee)
+    no::CPromise<COverrideOrderCtx> RunDefaultAsync(
+        const std::shared_ptr<COverrideOrderCtx>& spCtx, const std::shared_ptr<COverrideCalleeModule>& spCallee)
     {
         return m_execMain.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
             .ThenPromise(MakeCallFactory(spCallee), ASYNC_LOC)
@@ -129,8 +129,8 @@ public:
     }
 
     /// @brief 用 `ThenOn` 指定旁路执行器：该层跑在旁路执行器线程上，之后的层切回主执行器。
-    no::CPromise<COverrideOrderCtx> RunOnSideAsync(const std::shared_ptr<COverrideOrderCtx>& spCtx,
-                                                   const std::shared_ptr<COverrideCalleeModule>& spCallee)
+    no::CPromise<COverrideOrderCtx> RunOnSideAsync(
+        const std::shared_ptr<COverrideOrderCtx>& spCtx, const std::shared_ptr<COverrideCalleeModule>& spCallee)
     {
         return m_execMain.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
             .ThenPromise(MakeCallFactory(spCallee), ASYNC_LOC)
@@ -160,8 +160,8 @@ private:
     }
 
     /// ① 本模块自有层（主执行器）。
-    static no::CPromiseResult StepOrderLoad(no::CPromiseResult /*upResult*/,
-                                            const std::shared_ptr<COverrideOrderCtx>& spCtx)
+    static no::CPromiseResult StepOrderLoad(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->idFirst = std::this_thread::get_id();
@@ -171,8 +171,8 @@ private:
     }
 
     /// ③ `ThenInline` 层：应在被调模块线程上（就地）。
-    static no::CPromiseResult StepAfterBridgeInline(no::CPromiseResult /*upResult*/,
-                                                    const std::shared_ptr<COverrideOrderCtx>& spCtx)
+    static no::CPromiseResult StepAfterBridgeInline(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
         spCtx->idAfterBridgeInline = std::this_thread::get_id();
         spCtx->strTrace += "A2i;";
@@ -180,8 +180,8 @@ private:
     }
 
     /// ④ 默认亲和层：应回主执行器线程。
-    static no::CPromiseResult StepAfterBridgeDefault(no::CPromiseResult /*upResult*/,
-                                                     const std::shared_ptr<COverrideOrderCtx>& spCtx)
+    static no::CPromiseResult StepAfterBridgeDefault(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->idAfterBridgeDefault = std::this_thread::get_id();
@@ -191,8 +191,8 @@ private:
     }
 
     /// `ThenOn(旁路执行器)` 层：应在旁路执行器线程上。
-    static no::CPromiseResult StepOnSide(no::CPromiseResult /*upResult*/,
-                                         const std::shared_ptr<COverrideOrderCtx>& spCtx)
+    static no::CPromiseResult StepOnSide(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
         spCtx->idOnSide = std::this_thread::get_id();
         spCtx->strTrace += "S;";
@@ -200,8 +200,8 @@ private:
     }
 
     /// `ThenOn` 之后那一层：应切回主执行器线程。
-    static no::CPromiseResult StepAfterSide(no::CPromiseResult /*upResult*/,
-                                            const std::shared_ptr<COverrideOrderCtx>& spCtx)
+    static no::CPromiseResult StepAfterSide(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->idAfterSide = std::this_thread::get_id();
@@ -220,12 +220,12 @@ private:
     }
 
     /// 桥接层：把被调模块的 promise 接进本流程（不检查 OnSettled 返回值也安全）。
-    no::CPromise<COverrideOrderCtx> BridgeCallCallee(const std::shared_ptr<COverrideOrderCtx>& spCtx,
-                                                     const std::shared_ptr<COverrideCalleeModule>& spCallee)
+    no::CPromise<COverrideOrderCtx> BridgeCallCallee(
+        const std::shared_ptr<COverrideOrderCtx>& spCtx, const std::shared_ptr<COverrideCalleeModule>& spCallee)
     {
         no::CPromise<COverrideOrderCtx>::PromiseExecutor fnExecutor =
             [spCallee, spCtx](const no::CPromise<COverrideOrderCtx>::ResolveFn& fnResolve,
-                              const no::CPromise<COverrideOrderCtx>::RejectFn& fnReject)
+                const no::CPromise<COverrideOrderCtx>::RejectFn& fnReject)
         {
             auto spCalleeCtx = std::make_shared<COverrideCalleeCtx>();
             spCalleeCtx->nDelayMs = spCtx->nCalleeDelayMs;

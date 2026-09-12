@@ -60,8 +60,8 @@ public:
     template <typename T = IUnknown>
     ScopedInterfacePtr<T> Self()
     {
-        static_assert(detail::IsSelfable<T>::value,
-                      "Self<T>(): T 必须是 IUnknown 派生接口，且不能是指针/引用/cv 限定类型");
+        static_assert(
+            detail::IsSelfable<T>::value, "Self<T>(): T 必须是 IUnknown 派生接口，且不能是指针/引用/cv 限定类型");
         return ScopedInterfacePtr<T>(dynamic_cast<T*>(this));
     }
 
@@ -70,8 +70,8 @@ public:
     template <typename T = IUnknown>
     CWeakPtr<T> WeakSelf()
     {
-        static_assert(detail::IsSelfable<T>::value,
-                      "WeakSelf<T>(): T 必须是 IUnknown 派生接口，且不能是指针/引用/cv 限定类型");
+        static_assert(
+            detail::IsSelfable<T>::value, "WeakSelf<T>(): T 必须是 IUnknown 派生接口，且不能是指针/引用/cv 限定类型");
         return CWeakPtr<T>(dynamic_cast<T*>(this), m_pLifetime);
     }
 

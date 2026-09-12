@@ -97,10 +97,10 @@ TEST(Timer_OneShotFires)
 
     std::atomic<int> nFired(0);
     common::timer::TimerId nId = timerManager.AddTimer(30,
-                                                       [&nFired]()
-                                                       {
-                                                           nFired.fetch_add(1);
-                                                       });
+        [&nFired]()
+        {
+            nFired.fetch_add(1);
+        });
     ASSERT_TRUE(nId != common::timer::kInvalidTimerId);
 
     std::this_thread::sleep_for(std::chrono::milliseconds(120));

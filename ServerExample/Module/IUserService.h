@@ -70,8 +70,8 @@ public:
     virtual common::async::CPromise<CUserOpContext> RegisterUserAsync(const CUserRecord& recRequest) = 0;
 
     // 异步修改用户名（改；乐观锁冲突在回调里自动重试）。
-    virtual common::async::CPromise<CUserOpContext> RenameUserAsync(std::uint64_t nUserId,
-                                                                    const std::string& strNewName) = 0;
+    virtual common::async::CPromise<CUserOpContext> RenameUserAsync(
+        std::uint64_t nUserId, const std::string& strNewName) = 0;
 
     // 异步删除用户（删）。
     virtual common::async::CPromise<CUserOpContext> RemoveUserAsync(std::uint64_t nUserId) = 0;

@@ -60,15 +60,15 @@ bool CExampleService::Initialize(const sc::CResolveContext& ctx)
     }
     m_pRouter->SetExtractor(CExampleProtocol::MakeMessageExtractor());
     m_pRouter->RegisterHandler(kCmdPing,
-                               [this](sc::ConnectionId id, int, const char*, size_t)
-                               {
-                                   HandlePing(id);
-                               });
+        [this](sc::ConnectionId id, int, const char*, size_t)
+        {
+            HandlePing(id);
+        });
     m_pRouter->RegisterHandler(kCmdEcho,
-                               [this](sc::ConnectionId id, int, const char* payload, size_t payloadSize)
-                               {
-                                   HandleEcho(id, payload, payloadSize);
-                               });
+        [this](sc::ConnectionId id, int, const char* payload, size_t payloadSize)
+        {
+            HandleEcho(id, payload, payloadSize);
+        });
 
     // ③ 异步执行器（可选，重活投递）
     m_pExecutor.Reset(ctx.Resolve<sc::IAsyncExecutor>());

@@ -45,8 +45,8 @@ public:
     /// @param eKind 子任务类型（读/写）。
     /// @param fnTask 子任务逻辑（不应抛异常；框架捕获并记录日志）。
     /// @return true 已投递或已排队；false 调度器为空或线程池不可用。
-    bool SubmitTask(CModuleScheduler* pScheduler, CModuleScheduler::ETaskKind eKind,
-                    const std::function<void()>& fnTask);
+    bool SubmitTask(
+        CModuleScheduler* pScheduler, CModuleScheduler::ETaskKind eKind, const std::function<void()>& fnTask);
 
     /// @brief 标记一个子任务开始（SubmitTask 内部使用）。
     void BeginTask();

@@ -155,8 +155,7 @@ bool CExampleApplication::OnInitialize()
     }
 
     // 订阅网络启动事件：从事件负载读取监听端口
-    m_tEventStartId = m_pEventDispatcher->Subscribe(
-        sc::events::kNetworkStarted,
+    m_tEventStartId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStarted,
         [](const sc::Event& event)
         {
             if (event.data != nullptr && event.size == sizeof(std::uint16_t))
@@ -166,15 +165,13 @@ bool CExampleApplication::OnInitialize()
             }
         });
     // 订阅网络停止事件
-    m_tEventStopId =
-        m_pEventDispatcher->Subscribe(sc::events::kNetworkStopped,
-                                      [](const sc::Event&)
-                                      {
-                                          common::log::CLogger::Instance().Info("[Event] 收到 network.stopped");
-                                      });
+    m_tEventStopId = m_pEventDispatcher->Subscribe(sc::events::kNetworkStopped,
+        [](const sc::Event&)
+        {
+            common::log::CLogger::Instance().Info("[Event] 收到 network.stopped");
+        });
     // 订阅自定义事件（由 OnStart 中 PublishAsync 异步发布，工作线程处理）
-    m_tExampleEventId = m_pEventDispatcher->Subscribe(
-        "example.hello",
+    m_tExampleEventId = m_pEventDispatcher->Subscribe("example.hello",
         [](const sc::Event&)
         {
             common::log::CLogger::Instance().Info("[Event] 收到 example.hello（异步分发）");

@@ -293,8 +293,8 @@ void DemoCatchSeesRejection()
     ASSERT(r.IsRejected());
     ASSERT(spCtx->bRolledBack);  // 回滚层看到了上一层失败
     ASSERT(spCtx->strTrace == std::string("读参数;缩放;落库;回滚;"));
-    std::printf("③ catch 看到拒绝: 回滚=%s 轨迹=%s\n", spCtx->bRolledBack ? "已执行" : "未执行",
-                spCtx->strTrace.c_str());
+    std::printf(
+        "③ catch 看到拒绝: 回滚=%s 轨迹=%s\n", spCtx->bRolledBack ? "已执行" : "未执行", spCtx->strTrace.c_str());
     exec.Stop();
 }
 
@@ -315,7 +315,7 @@ void DemoThenFailFast()
     ASSERT(r.Code() == kCodeInvalid);  // 业务拒绝码原样透传
     ASSERT(spCtx->strTrace == std::string("读参数;"));
     std::printf("④ then 失败即停: 码=%d（业务码从 kBusinessBase=%d 起）轨迹=%s\n", r.Code(), no::kBusinessBase,
-                spCtx->strTrace.c_str());
+        spCtx->strTrace.c_str());
     exec.Stop();
 }
 
@@ -591,7 +591,7 @@ void DemoSourceLoc()
     const no::CSourceLoc loc = tail.Loc();
     (void)loc;  // 调试构建下：loc.szFunction / szFile / nLine 指向注册点
     std::printf("⑮ 注册点源码位置: 调试构建下 tail.Loc() = %s:%d\n", loc.szFile != NULL ? loc.szFile : "(发布构建为空)",
-                loc.nLine);
+        loc.nLine);
     ASSERT(tail.Await().IsFulfilled());
     exec.Stop();
 }
@@ -765,28 +765,28 @@ void DemoNestedBlockingInLayer()
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     std::shared_ptr<CSubContext> spSub = std::make_shared<CSubContext>();
 
-    const no::CPromiseResult r = exec.NewPromise(
-                                         spCtx,
-                                         [&exec, spSub](no::CPromiseResult upResult,
-                                                        const std::shared_ptr<CDemoContext>& sp) -> no::CPromiseResult
-                                         {
-                                             if (upResult.IsRejected())
-                                             {
-                                                 return upResult;
-                                             }
-                                             // 层内嵌套：起子 promise（另一套上下文）并阻塞等它结束
-                                             const no::CPromiseResult sub =
-                                                 exec.NewPromise(spSub, &StepQueryRows, ASYNC_LOC).Await();
-                                             if (sub.IsRejected())
-                                             {
-                                                 return sub;  // 子流程被拒绝 → 本层拒绝（拒绝码向上透传）
-                                             }
-                                             sp->nScaled = spSub->nRows;  // 子流程数据写回父上下文
-                                             sp->strTrace += "父层;";
-                                             return no::CPromiseResult::Resolve();
-                                         },
-                                         ASYNC_LOC)
-                                     .Await();
+    const no::CPromiseResult r =
+        exec.NewPromise(
+                spCtx,
+                [&exec, spSub](
+                    no::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& sp) -> no::CPromiseResult
+                {
+                    if (upResult.IsRejected())
+                    {
+                        return upResult;
+                    }
+                    // 层内嵌套：起子 promise（另一套上下文）并阻塞等它结束
+                    const no::CPromiseResult sub = exec.NewPromise(spSub, &StepQueryRows, ASYNC_LOC).Await();
+                    if (sub.IsRejected())
+                    {
+                        return sub;  // 子流程被拒绝 → 本层拒绝（拒绝码向上透传）
+                    }
+                    sp->nScaled = spSub->nRows;  // 子流程数据写回父上下文
+                    sp->strTrace += "父层;";
+                    return no::CPromiseResult::Resolve();
+                },
+                ASYNC_LOC)
+            .Await();
 
     ASSERT(r.IsFulfilled());
     ASSERT(spSub->nRows == 3);
@@ -810,8 +810,8 @@ void DemoNestedCallbackDrivenInLayer()
 
     no::CPromise<CDemoContext> outer = exec.NewPromise(
         spCtx,
-        [&exec, spSub, &bSubDone](no::CPromiseResult upResult,
-                                  const std::shared_ptr<CDemoContext>& sp) -> no::CPromiseResult
+        [&exec, spSub, &bSubDone](
+            no::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& sp) -> no::CPromiseResult
         {
             if (upResult.IsRejected())
             {
@@ -852,8 +852,8 @@ void DemoNestedPostInLayer()
     const no::CPromiseResult r =
         exec.NewPromise(
                 spCtx,
-                [&exec, &bDone](no::CPromiseResult upResult,
-                                const std::shared_ptr<CDemoContext>& sp) -> no::CPromiseResult
+                [&exec, &bDone](
+                    no::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& sp) -> no::CPromiseResult
                 {
                     if (upResult.IsRejected())
                     {
@@ -941,8 +941,7 @@ public:
             spBranch->nId = i;
             m_vecBranches.push_back(spBranch);
         }
-        CO_AWAIT_ALL(
-            m_pExec->NewPromise(m_vecBranches[0], &StepBranchLoad, ASYNC_LOC).Then(&StepBranchSave, ASYNC_LOC),
+        CO_AWAIT_ALL(m_pExec->NewPromise(m_vecBranches[0], &StepBranchLoad, ASYNC_LOC).Then(&StepBranchSave, ASYNC_LOC),
             m_pExec->NewPromise(m_vecBranches[1], &StepBranchLoad, ASYNC_LOC).Then(&StepBranchSave, ASYNC_LOC),
             m_pExec->NewPromise(m_vecBranches[2], &StepBranchLoad, ASYNC_LOC).Then(&StepBranchSave, ASYNC_LOC));
 
@@ -1066,13 +1065,13 @@ static no::CPromise<CSubContext> QueryRowsOfOtherModule(no::CAsyncExecutor& exec
 /// @param spCtx 本流程上下文。
 /// @param bFail true 时子流程失败。
 /// @return 本流程的 promise（由子流程的回调 settle）。
-static no::CPromise<CDemoContext> BridgeQueryOther(no::CAsyncExecutor& exec, const std::shared_ptr<CDemoContext>& spCtx,
-                                                   bool bFail)
+static no::CPromise<CDemoContext> BridgeQueryOther(
+    no::CAsyncExecutor& exec, const std::shared_ptr<CDemoContext>& spCtx, bool bFail)
 {
     // executor 先赋给具名变量再用：长行不会被 clang-format 对齐撑开（见 docs/vscode-clangd-format.md）。
-    no::CPromise<CDemoContext>::PromiseExecutor fnExecutor =
-        [&exec, spCtx, bFail](const no::CPromise<CDemoContext>::ResolveFn& fnResolve,
-                              const no::CPromise<CDemoContext>::RejectFn& fnReject)
+    no::CPromise<CDemoContext>::PromiseExecutor fnExecutor = [&exec, spCtx, bFail](
+                                                                 const no::CPromise<CDemoContext>::ResolveFn& fnResolve,
+                                                                 const no::CPromise<CDemoContext>::RejectFn& fnReject)
     {
         no::CPromise<CSubContext> promiseSub = QueryRowsOfOtherModule(exec, bFail);
         std::shared_ptr<CSubContext> spSub = promiseSub.GetContext();

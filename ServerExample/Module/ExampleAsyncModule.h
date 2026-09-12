@@ -68,8 +68,8 @@ private:
     // ---------------- 对外异步函数（IUserService 实现） ----------------
     common::async::CPromise<CUserOpContext> QueryUserAsync(std::uint64_t nUserId) override;
     common::async::CPromise<CUserOpContext> RegisterUserAsync(const CUserRecord& recRequest) override;
-    common::async::CPromise<CUserOpContext> RenameUserAsync(std::uint64_t nUserId,
-                                                            const std::string& strNewName) override;
+    common::async::CPromise<CUserOpContext> RenameUserAsync(
+        std::uint64_t nUserId, const std::string& strNewName) override;
     common::async::CPromise<CUserOpContext> RemoveUserAsync(std::uint64_t nUserId) override;
 
     // 创建业务操作上下文（设置操作名；数据访问操作上下文在构造中一并创建）。

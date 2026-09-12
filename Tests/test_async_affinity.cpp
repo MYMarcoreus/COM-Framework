@@ -72,8 +72,8 @@ public:
     /// @param spStockModule 库存模块。
     ///
     /// @return 指向最后一层的 promise。
-    no::CPromise<CAffinityOrderCtx> RunOnceAsync(const std::shared_ptr<CAffinityOrderCtx>& spCtx,
-                                                 const std::shared_ptr<CCalleeModule>& spStockModule)
+    no::CPromise<CAffinityOrderCtx> RunOnceAsync(
+        const std::shared_ptr<CAffinityOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         return m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
             .ThenPromise(MakeQueryFactory(spStockModule), ASYNC_LOC)
@@ -90,7 +90,7 @@ public:
     ///
     /// @return 指向最后一层的 promise。
     no::CPromise<CAffinityOrderCtx> RunRoundsAsync(const std::shared_ptr<CAffinityOrderCtx>& spCtx,
-                                                   const std::shared_ptr<CCalleeModule>& spStockModule, int nRounds)
+        const std::shared_ptr<CCalleeModule>& spStockModule, int nRounds)
     {
         no::CPromise<CAffinityOrderCtx> promise = m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC);
         for (int i = 0; i < nRounds; ++i)
@@ -108,8 +108,8 @@ public:
     /// @param spStockModule 库存模块。
     ///
     /// @return 指向最后一层的 promise。
-    no::CPromise<CAffinityOrderCtx> RunWithOnSettledAsync(const std::shared_ptr<CAffinityOrderCtx>& spCtx,
-                                                          const std::shared_ptr<CCalleeModule>& spStockModule)
+    no::CPromise<CAffinityOrderCtx> RunWithOnSettledAsync(
+        const std::shared_ptr<CAffinityOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         return m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
             .ThenPromise(MakeQueryFactory(spStockModule), ASYNC_LOC)
@@ -124,8 +124,7 @@ public:
     ///
     /// @return 协程句柄（Await 取结果）。
     std::shared_ptr<CAffinityFlowCoro> RunCoAsync(const std::shared_ptr<CAffinityOrderCtx>& spCtx,
-                                                  const std::shared_ptr<CCalleeModule>& spStockModule,
-                                                  const no::CPromise<CCalleeCtx>& promiseStock)
+        const std::shared_ptr<CCalleeModule>& spStockModule, const no::CPromise<CCalleeCtx>& promiseStock)
     {
         return m_exec.CoStart<CAffinityFlowCoro>(spCtx, spStockModule, promiseStock);
     }
@@ -140,8 +139,7 @@ public:
         /// @param spStockModule 库存模块（跨模块 await 用，需保活）。
         /// @param promiseStock 要 await 的跨模块 promise。
         CAffinityFlowCoro(const std::shared_ptr<CAffinityOrderCtx>& spCtx,
-                          const std::shared_ptr<CCalleeModule>& spStockModule,
-                          const no::CPromise<CCalleeCtx>& promiseStock)
+            const std::shared_ptr<CCalleeModule>& spStockModule, const no::CPromise<CCalleeCtx>& promiseStock)
             : no::CCoroutine<CAffinityOrderCtx>(spCtx), m_pStock(promiseStock), m_spStockModule(spStockModule)
         {}
 
@@ -181,8 +179,8 @@ private:
     }
 
     /// ① 本模块自有步骤。
-    static no::CPromiseResult StepOrderLoad(no::CPromiseResult /*upResult*/,
-                                            const std::shared_ptr<CAffinityOrderCtx>& spCtx)
+    static no::CPromiseResult StepOrderLoad(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<CAffinityOrderCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->idFirst = std::this_thread::get_id();
@@ -191,8 +189,8 @@ private:
     }
 
     /// ④ 跨模块返回后的层：线程亲和应把它拉回本模块执行器线程。
-    static no::CPromiseResult StepOrderAfterBridge(no::CPromiseResult /*upResult*/,
-                                                   const std::shared_ptr<CAffinityOrderCtx>& spCtx)
+    static no::CPromiseResult StepOrderAfterBridge(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<CAffinityOrderCtx>& spCtx)
     {
         spCtx->idAfterBridge = std::this_thread::get_id();
         if (spCtx->idAfterBridge == spCtx->idFirst)
@@ -207,8 +205,8 @@ private:
     }
 
     /// 多轮用例的轮次层。
-    static no::CPromiseResult StepOrderRound(no::CPromiseResult /*upResult*/,
-                                             const std::shared_ptr<CAffinityOrderCtx>& spCtx)
+    static no::CPromiseResult StepOrderRound(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<CAffinityOrderCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         ++spCtx->nRounds;
@@ -217,8 +215,8 @@ private:
     }
 
     /// ⑥ 显式 Post 回本模块后的层。
-    static no::CPromiseResult StepOrderBackHome(no::CPromiseResult /*upResult*/,
-                                                const std::shared_ptr<CAffinityOrderCtx>& spCtx)
+    static no::CPromiseResult StepOrderBackHome(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<CAffinityOrderCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->idBackHome = std::this_thread::get_id();
@@ -227,12 +225,12 @@ private:
     }
 
     /// 跨模块桥接层（本层属于本模块；被调模块在自己执行器上跑）。
-    no::CPromise<CAffinityOrderCtx> BridgeQueryStock(const std::shared_ptr<CAffinityOrderCtx>& spCtx,
-                                                     const std::shared_ptr<CCalleeModule>& spStockModule)
+    no::CPromise<CAffinityOrderCtx> BridgeQueryStock(
+        const std::shared_ptr<CAffinityOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         no::CPromise<CAffinityOrderCtx>::PromiseExecutor fnExecutor =
             [spStockModule, spCtx](const no::CPromise<CAffinityOrderCtx>::ResolveFn& fnResolve,
-                                   const no::CPromise<CAffinityOrderCtx>::RejectFn& fnReject)
+                const no::CPromise<CAffinityOrderCtx>::RejectFn& fnReject)
         {
             auto spStock = std::make_shared<CCalleeCtx>();
             spStock->nDelayMs = spCtx->nStockDelayMs;
@@ -264,7 +262,7 @@ private:
     {
         no::CPromise<CAffinityOrderCtx>::PromiseExecutor fnExecutor =
             [this](const no::CPromise<CAffinityOrderCtx>::ResolveFn& fnResolve,
-                   const no::CPromise<CAffinityOrderCtx>::RejectFn& fnReject)
+                const no::CPromise<CAffinityOrderCtx>::RejectFn& fnReject)
         {
             if (!m_exec.Post(
                     [fnResolve]()

@@ -1019,9 +1019,9 @@ public:
         CO_BEGIN();
         m_spOtherA = std::make_shared<COtherContext>();  // 跨 await → 成员变量
         m_spOtherB = std::make_shared<COtherContext>();
-        CO_AWAIT_ALL(NewPromise(&StepAdd1),                                       // 同上下文
-                     m_pExec->NewPromise(m_spOtherA, &StepQueryRows, ASYNC_LOC),  // 另一套上下文
-                     m_pExec->NewPromise(m_spOtherB, &StepQueryRows, ASYNC_LOC));
+        CO_AWAIT_ALL(NewPromise(&StepAdd1),                              // 同上下文
+            m_pExec->NewPromise(m_spOtherA, &StepQueryRows, ASYNC_LOC),  // 另一套上下文
+            m_pExec->NewPromise(m_spOtherB, &StepQueryRows, ASYNC_LOC));
         GetContext()->nValue += m_spOtherA->nRows + m_spOtherB->nRows;
         CO_RETURN_VOID();
         CO_END();
@@ -1092,7 +1092,7 @@ TEST(Promise_BridgeForeignPromise)
                     return no::CPromise<CTestContext>::New(
                         exec, spCtxSelf,
                         [spForeign, spCtxSelf](const no::CPromise<CTestContext>::ResolveFn& fnResolve,
-                                               const no::CPromise<CTestContext>::RejectFn& fnReject)
+                            const no::CPromise<CTestContext>::RejectFn& fnReject)
                         {
                             spForeign->OnSettled(
                                 [spForeign, spCtxSelf, fnResolve, fnReject](no::CPromiseResult result)
@@ -1138,7 +1138,7 @@ TEST(Promise_BridgeForeignRejected)
                     return no::CPromise<CTestContext>::New(
                         exec, spCtxSelf,
                         [spForeign](const no::CPromise<CTestContext>::ResolveFn& fnResolve,
-                                    const no::CPromise<CTestContext>::RejectFn& fnReject)
+                            const no::CPromise<CTestContext>::RejectFn& fnReject)
                         {
                             spForeign->OnSettled(
                                 [fnResolve, fnReject](no::CPromiseResult result)

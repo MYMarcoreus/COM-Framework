@@ -107,8 +107,8 @@ void RunResumableCases()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
             std::shared_ptr<BenchCoroSeq20> pCoro = exec.CoStart<BenchCoroSeq20>(spCtx);
-            benchmark::SanityCheck(group, "长协程 20 次 await 结果=20",
-                                   pCoro->Await().IsFulfilled() && spCtx->nValue == 20);
+            benchmark::SanityCheck(
+                group, "长协程 20 次 await 结果=20", pCoro->Await().IsFulfilled() && spCtx->nValue == 20);
         }
 
         benchmark::BenchOp(
@@ -133,8 +133,8 @@ void RunResumableCases()
         no::CAsyncExecutor exec(static_cast<size_t>(nThreads[i]));
         exec.Start();
 
-        benchmark::SanityCheck(
-            group, "批量 " + std::to_string(kBatch) + " 协程全部完成 @" + std::to_string(nThreads[i]) + " thread",
+        benchmark::SanityCheck(group,
+            "批量 " + std::to_string(kBatch) + " 协程全部完成 @" + std::to_string(nThreads[i]) + " thread",
             RunCoroBatch(exec, kBatch) == kBatch);
 
         benchmark::BenchOp(

@@ -36,15 +36,17 @@ find . -name '*.cpp' -not -path './build/*' -not -path './ThirdParty/*' | xargs 
 4. **编译数据库过期**：clangd 拿不到 `-I` / `-std`，代码按错误解析，格式化也会乱 →
    重刷：`./build.sh --compiledb [项目...]`。
 
-## 4. 长参数行 / lambda 的排版建议（踩坑点）
+## 4. 长参数行 / lambda 的排版
 
-`.clang-format` 采用 `AlignAfterOpenBracket: Align`（续行对齐到开括号）+
-`LambdaBodyIndentation: OuterScope`（lambda 体按外层作用域缩进）。
-当**很长的实参列表里直接内联 lambda** 时，clang-format 会把续行推到 40+ 列，
-而 lambda 体的花括号又落回外层缩进 —— 观感就是「缩进乱了」。约定写法是「先起名、再串链」：
+`.clang-format` 采用 `AlignAfterOpenBracket: DontAlign`（续行不对齐到开括号，
+只缩进一个 `ContinuationIndentWidth` 即 4 格）+ `LambdaBodyIndentation: Signature`
+（lambda 体与签名同缩进）。
+因此**长实参列表里直接内联 lambda** 也是安全的：实参换行后缩进一级，
+lambda 体再缩进一级，结尾 `});` 与 lambda 起始列对齐，不需要再「先起名再串链」来回避对齐问题。
+具名变量仍有价值 —— 当 lambda 需要**复用**、需要在多处引用同一处理器时：
 
 ```cpp
-// 推荐：lambda 先赋给具名变量（类型用 ThenHandler / PromiseFactory / PromiseExecutor），再用变量串链
+// 推荐：lambda 需要在多处复用时才先赋给具名变量（类型用 ThenHandler / PromiseFactory / PromiseExecutor）
 COrderPromise::ThenHandler fnValidate = [](no::CPromiseResult upResult, const std::shared_ptr<COrderContext>& spCtx)
 {
     if (upResult.IsRejected())
@@ -61,10 +63,16 @@ return exec.NewPromise(spCtx, &StepLoadOrder, ASYNC_LOC)  // ① 具名异步函
 ```
 
 ```cpp
-// 不推荐：签名很长的 lambda 作为实参直接内联 —— 续行会被对齐到开括号、lambda 体又掉回外层缩进
-return CPromise<Ctx>::New(exec, spCtx, [&](const CPromise<Ctx>::ResolveFn& fnResolve,
-                                           const CPromise<Ctx>::RejectFn& fnReject) { /* … */ },
-                          ASYNC_LOC);
+// 同样推荐：只用一次时直接内联 —— 实参缩进一级、lambda 体再缩进一级、`});` 与 lambda 对齐
+const bool bOk = pUpState->AddHandler(pCore->Handle(),
+    [pCore, pNextState, fnFactory](const CPromiseResult& upResult)
+    {
+        if (upResult.IsRejected())
+        {
+            return;  // 失败即停。
+        }
+        Adopt(pCore, pNextState, fnFactory);
+    });
 ```
 
 ## 5. 函数体不写单行 + 每层标号
@@ -109,8 +117,14 @@ COrderP::PromiseFactory fnQueryStock = [&exec](const std::shared_ptr<COrderCtx>&
 完整示例见 `examples/cases/ThenMixCase.cpp`（一条链里混用具名 handler / lambda / lambda 内执行其他异步函数），
 精简版见 [common/async-mixed-then-example.md](common/async-mixed-then-example.md)。
 
-## 5. 想把长参数列表改成「整块缩进」怎么办
+## 6. 为什么是 `DontAlign` 而不是 `BlockIndent`
 
-把 `.clang-format` 的 `AlignAfterOpenBracket: Align` 改成 `BlockIndent`（clang-format ≥14）即可：
-续行会改为换行后按 4 空格整块缩进、不再对齐到开括号。注意这会**影响全仓库的函数签名排版**，
-需要一次全量 `clang-format -i` 重排后再提交，否则新旧风格混杂。
+两者都能让续行只缩进一级，区别在**函数声明 / 定义的括号内换行**：
+`BlockIndent` 会把函数名或 `)` 单独断行，`DontAlign` 则保持参数紧跟在括号后、只缩进一级 ——
+后者与本仓库「访问修饰符顶格 + 续行缩进一级」的整体风格更一致。
+切换该选项会**影响全仓库的续行排版**，需要在同一个提交里做一次全量重排，否则新旧风格混杂：
+
+```bash
+FILES=$(git ls-files '*.h' '*.cpp' | grep -v '^ThirdParty/') && clang-format -i --style=file $FILES
+clang-format --style=file --dry-run --Werror $FILES   # 校验：0 违规
+```

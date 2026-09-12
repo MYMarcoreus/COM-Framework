@@ -62,7 +62,7 @@ public:
 private:
     // 调度一次异步等待（周期定时器到期后重新调度）。
     void Schedule(std::shared_ptr<asio::steady_timer> pTimer, TimerId nId, std::int64_t nIntervalMs,
-                  const TimerCallback& fnCallback);
+        const TimerCallback& fnCallback);
 
     // 添加定时器。
     TimerId AddTimerInternal(std::int64_t nDelayMs, std::int64_t nIntervalMs, const TimerCallback& fnCallback);

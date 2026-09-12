@@ -257,10 +257,10 @@ TEST(ConfigReloadModule_Broadcast)
     ASSERT_TRUE(pIface != nullptr);
     std::atomic<int> nEvents(0);
     sc::SubscriptionId nSubId = pIface->Subscribe(sc::events::kConfigReloaded,
-                                                  [&nEvents](const sc::Event&)
-                                                  {
-                                                      nEvents.fetch_add(1);
-                                                  });
+        [&nEvents](const sc::Event&)
+        {
+            nEvents.fetch_add(1);
+        });
     ASSERT_TRUE(nSubId != sc::kInvalidSubscriptionId);
 
     ASSERT_TRUE(manager.InitializeAll());
@@ -348,15 +348,15 @@ TEST(EventDispatcher_PublishAsync)
     std::atomic<int> nAsync(0);
     std::atomic<int> nSync(0);
     pIface->Subscribe("async.test",
-                      [&nAsync](const sc::Event&)
-                      {
-                          nAsync.fetch_add(1);
-                      });
+        [&nAsync](const sc::Event&)
+        {
+            nAsync.fetch_add(1);
+        });
     pIface->Subscribe("sync.test",
-                      [&nSync](const sc::Event&)
-                      {
-                          nSync.fetch_add(1);
-                      });
+        [&nSync](const sc::Event&)
+        {
+            nSync.fetch_add(1);
+        });
 
     ASSERT_TRUE(manager.InitializeAll());
     ASSERT_TRUE(manager.StartAll());

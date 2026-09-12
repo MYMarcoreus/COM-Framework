@@ -37,8 +37,9 @@ IndentPPDirectives: BeforeHash
 ColumnLimit: 120
 
 # ---- 对齐 ----
-# 续行对齐到开括号（函数签名如 RunTransform(...) 的续行对齐到参数列）。
-AlignAfterOpenBracket: Align
+# 续行不按开括号对齐，只缩进一个 ContinuationIndentWidth（4 格）：
+# lambda 实参、长参数表都按「多缩进一级」排，不会拉到 40+ 列去对齐。
+AlignAfterOpenBracket: DontAlign
 # 行尾注释列对齐（成员变量注释、using 别名注释等）。
 AlignTrailingComments: true
 # **不要**按文件内容推导指针风格（Google 基准默认开启，会盖掉下面的 PointerAlignment）。

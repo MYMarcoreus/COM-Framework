@@ -35,18 +35,18 @@ namespace sc {
 ///
 /// @return 定时器标识（取消时用）。
 template <typename TimerT, typename T, typename F>
-common::timer::TimerId AddGuardedPeriodicTimer(TimerT* pTimer, std::int64_t nIntervalMs, const CWeakPtr<T>& spWeak,
-                                               F fnCallback)
+common::timer::TimerId AddGuardedPeriodicTimer(
+    TimerT* pTimer, std::int64_t nIntervalMs, const CWeakPtr<T>& spWeak, F fnCallback)
 {
     return pTimer->AddPeriodicTimer(nIntervalMs,
-                                    [spWeak, fnCallback]()
-                                    {
-                                        ScopedInterfacePtr<T> sp = spWeak.Lock();
-                                        if (sp && fnCallback)
-                                        {
-                                            fnCallback(sp);
-                                        }
-                                    });
+        [spWeak, fnCallback]()
+        {
+            ScopedInterfacePtr<T> sp = spWeak.Lock();
+            if (sp && fnCallback)
+            {
+                fnCallback(sp);
+            }
+        });
 }
 
 }  // namespace sc

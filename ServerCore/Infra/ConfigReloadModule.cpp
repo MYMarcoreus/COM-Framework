@@ -57,10 +57,10 @@ bool CConfigReloadModule::Start()
     // 周期定时任务：用模板守卫函数统一处理弱引用生命周期，
     // 回调参数为具体类型强引用（无需转换）。
     m_tTimerId = sc::AddGuardedPeriodicTimer(&m_timer, m_nIntervalMs, WeakSelf<CConfigReloadModule>(),
-                                             [](const sc::ScopedInterfacePtr<CConfigReloadModule>& sp)
-                                             {
-                                                 sp->CheckReload();
-                                             });
+        [](const sc::ScopedInterfacePtr<CConfigReloadModule>& sp)
+        {
+            sp->CheckReload();
+        });
     return true;
 }
 

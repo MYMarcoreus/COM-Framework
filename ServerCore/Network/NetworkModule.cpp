@@ -65,8 +65,8 @@ bool CNetworkModule::StartTcpServer(uint16_t nPort, INetworkHandler* pHandler)
         if (m_pMetrics != nullptr)
         {
             m_pMetrics->Inc("network.accepted");
-            m_pMetrics->SetGauge("network.conns",
-                                 static_cast<double>(m_pServer != nullptr ? m_pServer->ConnectionCount() : 0));
+            m_pMetrics->SetGauge(
+                "network.conns", static_cast<double>(m_pServer != nullptr ? m_pServer->ConnectionCount() : 0));
         }
         if (m_pHandler != nullptr)
         {
@@ -90,8 +90,8 @@ bool CNetworkModule::StartTcpServer(uint16_t nPort, INetworkHandler* pHandler)
         if (m_pMetrics != nullptr)
         {
             m_pMetrics->Inc("network.closed");
-            m_pMetrics->SetGauge("network.conns",
-                                 static_cast<double>(m_pServer != nullptr ? m_pServer->ConnectionCount() : 0));
+            m_pMetrics->SetGauge(
+                "network.conns", static_cast<double>(m_pServer != nullptr ? m_pServer->ConnectionCount() : 0));
         }
         if (m_pHandler != nullptr)
         {
@@ -263,8 +263,8 @@ std::string CNetworkModule::GetStatus() const
 {
     char szBuffer[128];
     std::snprintf(szBuffer, sizeof(szBuffer), "network:port=%u conns=%zu accepted=%llu closed=%llu",
-                  static_cast<unsigned int>(ListeningPort()), ConnectionCount(),
-                  static_cast<unsigned long long>(TotalAccepted()), static_cast<unsigned long long>(TotalClosed()));
+        static_cast<unsigned int>(ListeningPort()), ConnectionCount(), static_cast<unsigned long long>(TotalAccepted()),
+        static_cast<unsigned long long>(TotalClosed()));
     return std::string(szBuffer);
 }
 

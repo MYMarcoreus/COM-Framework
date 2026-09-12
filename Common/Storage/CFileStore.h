@@ -67,12 +67,12 @@ public:
 
     // 保存文本到指定租户，返回全局唯一短码；失败（含配额超限）返回空串。
     std::string SaveText(const std::string& strTenant, const std::string& strContent, const std::string& strFrom = "",
-                         const StoreLimits& limits = StoreLimits());
+        const StoreLimits& limits = StoreLimits());
 
     // 保存二进制文件到指定租户，返回全局唯一短码；失败返回空串。
     // @param strName 文件名（展示用；为空时自动填 "file.bin"）
     std::string SaveFile(const std::string& strTenant, const std::string& strName, const void* pData, std::size_t nSize,
-                         const std::string& strFrom = "", const StoreLimits& limits = StoreLimits());
+        const std::string& strFrom = "", const StoreLimits& limits = StoreLimits());
 
     // 按短码获取指定租户内数据项元信息；不存在 / 不属于该租户返回 false。
     bool GetInfo(const std::string& strTenant, const std::string& strId, StoreItemInfo& info) const;
@@ -81,8 +81,8 @@ public:
     bool GetText(const std::string& strTenant, const std::string& strId, std::string& strOut) const;
 
     // 读取指定租户内文件内容；成功返回 true。
-    bool GetFile(const std::string& strTenant, const std::string& strId, std::string& strName,
-                 std::vector<char>& vecData) const;
+    bool GetFile(
+        const std::string& strTenant, const std::string& strId, std::string& strName, std::vector<char>& vecData) const;
 
     // 列出指定租户全部数据项（按创建时间倒序）。
     std::vector<StoreItemInfo> List(const std::string& strTenant) const;

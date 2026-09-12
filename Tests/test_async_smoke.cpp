@@ -102,8 +102,8 @@ static no::CPromiseResult StepCatchRecover(no::CPromiseResult /*upResult*/, cons
 }
 
 /// finally 层：成败都执行；返回值被忽略（这里故意返回拒绝，验证不影响结果）。
-static no::CPromiseResult StepFinallyIgnoreReturn(no::CPromiseResult /*upResult*/,
-                                                  const std::shared_ptr<CSmokeCtx>& spCtx)
+static no::CPromiseResult StepFinallyIgnoreReturn(
+    no::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spCtx)
 {
     ++spCtx->nFinallyRuns;
     spCtx->strTrace += "f";
@@ -275,8 +275,8 @@ TEST(Smoke_NewExternalSettle)
         no::CPromise<CSmokeCtx>::ResolveFn fnResolveHolder;
         no::CPromise<CSmokeCtx> p = no::CPromise<CSmokeCtx>::New(
             exec, spCtx,
-            [&fnResolveHolder, &fnRejectHolder, spCtx](const no::CPromise<CSmokeCtx>::ResolveFn& fnResolve,
-                                                       const no::CPromise<CSmokeCtx>::RejectFn& fnReject)
+            [&fnResolveHolder, &fnRejectHolder, spCtx](
+                const no::CPromise<CSmokeCtx>::ResolveFn& fnResolve, const no::CPromise<CSmokeCtx>::RejectFn& fnReject)
             {
                 fnResolveHolder = fnResolve;  // 存起来，稍后由「外部事件」调用
                 fnRejectHolder = fnReject;
@@ -299,7 +299,7 @@ TEST(Smoke_NewExternalSettle)
         no::CPromise<CSmokeCtx> p = no::CPromise<CSmokeCtx>::New(
             exec, spCtx,
             [&fnRejectHolder](const no::CPromise<CSmokeCtx>::ResolveFn& /*fnResolve*/,
-                              const no::CPromise<CSmokeCtx>::RejectFn& fnReject)
+                const no::CPromise<CSmokeCtx>::RejectFn& fnReject)
             {
                 fnRejectHolder = fnReject;
             },
@@ -323,13 +323,13 @@ TEST(Smoke_NewBadExecutor)
 
     std::shared_ptr<CSmokeCtx> spCtxThrow = std::make_shared<CSmokeCtx>();
     const no::CPromiseResult rThrow = no::CPromise<CSmokeCtx>::New(
-                                          exec, spCtxThrow,
-                                          [](const no::CPromise<CSmokeCtx>::ResolveFn& /*fnResolve*/,
-                                             const no::CPromise<CSmokeCtx>::RejectFn& /*fnReject*/)
-                                          {
-                                              throw std::runtime_error("executor boom");
-                                          },
-                                          ASYNC_LOC)
+        exec, spCtxThrow,
+        [](const no::CPromise<CSmokeCtx>::ResolveFn& /*fnResolve*/,
+            const no::CPromise<CSmokeCtx>::RejectFn& /*fnReject*/)
+        {
+            throw std::runtime_error("executor boom");
+        },
+        ASYNC_LOC)
                                           .Await();
     ASSERT_TRUE(rThrow.IsRejected());
     ASSERT_EQ(rThrow.Code(), static_cast<int>(no::kException));
@@ -540,8 +540,8 @@ TEST(Smoke_BridgeTwoModules)
 
     // 桥接层：发起库存模块的调用，由它的完成回调 settle 本流程的 promise
     no::CPromise<CSmokeCtx>::PromiseExecutor fnExecutor =
-        [&execStock, spCtx, &idStock](const no::CPromise<CSmokeCtx>::ResolveFn& fnResolve,
-                                      const no::CPromise<CSmokeCtx>::RejectFn& fnReject)
+        [&execStock, spCtx, &idStock](
+            const no::CPromise<CSmokeCtx>::ResolveFn& fnResolve, const no::CPromise<CSmokeCtx>::RejectFn& fnReject)
     {
         no::CPromise<CSmokeCtx> pStock = execStock.NewPromise(spCtx, &StepAdd10, ASYNC_LOC);
         pStock.OnSettled(
@@ -559,8 +559,8 @@ TEST(Smoke_BridgeTwoModules)
     };
 
     // 工厂里才发起跨模块调用（与外层链同步：③ 层被调用时才发起）
-    no::CPromise<CSmokeCtx>::PromiseFactory fnBridge =
-        [&execOrder, &fnExecutor, spCtx](const std::shared_ptr<CSmokeCtx>& /*spSelf*/)
+    no::CPromise<CSmokeCtx>::PromiseFactory fnBridge = [&execOrder, &fnExecutor, spCtx](
+                                                           const std::shared_ptr<CSmokeCtx>& /*spSelf*/)
     {
         return no::CPromise<CSmokeCtx>::New(execOrder, spCtx, fnExecutor, ASYNC_LOC);
     };

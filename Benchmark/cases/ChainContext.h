@@ -24,8 +24,8 @@ struct CChainContext
 };
 
 /// 层：值 +1（固定签名：上一层结果 + 共享上下文 → 本层结果）。
-inline common::async::CPromiseResult StepInc(common::async::CPromiseResult upResult,
-                                             const std::shared_ptr<CChainContext>& spCtx)
+inline common::async::CPromiseResult StepInc(
+    common::async::CPromiseResult upResult, const std::shared_ptr<CChainContext>& spCtx)
 {
     if (upResult.IsRejected())
     {
@@ -37,8 +37,8 @@ inline common::async::CPromiseResult StepInc(common::async::CPromiseResult upRes
 }
 
 /// 层：业务失败（用于失败即停链）。
-inline common::async::CPromiseResult StepFail(common::async::CPromiseResult upResult,
-                                              const std::shared_ptr<CChainContext>& spCtx)
+inline common::async::CPromiseResult StepFail(
+    common::async::CPromiseResult upResult, const std::shared_ptr<CChainContext>& spCtx)
 {
     if (upResult.IsRejected())
     {

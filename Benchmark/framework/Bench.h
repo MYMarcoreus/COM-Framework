@@ -114,7 +114,7 @@ inline double NowNs()
 // @param note     说明文字。
 // ====================================================================
 inline void BenchOp(const std::string& group, const std::string& name, std::function<void()> fn, int reps = 7,
-                    const std::string& note = std::string())
+    const std::string& note = std::string())
 {
     // 1) 预热（丢弃：让缓存、线程、分配器就绪；异步操作含唤醒休眠工作线程）。
     for (int i = 0; i < 30; ++i) fn();
@@ -228,8 +228,7 @@ inline bool SanityCheck(const std::string& group, const std::string& name, bool 
 // @param note         说明。
 // ====================================================================
 inline void StressWindow(const std::string& group, const std::string& name, int window, int duration_ms,
-                         const std::function<void()>& submit, std::atomic<uint64_t>& done,
-                         const std::string& note = std::string())
+    const std::function<void()>& submit, std::atomic<uint64_t>& done, const std::string& note = std::string())
 {
     const int kWarmup = 2;  // 丢弃的预热窗口数。
     const double tEndNs = NowNs() + duration_ms * 1e6;

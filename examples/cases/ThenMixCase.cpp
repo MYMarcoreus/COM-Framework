@@ -224,12 +224,11 @@ public:
     ///
     /// @return 指向 finally 层的 promise 句柄。
     no::CPromise<COrderContext> PlaceOrderAsync(const std::shared_ptr<COrderContext>& spCtx,
-                                                const std::shared_ptr<CStockModule>& spStockModule,
-                                                const std::shared_ptr<CBillingModule>& spBillingModule)
+        const std::shared_ptr<CStockModule>& spStockModule, const std::shared_ptr<CBillingModule>& spBillingModule)
     {
         // ③ 工厂：then 内部执行其他模块的异步函数，并等它（跨上下文 → 桥接）。
-        no::CPromise<COrderContext>::PromiseFactory fnQueryStock =
-            [this, spStockModule](const std::shared_ptr<COrderContext>& spCtxSelf)
+        no::CPromise<COrderContext>::PromiseFactory fnQueryStock = [this, spStockModule](
+                                                                       const std::shared_ptr<COrderContext>& spCtxSelf)
         {
             return BridgeQueryStock(spCtxSelf, spStockModule);
         };
@@ -307,12 +306,12 @@ private:
     /// @param spStockModule 库存模块。
     ///
     /// @return 由库存模块的回调 settle 的本流程 promise。
-    no::CPromise<COrderContext> BridgeQueryStock(const std::shared_ptr<COrderContext>& spCtx,
-                                                 const std::shared_ptr<CStockModule>& spStockModule)
+    no::CPromise<COrderContext> BridgeQueryStock(
+        const std::shared_ptr<COrderContext>& spCtx, const std::shared_ptr<CStockModule>& spStockModule)
     {
         no::CPromise<COrderContext>::PromiseExecutor fnExecutor =
             [spStockModule, spCtx](const no::CPromise<COrderContext>::ResolveFn& fnResolve,
-                                   const no::CPromise<COrderContext>::RejectFn& fnReject)
+                const no::CPromise<COrderContext>::RejectFn& fnReject)
         {
             // 发起跨模块调用：拿到的是库存模块上下文的 promise，执行器在模块内部。
             no::CPromise<CStockContext> promiseStock = spStockModule->QueryStockAsync(spCtx->nSku);
@@ -342,8 +341,8 @@ private:
     }
 
     /// ④ 算折扣：满 3 件 9 折（模拟业务规则）。
-    static no::CPromiseResult StepApplyDiscount(no::CPromiseResult /*upResult*/,
-                                                const std::shared_ptr<COrderContext>& spCtx)
+    static no::CPromiseResult StepApplyDiscount(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
     {
         spCtx->nTotal = spCtx->nUnitPrice * spCtx->nQty;
         if (spCtx->nQty >= 3)
@@ -359,16 +358,16 @@ private:
     }
 
     /// ④+ 内层链第 1 步：预占库存。
-    static no::CPromiseResult StepReserveStock(no::CPromiseResult /*upResult*/,
-                                               const std::shared_ptr<COrderContext>& spCtx)
+    static no::CPromiseResult StepReserveStock(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
     {
         spCtx->strTrace += "预占;";
         return no::CPromiseResult::Resolve();
     }
 
     /// ④+ 内层链第 2 步：确认预占（bFailReserve 时拒绝，用来看拒绝如何透传）。
-    static no::CPromiseResult StepReserveConfirm(no::CPromiseResult /*upResult*/,
-                                                 const std::shared_ptr<COrderContext>& spCtx)
+    static no::CPromiseResult StepReserveConfirm(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
     {
         if (spCtx->bFailReserve)
         {
@@ -379,8 +378,8 @@ private:
     }
 
     /// ⑥ 落库：保存订单（模拟一次写库）。
-    static no::CPromiseResult StepSaveOrder(no::CPromiseResult /*upResult*/,
-                                            const std::shared_ptr<COrderContext>& spCtx)
+    static no::CPromiseResult StepSaveOrder(
+        no::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         spCtx->strTrace += "落库;";
@@ -459,8 +458,8 @@ bool RunThenMixCase()
     bOk = Expect(spOk->nBillingDone.load() == 1, "正常下单：旁支记账已完成", "nBillingDone!=1") && bOk;
     bOk = Expect(spOk->bAudited, "正常下单：finally 审计已执行", "bAudited=false") && bOk;
     bOk = Expect(bOkTrace, "正常下单：执行顺序符合预期", "轨迹=" + spOk->strTrace) && bOk;
-    std::printf("㉘ 混用多种 then（正常下单）: 合计=%d 库存=%d 轨迹=%s\n", spOk->nTotal, spOk->nStock,
-                spOk->strTrace.c_str());
+    std::printf(
+        "㉘ 混用多种 then（正常下单）: 合计=%d 库存=%d 轨迹=%s\n", spOk->nTotal, spOk->nStock, spOk->strTrace.c_str());
 
     // ---------------- 路径 ②：库存不足（③ 的桥接拒绝 → ④⑤⑥ 不执行，catch
     // 补偿后仍透传） ----------------

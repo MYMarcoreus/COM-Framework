@@ -60,9 +60,9 @@ public:
     {
         CO_BEGIN();
         CO_AWAIT_ALL(NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc),
-                     NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc),
-                     NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc),
-                     NewPromise(&bench::StepInc));
+            NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc),
+            NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc),
+            NewPromise(&bench::StepInc));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -90,8 +90,8 @@ void RunCoroutineCases()
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
         std::shared_ptr<BenchCoroAll10> pCoro = exec.CoStart<BenchCoroAll10>(spCtx);
-        benchmark::SanityCheck(group, "协程并行 await ×10 结果=10",
-                               pCoro->Await().IsFulfilled() && spCtx->nValue == 10);
+        benchmark::SanityCheck(
+            group, "协程并行 await ×10 结果=10", pCoro->Await().IsFulfilled() && spCtx->nValue == 10);
     }
 
     // 基线：直接函数调用。

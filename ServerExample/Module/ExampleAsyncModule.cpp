@@ -321,7 +321,7 @@ CUserPromise BridgeInsertUser(const CFlowDeps& deps, const std::shared_ptr<CUser
 /// @param fnReject 本次桥接的拒绝句柄。
 /// @param nAttempt 本次是第几次尝试（从 1 开始）。
 void UpdateUserAttempt(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx, const ResolveFn& fnResolve,
-                       const RejectFn& fnReject, int nAttempt)
+    const RejectFn& fnReject, int nAttempt)
 {
     spCtx->nAttempt = nAttempt;
     spCtx->spDbOp->nUserId = spCtx->nUserId;
@@ -528,8 +528,8 @@ public:
     ///
     /// @param spService 业务模块接口（自持引用：回调期间模块存活）。
     /// @param spTable 数据访问模块接口（场景⑧需要直接观察数据访问层的异常语义）。
-    CDemoDriver(const sc::ScopedInterfacePtr<IUserService>& spService,
-                const sc::ScopedInterfacePtr<IUserTable>& spTable)
+    CDemoDriver(
+        const sc::ScopedInterfacePtr<IUserService>& spService, const sc::ScopedInterfacePtr<IUserTable>& spTable)
         : m_spService(spService), m_spTable(spTable), m_nUserId(0), m_nRenamePending(0), m_strRenameSummary()
     {}
 
@@ -547,8 +547,8 @@ private:
     /// @param strScenario 场景名。
     /// @param result 本场景最终结果。
     /// @param spCtx 本场景上下文。
-    void LogScenario(const std::string& strScenario, const no::CPromiseResult& result,
-                     const std::shared_ptr<CUserOpContext>& spCtx)
+    void LogScenario(
+        const std::string& strScenario, const no::CPromiseResult& result, const std::shared_ptr<CUserOpContext>& spCtx)
     {
         const std::string strLine = "[" + strScenario + "] " + DescribeResult(result) +
                                     (spCtx->strError.empty() ? std::string() : (" 说明=" + spCtx->strError)) +
@@ -619,7 +619,7 @@ private:
             {
                 spSelf->LogScenario("演示③ 查询用户 名字=" + spCtx->recResult.strName +
                                         " 等级=" + std::to_string(spCtx->recResult.nLevel),
-                                    result, spCtx);
+                    result, spCtx);
                 spSelf->RunRenameConcurrent();
             });
     }
@@ -811,10 +811,10 @@ bool CExampleAsyncModule::Start()
 
     // 周期演示：弱引用守卫，模块停止 / 销毁后回调自动跳过。
     m_tTimerId = sc::AddGuardedPeriodicTimer(m_pTimer.Get(), m_nIntervalMs, WeakSelf<CExampleAsyncModule>(),
-                                             [](const sc::ScopedInterfacePtr<CExampleAsyncModule>& sp)
-                                             {
-                                                 sp->ScheduleExample();
-                                             });
+        [](const sc::ScopedInterfacePtr<CExampleAsyncModule>& sp)
+        {
+            sp->ScheduleExample();
+        });
     return true;
 }
 
@@ -871,8 +871,8 @@ std::shared_ptr<CUserOpContext> CExampleAsyncModule::MakeContext(const std::stri
 /// @brief 组装流程依赖（按值传给流程：执行器 shared_ptr + 数据访问接口）。
 ///
 /// @return 流程依赖。
-static CFlowDeps MakeFlowDeps(const std::shared_ptr<common::async::CAsyncExecutor>& spExec,
-                              const sc::ScopedInterfacePtr<IUserTable>& spTable)
+static CFlowDeps MakeFlowDeps(
+    const std::shared_ptr<common::async::CAsyncExecutor>& spExec, const sc::ScopedInterfacePtr<IUserTable>& spTable)
 {
     CFlowDeps deps;
     deps.spExec = spExec;
@@ -945,8 +945,8 @@ common::async::CPromise<CUserOpContext> CExampleAsyncModule::RegisterUserAsync(c
 /// @param strNewName 新用户名。
 ///
 /// @return promise 句柄（冲突重试次数见上下文的 nAttempt）。
-common::async::CPromise<CUserOpContext> CExampleAsyncModule::RenameUserAsync(std::uint64_t nUserId,
-                                                                             const std::string& strNewName)
+common::async::CPromise<CUserOpContext> CExampleAsyncModule::RenameUserAsync(
+    std::uint64_t nUserId, const std::string& strNewName)
 {
     std::shared_ptr<CUserOpContext> spCtx = MakeContext("修改用户名");
     spCtx->nUserId = nUserId;

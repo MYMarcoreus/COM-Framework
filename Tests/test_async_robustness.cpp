@@ -366,11 +366,11 @@ TEST(Robust_OnSettledOnRunsOnTargetExecutor)
     std::atomic<bool> bNoticeRan(false);
     std::thread::id idNoticeThread;
     ASSERT_TRUE(promiseCallee.OnSettledOn(ownExec,
-                                          [&bNoticeRan, &idNoticeThread](no::CPromiseResult)
-                                          {
-                                              idNoticeThread = std::this_thread::get_id();
-                                              bNoticeRan.store(true);
-                                          }));
+        [&bNoticeRan, &idNoticeThread](no::CPromiseResult)
+        {
+            idNoticeThread = std::this_thread::get_id();
+            bNoticeRan.store(true);
+        }));
     ASSERT_TRUE(WaitFor(
         [&bNoticeRan]()
         {
@@ -385,10 +385,10 @@ TEST(Robust_OnSettledOnRunsOnTargetExecutor)
     ownExec.Stop();
     std::atomic<bool> bDeliveredAfterStop(false);
     ASSERT_TRUE(promiseCallee.OnSettledOn(ownExec,
-                                          [&bDeliveredAfterStop](no::CPromiseResult)
-                                          {
-                                              bDeliveredAfterStop.store(true);
-                                          }));
+        [&bDeliveredAfterStop](no::CPromiseResult)
+        {
+            bDeliveredAfterStop.store(true);
+        }));
     ASSERT_TRUE(WaitFor(
         [&bDeliveredAfterStop]()
         {

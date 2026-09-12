@@ -35,7 +35,7 @@ public:
 
     // 异步连接远程服务器。
     bool Connect(const std::string& strHost, uint16_t nPort, const ConnectCallback& fnConnect,
-                 const DataCallback& fnData, const CloseCallback& fnClose);
+        const DataCallback& fnData, const CloseCallback& fnClose);
 
     // 发送数据（线程安全）。
     bool Send(const char* pData, size_t nLen);

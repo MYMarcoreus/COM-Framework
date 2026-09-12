@@ -100,8 +100,8 @@ public:
     /// @param spCallee 被调模块。
     ///
     /// @return 未启动的链句柄。
-    no::CPromise<CStartCtx> BuildChain(const std::shared_ptr<CStartCtx>& spCtx,
-                                       const std::shared_ptr<CStartCalleeModule>& spCallee)
+    no::CPromise<CStartCtx> BuildChain(
+        const std::shared_ptr<CStartCtx>& spCtx, const std::shared_ptr<CStartCalleeModule>& spCallee)
     {
         no::CPromise<CStartCtx>::PromiseFactory fnCall = [this, spCallee](const std::shared_ptr<CStartCtx>& spSelf)
         {
@@ -178,12 +178,12 @@ private:
     }
 
     /// 跨模块桥接层（本层属于本模块；被调模块在自己执行器上跑）。
-    no::CPromise<CStartCtx> BridgeCall(const std::shared_ptr<CStartCtx>& spCtx,
-                                       const std::shared_ptr<CStartCalleeModule>& spCallee)
+    no::CPromise<CStartCtx> BridgeCall(
+        const std::shared_ptr<CStartCtx>& spCtx, const std::shared_ptr<CStartCalleeModule>& spCallee)
     {
         no::CPromise<CStartCtx>::PromiseExecutor fnExecutor =
-            [spCallee, spCtx](const no::CPromise<CStartCtx>::ResolveFn& fnResolve,
-                              const no::CPromise<CStartCtx>::RejectFn& fnReject)
+            [spCallee, spCtx](
+                const no::CPromise<CStartCtx>::ResolveFn& fnResolve, const no::CPromise<CStartCtx>::RejectFn& fnReject)
         {
             auto spCalleeCtx = std::make_shared<CStartCalleeCtx>();
             no::CPromise<CStartCalleeCtx> promiseCallee = spCallee->QueryAsync(spCalleeCtx);

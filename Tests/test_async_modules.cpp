@@ -67,12 +67,12 @@ public:
     /// @param spStockModule 库存模块（只传 promise 与上下文，不传执行器）。
     ///
     /// @return 指向最后一层的 promise。
-    no::CPromise<COrderCtx> PlaceOrderAsync(const std::shared_ptr<COrderCtx>& spCtx,
-                                            const std::shared_ptr<CCalleeModule>& spStockModule)
+    no::CPromise<COrderCtx> PlaceOrderAsync(
+        const std::shared_ptr<COrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         // ③ 跨模块那一层：等库存模块的 promise（桥接层属于本模块）
-        no::CPromise<COrderCtx>::PromiseFactory fnQueryStock =
-            [this, spStockModule](const std::shared_ptr<COrderCtx>& spSelf)
+        no::CPromise<COrderCtx>::PromiseFactory fnQueryStock = [this, spStockModule](
+                                                                   const std::shared_ptr<COrderCtx>& spSelf)
         {
             return BridgeQueryStock(spSelf, spStockModule);
         };
@@ -100,8 +100,8 @@ public:
     /// @param spStockModule 库存模块。
     ///
     /// @return 指向最后一层的 promise。
-    no::CPromise<COrderCtx> PlaceOrderByBridgeAsync(const std::shared_ptr<COrderCtx>& spCtx,
-                                                    const std::shared_ptr<CCalleeModule>& spStockModule)
+    no::CPromise<COrderCtx> PlaceOrderByBridgeAsync(
+        const std::shared_ptr<COrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         // ② 起子链：把入参搬进对方上下文（跑在本模块执行器线程上，只发起不干活）。
         auto fnCreateStock = [spStockModule](const std::shared_ptr<COrderCtx>& spSelf) -> no::CPromise<CCalleeCtx>
@@ -166,12 +166,12 @@ private:
     /// @param spStockModule 库存模块。
     ///
     /// @return 由库存模块回调 settle 的本流程 promise。
-    no::CPromise<COrderCtx> BridgeQueryStock(const std::shared_ptr<COrderCtx>& spCtx,
-                                             const std::shared_ptr<CCalleeModule>& spStockModule)
+    no::CPromise<COrderCtx> BridgeQueryStock(
+        const std::shared_ptr<COrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         no::CPromise<COrderCtx>::PromiseExecutor fnExecutor =
-            [spStockModule, spCtx](const no::CPromise<COrderCtx>::ResolveFn& fnResolve,
-                                   const no::CPromise<COrderCtx>::RejectFn& fnReject)
+            [spStockModule, spCtx](
+                const no::CPromise<COrderCtx>::ResolveFn& fnResolve, const no::CPromise<COrderCtx>::RejectFn& fnReject)
         {
             // 发起跨模块调用：执行器在库存模块内部，调用方不持有。
             auto spStock = std::make_shared<CCalleeCtx>();
@@ -210,8 +210,8 @@ private:
     no::CPromise<COrderCtx> PostBackToOwnThread(const std::shared_ptr<COrderCtx>& spCtx)
     {
         no::CPromise<COrderCtx>::PromiseExecutor fnExecutor =
-            [this](const no::CPromise<COrderCtx>::ResolveFn& fnResolve,
-                   const no::CPromise<COrderCtx>::RejectFn& fnReject)
+            [this](
+                const no::CPromise<COrderCtx>::ResolveFn& fnResolve, const no::CPromise<COrderCtx>::RejectFn& fnReject)
         {
             // executor 在本层所在线程（亲和后 = 本模块执行器线程）上同步执行，这里只投递、不干活。
             if (!m_exec.Post(

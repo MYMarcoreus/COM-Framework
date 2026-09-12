@@ -263,10 +263,10 @@ TEST(EventDispatcher_SubscribePublish)
     sc::CEventDispatcher dispatcher;
     std::atomic<int> nCount(0);
     sc::SubscriptionId nId = dispatcher.Subscribe("evt.test",
-                                                  [&nCount](const sc::Event&)
-                                                  {
-                                                      nCount.fetch_add(1);
-                                                  });
+        [&nCount](const sc::Event&)
+        {
+            nCount.fetch_add(1);
+        });
     ASSERT_TRUE(nId != sc::kInvalidSubscriptionId);
 
     dispatcher.Publish("evt.test", nullptr, 0);
@@ -391,10 +391,10 @@ TEST(MessageRouter_Dispatch)
 
     std::vector<std::string> vecReceived;
     pRouter->RegisterHandler(1,
-                             [&vecReceived](sc::ConnectionId, int, const char* pPayload, size_t nLen)
-                             {
-                                 vecReceived.push_back(std::string(pPayload, nLen));
-                             });
+        [&vecReceived](sc::ConnectionId, int, const char* pPayload, size_t nLen)
+        {
+            vecReceived.push_back(std::string(pPayload, nLen));
+        });
 
     // 构造两条消息（type=1, payload="hello"/"world"），每条 13 字节
     unsigned char buf[26];

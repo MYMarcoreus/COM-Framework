@@ -9,8 +9,8 @@ CBusinessFlow::~CBusinessFlow()
 {}
 
 /// @brief 提交一个读/写子任务到模块调度器（自动 BeginTask/EndTask）。
-bool CBusinessFlow::SubmitTask(CModuleScheduler* pScheduler, CModuleScheduler::ETaskKind eKind,
-                               const std::function<void()>& fnTask)
+bool CBusinessFlow::SubmitTask(
+    CModuleScheduler* pScheduler, CModuleScheduler::ETaskKind eKind, const std::function<void()>& fnTask)
 {
     if (pScheduler == nullptr)
     {
@@ -20,11 +20,11 @@ bool CBusinessFlow::SubmitTask(CModuleScheduler* pScheduler, CModuleScheduler::E
     std::shared_ptr<CBusinessFlow> spSelf = shared_from_this();
     BeginTask();
     bool bOk = pScheduler->Submit(eKind,
-                                  [spSelf, fnTask]()
-                                  {
-                                      fnTask();  // 子任务业务逻辑（异常由调度器包装捕获）
-                                      spSelf->EndTask();
-                                  });
+        [spSelf, fnTask]()
+        {
+            fnTask();  // 子任务业务逻辑（异常由调度器包装捕获）
+            spSelf->EndTask();
+        });
     if (!bOk)
     {
         EndTask();  // 投递失败：立即归还计数

@@ -398,8 +398,8 @@ private:
     /// @param promise 当前注册的 promise。
     /// @param rest 其余 promise。
     template <typename TOtherContext, typename... TRest>
-    void AwaitEach(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup, const CPromise<TOtherContext>& promise,
-                   TRest&&... rest)
+    void AwaitEach(
+        const std::shared_ptr<detail::CAwaitAllGroup>& pGroup, const CPromise<TOtherContext>& promise, TRest&&... rest)
     {
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
         const bool bOk = promise.OnSettled(

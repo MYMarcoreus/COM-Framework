@@ -54,8 +54,8 @@ static std::int64_t NowMs()
             .count());
 }
 
-std::string CFileStore::SaveText(const std::string& strTenant, const std::string& strContent,
-                                 const std::string& strFrom, const StoreLimits& limits)
+std::string CFileStore::SaveText(
+    const std::string& strTenant, const std::string& strContent, const std::string& strFrom, const StoreLimits& limits)
 {
     if (strTenant.empty() || strContent.empty())
     {
@@ -92,7 +92,7 @@ std::string CFileStore::SaveText(const std::string& strTenant, const std::string
 }
 
 std::string CFileStore::SaveFile(const std::string& strTenant, const std::string& strName, const void* pData,
-                                 std::size_t nSize, const std::string& strFrom, const StoreLimits& limits)
+    std::size_t nSize, const std::string& strFrom, const StoreLimits& limits)
 {
     if (strTenant.empty() || pData == nullptr || nSize == 0)
     {
@@ -163,8 +163,8 @@ bool CFileStore::GetText(const std::string& strTenant, const std::string& strId,
     return true;
 }
 
-bool CFileStore::GetFile(const std::string& strTenant, const std::string& strId, std::string& strName,
-                         std::vector<char>& vecData) const
+bool CFileStore::GetFile(
+    const std::string& strTenant, const std::string& strId, std::string& strName, std::vector<char>& vecData) const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_mapItems.find(strId);
@@ -202,10 +202,10 @@ std::vector<StoreItemInfo> CFileStore::List(const std::string& strTenant) const
     }
     // 按创建时间倒序（新的在前）。
     std::sort(vecResult.begin(), vecResult.end(),
-              [](const StoreItemInfo& a, const StoreItemInfo& b)
-              {
-                  return a.nCreateMs > b.nCreateMs;
-              });
+        [](const StoreItemInfo& a, const StoreItemInfo& b)
+        {
+            return a.nCreateMs > b.nCreateMs;
+        });
     return vecResult;
 }
 
@@ -234,10 +234,10 @@ std::vector<StoreItemInfo> CFileStore::ListSince(const std::string& strTenant, s
     }
     // 按序号升序（旧→新），便于客户端按顺序追加渲染。
     std::sort(vecResult.begin(), vecResult.end(),
-              [](const StoreItemInfo& a, const StoreItemInfo& b)
-              {
-                  return a.nSeq < b.nSeq;
-              });
+        [](const StoreItemInfo& a, const StoreItemInfo& b)
+        {
+            return a.nSeq < b.nSeq;
+        });
     return vecResult;
 }
 

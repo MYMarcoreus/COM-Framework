@@ -22,8 +22,8 @@ public:
     bool Initialize(const CResolveContext& ctx) override;
     bool Start() override;
     common::timer::TimerId AddTimer(std::int64_t delayMs, const common::timer::TimerCallback& callback) override;
-    common::timer::TimerId AddPeriodicTimer(std::int64_t intervalMs,
-                                            const common::timer::TimerCallback& callback) override;
+    common::timer::TimerId AddPeriodicTimer(
+        std::int64_t intervalMs, const common::timer::TimerCallback& callback) override;
     bool Cancel(common::timer::TimerId id) override;
     void Stop() override;
     void Shutdown() override;

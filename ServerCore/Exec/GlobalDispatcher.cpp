@@ -60,8 +60,8 @@ bool CGlobalDispatcher::Dispatch(const std::function<void(const std::shared_ptr<
             }
             catch (const std::exception& e)
             {
-                common::log::CLogger::Instance().Error(std::string("CGlobalDispatcher::Dispatch 主体异常: ") +
-                                                       e.what());
+                common::log::CLogger::Instance().Error(
+                    std::string("CGlobalDispatcher::Dispatch 主体异常: ") + e.what());
             }
             catch (...)
             {

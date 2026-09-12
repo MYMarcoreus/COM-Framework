@@ -24,8 +24,8 @@ public:
     virtual common::timer::TimerId AddTimer(std::int64_t delayMs, const common::timer::TimerCallback& callback) = 0;
 
     // 添加周期性定时器。
-    virtual common::timer::TimerId AddPeriodicTimer(std::int64_t intervalMs,
-                                                    const common::timer::TimerCallback& callback) = 0;
+    virtual common::timer::TimerId AddPeriodicTimer(
+        std::int64_t intervalMs, const common::timer::TimerCallback& callback) = 0;
 
     // 取消定时器。
     virtual bool Cancel(common::timer::TimerId id) = 0;

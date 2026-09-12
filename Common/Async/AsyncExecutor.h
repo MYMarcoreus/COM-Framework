@@ -164,8 +164,7 @@ public:
     /// @return 指向首层的 promise 句柄；执行器不可用时首层立即被拒绝（kStopped）。
     template <typename TContext>
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
-                                  typename CPromise<TContext>::ThenHandler fnHandler,
-                                  const CSourceLoc& loc = CSourceLoc());
+        typename CPromise<TContext>::ThenHandler fnHandler, const CSourceLoc& loc = CSourceLoc());
 
     /// @brief 建一条「延迟启动」的 promise 链（先挂完所有层，再 `Start()`）。
     ///

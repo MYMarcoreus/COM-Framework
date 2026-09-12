@@ -33,8 +33,8 @@ CTcpServer::~CTcpServer()
 /// @param closeCb 连接关闭回调。
 ///
 /// @return 成功返回 true。
-bool CTcpServer::Start(uint16_t nPort, const AcceptCallback& fnAccept, const DataCallback& fnData,
-                       const CloseCallback& fnClose)
+bool CTcpServer::Start(
+    uint16_t nPort, const AcceptCallback& fnAccept, const DataCallback& fnData, const CloseCallback& fnClose)
 {
     if (m_bRunning.load())
     {
@@ -70,13 +70,13 @@ bool CTcpServer::Start(uint16_t nPort, const AcceptCallback& fnAccept, const Dat
     m_bRunning.store(true);
     m_thread = std::thread(&CTcpServer::ThreadMain, this);
     asio::post(m_io,
-               [this]()
-               {
-                   if (m_nIdleSeconds.load() != 0 && m_pIdleTimer == nullptr)
-                   {
-                       StartIdleTimer();
-                   }
-               });
+        [this]()
+        {
+            if (m_nIdleSeconds.load() != 0 && m_pIdleTimer == nullptr)
+            {
+                StartIdleTimer();
+            }
+        });
     return true;
 }
 
@@ -91,10 +91,10 @@ void CTcpServer::Stop()
     }
     m_bRunning.store(false);
     asio::post(m_io,
-               [this]()
-               {
-                   ShutdownOnIoThread();
-               });
+        [this]()
+        {
+            ShutdownOnIoThread();
+        });
     if (m_thread.joinable())
     {
         m_thread.join();
@@ -147,8 +147,8 @@ void CTcpServer::StartAccept()
             ConnectionId nId = m_nNextId++;
             CTcpConnection::Ptr pConn = std::make_shared<CTcpConnection>(m_io, nId, std::move(socket));
             pConn->SetCallbacks(std::bind(&CTcpServer::HandleData, this, std::placeholders::_1, std::placeholders::_2,
-                                          std::placeholders::_3),
-                                std::bind(&CTcpServer::HandleClose, this, std::placeholders::_1));
+                                    std::placeholders::_3),
+                std::bind(&CTcpServer::HandleClose, this, std::placeholders::_1));
             m_mapConnections[nId] = pConn;
             pConn->StartRead();
             {
@@ -207,14 +207,14 @@ bool CTcpServer::Send(ConnectionId nId, const char* pData, size_t nLen)
     }
     std::string strPayload(pData, nLen);
     asio::post(m_io,
-               [this, nId, strPayload]()
-               {
-                   std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = m_mapConnections.find(nId);
-                   if (it != m_mapConnections.end())
-                   {
-                       it->second->Send(strPayload.data(), strPayload.size());
-                   }
-               });
+        [this, nId, strPayload]()
+        {
+            std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = m_mapConnections.find(nId);
+            if (it != m_mapConnections.end())
+            {
+                it->second->Send(strPayload.data(), strPayload.size());
+            }
+        });
     return true;
 }
 
@@ -222,30 +222,30 @@ bool CTcpServer::Send(ConnectionId nId, const char* pData, size_t nLen)
 void CTcpServer::Close(ConnectionId nId)
 {
     asio::post(m_io,
-               [this, nId]()
-               {
-                   std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = m_mapConnections.find(nId);
-                   if (it == m_mapConnections.end())
-                   {
-                       return;
-                   }
-                   CTcpConnection::Ptr pConn = it->second;
-                   m_mapConnections.erase(it);
-                   {
-                       std::lock_guard<std::mutex> lock(m_mutexPeer);
-                       m_mapPeerAddresses.erase(nId);
-                   }
-                   if (m_nConnectionCount.load() > 0)
-                   {
-                       m_nConnectionCount.fetch_sub(1);
-                   }
-                   m_nTotalClosed.fetch_add(1);
-                   pConn->Close();
-                   if (m_fnClose)
-                   {
-                       m_fnClose(nId);
-                   }
-               });
+        [this, nId]()
+        {
+            std::map<ConnectionId, CTcpConnection::Ptr>::iterator it = m_mapConnections.find(nId);
+            if (it == m_mapConnections.end())
+            {
+                return;
+            }
+            CTcpConnection::Ptr pConn = it->second;
+            m_mapConnections.erase(it);
+            {
+                std::lock_guard<std::mutex> lock(m_mutexPeer);
+                m_mapPeerAddresses.erase(nId);
+            }
+            if (m_nConnectionCount.load() > 0)
+            {
+                m_nConnectionCount.fetch_sub(1);
+            }
+            m_nTotalClosed.fetch_add(1);
+            pConn->Close();
+            if (m_fnClose)
+            {
+                m_fnClose(nId);
+            }
+        });
 }
 
 /// @brief 设置最大连接数上限。
@@ -267,13 +267,13 @@ void CTcpServer::SetIdleTimeout(uint32_t nSeconds)
     if (nSeconds != 0)
     {
         asio::post(m_io,
-                   [this]()
-                   {
-                       if (m_pIdleTimer == nullptr)
-                       {
-                           StartIdleTimer();
-                       }
-                   });
+            [this]()
+            {
+                if (m_pIdleTimer == nullptr)
+                {
+                    StartIdleTimer();
+                }
+            });
     }
 }
 

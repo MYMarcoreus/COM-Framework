@@ -108,8 +108,8 @@ public:
     /// @param spCallee 被调模块（可为已停止的模块）。
     ///
     /// @return 指向最后一层的 promise。
-    no::CPromise<CCallerCtx> RunAsync(const std::shared_ptr<CCallerCtx>& spCtx,
-                                      const std::shared_ptr<CDeliveryModule>& spCallee)
+    no::CPromise<CCallerCtx> RunAsync(
+        const std::shared_ptr<CCallerCtx>& spCtx, const std::shared_ptr<CDeliveryModule>& spCallee)
     {
         no::CPromise<CCallerCtx>::PromiseFactory fnCall = [this, spCallee](const std::shared_ptr<CCallerCtx>& spSelf)
         {
@@ -148,12 +148,12 @@ private:
     /// ② 桥接层：**故意不检查** `promiseCallee.OnSettled(...)` 的返回值。
     ///
     /// 框架已保证送达（执行器不可用时就地执行），因此这里漏检也不会永久 pending。
-    no::CPromise<CCallerCtx> BridgeCallCallee(const std::shared_ptr<CCallerCtx>& spCtx,
-                                              const std::shared_ptr<CDeliveryModule>& spCallee)
+    no::CPromise<CCallerCtx> BridgeCallCallee(
+        const std::shared_ptr<CCallerCtx>& spCtx, const std::shared_ptr<CDeliveryModule>& spCallee)
     {
-        no::CPromise<CCallerCtx>::PromiseExecutor fnExecutor =
-            [spCallee, spCtx](const no::CPromise<CCallerCtx>::ResolveFn& fnResolve,
-                              const no::CPromise<CCallerCtx>::RejectFn& fnReject)
+        no::CPromise<CCallerCtx>::PromiseExecutor fnExecutor = [spCallee, spCtx](
+                                                                   const no::CPromise<CCallerCtx>::ResolveFn& fnResolve,
+                                                                   const no::CPromise<CCallerCtx>::RejectFn& fnReject)
         {
             auto spCalleeCtx = std::make_shared<CDeliveryCtx>();
             no::CPromise<CDeliveryCtx> promiseCallee = spCallee->QueryAsync(spCalleeCtx);

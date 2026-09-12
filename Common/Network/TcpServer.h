@@ -38,8 +38,8 @@ public:
     ~CTcpServer();
 
     // 启动服务器并监听端口。
-    bool Start(uint16_t nPort, const AcceptCallback& fnAccept, const DataCallback& fnData,
-               const CloseCallback& fnClose);
+    bool Start(
+        uint16_t nPort, const AcceptCallback& fnAccept, const DataCallback& fnData, const CloseCallback& fnClose);
 
     // 停止服务器，等待事件循环线程退出。
     void Stop();

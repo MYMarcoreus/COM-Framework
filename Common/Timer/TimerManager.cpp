@@ -77,8 +77,8 @@ bool CTimerManager::Cancel(TimerId nId)
 /// @param fnCallback 每次到期回调。
 ///
 /// @return 定时器标识；失败返回 kInvalidTimerId。
-TimerId CTimerManager::AddNamedTimer(const std::string& strName, std::int64_t nIntervalMs,
-                                     const TimerCallback& fnCallback)
+TimerId CTimerManager::AddNamedTimer(
+    const std::string& strName, std::int64_t nIntervalMs, const TimerCallback& fnCallback)
 {
     TimerId nId = AddTimerInternal(0, nIntervalMs, fnCallback);
     if (nId != kInvalidTimerId)
@@ -147,8 +147,8 @@ bool CTimerManager::IsRunning() const
 /// @param delayMs 一次性延迟（intervalMs 为 0 时生效）。
 /// @param intervalMs 周期（大于 0 时表示周期性定时器）。
 /// @param callback 回调。
-TimerId CTimerManager::AddTimerInternal(std::int64_t nDelayMs, std::int64_t nIntervalMs,
-                                        const TimerCallback& fnCallback)
+TimerId CTimerManager::AddTimerInternal(
+    std::int64_t nDelayMs, std::int64_t nIntervalMs, const TimerCallback& fnCallback)
 {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (!m_bRunning.load())
@@ -165,8 +165,8 @@ TimerId CTimerManager::AddTimerInternal(std::int64_t nDelayMs, std::int64_t nInt
 }
 
 /// @brief 调度一次异步等待。
-void CTimerManager::Schedule(std::shared_ptr<asio::steady_timer> pTimer, TimerId nId, std::int64_t nIntervalMs,
-                             const TimerCallback& fnCallback)
+void CTimerManager::Schedule(
+    std::shared_ptr<asio::steady_timer> pTimer, TimerId nId, std::int64_t nIntervalMs, const TimerCallback& fnCallback)
 {
     pTimer->async_wait(
         [this, pTimer, nId, nIntervalMs, fnCallback](const asio::error_code& ec)
