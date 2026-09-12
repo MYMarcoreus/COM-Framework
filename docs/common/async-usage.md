@@ -699,6 +699,7 @@ common::async::CPromise<Ctx> p =
   `test_async_settled_delivery.cpp`（4）通知送达、
   `test_async_robustness.cpp`（6）健壮性与诊断、`test_async_layer_rules.cpp`（2）三态语义白盒、
   `test_async_alloc.cpp`（2）每层分配预算护栏、
-  `test_async_trace.cpp`（2）调用链 trace（一条复杂主链看完整链 + 层外空操作契约，见 [async-impl.md](async-impl.md) §14）；
+  `test_async_trace.cpp`（6）调用链 trace（复杂主链看完整链 / 多层子链跨链祖先路径 /
+  并发多链互不串 / 深链与帧栈无残留 / 层里起链的父层 / 层外空操作契约，见 [async-impl.md](async-impl.md) §14）；
 - 基准：`Benchmark/cases/ChainCase.cpp`、`CoroutineCase.cpp`、`ResumableCase.cpp`、`StressCase.cpp`；
 - 运行：`./build.sh --tests`、`./build/debug/examples`。
