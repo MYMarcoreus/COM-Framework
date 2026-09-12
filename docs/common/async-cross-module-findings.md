@@ -228,15 +228,18 @@ bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandl
 - **层的语义不变**：`Then` / `Catch` / `Finally` 在“已 settled + 执行器不可用”时依旧以 `kStopped` 结算，
   不会“就地执行一层”（验收：`SettledNotice_LayerStillRejectedWhenExecutorUnavailable`）。
 
-验收用例（`Tests/test_async_settled_delivery.cpp`，5 例）：
+验收用例（`Tests/test_async_settled_delivery.cpp`，4 例）：
 
 | 用例 | 验的是什么 |
 |---|---|
-| `SettledNotice_DeliveredEvenIfExecutorStopped` | 执行器已停 → 已 settled 上注册通知：返回 true、回调就地执行、层仍不跑 |
+| `SettledNotice_DeliveredEvenIfExecutorStopped` | 执行器已停 → 已 settled 上注册通知：回调就地执行、层仍不跑 |
 | `SettledNotice_ManyRegistrationsAllDelivered` | 一次注册 100 个通知：全部送达、按注册顺序、均在调用线程 |
-| `SettledNotice_InvalidPromiseReturnsFalse` | 唯一仍为 `false` 的情形：无效 promise |
-| `SettledNotice_BridgeWithoutReturnCheckNoDeadlock` | **关键回归**：桥接漏检返回值的原形状 → 链以 `kStopped` 拒绝，不再死等 |
+| `SettledNotice_BridgeWithoutReturnCheckNoDeadlock` | **关键回归**：桥接不检查返回值的原形状 → 链以 `kStopped` 拒绝，不再死等 |
 | `SettledNotice_LayerStillRejectedWhenExecutorUnavailable` | 对照：层不被就地执行，仍以 `kStopped` 收口 |
+
+> 后续（2026-09-12，批次 2）：`OnSettled` **不再返回 `bool`**（“调用方漏检返回值”这一
+> 病因从 API 上消失），`SettledNotice_InvalidPromiseReturnsFalse` 用例随之删除——
+> 现在没有“无效 promise”这种对象了。
 
 ### 2.4 写作建议（现已可选）
 
@@ -292,7 +295,7 @@ if (!bOk)
 
 ```bash
 # 跑全部测试（含以上用例）
-./build.sh --debug Tests && ./build/debug/tests        # total=160 pass=160 fail=0
+./build.sh --debug Tests && ./build/debug/tests        # total=156 pass=156 fail=0
 
 # 数据竞争检查（异步测试文件 + 异步框架 + 线程池）
 g++ -std=c++11 -fsanitize=thread -g -O1 -pthread -ICommon -ITests \
@@ -315,4 +318,4 @@ g++ -std=c++11 -fsanitize=thread -g -O1 -pthread -ICommon -ITests \
 >   注册通知前就落定，通知会被投递回本链执行器）。已改为由用例**自己指定结算线程**（子 promise 建在
 >   旁路执行器上，挂完层后再投递结算），断言从「不是本链线程」升级为「等于结算线程」。
 >   跨模块的真实形状由 `RunDefaultAsync` / `RunOnSideAsync` 与 `test_async_affinity.cpp` 覆盖。
->   验证：TSan 连跑 5 轮，0 竞争、异步 114 例全绿。
+>   验证：TSan 连跑 5 轮，0 竞争、异步 110 例全绿。

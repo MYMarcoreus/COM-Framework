@@ -351,7 +351,8 @@ private:
             spStock->pProbe = spCtx->pProbe;
 
             common::async::CPromise<CCalleeCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
-            const bool bOk = promiseStock.OnSettled(
+            // 通知恒送达（没有返回值可检查）：子链落定后收回上下文并 settle 本层。
+            promiseStock.OnSettled(
                 [spCtx, spStock, fnResolve, fnReject](common::async::CPromiseResult result)
                 {
                     // 本回调要么在库存模块线程上内联跑，要么（补登记时）在库存模块执行器上跑。
@@ -364,12 +365,6 @@ private:
                     spCtx->nStock = spStock->nAvail;
                     fnResolve();
                 });
-            if (!bOk)
-            {
-                // 子 promise 已 settled 且对方执行器不可用：回调不会执行，本层必须以拒绝收口
-                // （否则本层永久 pending → 上层 Await 死等）。
-                fnReject(common::async::kStopped);
-            }
         };
         return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }
@@ -410,7 +405,8 @@ private:
                 spStock->pProbe = spCtx->pProbe;
 
                 common::async::CPromise<CCalleeCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
-                const bool bOk = promiseStock.OnSettled(
+                // 通知恒送达（没有返回值可检查）：分支落定即计数，归零时收口本层。
+                promiseStock.OnSettled(
                     [spCtx, pRemain, fnResolve, fnReject](common::async::CPromiseResult result)
                     {
                         // 本回调在库存模块线程上；单个 worker ⇒ 不会并发进入。
@@ -433,15 +429,6 @@ private:
                             fnResolve();
                         }
                     });
-                if (!bOk)
-                {
-                    // 分支已 settled 但对方执行器不可用：计失败并计入剩余数（不能永久 pending）。
-                    ++spCtx->nBranchFail;
-                    if (--(*pRemain) == 0)
-                    {
-                        fnReject(common::async::kStopped);
-                    }
-                }
             }
         };
         return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);

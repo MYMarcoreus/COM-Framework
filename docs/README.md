@@ -34,6 +34,7 @@
 | 异步 promise（CAsyncExecutor / CPromise） | [async-usage.md](common/async-usage.md) | [async-impl.md](common/async-impl.md) |
 | 协程库（CCoroutine，`Common/Coroutine`） | [coroutine-usage.md](common/coroutine-usage.md) | [coroutine-impl.md](common/coroutine-impl.md) |
 | 组合器（`WhenAll` / `AllSettled` / `Race` / `Any`） | [async-usage.md §10](common/async-usage.md) | [async-impl.md](common/async-impl.md) |
+| 契约断言（`ASSERT` / `ASSERT_MSG`，`Common/Assert.h`） | [assert-usage.md](common/assert-usage.md) | —（头文件即实现） |
 
 ### 示例（`docs/common/`）
 

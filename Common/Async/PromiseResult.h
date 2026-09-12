@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Assert.h"
+
 // ====================================================================
 // CPromiseResult —— promise 结果（已兑现 / 已拒绝），层与层之间传递的唯一信息
 //
@@ -85,6 +87,8 @@ public:
     /// @param nCode 错误码（默认为 kRejected；业务码建议从 kBusinessBase 起取）。
     static CPromiseResult Reject(int nCode = kRejected)
     {
+        // 0 是 kFulfilled（兑现）：用它当拒绝码会让下游把失败当成功，开发期必须暴露。
+        ASSERT_MSG(nCode != kFulfilled, "Reject 的码不能用 0（0 表示兑现 kFulfilled）");
         return CPromiseResult(nCode);
     }
 

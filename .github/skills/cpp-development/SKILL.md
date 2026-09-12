@@ -118,6 +118,36 @@ MyApplication
 
 系统级错误必须保留足够的诊断信息。
 
+### 6.1 契约断言（ASSERT）
+
+「调用前提」与「内部不变量」用**断言**表达，不要用运行时的宽容分支（静默返回、
+空操作、特例检查）——那些分支会一直留在热路径上，而且让误用拖到很晚才暴露。
+
+断言是**全框架通用**设施，宏与开关都在 `Common/Assert.h`：
+
+```cpp
+#include "Assert.h"
+
+ASSERT(pCore != nullptr);                                      // 内部不变量
+ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  // 带说明
+```
+
+* **开关**：`Common/Assert.h` 提供唯一的调试判定 `FRAMEWORK_DEBUG`
+  （未定义 `NDEBUG` **且** 未开优化）；发布构建统一加 `-DNDEBUG`（`build.sh` 与各
+  `Makefile` 已加）→ 断言展开为 `(void)sizeof(expr)`，不求值、零开销、不引入分支；
+* **失败**：打印「表达式 / 位置 / 函数」后 `abort()`；
+* **判断标准**：
+  * 该断言 → **内部不变量**、**调用前提**（上下文必传、模块已启动、必须在
+    `CoStart` 之后 await）、**显然写错的入参**（`Reject(0)`）；
+  * 不该断言 → **业务错误**（走返回值 / 错误码 / 异常 / 日志）、**正常分支**
+    （投递失败、对象已停止、子流程被拒绝）；
+* **优先于运行时检查**：一个条件若「不满足就是编程错误」，就用断言 + 直路，
+  不要写 `if (!ok) { 兜底 }`；反之若「不满足也算正常」，就必须写分支。
+
+已在用它的地方：`Common/Assert.h`（自身）、`Common/Async/Promise.h`、`PromiseResult.h`、
+`Common/Coroutine/Coroutine.h`、`ServerExample/Module/Example{Db,Async}Module.cpp`、
+`examples/main.cpp`（示例自校验）。
+
 ---
 
 ## 7. 多线程

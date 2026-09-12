@@ -259,7 +259,6 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
 | --- | --- |
 | 子链**兑现** | 先 `fnApply(本上下文, 子上下文)` 搬数据，再兑现本层 |
 | 子链**被拒绝** | 本层以**同一拒绝码**被拒绝（不搬数据；后续 `Then` 不执行，`Catch` / `Finally` 仍执行） |
-| 子链**无效**（工厂返回无效 promise） | 本层以 `kStopped` 拒绝（不挂死） |
 | `fnApply` **抛异常** | 本层以 `kException` 拒绝（异常不会窜出通知回调） |
 | 上层被拒绝 | 本层不执行，拒绝原因原样透传 |
 
@@ -440,7 +439,6 @@ common::async::SetDiagnosticHandler([](const char*)
 | `exec.Post()` 投递的任务抛异常 | 同上（线程池 worker 本身不捕获异常） |
 | `exec.Post(nullptr)` | 空任务：不提交 + 报告（不再「返回 true 却什么也不做」） |
 | 层内 / 本链执行器线程上 `Await()` 未落定的层 | 极可能死锁（占住 worker / 卡住本链）—— 改用 `ThenPromise` / 协程 / `AwaitFor(ms)` |
-| 无效 promise 上挂层（`Then` / `ThenPromise`） | 静默无操作最容易埋坑（链根本不会跑） |
 
 ## 8. 执行器
 
@@ -530,7 +528,7 @@ common::async::CPromiseResult r = p.Await();
 - 数量**运行时确定**时传 `std::vector<CPromise<同上下文> >`，可与单个子 promise **混用**；
 - 聚合只关心分支**成败、不传值** —— 数据写各自的共享上下文（同上下文时共用一个实例）；
 - 全程只登记回调、**不占工作线程**（单线程执行器也安全）；
-- 已落定的子 promise 直接计入；**无效子 promise（未绑定执行器）按已拒绝 `kStopped` 计**；
+- 已落定的子 promise 直接计入（**子 promise 恒有效**：句柄只能由起链入口产出）；
 - 框架**不取消**分支：收口后落败 / 剩余分支继续跑完（结果被忽略）。
 
 ```cpp
@@ -632,7 +630,7 @@ common::async::CPromise<Ctx> p =
 - 示例：`examples/main.cpp`（28 个演示：then / catch / finally / 分叉 / 深链 / 协程 / **嵌套** / **跨模块组合** / **多种 then 混用**）；
 - 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
 - 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞）；
-- 单元测试（异步共 **114 例**，全量 160 例）：`test_async_smoke.cpp`（17）对外用法逐条冒烟、
+- 单元测试（异步共 **110 例**，全量 156 例）：`test_async_smoke.cpp`（17）对外用法逐条冒烟、
   `test_async_chain.cpp`（37）promise 契约 + 协程、`test_async_combine.cpp`（13）组合器、
   `test_async_modules.cpp`（7）+ `test_async_modules_stress.cpp`（8）跨模块与极限、
   `test_async_affinity.cpp`（5）+ `test_async_affinity_override.cpp`（4）线程亲和，

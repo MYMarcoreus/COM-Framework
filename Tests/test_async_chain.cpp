@@ -340,12 +340,12 @@ TEST(Promise_OnSettledCallback)
     std::atomic<bool> bOkDone(false);
     common::async::CPromise<CTestContext> chainOk =
         exec.NewPromise(spOk, &StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC);
-    ASSERT_TRUE(chainOk.OnSettled(
+    chainOk.OnSettled(
         [&nOk, &bOkDone](common::async::CPromiseResult r)
         {
             nOk.store(r.Code() + 1);  // 成功：0 + 1
             bOkDone.store(true);
-        }));
+        });
     chainOk.Await();
     while (!bOkDone.load())
     {
@@ -359,12 +359,12 @@ TEST(Promise_OnSettledCallback)
     std::atomic<int> nCode(-1);
     std::atomic<bool> bFailDone(false);
     common::async::CPromise<CTestContext> chainFail = exec.NewPromise(spFail, &StepFail, ASYNC_LOC);
-    ASSERT_TRUE(chainFail.OnSettled(
+    chainFail.OnSettled(
         [&nCode, &bFailDone](common::async::CPromiseResult r)
         {
             nCode.store(r.Code());
             bFailDone.store(true);
-        }));
+        });
     chainFail.Await();
     while (!bFailDone.load())
     {
@@ -504,15 +504,17 @@ TEST(Promise_WorkerThread)
 TEST(Promise_LifetimeAfterDestroy)
 {
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
-    common::async::CPromise<CTestContext> tail;
+    // 句柄没有默认构造：要跨作用域持有，就用 shared_ptr 装它（链本身是浅句柄，可拷贝）。
+    std::shared_ptr<common::async::CPromise<CTestContext> > spTail;
     {
         common::async::CAsyncExecutor exec(2);
         ASSERT_TRUE(exec.Start());
-        tail = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC);
+        spTail = std::make_shared<common::async::CPromise<CTestContext> >(
+            exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC));
         exec.Stop();  // 等待已投递任务完成
     }  // 执行器析构
 
-    const common::async::CPromiseResult r = tail.Await();
+    const common::async::CPromiseResult r = spTail->Await();
     ASSERT_TRUE(r.IsFulfilled());
     ASSERT_EQ(spCtx->nValue, 11);
 }
@@ -901,11 +903,11 @@ TEST(Coro_OnSettledCallback)
     std::shared_ptr<CSequentialCoro> pCoro = exec.CoStart<CSequentialCoro>(spCtx);
 
     std::atomic<int> nCode(-1);
-    ASSERT_TRUE(pCoro->AsPromise().OnSettled(
+    pCoro->AsPromise().OnSettled(
         [&nCode](common::async::CPromiseResult r)
         {
             nCode.store(r.Code());
-        }));
+        });
     while (nCode.load() < 0)
     {
         std::this_thread::yield();

@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <thread>
 
+#include "Assert.h"
 #include "Log/Logger.h"
 #include "Module/ResolveContext.h"
 
@@ -145,10 +146,9 @@ std::string CExampleDbModule::GetStatus() const
 /// @return promise 句柄（未命中时最终以 kDbRowNotFound 被拒绝）。
 common::async::CPromise<CUserTableOp> CExampleDbModule::QueryUserAsync(const std::shared_ptr<CUserTableOp>& spOp)
 {
-    if (spOp == nullptr || m_pExecutor == nullptr)
-    {
-        return MakeInvalidPromise();
-    }
+    // 契约：执行器在 Start() 中创建（失败即模块不可用），操作上下文由调用方提供且非空。
+    ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
+    ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
     return LoadRowAsync(spOp).Finally(BindHandler(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
 }
 
@@ -162,10 +162,8 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::QueryUserAsync(const std
 /// @return promise 句柄（主键冲突时最终以 kDbDuplicateKey 被拒绝）。
 common::async::CPromise<CUserTableOp> CExampleDbModule::InsertUserAsync(const std::shared_ptr<CUserTableOp>& spOp)
 {
-    if (spOp == nullptr || m_pExecutor == nullptr)
-    {
-        return MakeInvalidPromise();
-    }
+    ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
+    ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
     return LoadRowAsync(spOp)  // 本模块内的异步函数（读表）
         .Catch(BindHandler(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)  // 「不存在」归一化为兑现
         .Then(BindHandler(&CExampleDbModule::StepRejectIfExists), ASYNC_LOC)   // 查重
@@ -180,10 +178,8 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::InsertUserAsync(const st
 /// @return promise 句柄（版本冲突时最终以 kDbVersionConflict 被拒绝，recResult 为库中最新行）。
 common::async::CPromise<CUserTableOp> CExampleDbModule::UpdateUserAsync(const std::shared_ptr<CUserTableOp>& spOp)
 {
-    if (spOp == nullptr || m_pExecutor == nullptr)
-    {
-        return MakeInvalidPromise();
-    }
+    ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
+    ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
     return LoadRowAsync(spOp)
         .Catch(BindHandler(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)
         .Then(BindHandler(&CExampleDbModule::StepApplyUpdate), ASYNC_LOC)
@@ -197,10 +193,8 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::UpdateUserAsync(const st
 /// @return promise 句柄（未命中时最终以 kDbRowNotFound 被拒绝）。
 common::async::CPromise<CUserTableOp> CExampleDbModule::DeleteUserAsync(const std::shared_ptr<CUserTableOp>& spOp)
 {
-    if (spOp == nullptr || m_pExecutor == nullptr)
-    {
-        return MakeInvalidPromise();
-    }
+    ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
+    ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
     return LoadRowAsync(spOp)
         .Catch(BindHandler(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)
         .Then(BindHandler(&CExampleDbModule::StepEraseRow), ASYNC_LOC)
@@ -434,14 +428,6 @@ CExampleDbModule::Handler CExampleDbModule::BindHandler(HandlerMemberFn pfnHandl
     {
         return (this->*pfnHandler)(upResult, spOp);
     };
-}
-
-/// @brief 创建无效 promise（调用方 Await() 得到 kStopped，不会静默丢结果）。
-///
-/// @return 默认构造的无效 promise 句柄。
-common::async::CPromise<CUserTableOp> CExampleDbModule::MakeInvalidPromise() const
-{
-    return common::async::CPromise<CUserTableOp>();
 }
 
 }  // namespace serverexample

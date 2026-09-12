@@ -4,6 +4,7 @@
 #include <memory>
 #include <utility>
 
+#include "Assert.h"
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
@@ -117,9 +118,12 @@ public:
           m_pExec(nullptr),
           m_wpSelf(),
           m_hot()
-    {}
+    {
+        // 上下文强制传入：把契约钉在唯一入口上（与 promise 一致）。
+        ASSERT_MSG(spContext != nullptr, "协程的共享上下文必须由调用方传入（框架不做懒创建）");
+    }
 
-    /// @brief 析构（不阻塞）。
+    /// @brief 析构（不阻塞；虚析构：派生类成员需要正常析构）。
     virtual ~CCoroutine()
     {}
 
@@ -137,6 +141,8 @@ public:
     /// @return 最终结果：正常结束为兑现；await 到拒绝 / 执行器停止为对应拒绝码。
     CPromiseResult Await() const
     {
+        // 未启动就没有执行器去跑协程 → 永远等不到结果（必挂死），属于用法错误。
+        ASSERT_MSG(m_pExec != nullptr, "Await 须在 CoStart 启动之后调用（未启动的协程永远不会完成）");
         return m_pSegment->Await();
     }
 
@@ -155,6 +161,7 @@ public:
     /// @return 指向本协程完成状态的 promise 句柄。
     CPromise<TContext> AsPromise() const
     {
+        ASSERT_MSG(m_pExec != nullptr, "AsPromise 须在 CoStart 启动之后调用（启动时才绑定执行器）");
         return CPromise<TContext>::Make(m_pCore, m_pSegment);
     }
 
@@ -193,11 +200,12 @@ protected:
     template <typename TOtherContext>
     void AwaitWait(int nLine, const CPromise<TOtherContext>& promise)
     {
+        ASSERT_MSG(m_pExec != nullptr, "await 只能在 CoStart 启动之后（协程体 Run() 内）调用");
         m_hot.nStep.store(nLine, std::memory_order_release);
 
         // 回调捕获自持强引用：保证协程对象存活到回调执行完毕。
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        const bool bOk = promise.OnSettled(
+        promise.OnSettled(
             [spSelf, this](CPromiseResult result)
             {
                 if (result.IsRejected())
@@ -206,11 +214,6 @@ protected:
                 }
                 ResumeInline();  // 线程亲和 + 负载感知内联 / 投递。
             });
-        if (!bOk)
-        {
-            // 防御：OnSettled 已保证送达（仅无效 promise 返回 false），正常路径不会走到这里。
-            Terminate(CPromiseResult::Reject(kStopped));
-        }
     }
 
     /// @brief 并行 await 多条 promise（CO_AWAIT_ALL 用）：全部 settled 后恢复。
@@ -418,16 +421,13 @@ private:
     void AwaitEach(
         const std::shared_ptr<detail::CAwaitAllGroup>& pGroup, const CPromise<TOtherContext>& promise, TRest&&... rest)
     {
+        ASSERT_MSG(m_pExec != nullptr, "await 只能在 CoStart 启动之后（协程体 Run() 内）调用");
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
-        const bool bOk = promise.OnSettled(
+        promise.OnSettled(
             [pGroup, spSelf, this](CPromiseResult result)
             {
                 OnAwaitDone(pGroup, result);
             });
-        if (!bOk)
-        {
-            OnAwaitDone(pGroup, CPromiseResult::Reject(kStopped));  // 无法注册 → 该 promise 计为拒绝。
-        }
         AwaitEach(pGroup, std::forward<TRest>(rest)...);
     }
 

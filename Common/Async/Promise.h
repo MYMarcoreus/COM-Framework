@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "Assert.h"
 #include "Async/AsyncExecutor.h"
 #include "Async/Diagnostics.h"
 #include "Async/PromiseResult.h"
@@ -147,11 +148,6 @@ namespace detail {
 
 /// @brief 诊断文案（集中一处：测试断言常量，而不是去匹配子串）。
 constexpr const char* kDiagNoticeThrow = "OnSettled 通知里抛出了异常（已忽略；通知不是层，没有结果可落）";
-constexpr const char* kDiagInvalidLayer =
-    "在无效 promise 上挂层（Then / Catch / Finally / ThenInline / ThenOn）：已忽略，该链不会跑；"
-    "请先确认 IsValid()（句柄是否已由执行器产出）";
-constexpr const char* kDiagInvalidAdopt =
-    "在无效 promise 上 ThenPromise（或 ThenBridge）：已忽略，该链不会跑；请先确认 IsValid()";
 constexpr const char* kDiagAwaitRisk =
     "Await(): 层内（或本链执行器线程上）阻塞等待未落定的层 → 极可能死锁；"
     "请改用 ThenPromise / ThenBridge / OnSettled 回调续跑 / 协程 CO_AWAIT，或用 AwaitFor(ms) 兜底";
@@ -461,6 +457,7 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spConte
     const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
     const CPromiseResult& upResult, HandlerMode eMode)
 {
+    ASSERT(spContext != nullptr);  // 任务体把上下文按值捕获交给处理器：必须已经备好。
     return [spContext, pState, fnHandler, upResult, eMode]()
     {
         CPromiseResult result;
@@ -507,11 +504,14 @@ class CPromiseCore
 public:
     /// @brief 创建核心。
     ///
-    /// @param pHandle 执行器句柄（可为空：无效 promise）。
+    /// @param pHandle 执行器句柄（可为空：协程构造时尚未绑定执行器，`Start` 时注入）。
     /// @param spContext 共享上下文（**必传**；调用方负责在建链前备好数据，框架不管它的生命周期）。
     CPromiseCore(const std::shared_ptr<CExecutorHandle>& pHandle, const std::shared_ptr<TContext>& spContext)
         : m_pHandle(pHandle), m_spContext(spContext), m_bDeferred(false), m_pLaunch()
-    {}
+    {
+        // 上下文强制传入：没有它就无从「共享」——断言把这一契约钉在唯一入口上。
+        ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入（框架不做懒创建）");
+    }
 
     /// @brief 共享上下文（恒非空、构造后只读）。
     ///
@@ -579,6 +579,7 @@ public:
         const CPromiseResult& upResult, HandlerMode eMode, HandlerAffinity eAffinity = kAffinityChain,
         const std::shared_ptr<CExecutorHandle>& pTarget = nullptr) const
     {
+        ASSERT(pState != nullptr);  // 内部调用：本层状态恒存在。
         std::function<void()> fnRun = MakeHandlerRunner(Context(), pState, fnHandler, upResult, eMode);
 
         // 派发策略（就地 / 投递 / 深度限额 / 亲和解析）在执行器侧；这里只管「造任务体 + 失败收口」。
@@ -599,6 +600,7 @@ public:
     void PostHandler(const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
         const CPromiseResult& upResult, HandlerMode eMode, const std::shared_ptr<CExecutorHandle>& pExec) const
     {
+        ASSERT(pState != nullptr);  // 内部调用：本层状态恒存在。
         std::function<void()> fnRun = MakeHandlerRunner(Context(), pState, fnHandler, upResult, eMode);
         if (!PostToHandle(pExec, std::move(fnRun)))
         {
@@ -624,6 +626,8 @@ private:
 ///  - 起链只有**执行器上的**公开入口：`exec.NewPromise(spCtx, 首层处理器)`（立即投递首层）、
 ///    `exec.NewPromise(spCtx, executor)`（由外部回调 settle）、`exec.BuildPromise(spCtx)`（先挂层、后 `Start()`）、
 ///    `exec.CoStart<T>(spCtx)`（协程）；本类**不提供**任何起链入口，只做「句柄 + 加层」；
+///  - **没有默认构造、也没有「无效句柄」这种对象**：句柄只能由执行器起链入口或链上的层方法产出 ——
+///    所以「忘起链就挂层」「对空句柄 Await」在编译期就不成立，框架也不必留运行时的空判与诊断；
 ///  - `Then` / `Catch` / `Finally` 追加一层并返回指向新层的句柄（等价 JS 的
 ///    `then` / `catch` / `finally`）；
 ///  - `Await` / `OnSettled` / `IsSettled` 作用于句柄所指的那一层。
@@ -651,40 +655,29 @@ public:
     using PromiseExecutor = std::function<void(const ResolveFn& fnResolve, const RejectFn& fnReject)>;
 
     /// promise 工厂（ThenPromise 用）：返回一条需要等待的子 promise。
+    ///
+    /// 契约：工厂**必须**给出可等待的子 promise（没有「返回空表示没有子链」这条路 ——
+    /// 真需要条件分支，就在工厂里返回不同形状的链）。
     using PromiseFactory = std::function<CPromise(const std::shared_ptr<TContext>& spContext)>;
 
-    //================ Construction ================
-
-    /// @brief 创建无效 promise（未绑定执行器；供成员声明 / 后续赋值用）。
-    ///
-    /// 无效 promise 上 Then / Catch / Finally 为空操作，Await() 返回被拒绝（kStopped）。
-    /// 起链请用 `exec.NewPromise` / `exec.BuildPromise` / `exec.NewPromise(spCtx, executor)`。
-    CPromise() : m_pCore(), m_pState()
-    {}
-
     //================ Lifecycle ================
-
-    /// @brief 是否有效（已绑定执行器）。
-    bool IsValid() const
-    {
-        return m_pCore != nullptr && m_pState != nullptr;
-    }
 
     /// @brief 本链是否「延迟启动」（`BuildPromise` 建的链）。
     bool IsDeferred() const
     {
-        return m_pCore != nullptr && m_pCore->IsDeferred();
+        return m_pCore->IsDeferred();
     }
 
     /// @brief 本链是否已启动（普通链恒为 true）。
     bool IsStarted() const
     {
-        if (m_pCore == nullptr || !m_pCore->IsDeferred())
+        if (!m_pCore->IsDeferred())
         {
-            return true;  // 无效句柄 / 普通链：无「未启动」状态。
+            return true;  // 普通链：无「未启动」状态。
         }
         const std::shared_ptr<detail::CLaunchState>& pLaunch = m_pCore->Launch();
-        return pLaunch != nullptr && pLaunch->bStarted;
+        ASSERT(pLaunch != nullptr);  // 延迟链必有载荷。
+        return pLaunch->bStarted;
     }
 
     /// @brief 启动「延迟链」：此刻才把首层投递到执行器（幂等；普通链调用无副作用）。
@@ -694,15 +687,16 @@ public:
     /// - 目标执行器不可用（已 Stop / 拒绝投递）→ 首层以 `kStopped` 收口，下游继续透传。
     void Start()
     {
-        if (m_pCore == nullptr)
+        if (!m_pCore->IsDeferred())
         {
-            return;
+            return;  // 普通链：无「未启动」状态（调用无副作用）。
         }
 
         const std::shared_ptr<detail::CLaunchState> pLaunch = m_pCore->Launch();
-        if (!m_pCore->IsDeferred() || pLaunch == nullptr || pLaunch->bStarted)
+        ASSERT(pLaunch != nullptr);  // 延迟链必有载荷（MarkDeferred 时建）。
+        if (pLaunch->bStarted)
         {
-            return;  // 非延迟链 / 已启动：幂等。
+            return;  // 已启动：幂等。
         }
         pLaunch->bStarted = true;
 
@@ -714,8 +708,11 @@ public:
             return;  // 空链（没挂过任何层）：没有启动动作。
         }
 
+        // 首层投递的目标：延迟链登记过「指定执行器」时用它，否则用本链执行器。
+        // （这里不用 `ResolveExecHandle(kAffinityExecutor, …)`：那个入口的语义是「按亲和解析」，
+        //   而这里只是「有没有指定目标」这个简单判断。）
         const std::shared_ptr<detail::CExecutorHandle> pExec =
-            detail::ResolveExecHandle(detail::kAffinityExecutor, pLaunch->pTarget, m_pCore->Handle());
+            pLaunch->pTarget != nullptr ? pLaunch->pTarget : m_pCore->Handle();
         if (!detail::PostToHandle(pExec, std::move(fnLaunch)))
         {
             pFirst->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用。
@@ -818,12 +815,6 @@ public:
     /// @return 指向本层的 promise 句柄。
     CPromise ThenPromise(const PromiseFactory& fnFactory, const CSourceLoc& loc = CSourceLoc())
     {
-        if (m_pCore == nullptr)
-        {
-            ReportDiagnostic(detail::kDiagInvalidAdopt);
-            return CPromise();
-        }
-
         const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = m_pCore;
 
         // ① 尚未起链：本层即首层（起点结果视为已兑现），投递执行（不在起链线程上跑）。
@@ -881,7 +872,6 @@ public:
     ///  - `fnCreate(spSelf)` 在**本链执行器线程**上执行（只做「起子链 + 登记回调」，不要做重活）；
     ///  - 子链被拒绝 → 本层以**同一拒绝码**被拒绝（后续 Then 不执行，Catch / Finally 仍执行）；
     ///  - 子链兑现 → 先 `fnApply(spSelf, spChildCtx)` 把数据搬进本上下文，再兑现本层；
-    ///  - 子链无效（`fnCreate` 返回无效 promise）→ 本层以 `kStopped` 拒绝；
     ///  - 上层被拒绝 → 本层不执行，拒绝原因原样透传（与 Then / ThenPromise 一致）；
     ///  - 全程只登记回调、不占工作线程（单线程执行器也安全）。
     ///
@@ -902,10 +892,6 @@ public:
         PromiseFactory fnFactory = [fnCreate, fnApply, pCore, loc](const std::shared_ptr<TContext>& spSelf) -> CPromise
         {
             TChildPromise promiseChild = fnCreate(spSelf);  // 起子链（抛异常 → Adopt 兜底为 kException）
-            if (!promiseChild.IsValid())
-            {
-                return CPromise();  // 没有可等待的子链 → 本层以 kStopped 收口（Adopt 处理）。
-            }
 
             PromiseExecutor fnExecutor = [promiseChild, fnApply, spSelf](
                                              const ResolveFn& fnResolve, const RejectFn& fnReject)
@@ -923,19 +909,13 @@ public:
     ///
     /// 不产生新层、不改变结果；等价「观察最终结果」。
     ///
-    /// **保证送达**：即使本层的执行器已停止 / 拒绝投递（典型：被调模块已 Stop），
-    /// 通知也会执行（改在调用线程上就地执行）。所以调用方**不需要**检查返回值；
-    /// 手写桥接里漏检返回值也不会让本层永久 pending（框架保证不会因此死等）。
+    /// **恒送达**：即使本层的执行器已停止 / 拒绝投递（典型：被调模块已 Stop），
+    /// 通知也会执行（改在调用线程上就地执行）—— 所以**没有返回值可检查**：登记即生效，
+    /// 不会丢、也不会让本层永久 pending。
     ///
     /// @param fnSettled 收尾通知（入参为本层最终结果）。
-    /// @return true 已登记 / 已投递 / 已就地送达；false 仅当本 promise 无效（未绑定执行器）。
-    bool OnSettled(const SettledHandler& fnSettled) const
+    void OnSettled(const SettledHandler& fnSettled) const
     {
-        if (m_pCore == nullptr || m_pState == nullptr)
-        {
-            return false;  // 无效 promise：无法注册（唯一返回 false 的情形）。
-        }
-
         m_pState->AddHandler(
             m_pCore->Handle(),
             [fnSettled](const CPromiseResult& result)
@@ -943,7 +923,6 @@ public:
                 detail::RunNotice(fnSettled, result);  // 通知里抛异常：只报告，不逃出（否则 terminate）。
             },
             /* bGuaranteedDelivery = */ true);
-        return true;
     }
 
     /// @brief onSettled（**指定执行器**版）：通知在给定执行器线程上触发（不在结算线程）。
@@ -959,14 +938,8 @@ public:
     ///
     /// @param executor 目标执行器（典型：本模块的执行器）。
     /// @param fnSettled 收尾通知（入参为本层最终结果）。
-    /// @return true 已登记 / 已投递 / 已就地送达；false 仅当本 promise 无效。
-    bool OnSettledOn(CAsyncExecutor& executor, const SettledHandler& fnSettled) const
+    void OnSettledOn(CAsyncExecutor& executor, const SettledHandler& fnSettled) const
     {
-        if (m_pCore == nullptr || m_pState == nullptr)
-        {
-            return false;  // 无效 promise：无法注册（唯一返回 false 的情形）。
-        }
-
         const std::shared_ptr<detail::CExecutorHandle> pTarget = executor.Handle();
         m_pState->AddHandler(
             pTarget,
@@ -976,7 +949,6 @@ public:
                 detail::RunNoticeOn(pTarget, fnSettled, result);
             },
             /* bGuaranteedDelivery = */ true);
-        return true;
     }
 
     /// @brief await：阻塞等待本层结果（JS await 的阻塞版，不抛异常）。
@@ -990,7 +962,7 @@ public:
     ///           - 层内「起子 promise 后由 OnSettled 回调续跑」（非阻塞，回调驱动）；
     ///           - 层内「先并行起、后续层里再等」（此时子 promise 多已完成，几乎不阻塞）。
     ///
-    /// @return 本层最终结果；无效 promise 返回被拒绝（kStopped）。
+    /// @return 本层最终结果；延迟链「一层都没挂过」时返回被拒绝（kStopped）。
     CPromiseResult Await() const
     {
         return WaitInternal(-1);  // < 0 = 无限等待。
@@ -1025,10 +997,6 @@ public:
     /// 也可在任意层读写。
     std::shared_ptr<TContext> GetContext() const
     {
-        if (m_pCore == nullptr)
-        {
-            return std::shared_ptr<TContext>();
-        }
         return m_pCore->Context();
     }
 
@@ -1052,6 +1020,19 @@ private:
         : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(executor.Handle(), spContext)), m_pState()
     {}
 
+    /// @brief 创建指向「指定核心的某一层」的句柄（层方法 / 协程 AsPromise / 外部 settle 用）。
+    ///
+    /// 私有不对外：句柄只能由「执行器起链」或「链上的层方法」产出，外部拿不到半成品。
+    ///
+    /// @param pCore 共享核心（上下文 + 执行器句柄；恒非空）。
+    /// @param pState 本句柄所指的层状态（可为空 = 尚未挂首层，即延迟链登记首层之前）。
+    CPromise(const std::shared_ptr<detail::CPromiseCore<TContext> >& pCore,
+        const std::shared_ptr<detail::CPromiseState>& pState)
+        : m_pCore(pCore), m_pState(pState)
+    {
+        ASSERT(pCore != nullptr);  // 句柄恒有核心（无「无效句柄」态）。
+    }
+
     /// @brief 阻塞等待前的「死锁预警」（**不改变行为**，只报告，便于开发期定位）。
     ///
     /// 两种形态都报：
@@ -1064,7 +1045,7 @@ private:
     /// 返回的，硬失败会误伤。要避免永久挂住请用 `AwaitFor(ms)`。
     void ReportBlockingRisk() const
     {
-        if (m_pCore == nullptr || m_pState == nullptr || m_pState->IsSettled())
+        if (m_pState == nullptr || m_pState->IsSettled())
         {
             return;
         }
@@ -1083,11 +1064,9 @@ private:
     /// @return 指向新层的句柄（pending）。
     CPromise NewLayer(const CSourceLoc& loc)
     {
-        CPromise promise;
-        promise.m_pCore = m_pCore;
-        promise.m_pState = std::make_shared<detail::CPromiseState>();
-        promise.m_pState->SetLoc(loc);
-        return promise;
+        const std::shared_ptr<detail::CPromiseState> pState = std::make_shared<detail::CPromiseState>();
+        pState->SetLoc(loc);
+        return CPromise(m_pCore, pState);
     }
 
     /// @brief 内部：把「本层跑不了」收口为被拒绝（`kStopped`）——「层」唯一的失败收口点。
@@ -1120,8 +1099,10 @@ private:
     /// @param fnLaunch 首层启动动作（`Start()` 时投递到执行器执行）。
     void RegisterFirstLayer(const std::function<void()>& fnLaunch)
     {
-        m_pCore->Launch()->pFirst = m_pState;
-        m_pCore->Launch()->fnLaunch = fnLaunch;
+        const std::shared_ptr<detail::CLaunchState>& pLaunch = m_pCore->Launch();
+        ASSERT(pLaunch != nullptr);  // 只有延迟链会登记首层动作。
+        pLaunch->pFirst = m_pState;
+        pLaunch->fnLaunch = fnLaunch;
     }
 
     /// @brief 内部：阻塞等待的统一入口（`Await` / `AwaitFor` 共用）：无效句柄拒绝 → 预警 → 自动启动。
@@ -1132,10 +1113,10 @@ private:
     {
         if (m_pState == nullptr)
         {
-            return CPromiseResult::Reject(kStopped);  // 无效 promise：无结果可等。
+            return CPromiseResult::Reject(kStopped);  // 延迟链还没挂过层：无结果可等。
         }
         ReportBlockingRisk();  // 死锁预警（不改变行为，只报告）。
-        if (m_pCore != nullptr && m_pCore->IsDeferred() && !IsStarted())
+        if (m_pCore->IsDeferred() && !IsStarted())
         {
             const_cast<CPromise*>(this)->Start();  // 兜底：漏写 Start() 也不会死等。
         }
@@ -1191,16 +1172,15 @@ private:
     static CPromise NewFromHandle(const std::shared_ptr<detail::CExecutorHandle>& pHandle,
         const std::shared_ptr<TContext>& spContext, const PromiseExecutor& fnExecutor, const CSourceLoc& loc)
     {
-        CPromise promise;
-        promise.m_pCore = std::make_shared<detail::CPromiseCore<TContext> >(pHandle, spContext);
-        promise.m_pState = std::make_shared<detail::CPromiseState>();  // 待定：等外部 settle。
-        promise.m_pState->SetLoc(loc);
+        // 待定：等外部 settle。
+        const std::shared_ptr<detail::CPromiseState> pState = std::make_shared<detail::CPromiseState>();
+        pState->SetLoc(loc);
 
         // 这里恒为「立即启动」：本 promise 的 core 是新建的，延迟启动状态必为 false。
         // 「挂完层再跑」的语义由调用方所在层的时机保证（`BuildPromise` 链里也是轮到该层才执行
-        // executor，见 `Append` / `ThenPromise` 的 bDeferred 分支），所以无需再判 bDeferred。
-        RunExternalExecutor(promise.m_pState, fnExecutor);
-        return promise;
+        // executor，见 `Append` / `ThenPromise` 的延迟链分支），所以无需再判 IsDeferred。
+        RunExternalExecutor(pState, fnExecutor);
+        return CPromise(std::make_shared<detail::CPromiseCore<TContext> >(pHandle, spContext), pState);
     }
 
     /// @brief 内部：执行 promise 工厂并 adopt 子 promise（ThenPromise 的收口逻辑）。
@@ -1213,32 +1193,26 @@ private:
     static void Adopt(const std::shared_ptr<detail::CPromiseCore<TContext> >& pCore,
         const std::shared_ptr<detail::CPromiseState>& pState, const PromiseFactory& fnFactory)
     {
-        CPromise promiseChild;
+        if (!fnFactory)
+        {
+            SettleStopped(pState);  // 没给工厂：本层无法产出子链。
+            return;
+        }
+
         try
         {
-            if (fnFactory)
-            {
-                promiseChild = fnFactory(pCore->Context());
-            }
+            const CPromise promiseChild = fnFactory(pCore->Context());
+            // 通知恒送达（没有返回值）→ 子链落定即收口本层。
+            promiseChild.OnSettled(
+                [pState](CPromiseResult childResult)
+                {
+                    pState->Settle(childResult);
+                });
         }
         catch (...)
         {
-            pState->Settle(CPromiseResult::Reject(kException));  // 工厂内异常 → 本层被拒绝。
-            return;
+            pState->Settle(CPromiseResult::Reject(kException));  // 工厂内异常 / 子链构造失败 → 本层被拒绝。
         }
-
-        if (!promiseChild.IsValid())
-        {
-            SettleStopped(pState);  // 工厂没给出可等待的子 promise。
-            return;
-        }
-
-        // OnSettled 保证送达（仅无效 promise 返回 false，此处已判过）→ 不需检查返回值。
-        promiseChild.OnSettled(
-            [pState](CPromiseResult childResult)
-            {
-                pState->Settle(childResult);
-            });
     }
 
     /// @brief 内部：执行外部 settle 体（`exec.NewPromise(spCtx, executor)` 的 executor），把 resolve / reject 交给它。
@@ -1276,10 +1250,7 @@ private:
     /// @brief 内部：标记为「延迟启动」链（`CAsyncExecutor::BuildPromise` 用）。
     void MarkDeferred()
     {
-        if (m_pCore != nullptr)
-        {
-            m_pCore->MarkDeferred();
-        }
+        m_pCore->MarkDeferred();
     }
 
     /// @brief 内部：追加一层（Then / Catch / Finally / ThenInline / ThenOn 共用；尚未起链时本层即首层）。
@@ -1289,18 +1260,11 @@ private:
     /// @param eMode 处理器模式（detail::kModeThen / kModeCatch / kModeFinally）。
     /// @param eAffinity 执行线程偏好（默认本链执行器；kAffinityInline 就地；kAffinityExecutor 用 pTarget）。
     /// @param pTarget 指定执行器句柄（kAffinityExecutor 时有效）。
-    /// @return 指向本层的 promise 句柄（无效 promise 返回无效句柄）。
+    /// @return 指向本层的 promise 句柄。
     CPromise Append(const ThenHandler& fnHandler, const CSourceLoc& loc, detail::HandlerMode eMode,
         detail::HandlerAffinity eAffinity = detail::kAffinityChain,
         const std::shared_ptr<detail::CExecutorHandle>& pTarget = nullptr)
     {
-        if (m_pCore == nullptr)
-        {
-            // 无效 promise（未绑定执行器）：空操作 —— 不要静默，报一次诊断便于定位误用。
-            ReportDiagnostic(detail::kDiagInvalidLayer);
-            return CPromise();
-        }
-
         // 本层实际的执行器：默认本链执行器；指定执行器版用调用方给的那个。
         const std::shared_ptr<detail::CExecutorHandle> pExec =
             detail::ResolveExecHandle(eAffinity, pTarget, m_pCore->Handle());
@@ -1314,7 +1278,9 @@ private:
             // 延迟启动链（BuildPromise）：只登记首层动作，等 Start() 再投递。
             if (m_pCore->IsDeferred())
             {
-                m_pCore->Launch()->pTarget = (eAffinity == detail::kAffinityExecutor) ? pTarget : nullptr;
+                const std::shared_ptr<detail::CLaunchState>& pLaunch = m_pCore->Launch();
+                ASSERT(pLaunch != nullptr);  // 延迟链必有载荷。
+                pLaunch->pTarget = (eAffinity == detail::kAffinityExecutor) ? pTarget : nullptr;
                 if (eMode == detail::kModeCatch)
                 {
                     // catch 作为首层：起点已兑现，没有可处理的拒绝 → 启动即 settled。
@@ -1376,10 +1342,7 @@ private:
     static CPromise Make(const std::shared_ptr<detail::CPromiseCore<TContext> >& pCore,
         const std::shared_ptr<detail::CPromiseState>& pState)
     {
-        CPromise promise;
-        promise.m_pCore = pCore;
-        promise.m_pState = pState;
-        return promise;
+        return CPromise(pCore, pState);
     }
 
     friend class CAsyncExecutor;        // NewPromise 起链。

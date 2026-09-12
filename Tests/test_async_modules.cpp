@@ -180,7 +180,8 @@ private:
             spStock->spTrace = spCtx->spTrace;
             common::async::CPromise<CCalleeCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
 
-            const bool bOk = promiseStock.OnSettled(
+            // 通知恒送达（没有返回值可检查）：子链落定后语义转换 + 改上下文 + settle。
+            promiseStock.OnSettled(
                 [spCtx, spStock, fnResolve, fnReject](common::async::CPromiseResult result)
                 {
                     // 本回调在被调模块线程上执行：只做语义转换 + 改上下文 + settle。
@@ -192,12 +193,6 @@ private:
                     spCtx->nStock = spStock->nAvail;
                     fnResolve();
                 });
-            if (!bOk)
-            {
-                // 子 promise 已 settled 且对方执行器不可用：回调不会执行，本层必须以拒绝收口
-                // （否则本层永久 pending → 上层 Await 死等）。
-                fnReject(common::async::kStopped);
-            }
         };
         return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }
@@ -453,32 +448,6 @@ TEST(Module_BridgeHelperPropagatesRejection)
     ASSERT_EQ(nCaughtCode, common::async::kBusinessBase);
     ASSERT_EQ(spCtx->nStock, 0);                                          // 被拒绝 → 不搬数据
     ASSERT_EQ(spCtx->spTrace->strTrace, std::string("A1;B1;B2;C1;A3;"));  // A2 跳过，Catch 恢复后 A3 执行
-}
-
-/// @brief 子链无效（工厂返回无效 promise）：本层以 kStopped 拒绝，不挂死。
-TEST(Module_BridgeHelperInvalidChildRejects)
-{
-    auto spCtx = std::make_shared<COrderCtx>();
-    spCtx->spTrace = std::make_shared<CTraceSink>();
-
-    common::async::CAsyncExecutor exec(1);
-    ASSERT_TRUE(exec.Start());
-
-    auto fnCreateInvalid = [](const std::shared_ptr<COrderCtx>&) -> common::async::CPromise<CCalleeCtx>
-    {
-        return common::async::CPromise<CCalleeCtx>();  // 无效 promise：没有可等待的子链。
-    };
-    auto fnApplyNever = [](const std::shared_ptr<COrderCtx>&, const std::shared_ptr<CCalleeCtx>&)
-    {
-    };
-
-    const common::async::CPromiseResult result = exec.NewPromise(spCtx, &StepLoadOrderForTest, ASYNC_LOC)
-                                                     .ThenBridge(fnCreateInvalid, fnApplyNever, ASYNC_LOC)
-                                                     .Await();
-
-    ASSERT_TRUE(result.IsRejected());
-    ASSERT_EQ(result.Code(), common::async::kStopped);
-    ASSERT_EQ(spCtx->spTrace->strTrace, std::string("A1;"));
 }
 
 /// @brief 搬数据时抛异常：本层以 kException 拒绝（不让异常窜出通知回调）。

@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 
+#include "Assert.h"
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
 #include "Infra/GuardedTimer.h"
@@ -910,10 +911,8 @@ common::async::CPromise<CUserOpContext> CExampleAsyncModule::QueryUserAsync(std:
     std::shared_ptr<CUserOpContext> spCtx = MakeContext("查询用户");
     spCtx->nUserId = nUserId;
     const CFlowDeps deps = MakeFlowDeps(m_spExecutor, m_pUserTable);
-    if (deps.spExec == nullptr)
-    {
-        return common::async::CPromise<CUserOpContext>();  // 未启动：无效 promise（无法调度）。
-    }
+    // 执行器在 Start() 中创建；Start() 失败即模块不可用（框架不会再调用业务接口）。
+    ASSERT_MSG(deps.spExec != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     if (deps.spTable == nullptr)
     {
         return MakeRejectedPromise(deps, spCtx);
@@ -932,10 +931,7 @@ common::async::CPromise<CUserOpContext> CExampleAsyncModule::RegisterUserAsync(c
     spCtx->recRequest = recRequest;
     spCtx->nUserId = recRequest.nUserId;  // 指定了 id 时先查重；为 0（自增分配）时查库自然未命中。
     const CFlowDeps deps = MakeFlowDeps(m_spExecutor, m_pUserTable);
-    if (deps.spExec == nullptr)
-    {
-        return common::async::CPromise<CUserOpContext>();
-    }
+    ASSERT_MSG(deps.spExec != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     if (deps.spTable == nullptr)
     {
         return MakeRejectedPromise(deps, spCtx);
@@ -956,10 +952,7 @@ common::async::CPromise<CUserOpContext> CExampleAsyncModule::RenameUserAsync(
     spCtx->nUserId = nUserId;
     spCtx->recRequest.strName = strNewName;  // 只带新名字：其余字段由 StepPrepareRename 从库中补齐。
     const CFlowDeps deps = MakeFlowDeps(m_spExecutor, m_pUserTable);
-    if (deps.spExec == nullptr)
-    {
-        return common::async::CPromise<CUserOpContext>();
-    }
+    ASSERT_MSG(deps.spExec != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     if (deps.spTable == nullptr)
     {
         return MakeRejectedPromise(deps, spCtx);
@@ -977,10 +970,7 @@ common::async::CPromise<CUserOpContext> CExampleAsyncModule::RemoveUserAsync(std
     std::shared_ptr<CUserOpContext> spCtx = MakeContext("删除用户");
     spCtx->nUserId = nUserId;
     const CFlowDeps deps = MakeFlowDeps(m_spExecutor, m_pUserTable);
-    if (deps.spExec == nullptr)
-    {
-        return common::async::CPromise<CUserOpContext>();
-    }
+    ASSERT_MSG(deps.spExec != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     if (deps.spTable == nullptr)
     {
         return MakeRejectedPromise(deps, spCtx);

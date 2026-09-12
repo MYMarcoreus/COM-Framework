@@ -62,21 +62,9 @@
 #include "Coroutine/Coroutine.h"
 #include "cases/ThenMixCase.h"
 
-// ============================================================
-// 轻量 ASSERT（示例自我校验用，MFC 命名风格）
-// 条件为假时打印位置并累计失败数，不中断程序。
-// ============================================================
-static int g_nAssertFailures = 0;
-
-#define ASSERT(cond)                                                                 \
-    do                                                                               \
-    {                                                                                \
-        if (!(cond))                                                                 \
-        {                                                                            \
-            std::printf("  [ASSERT] 失败: %s (%s:%d)\n", #cond, __FILE__, __LINE__); \
-            ++g_nAssertFailures;                                                     \
-        }                                                                            \
-    } while (0)
+// 示例自我校验统一用框架通用 ASSERT（Common/Assert.h）：条件为假立即打印位置并 abort，
+// 这样示例与框架/业务代码用的是同一套断言。
+#include "Assert.h"
 
 // ============================================================
 // 演示用共享上下文与层函数
@@ -391,12 +379,12 @@ void DemoOnSettledCallback()
     std::atomic<bool> bDone(false);
 
     common::async::CPromise<CDemoContext> chain = exec.NewPromise(spCtx, &StepStore, ASYNC_LOC);
-    ASSERT(chain.OnSettled(
+    chain.OnSettled(
         [&nCode, &bDone](common::async::CPromiseResult r)
         {
             nCode.store(r.Code());
             bDone.store(true);
-        }));
+        });
     chain.Await();
     while (!bDone.load())
     {
@@ -550,15 +538,17 @@ void DemoConcurrent()
 void DemoLifetime()
 {
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    common::async::CPromise<CDemoContext> tail;
+    // 句柄无默认构造：要跨作用域持有，就用 shared_ptr 装（链本身是浅句柄）。
+    std::shared_ptr<common::async::CPromise<CDemoContext> > spTail;
     {
         common::async::CAsyncExecutor exec(2);
         ASSERT(exec.Start());
-        tail = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC);
+        spTail = std::make_shared<common::async::CPromise<CDemoContext> >(
+            exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC));
         exec.Stop();  // 停止并等待已投递任务完成
     }  // 执行器析构：链通过共享句柄保活线程池，不悬垂
 
-    ASSERT(tail.Await().IsFulfilled());
+    ASSERT(spTail->Await().IsFulfilled());
     ASSERT(spCtx->nScaled == 30);
     std::printf("⑫ 生命周期: 执行器析构后仍完成，缩放=%d\n", spCtx->nScaled);
 }
@@ -998,25 +988,29 @@ class CFanInCoroutine : public common::async::CCoroutine<CDemoContext>
 {
 public:
     explicit CFanInCoroutine(const std::shared_ptr<CDemoContext>& spCtx, common::async::CAsyncExecutor* pExec)
-        : common::async::CCoroutine<CDemoContext>(spCtx), m_pExec(pExec), m_head(), m_branchA(), m_branchB()
+        : common::async::CCoroutine<CDemoContext>(spCtx), m_pExec(pExec)
     {}
 
     void Run() override
     {
         CO_BEGIN();
-        m_head = m_pExec->NewPromise(GetContext(), &StepReadParam, ASYNC_LOC);  // 公共前段
-        m_branchA = m_head.Then(&StepForkBranch, ASYNC_LOC);                    // 分支 A
-        m_branchB = m_head.Then(&StepForkBranch, ASYNC_LOC);                    // 分支 B
-        CO_AWAIT_ALL(m_branchA, m_branchB);                                     // 汇聚：等两条分支都结束
+        // 跨 await 的句柄须是成员（恢复时会重新进入 Run）：无默认构造 → 用 shared_ptr 装。
+        m_spHead = std::make_shared<common::async::CPromise<CDemoContext> >(
+            m_pExec->NewPromise(GetContext(), &StepReadParam, ASYNC_LOC));  // 公共前段
+        m_spBranchA =
+            std::make_shared<common::async::CPromise<CDemoContext> >(m_spHead->Then(&StepForkBranch, ASYNC_LOC));
+        m_spBranchB =
+            std::make_shared<common::async::CPromise<CDemoContext> >(m_spHead->Then(&StepForkBranch, ASYNC_LOC));
+        CO_AWAIT_ALL(*m_spBranchA, *m_spBranchB);  // 汇聚：等两条分支都结束
         CO_RETURN_VOID();
         CO_END();
     }
 
 private:
     common::async::CAsyncExecutor* m_pExec;
-    common::async::CPromise<CDemoContext> m_head;
-    common::async::CPromise<CDemoContext> m_branchA;
-    common::async::CPromise<CDemoContext> m_branchB;
+    std::shared_ptr<common::async::CPromise<CDemoContext> > m_spHead;
+    std::shared_ptr<common::async::CPromise<CDemoContext> > m_spBranchA;
+    std::shared_ptr<common::async::CPromise<CDemoContext> > m_spBranchB;
 };
 
 // ㉖ 分叉 + 协程汇聚：两条分支并行跑，协程等全部结束（分支只写原子计数，并行安全）。
@@ -1184,11 +1178,6 @@ int main()
     DemoBridgeOtherModule();
     ASSERT(RunThenMixCase());  // 单独的例子：一条链里混用多种 then（见 cases/ThenMixCase.cpp）
 
-    if (g_nAssertFailures == 0)
-    {
-        std::printf("全部断言通过 ✔\n");
-        return 0;
-    }
-    std::printf("共 %d 个断言失败\n", g_nAssertFailures);
-    return 1;
+    std::printf("全部演示通过 ✔（自校验用通用 ASSERT：失败会立即打印位置并中止）\n");
+    return 0;
 }

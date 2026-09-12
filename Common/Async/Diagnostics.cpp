@@ -3,6 +3,8 @@
 #include <cstdio>
 #include <mutex>
 
+#include "Assert.h"
+
 // ====================================================================
 // 诊断钩子实现（进程级单例；报告路径必须自身安全）
 //
@@ -64,8 +66,9 @@ void ReportDiagnostic(const char* strWhat)
         return;
     }
 
-#if !defined(NDEBUG)
-    // 默认策略：debug 构建打印（让开发期一眼看到误用），发布构建安静。
+#if FRAMEWORK_DEBUG
+    // 默认策略：调试构建打印（让开发期一眼看到误用），发布构建安静。
+    // 调试判定只有一处：Common/Assert.h 的 FRAMEWORK_DEBUG（与 ASYNC_LOC、ASSERT 一致）。
     std::fprintf(stderr, "[async] %s\n", strWhat != nullptr ? strWhat : "(null)");
 #endif
 }

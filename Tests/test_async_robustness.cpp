@@ -141,12 +141,12 @@ TEST(Robust_NoticeThrowIsContained)
     common::async::CPromise<CRobustCtx> p = exec.NewPromise(spCtx, &StepBump, ASYNC_LOC);
 
     std::atomic<bool> bNoticeRan(false);
-    ASSERT_TRUE(p.OnSettled(
+    p.OnSettled(
         [&bNoticeRan](common::async::CPromiseResult)
         {
             bNoticeRan.store(true);
             throw std::runtime_error("通知里抛异常");  // 以前：逃出 settle → std::terminate。
-        }));
+        });
 
     const common::async::CPromiseResult result = p.Await();
     ASSERT_TRUE(result.IsFulfilled());
@@ -179,12 +179,12 @@ TEST(Robust_NoticeThrowOnGuaranteedDeliveryPath)
     exec.Stop();  // 执行器已停 → 通知只能就地送达。
 
     std::atomic<bool> bNoticeRan(false);
-    ASSERT_TRUE(p.OnSettled(
+    p.OnSettled(
         [&bNoticeRan](common::async::CPromiseResult)
         {
             bNoticeRan.store(true);
             throw std::runtime_error("就地送达的通知里抛异常");
-        }));
+        });
     ASSERT_TRUE(WaitFor(
         [&bNoticeRan]()
         {
@@ -299,44 +299,6 @@ TEST(Robust_AwaitInsideLayerReportsRisk)
     exec.Stop();
 }
 
-// ==================== 用例：无效 promise 上的误用 ====================
-
-/// @brief 无效 promise 上挂层：空操作但**不静默**（报诊断），Await 仍是 kStopped。
-TEST(Robust_InvalidPromiseAppendReports)
-{
-    CDiagnosticCapture capture;
-
-    common::async::CPromise<CRobustCtx> promiseInvalid;  // 未绑定执行器
-    ASSERT_TRUE(!promiseInvalid.IsValid());
-
-    common::async::CPromise<CRobustCtx>::ThenHandler fnStep =
-        [](common::async::CPromiseResult, const std::shared_ptr<CRobustCtx>&)
-    {
-        return common::async::CPromiseResult::Resolve();
-    };
-    auto fnCreateInvalid = [](const std::shared_ptr<CRobustCtx>&) -> common::async::CPromise<CCalleeCtx>
-    {
-        return common::async::CPromise<CCalleeCtx>();
-    };
-    auto fnApplyInvalid = [](const std::shared_ptr<CRobustCtx>&, const std::shared_ptr<CCalleeCtx>&)
-    {
-    };
-
-    const common::async::CPromise<CRobustCtx> promiseAfterThen = promiseInvalid.Then(fnStep, ASYNC_LOC);
-    const common::async::CPromise<CRobustCtx> promiseAfterBridge =
-        promiseInvalid.ThenBridge(fnCreateInvalid, fnApplyInvalid, ASYNC_LOC);
-
-    ASSERT_TRUE(!promiseAfterThen.IsValid());
-    ASSERT_TRUE(!promiseAfterBridge.IsValid());
-    ASSERT_EQ(promiseAfterThen.Await().Code(), common::async::kStopped);  // 既有语义不变
-    ASSERT_TRUE(!promiseInvalid.OnSettled(
-        [](common::async::CPromiseResult)
-        {
-        }));                                                             // 无效 promise 注册失败
-    ASSERT_TRUE(capture.Has(common::async::detail::kDiagInvalidLayer));  // Then 路径
-    ASSERT_TRUE(capture.Count() >= 2);                                   // Then + ThenBridge 各一次
-}
-
 // ==================== 用例：OnSettledOn（通知落到指定执行器） ====================
 
 /// @brief 通知跑在指定执行器线程上（而非结算线程），且执行器不可用时仍就地送达。
@@ -366,12 +328,12 @@ TEST(Robust_OnSettledOnRunsOnTargetExecutor)
 
     std::atomic<bool> bNoticeRan(false);
     std::thread::id idNoticeThread;
-    ASSERT_TRUE(promiseCallee.OnSettledOn(ownExec,
+    promiseCallee.OnSettledOn(ownExec,
         [&bNoticeRan, &idNoticeThread](common::async::CPromiseResult)
         {
             idNoticeThread = std::this_thread::get_id();
             bNoticeRan.store(true);
-        }));
+        });
     ASSERT_TRUE(WaitFor(
         [&bNoticeRan]()
         {
@@ -385,11 +347,11 @@ TEST(Robust_OnSettledOnRunsOnTargetExecutor)
     // 执行器已停：通知无法投递 → 就地送达（绝不丢）。
     ownExec.Stop();
     std::atomic<bool> bDeliveredAfterStop(false);
-    ASSERT_TRUE(promiseCallee.OnSettledOn(ownExec,
+    promiseCallee.OnSettledOn(ownExec,
         [&bDeliveredAfterStop](common::async::CPromiseResult)
         {
             bDeliveredAfterStop.store(true);
-        }));
+        });
     ASSERT_TRUE(WaitFor(
         [&bDeliveredAfterStop]()
         {

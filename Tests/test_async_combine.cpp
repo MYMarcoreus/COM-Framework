@@ -176,27 +176,6 @@ TEST(Combine_AllCountsAlreadySettledChild)
     execAgg.Stop();
 }
 
-TEST(Combine_AllInvalidChildCountsAsStopped)
-{
-    common::async::CAsyncExecutor exec(1), execAgg(1);
-    exec.Start();
-    execAgg.Start();
-
-    std::shared_ptr<CCombineCtx> spCtx = std::make_shared<CCombineCtx>();
-    const common::async::CPromise<CCombineCtx> pA = exec.NewPromise(spCtx, MakeBranchStep("A"), ASYNC_LOC);
-    const common::async::CPromise<CCombineCtx> pInvalid;  // 默认构造：无效句柄（永远不会落定）
-
-    const common::async::CPromiseResult resultAll = execAgg.WhenAll(spCtx, pA, pInvalid).AwaitFor(3000);
-    ASSERT_TRUE(resultAll.IsRejected());
-    ASSERT_EQ(resultAll.Code(), common::async::kStopped);  // 无效子 promise → kStopped（不是永久 pending）
-
-    // allSettled 不看成败：无效子 promise 也只算「已落定」。
-    ASSERT_TRUE(execAgg.WhenAllSettled(spCtx, pA, pInvalid).AwaitFor(3000).IsFulfilled());
-
-    exec.Stop();
-    execAgg.Stop();
-}
-
 // ==================== WhenAllSettled ====================
 
 TEST(Combine_AllSettledIgnoresRejects)

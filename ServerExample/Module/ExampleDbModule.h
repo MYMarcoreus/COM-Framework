@@ -100,9 +100,6 @@ private:
     // 绑定成员函数为处理器（处理器内可直接访问表数据）。
     Handler BindHandler(HandlerMemberFn pfnHandler);
 
-    // 创建无效 promise（模块未启动 / 入参为空时返回，调用方 Await() 得 kStopped）。
-    common::async::CPromise<CUserTableOp> MakeInvalidPromise() const;
-
     std::unique_ptr<common::async::CAsyncExecutor> m_pExecutor;  ///< 自建执行器（promise 调度）。
     std::map<std::uint64_t, CUserRecord> m_mapRows;              ///< 表数据（m_mutex 保护）。
     mutable std::mutex m_mutex;                                  ///< 保护表数据。

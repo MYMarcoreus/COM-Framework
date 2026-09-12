@@ -202,7 +202,7 @@ TEST(SettledNotice_DeliveredEvenIfExecutorStopped)
     // 在「已 settled + 执行器不可用」的层上注册通知：必须被送达
     int nNotify = 0;
     std::thread::id idNotified;
-    const bool bOk = promise.OnSettled(
+    promise.OnSettled(
         [&nNotify, &idNotified](common::async::CPromiseResult r)
         {
             ++nNotify;
@@ -210,7 +210,6 @@ TEST(SettledNotice_DeliveredEvenIfExecutorStopped)
             ASSERT_TRUE(r.IsRejected());  // 通知里能看到真实结果
         });
 
-    ASSERT_TRUE(bOk);                       // 不再返回 false（唯一 false 是无效 promise）
     ASSERT_EQ(nNotify, 1);                  // 回调确实执行了
     ASSERT_TRUE(idNotified == idCaller);    // 就地送达：在调用线程上执行
     ASSERT_EQ(spCtx->nStepRuns.load(), 0);  // 仍然没有跑"层"（层不被就地执行）
@@ -236,14 +235,13 @@ TEST(SettledNotice_ManyRegistrationsAllDelivered)
     {
         std::string strSeq = std::to_string(i);
         strSeq += ';';
-        const bool bOk = promise.OnSettled(
+        promise.OnSettled(
             [&nNotify, &strOrder, &idNotified, strSeq](common::async::CPromiseResult /*r*/)
             {
                 ++nNotify;
                 strOrder += strSeq;
                 idNotified = std::this_thread::get_id();
             });
-        ASSERT_TRUE(bOk);
     }
 
     ASSERT_EQ(nNotify, nCount);
@@ -255,22 +253,6 @@ TEST(SettledNotice_ManyRegistrationsAllDelivered)
         strExpected += ';';
     }
     ASSERT_EQ(strOrder, strExpected);  // 注册顺序 = 送达顺序
-}
-
-/// @brief 唯一仍返回 false 的情形：无效 promise（未绑定执行器）。
-TEST(SettledNotice_InvalidPromiseReturnsFalse)
-{
-    int nNotify = 0;
-    common::async::CPromise<CDeliveryCtx> promiseInvalid;  // 默认构造：无效
-    const bool bOk = promiseInvalid.OnSettled(
-        [&nNotify](common::async::CPromiseResult /*r*/)
-        {
-            ++nNotify;
-        });
-
-    ASSERT_TRUE(bOk == false);
-    ASSERT_EQ(nNotify, 0);
-    ASSERT_TRUE(promiseInvalid.Await().IsRejected());  // 无效 promise：Await 返回 kStopped
 }
 
 /// @brief 关键回归：桥接里**漏检**返回值（问题 ② 的原形状）→ 链以 kStopped 拒绝，不死等。

@@ -139,6 +139,8 @@ struct CInlineGuard
 inline const std::shared_ptr<CExecutorHandle>& ResolveExecHandle(HandlerAffinity eAffinity,
     const std::shared_ptr<CExecutorHandle>& pTarget, const std::shared_ptr<CExecutorHandle>& pChainHandle)
 {
+    // 注意：pTarget 为空是**合法**的（= 没指定目标 → 退回本链执行器），
+    // 所以这里不能断言非空 —— 调用方（如延迟链的 Start）会借此解析「未指定」的形态。
     return (eAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pChainHandle;
 }
 
@@ -295,7 +297,7 @@ private:
 // 聚合链，与 `NewPromise` / `BuildPromise` 同族的起链入口（完整语义文档见本节各入口定义）。
 //
 // 为什么实现能放在本文件（这里只前置声明了 `CPromise`）：对 `CPromise` 的每一处使用都落在
-// **模板的依赖上下文**里（`promiseChild.IsValid()` / `OnSettled(...)`、限定名
+// **模板的依赖上下文**里（`promiseChild.OnSettled(...)`、限定名
 // `CPromise<TContext>::New`、按值返回尚不完整的 `CPromise<TContext>`）—— 名字查找与类型完备性
 // 检查都推迟到**实例化点**，而实例化发生在调用方 TU（那时它必然已经 include 了 `Promise.h`）。
 //
@@ -448,21 +450,12 @@ private:
 ///
 /// 只登记回调、不阻塞任何线程（子 promise 已落定时由 `OnSettled` 的送达保证立即触发）。
 ///
-/// 无效子 promise（未绑定执行器，例如默认构造的句柄）**按「已拒绝 kStopped」计入** ——
-/// 它永远不会落定，若不这样处理，聚合链会永久 pending（`Await()` 死等）。
-///
 /// @param pGather 聚合状态。
-/// @param promiseChild 子 promise（上下文类型任意）。
+/// @param promiseChild 子 promise（上下文类型任意；恒有效）。
 template <typename TChildContext>
 void BindChildGather(const std::shared_ptr<CGatherState>& pGather, const CPromise<TChildContext>& promiseChild)
 {
-    if (!promiseChild.IsValid())
-    {
-        pGather->OnChildSettled(CPromiseResult::Reject(kStopped));
-        return;
-    }
-
-    // OnSettled 保证送达（仅无效 promise 返回 false，上面已判过）→ 无需检查返回值。
+    // 通知恒送达（没有返回值）→ 子链落定即计入聚合。
     promiseChild.OnSettled(
         [pGather](CPromiseResult childResult)
         {
@@ -578,7 +571,7 @@ CPromise<TContext> Gather(
 /// 语义：
 ///  - 全部兑现 → 聚合兑现；
 ///  - **任一拒绝 → 立即以该拒绝码拒绝**（对齐 JS：及时失败；其余分支继续跑完，结果被忽略）；
-///  - 已落定的子 promise 直接计入；无效子 promise（未绑定执行器）视为已拒绝 `kStopped`；
+///  - 已落定的子 promise 直接计入；
 ///  - 一处子 promise 都没给 → 立即兑现。
 ///
 /// @note 本执行器只用于**聚合 promise 自己的层**（`.Then(...)` 等）；各子 promise 仍跑在
@@ -603,7 +596,7 @@ CPromise<TContext> CAsyncExecutor::WhenAll(const std::shared_ptr<TContext>& spCo
 /// 各分支的成败在本框架里没有值通道，调用方自己读：此时各子句柄都已落定，
 /// `child.Await()` 会立即返回该分支的 `CPromiseResult`（不阻塞），或事先挂 `OnSettled`。
 ///
-/// @note 其余语义（跨上下文类型、无效子 promise 计为 `kStopped`、空集合立即兑现）同 `WhenAll`。
+/// @note 其余语义（跨上下文类型、空集合立即兑现）同 `WhenAll`。
 ///
 /// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
 /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。

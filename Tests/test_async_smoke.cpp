@@ -475,7 +475,7 @@ TEST(Smoke_OnSettledSideChannel)
     std::atomic<int> nFail(0);
     common::async::CPromise<CSmokeCtx> p =
         exec.NewPromise(spCtx, &StepFail, ASYNC_LOC).Catch(&StepCatchPass, ASYNC_LOC);
-    ASSERT_TRUE(p.OnSettled(
+    p.OnSettled(
         [&nOk, &nFail](common::async::CPromiseResult r)
         {
             if (r.IsRejected())
@@ -486,15 +486,15 @@ TEST(Smoke_OnSettledSideChannel)
             {
                 nOk.fetch_add(1);
             }
-        }));
-    ASSERT_TRUE(p.OnSettled(
+        });
+    p.OnSettled(
         [&nFail](common::async::CPromiseResult r)
         {
             if (r.IsRejected())
             {
                 nFail.fetch_add(1);
             }
-        }));
+        });
 
     const common::async::CPromiseResult r = p.Await();
     ASSERT_TRUE(r.IsRejected());
@@ -658,7 +658,6 @@ TEST(Smoke_PromiseIntrospection)
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
     common::async::CPromise<CSmokeCtx> p = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC);
-    ASSERT_TRUE(p.IsValid());
     ASSERT_TRUE(p.GetContext() == spCtx);  // 全链共用同一实例
     const common::async::CPromiseResult r = p.Await();
     ASSERT_TRUE(p.IsSettled());

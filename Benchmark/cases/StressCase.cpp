@@ -90,14 +90,11 @@ inline void RunCoroStress(
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
         std::shared_ptr<StressCoro> pCoro = exec.CoStart<StressCoro>(spCtx);
         // 协程对象由框架自持弱引用保活；这里只挂完成通知用于计数。
-        if (!pCoro->AsPromise().OnSettled(
-                [&done](common::async::CPromiseResult)
-                {
-                    done.fetch_add(1, std::memory_order_release);
-                }))
-        {
-            done.fetch_add(1, std::memory_order_release);  // 注册失败（不应发生）：按已完成计
-        }
+        pCoro->AsPromise().OnSettled(
+            [&done](common::async::CPromiseResult)
+            {
+                done.fetch_add(1, std::memory_order_release);
+            });
     };
     benchmark::StressWindow(group, name, window, ms, startOne, done, note);
     exec.Stop();

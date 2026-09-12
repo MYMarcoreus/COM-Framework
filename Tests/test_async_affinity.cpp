@@ -237,7 +237,8 @@ private:
             spStock->nDelayMs = spCtx->nStockDelayMs;
 
             common::async::CPromise<CCalleeCtx> promiseStock = spStockModule->QueryStockAsync(spStock);
-            const bool bOk = promiseStock.OnSettled(
+            // 通知恒送达（没有返回值可检查）：子链落定后搬数据并收口本层。
+            promiseStock.OnSettled(
                 [spCtx, spStock, fnResolve, fnReject](common::async::CPromiseResult result)
                 {
                     // 通知（OnSettled）不迁移：本回调跑在被调模块线程上。
@@ -250,10 +251,6 @@ private:
                     spCtx->nStock = spStock->nAvail;
                     fnResolve();
                 });
-            if (!bOk)
-            {
-                fnReject(common::async::kStopped);
-            }
         };
         return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     }

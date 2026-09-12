@@ -19,7 +19,7 @@ WS_ROOT    := $(abspath $(MKFILE_DIR)/../..)
 PROJECT    := $(notdir $(ROOT))
 
 CXX      ?= g++
-CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -pthread
+CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -g -DNDEBUG -pthread
 # 构建模式（release / debug）：产物分目录 build/<模式>/（由 build.sh 传入）
 BUILD_MODE ?= release
 # 本项目各模块目录 + Common 各模块目录 + asio 子模块

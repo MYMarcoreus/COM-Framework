@@ -33,7 +33,8 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 | `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle`、`detail::IsInExecutorThread`、`detail::HandlerAffinity` / `ResolveExecHandle` / `ShouldInline` / `DispatchInlineOrPost`（**调度策略**：跑在哪条线程）、组合器 `detail::Gather*` |
 | `Promise.h` | `detail::CPromiseState`、`detail::CPromiseCore<TContext>`、`CPromise<TContext>`（**编排**：层语义 / 三态 / 桥接） |
 | `Common/Coroutine/Coroutine.h` | `CCoroutine<TContext>` + `CO_*` 宏（**独立目录**：顺序化是另一个关注点，只依赖 `Common/Async`） |
-| `Diagnostics.h/.cpp` | 诊断钩子 `DiagnosticHandler` / `SetDiagnosticHandler` / `ReportDiagnostic`（进程级单槽；promise / 协程 / 执行器共用） |
+| `Diagnostics.h/.cpp` | 诊断钩子 `DiagnosticHandler` / `SetDiagnosticHandler` / `ReportDiagnostic`（进程级单槽；promise / 协程 / 执行器共用；调试构建默认打印） |
+| `Common/Assert.h`（**全框架**） | `ASSERT` / `ASSERT_MSG` + 唯一调试判定 `FRAMEWORK_DEBUG`（见 §13） |
 
 ## 2. 为什么固定签名 + 共享上下文
 
@@ -234,7 +235,7 @@ result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownR
 - **不阻塞**：全程只登记回调，不 `Await()`、不占工作线程（单线程执行器也安全）；
 - 子 promise 的 settle 线程可能是**另一个模块的执行器线程** → 流程函数请按值捕获依赖与上下文，
   不要捕获本模块 `this`（这样流程是纯函数，任何线程上都安全）；
-- 工厂抛异常 → 本层 `Reject(kException)`；工厂返回无效 promise → 本层 `Reject(kStopped)`；
+- 工厂抛异常 → 本层 `Reject(kException)`（工厂**必须**给出子链，没有「返回空」这条路）；
   子 promise 的拒绝码**原样**成为本层拒绝码（后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
 - **保活**：子 promise 的最后一段由「上一段 handler 捕获下一段」链保活，本层 state 被子 promise
   的 `OnSettled` handler 捕获 —— 即使句柄被丢弃，在途的整条链仍安全跑完；
@@ -248,8 +249,7 @@ result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownR
 ```text
 ThenBridge(fnCreate, fnApply, loc)
   = ThenPromise([=](spSelf) {
-        child = fnCreate(spSelf);                    // ① 工厂：在轮到本层时起子链
-        if (!child.IsValid()) return CPromise();     //    → Adopt 会以 kStopped 收口本层
+        child = fnCreate(spSelf);                    // ① 工厂：在轮到本层时起子链（必须给出子链）
         return NewFromHandle(本链执行器句柄, spSelf, // ② 造一条「由外部 settle」的本上下文 promise
             [=](fnResolve, fnReject) {
                 child.OnSettled([=](r) {             // ③ 子链落定 → 搬数据 → 收口（OnSettled 保证送达）
@@ -277,8 +277,8 @@ ThenBridge(fnCreate, fnApply, loc)
 
 - **聚合状态是纯状态**：`detail::CGatherState` 不碰上下文类型（只关心子 promise 的成败与拒绝码），
   所以**跨模块 / 跨上下文类型**的分支能汇到同一个聚合上，无需额外机制；
-- **登记路径只有一条**：`detail::BindChildGather` 给每个子 promise 挂 `OnSettled`（送达保证），
-  已落定的子 promise 直接计入；无效子 promise 按已拒绝 `kStopped` 计（否则聚合永久 pending）；
+- **登记路径只有一条**：`detail::BindChildGather` 给每个子 promise 挂 `OnSettled`（恒送达），
+  已落定的子 promise 直接计入；
 - **参数包摊平**：C++11 的 lambda 捕获列表不能展开参数包，所以先用
   `detail::AppendGatherBindings` 把每个子 promise 变成一个「登记动作」（标量 / `std::vector` 两个重载），
   再由聚合链的 executor 逐个执行；
@@ -381,7 +381,7 @@ if (!DispatchInlineOrPost(eAffinity, pExec, std::move(fnRun)))
 | `exec.NewPromise(spCtx, executor)` 的 executor 抛异常 | `RunExternalExecutor` 兜住 → `kException` | 不变 |
 | `Await()` 永久挂住 | 只能靠文档警告 | 新增 `AwaitFor(ms)`（超时返回 `kStopped`，不落定、不取消链） |
 | 层内 / 本链线程上 `Await()` 未落定的层（必死锁） | 无任何提示 | `ReportBlockingRisk()` 报诊断（**不硬失败**：等「别的线程 settle 的层」是合法的） |
-| 无效 promise 上挂层 | 静默返回无效句柄 | 报诊断（链根本不会跑，静默最难查） |
+| 调用方误用（未传上下文 / 模块未启动 / 对空上下文起链） | 运行期崩在别处，难定位 | `ASSERT` 在开发期直接报位置（见 §13）；无效句柄态已从类型上消除 |
 
 诊断出口（`Async/Diagnostics.cpp`，进程级单槽 + 锁；处理器自身抛异常也会被忽略）：
 
@@ -454,6 +454,15 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
    权衡：懒创建能让调用方少写一行 `make_shared`，代价却是——`TContext` 必须可默认构造；
    核心要留 mutable 成员 + mutex；`Context()` 每层多一次空判（热路径）。
    本框架的取舍基准是：**能用编译期约束表达的，就不要留成运行时的分支持久态**。
+10. **取消「无效 promise」这一态**：`CPromise` 没有默认构造、没有 `IsValid()`、
+    `OnSettled` / `OnSettledOn` 也不再有返回值。
+    权衡：默认构造方便了「先声明后赋值」（改成 `shared_ptr` 装句柄即可，样例已改），
+    换来的是一整类运行时分支的消失：`Append` / `ThenPromise` 的无效处理、两条诊断文案、
+    2 处 `OnSettled` 空判、组合器的「无效子 promise 计 kStopped」特例、
+    以及调用方到处要写的 `if (!bOk)`。详见 §13。
+11. **契约用断言表达，不用运行时宽容**：调用方违约（未传上下文、模块未启动、参数为空）
+    在开发期用 `ASSERT` 直接报位置；发布构建下这些断言零开销。
+    **业务错误仍走拒绝码**，两者不要混。
 
 ## 11. 测试与基准
 
@@ -541,6 +550,30 @@ ASSERT_TRUE(counter.Counts() <= 2 * nLayers + 8);
 2. **任务体去分配（P4）**：跑链的 1 次/层来自 `std::function<void()>` 任务类型，
    换成 16 字节可调用体（核心指针 + 状态指针）可再去掉一次/层；
 3. 取消（`kCancelled` + 令牌沿层 / 组合器 / 协程穿透）、诊断带上注册点 `CSourceLoc`。
+
+## 13. 契约断言（ASSERT）
+
+断言是**全框架通用**设施（`Common/Assert.h`，不只异步用）：用法、开关（`FRAMEWORK_DEBUG`）、
+该用 / 不该用的判断标准与完整使用点清单见 [assert-usage.md](assert-usage.md)；
+本节只记**异步框架自身的断言点**（设计意图）。
+
+```cpp
+#include "Assert.h"
+
+ASSERT(pCore != nullptr);                                        // 内部不变量
+ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  // 调用前提
+```
+
+| 位置 | 断言 | 理由 |
+| --- | --- | --- |
+| `CPromiseCore` 构造 | `spContext != nullptr` | 上下文强制传入（§10 第 9 条） |
+| `CPromise` 私有构造 | `pCore != nullptr` | 句柄恒有核心（无无效句柄态） |
+| `MakeHandlerRunner` / `RunHandler` / `PostHandler` | `spContext` / `pState` 非空 | 内部调用不变量 |
+| `CPromise::Start` / `IsStarted` / `RegisterFirstLayer` / `Append`（延迟分支） | 延迟链的载荷非空 | 「有载荷」是延迟链的定义 |
+| `CPromiseResult::Reject` | `nCode != kFulfilled` | 用 0 当拒绝码会把失败当成功 |
+| `CCoroutine` 构造 | `spContext != nullptr` | 与 promise 一致 |
+| `CCoroutine::AsPromise` / `AwaitWait` / `AwaitEach` | `m_pExec != nullptr` | 必须在 `CoStart` 之后调用 |
+| `CExampleDbModule` / `CExampleAsyncModule`（业务侧样例） | 模块已启动、参数非空 | 样例示范「业务契约也用断言钉住」 |
 
 ## 附：代码阅读顺序
 
