@@ -416,6 +416,27 @@ inline const std::shared_ptr<CExecutorHandle>& ResolveExecHandle(int nAffinity,
     return (nAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pChainHandle;
 }
 
+/// @brief 本层处理器是否跳过（JS 三态语义：then 被拒 / catch 已兑现 → 直接透传上一层结果）。
+///
+/// @param nMode 处理器模式（then / catch / finally）。
+/// @param upResult 上一层结果。
+/// @return true = 本层跳过（把 upResult 原样交给下一层）。
+inline bool ShouldPassThrough(int nMode, const CPromiseResult& upResult)
+{
+    return (nMode == kModeThen && upResult.IsRejected()) || (nMode == kModeCatch && upResult.IsFulfilled());
+}
+
+/// @brief 本层对外的最终结果（JS 三态语义：finally 忽略处理器返回值，原样透传上一层结果）。
+///
+/// @param nMode 处理器模式。
+/// @param upResult 上一层结果。
+/// @param ownResult 本层处理器返回的结果。
+/// @return then / catch 取 ownResult；finally 取 upResult。
+inline CPromiseResult ResolveLayerResult(int nMode, const CPromiseResult& upResult, const CPromiseResult& ownResult)
+{
+    return (nMode == kModeFinally) ? upResult : ownResult;
+}
+
 /// @brief 构造「执行本层处理器」的任务体。
 ///
 /// 任务体只捕获**它真正需要的东西**：共享上下文（handler 的第二参数）与本层状态（写回结果）。
@@ -439,9 +460,8 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spConte
         CPromiseResult result;
         try
         {
-            const CPromiseResult own = fnHandler(upResult, spContext);
-            // finally：忽略处理器返回的成败，原样透传上一层结果（JS: finally 不改变结果）。
-            result = (nMode == kModeFinally) ? upResult : own;
+            const CPromiseResult ownResult = fnHandler(upResult, spContext);
+            result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownResult，原样透传。
         }
         catch (...)
         {
@@ -845,8 +865,7 @@ public:
         // ① 尚未起链：本层即首层（起点结果视为已兑现），投递执行（不在起链线程上跑）。
         if (m_pState == nullptr)
         {
-            m_pState = std::make_shared<detail::CPromiseState>();
-            m_pState->SetLoc(loc);
+            *this = NewLayer(loc);  // 首层：本次调用即本链的第一层。
             const std::shared_ptr<detail::CPromiseState> pState = m_pState;
             std::function<void()> fnAdopt = [pCore, pState, fnFactory]()
             {
@@ -856,42 +875,37 @@ public:
             // 延迟启动链（BuildPromise）：只登记，等 Start() 再投递。
             if (pCore->Launch()->bDeferred)
             {
-                pCore->Launch()->pFirst = pState;
-                pCore->Launch()->fnLaunch = fnAdopt;
+                RegisterFirstLayer(fnAdopt);
                 return *this;
             }
 
-            if (!detail::PostToHandle(pCore->Handle(), std::move(fnAdopt)))
+            if (!detail::PostToHandle(pCore->Handle(), fnAdopt))
             {
-                pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用。
+                SettleStopped(pState);  // 执行器不可用。
             }
             return *this;
         }
 
         // ② 已起链：追加一层，等子 promise settle 后收口本层。
-        CPromise promiseNext;
-        promiseNext.m_pCore = m_pCore;
-        promiseNext.m_pState = std::make_shared<detail::CPromiseState>();
+        CPromise promiseNext = NewLayer(loc);
         const std::shared_ptr<detail::CPromiseState> pNextState = promiseNext.m_pState;
-        pNextState->SetLoc(loc);
 
         const std::shared_ptr<detail::CPromiseState> pUpState = m_pState;
-        const bool bOk =
-            pUpState->AddHandler(pCore->Handle(),
-                                 [pCore, pNextState, fnFactory](const CPromiseResult& upResult)
-                                 {
-                                     if (upResult.IsRejected())
-                                     {
-                                         pNextState->Settle(upResult);  // 上层被拒绝：失败即停（与 Then 一致）。
-                                         return;
-                                     }
-                                     Adopt(pCore, pNextState, fnFactory);
-                                 });
+        const bool bOk = pUpState->AddHandler(pCore->Handle(),
+                                              [pCore, pNextState, fnFactory](const CPromiseResult& upResult)
+                                              {
+                                                  if (upResult.IsRejected())
+                                                  {
+                                                      pNextState->Settle(upResult);  // 失败即停（与 Then 一致）。
+                                                      return;
+                                                  }
+                                                  Adopt(pCore, pNextState, fnFactory);
+                                              });
 
         if (!bOk)
         {
             // 上一层已 settled 但执行器不可用：本层无法执行，以拒绝结束（下游继续透传）。
-            pNextState->Settle(CPromiseResult::Reject(kStopped));
+            SettleStopped(pNextState);
         }
         return promiseNext;
     }
@@ -932,29 +946,7 @@ public:
             PromiseExecutor fnExecutor =
                 [promiseChild, fnApply, spSelf](const ResolveFn& fnResolve, const RejectFn& fnReject)
             {
-                // 子链落定 → 搬数据 → 收口本层；OnSettled 保证送达（此处恒返回 true，不需检查）。
-                promiseChild.OnSettled(
-                    [promiseChild, fnApply, spSelf, fnResolve, fnReject](CPromiseResult childResult)
-                    {
-                        if (childResult.IsRejected())
-                        {
-                            fnReject(childResult.Code());  // 子链拒绝：原样透传拒绝码。
-                            return;
-                        }
-                        try
-                        {
-                            if (fnApply)
-                            {
-                                fnApply(spSelf, promiseChild.GetContext());  // 搬到本上下文（跨线程：见 @warning）。
-                            }
-                        }
-                        catch (...)
-                        {
-                            fnReject(kException);  // 搬运里抛异常 → 本层被拒绝（不向外抛）。
-                            return;
-                        }
-                        fnResolve();
-                    });
+                BindChildSettle(promiseChild, fnApply, spSelf, fnResolve, fnReject);  // 规则只有一份。
             };
             return NewFromHandle(pCore->Handle(), spSelf, fnExecutor, loc);
         };
@@ -1034,17 +1026,7 @@ public:
     /// @return 本层最终结果；无效 promise 返回被拒绝（kStopped）。
     CPromiseResult Await() const
     {
-        if (m_pState == nullptr)
-        {
-            return CPromiseResult::Reject(kStopped);  // 无效 promise：无结果可等。
-        }
-        ReportBlockingRisk();  // 死锁预警（不改变行为，只报告）。
-        // 延迟链未启动 → 自动启动（兜底：漏写 Start() 也不会死等）。
-        if (m_pCore != nullptr && m_pCore->Launch()->bDeferred && !m_pCore->Launch()->bStarted)
-        {
-            const_cast<CPromise*>(this)->Start();
-        }
-        return m_pState->Await();
+        return WaitInternal(-1);  // < 0 = 无限等待。
     }
 
     /// @brief await（**带超时**）：最多等 nTimeoutMs 毫秒，超时不再阻塞。
@@ -1061,16 +1043,7 @@ public:
     /// @return 本层最终结果；超时返回被拒绝（kStopped）。
     CPromiseResult AwaitFor(int nTimeoutMs) const
     {
-        if (m_pState == nullptr)
-        {
-            return CPromiseResult::Reject(kStopped);  // 无效 promise：无结果可等。
-        }
-        ReportBlockingRisk();  // 死锁预警（不改变行为，只报告）。
-        if (m_pCore != nullptr && m_pCore->Launch()->bDeferred && !m_pCore->Launch()->bStarted)
-        {
-            const_cast<CPromise*>(this)->Start();  // 与 Await() 一样自动启动延迟链。
-        }
-        return m_pState->AwaitFor(nTimeoutMs);
+        return WaitInternal(nTimeoutMs);
     }
 
     /// @brief 本层是否已 settled（兑现或拒绝）。
@@ -1120,6 +1093,111 @@ private:
                 "Await(): 层内（或本链执行器线程上）阻塞等待未落定的层 → 极可能死锁；"
                 "请改用 ThenPromise / ThenBridge / OnSettled 回调续跑 / 协程 CO_AWAIT，或用 AwaitFor(ms) 兜底");
         }
+    }
+
+    /// @brief 内部：建一层新状态（与当前层**共享核心**：同一上下文 + 同一执行器）。
+    ///
+    /// 两种用法：追加层 `CPromise next = NewLayer(loc);`；首层 `*this = NewLayer(loc);`
+    /// （链的「建 state + 记注册点」只有这一处）。
+    ///
+    /// @param loc 注册点源码位置。
+    /// @return 指向新层的句柄（pending）。
+    CPromise NewLayer(const CSourceLoc& loc)
+    {
+        CPromise promise;
+        promise.m_pCore = m_pCore;
+        promise.m_pState = std::make_shared<detail::CPromiseState>();
+        promise.m_pState->SetLoc(loc);
+        return promise;
+    }
+
+    /// @brief 内部：把「本层跑不了」收口为被拒绝（`kStopped`）——「层」唯一的失败收口点。
+    ///
+    /// 触发：上一层已 settled 但目标执行器不可用（被停 / 拒绝投递），或工厂没给出可等待的子链。
+    /// 注意别当成 `kRejected`：语义不同。
+    ///
+    /// @param pState 本层状态。
+    static void SettleStopped(const std::shared_ptr<detail::CPromiseState>& pState)
+    {
+        pState->Settle(CPromiseResult::Reject(kStopped));
+    }
+
+    /// @brief 内部：造一个「直接 settle 指定层」的任务体（延迟链的首层动作用）。
+    ///
+    /// @param pState 目标层状态。
+    /// @param result 落定结果。
+    /// @return 任务体。
+    static std::function<void()> MakeSettleRunner(const std::shared_ptr<detail::CPromiseState>& pState,
+                                                  const CPromiseResult& result)
+    {
+        return [pState, result]()
+        {
+            pState->Settle(result);
+        };
+    }
+
+    /// @brief 内部：登记「延迟链的首层动作」（`Append` / `ThenPromise` 共用）。
+    ///
+    /// @param fnLaunch 首层启动动作（`Start()` 时投递到执行器执行）。
+    void RegisterFirstLayer(const std::function<void()>& fnLaunch)
+    {
+        m_pCore->Launch()->pFirst = m_pState;
+        m_pCore->Launch()->fnLaunch = fnLaunch;
+    }
+
+    /// @brief 内部：阻塞等待的统一入口（`Await` / `AwaitFor` 共用）：无效句柄拒绝 → 预警 → 自动启动。
+    ///
+    /// @param nTimeoutMs 超时毫秒数（< 0 = 无限等待）。
+    /// @return 本层最终结果；超时 / 无效句柄返回被拒绝（kStopped）。
+    CPromiseResult WaitInternal(int nTimeoutMs) const
+    {
+        if (m_pState == nullptr)
+        {
+            return CPromiseResult::Reject(kStopped);  // 无效 promise：无结果可等。
+        }
+        ReportBlockingRisk();  // 死锁预警（不改变行为，只报告）。
+        if (m_pCore != nullptr && m_pCore->Launch()->bDeferred && !m_pCore->Launch()->bStarted)
+        {
+            const_cast<CPromise*>(this)->Start();  // 兜底：漏写 Start() 也不会死等。
+        }
+        return m_pState->AwaitFor(nTimeoutMs);  // AwaitFor 自行处理「< 0 = 无限等待」。
+    }
+
+    /// @brief 内部：把「子链落定 → 搬数据 → 收口」登记到子链上（`ThenBridge` 的唯一规则）。
+    ///
+    /// 子链被拒绝 → `fnReject(拒绝码)`；子链兑现 → `fnApply(本上下文, 子链上下文)` 后 `fnResolve()`；
+    /// 搬运抛异常 → `fnReject(kException)`。子链上下文在本层线程上取好，避免搬运回调里再访子链。
+    ///
+    /// @param promiseChild 要等待的子链（上下文类型任意）。
+    /// @param fnApply 数据搬运：入参为本流程上下文与子链上下文。
+    /// @param spSelf 本流程共享上下文（交给 fnApply）。
+    /// @param fnResolve 子链兑现后的收口动作。
+    /// @param fnReject 失败收口动作（子链拒绝码 / 搬运异常的 kException）。
+    template <class TChildContext, class TFnApply>
+    static void BindChildSettle(const CPromise<TChildContext>& promiseChild, TFnApply fnApply,
+                                const std::shared_ptr<TContext>& spSelf, const ResolveFn& fnResolve,
+                                const RejectFn& fnReject)
+    {
+        const std::shared_ptr<TChildContext> spChildCtx = promiseChild.GetContext();  // 有效 promise 恒非空。
+        promiseChild.OnSettled(
+            [spChildCtx, fnApply, spSelf, fnResolve, fnReject](CPromiseResult childResult)
+            {
+                if (childResult.IsRejected())
+                {
+                    fnReject(childResult.Code());  // 子链拒绝：拒绝码原样透传。
+                    return;
+                }
+                try
+                {
+                    fnApply(spSelf, spChildCtx);  // 搬数据（跑在子链结算线程上，见 ThenBridge 的 @warning）。
+                }
+                catch (...)
+                {
+                    fnReject(kException);  // 搬运抛异常 → 本层被拒绝（不向外抛）。
+                    return;
+                }
+                fnResolve();
+            });
     }
 
     /// @brief 内部：用执行器**句柄**创建「由外部兑现 / 拒绝」的 promise（`New` 与 `ThenBridge` 共用）。
@@ -1174,7 +1252,7 @@ private:
 
         if (!promiseChild.IsValid())
         {
-            pState->Settle(CPromiseResult::Reject(kStopped));  // 工厂没给出可等待的子 promise。
+            SettleStopped(pState);  // 工厂没给出可等待的子 promise。
             return;
         }
 
@@ -1256,27 +1334,21 @@ private:
         //    首层总是投递（起链线程不跑业务代码）；kAffinityExecutor 时投递到指定执行器。
         if (m_pState == nullptr)
         {
-            m_pState = std::make_shared<detail::CPromiseState>();
-            m_pState->SetLoc(loc);
+            *this = NewLayer(loc);  // 首层：本次调用即本链的第一层。
 
             // 延迟启动链（BuildPromise）：只登记首层动作，等 Start() 再投递。
             if (m_pCore->Launch()->bDeferred)
             {
-                const std::shared_ptr<detail::CPromiseState> pFirst = m_pState;
-                m_pCore->Launch()->pFirst = pFirst;
                 m_pCore->Launch()->pTarget = (nAffinity == detail::kAffinityExecutor) ? pTarget : nullptr;
                 if (nMode == detail::kModeCatch)
                 {
                     // catch 作为首层：起点已兑现，没有可处理的拒绝 → 启动即 settled。
-                    m_pCore->Launch()->fnLaunch = [pFirst]()
-                    {
-                        pFirst->Settle(CPromiseResult::Resolve());
-                    };
+                    RegisterFirstLayer(MakeSettleRunner(m_pState, CPromiseResult::Resolve()));
                 }
                 else
                 {
-                    m_pCore->Launch()->fnLaunch = detail::MakeHandlerRunner(m_pCore->Context(), pFirst, fnHandler,
-                                                                            CPromiseResult::Resolve(), nMode);
+                    RegisterFirstLayer(detail::MakeHandlerRunner(m_pCore->Context(), m_pState, fnHandler,
+                                                                 CPromiseResult::Resolve(), nMode));
                 }
                 return *this;
             }
@@ -1294,11 +1366,8 @@ private:
         }
 
         // ② 已起链：追加一层（与上一层共享核心：同一上下文 + 同一执行器）。
-        CPromise promiseNext;
-        promiseNext.m_pCore = m_pCore;
-        promiseNext.m_pState = std::make_shared<detail::CPromiseState>();
+        CPromise promiseNext = NewLayer(loc);
         const std::shared_ptr<detail::CPromiseState> pNextState = promiseNext.m_pState;
-        pNextState->SetLoc(loc);
 
         const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = m_pCore;
         const std::shared_ptr<detail::CPromiseState> pUpState = m_pState;
@@ -1308,27 +1377,19 @@ private:
             pExec,
             [pCore, pNextState, fnHandler, nMode, nAffinity, pTargetExec](const CPromiseResult& upResult)
             {
-                // then：上一层被拒绝 → 失败即停（本层不执行，拒绝原因原样交给下一层）。
-                if (nMode == detail::kModeThen && upResult.IsRejected())
+                // 三态语义：该跳过的层直接透传上一层结果（then 被拒 / catch 已兑现）。
+                if (detail::ShouldPassThrough(nMode, upResult))
                 {
                     pNextState->Settle(upResult);
                     return;
                 }
-                // catch：上一层已兑现 → 无事可做，原样交给下一层。
-                if (nMode == detail::kModeCatch && upResult.IsFulfilled())
-                {
-                    pNextState->Settle(upResult);
-                    return;
-                }
-
-                // finally：无论成败都执行（但忽略返回值）；then / catch：执行本层处理器。
                 pCore->RunHandler(pNextState, fnHandler, upResult, nMode, nAffinity, pTargetExec);
             });
 
         if (!bOk)
         {
             // 上一层已 settled 但目标执行器不可用：本层无法执行，以拒绝结束（下游继续透传）。
-            pNextState->Settle(CPromiseResult::Reject(kStopped));
+            SettleStopped(pNextState);
         }
         return promiseNext;
     }

@@ -160,29 +160,34 @@ extern struct CLaunchState { bool bDeferred; bool bStarted; std::function<void()
 
 ## 6. 处理器模式分派（then / catch / finally）
 
-`Append(handler, loc, nMode)` 是 `Then` / `Catch` / `Finally` 的共同实现，差异只在续接分派：
+三态语义只有两个集中点（纯函数，`Tests/test_async_layer_rules.cpp` 直测它们）：
+
+```cpp
+// Common/Async/Promise.h（detail）
+bool ShouldPassThrough(int nMode, const CPromiseResult& up);        // 本层跳过？→ 把 up 原样交给下一层
+CPromiseResult ResolveLayerResult(int nMode, const CPromiseResult& up, const CPromiseResult& own);
+```
+
+`Append(handler, loc, nMode)` 是 `Then` / `Catch` / `Finally` 的共同实现，续接处不再写三态判断：
 
 ```cpp
 [pCore, pNextState, fnHandler, nMode](const CPromiseResult& upResult)
 {
-    // then：上一层被拒绝 → 失败即停（本层不执行，拒绝原因原样交给下一层）
-    if (nMode == detail::kModeThen && upResult.IsRejected())
-    { pNextState->Settle(upResult); return; }
-
-    // catch：上一层已兑现 → 无事可做，原样交给下一层
-    if (nMode == detail::kModeCatch && upResult.IsFulfilled())
-    { pNextState->Settle(upResult); return; }
-
-    // finally：无论成败都执行（但忽略返回值）；then / catch：执行本层处理器
+    // 该跳过的层直接透传（then 被拒 / catch 已兑现）——规则见 ShouldPassThrough
+    if (detail::ShouldPassThrough(nMode, upResult))
+    {
+        pNextState->Settle(upResult);
+        return;
+    }
     pCore->RunHandler(pNextState, fnHandler, upResult, nMode);
 }
 ```
 
-处理器执行体（`MakeHandlerRunner`）里对 `finally` 做了收尾处理：
+处理器执行体（`MakeHandlerRunner`）里本层结果也只委托一句：
 
 ```cpp
-const CPromiseResult own = fnHandler(upResult, pCore->Context());
-result = (nMode == kModeFinally) ? upResult : own;   // finally 不改变结果
+const CPromiseResult ownResult = fnHandler(upResult, spContext);
+result = ResolveLayerResult(nMode, upResult, ownResult);   // finally 忽略 ownResult，原样透传
 ```
 
 - `then` / `catch`：返回值即本层结果 → 决定后续走向（catch 返回 `Resolve()` 即恢复）；
