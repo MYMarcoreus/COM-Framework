@@ -41,6 +41,10 @@
 //     => { … 回调里 resolve()/reject()… })   // 由外部（其他模块 / 回调）兑现或拒绝本 promise
 //   then(onFulfilled 返回 promise)  →  p.ThenPromise(FnFactory);   // 等子 promise（flatten）
 //   + 把子 promise 的数据搬回本上下文 →  p.ThenBridge(FnCreate, FnApply);  // 跨模块 / 跨上下文桥接（推荐）
+//   Promise.all([a, b])            →  exec.WhenAll(spCtx, a, b);         // 全部兑现才继续（任一拒绝立即失败）
+//   Promise.allSettled([a, b])     →  exec.WhenAllSettled(spCtx, a, b);  // 全部落定即继续（不看成败）
+//   Promise.race([a, b])           →  exec.WhenRace(spCtx, a, b);         // 首个落定者定结果
+//   Promise.any([a, b])            →  exec.WhenAny(spCtx, a, b);          // 首个兑现者定结果（全拒绝才失败）
 //
 // 语义要点：
 //  - then / catch / finally 都返回「指向新一层的 promise」（与 JS 一致，链式可读）；
@@ -69,6 +73,10 @@
 //    ③ ①② 合一、不用写样板的简写：`p.ThenBridge(fnCreate, fnApply, ASYNC_LOC)` ——
 //       fnCreate 在轮到本层时起子链，fnApply 在子链兑现时把它的上下文数据搬进本上下文。
 //    本流程的最终结果 = 含跨模块子流程的完整结果，全程不阻塞任何线程。
+//
+// ⑥ 汇聚多条并行分支（分叉 → 合流）：`exec.WhenAll(spCtx, pA, pB)` —— 组合器在**执行器**上
+//    （与 `exec.NewPromise` 同族的起链入口），另有 `exec.WhenAllSettled` / `WhenRace` / `WhenAny`
+//    （对齐 JS 同名 API）；子 promise 可跨上下文类型，聚合结果落定后照常 Then / Catch / Finally 继续。
 //
 // 并发注意：并行/嵌套的子 promise 若共用同一份共享上下文，请让各分支只写**不同字段**
 // （或自行加同步）—— 框架只保证「同一条链的层顺序执行」，跨链并发由调用方负责。
@@ -116,7 +124,10 @@
 //       （延迟启动）/ CPromiseCore（共享核心：上下文 + 执行器 + 启动状态，兼层调度策略 RunHandler /
 //       PostHandler）
 //   二、CPromise：对外句柄（构造 / Start / New / 层方法 / 结果与通知 / 内部实现）
-//   三、模板方法定义：CAsyncExecutor::NewPromise、BuildPromise
+//   三、模板方法定义（执行器入口）：NewPromise、BuildPromise
+//
+// 注：组合器（`exec.WhenAll` / `WhenAllSettled` / `WhenRace` / `WhenAny`）属于**执行器**的能力，
+// 其声明、实现与文档均在 "Async/AsyncExecutor.h"；`CPromise` 侧不提供成员形态。
 // ====================================================================
 
 namespace common {
@@ -1435,6 +1446,20 @@ private:
     std::shared_ptr<detail::CPromiseState> m_pState;           ///< 当前层对应的状态。
 };
 
+// ====================================================================
+// 三、模板方法定义（执行器入口）
+//
+// 这里放 `CAsyncExecutor` 模板成员的**定义**（声明与完整文档在 AsyncExecutor.h）：
+//  - 起链：`NewPromise` / `BuildPromise`。
+//
+// 为什么定义留在这里，而不是 AsyncExecutor.h：这两者都要**造 `CPromise` 实例**
+// （用到注入点 `CPromise::New` 等内部构造路径），与 promise 机制放在一起读才完整。
+// `CoStart`（定义在 Coroutine.h）同样遵循「声明在执行器头、实现跟着机制走」。
+//
+// 组合器（`WhenAll` 一族）不在此节：它们不碰 `CPromise` 的私有构造路径，
+// 声明与实现都在 AsyncExecutor.h（该文件里对 `CPromise` 的使用全落在模板的依赖上下文）。
+// ====================================================================
+
 /// @brief 起链实现（执行器入口，等价 JS `new Promise(executor)`）。
 ///
 /// @tparam TContext 上下文类型（由 spContext 推导）。
@@ -1442,10 +1467,6 @@ private:
 /// @param fnHandler 首层处理器（固定签名）。
 /// @param loc 注册点源码位置（可选）。
 /// @return 指向首层的 promise 句柄。
-// ====================================================================
-// 三、模板方法定义（执行器入口）
-// ====================================================================
-
 template <typename TContext>
 CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& spContext,
     typename CPromise<TContext>::ThenHandler fnHandler, const CSourceLoc& loc /* = CSourceLoc() */)
