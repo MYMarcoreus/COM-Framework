@@ -212,19 +212,20 @@ TEST(Promise_ThenSequence)
     exec.Stop();
 }
 
-/// @brief 懒创建上下文：链自己创建，外部取用后填初始数据。
-TEST(Promise_LazyContext)
+/// @brief 先建延迟链、再填初始数据、最后挂层启动（上下文由调用方强制传入，框架不代建）。
+TEST(Promise_BuildThenFillContext)
 {
     common::async::CAsyncExecutor exec(2);
     ASSERT_TRUE(exec.Start());
 
-    common::async::CPromise<CTestContext> chain = exec.BuildPromise<CTestContext>();  // 上下文懒创建
-    ASSERT_TRUE(chain.GetContext() != nullptr);                                       // 懒创建，恒非空
-    chain.GetContext()->nValue = 100;
+    std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
+    common::async::CPromise<CTestContext> chain = exec.BuildPromise<CTestContext>(spCtx);
+    ASSERT_TRUE(chain.GetContext() == spCtx);  // 恒非空，且就是传入的那个实例
+    chain.GetContext()->nValue = 100;          // 建链与挂层之间改数据：此刻链还没开跑
 
     common::async::CPromise<CTestContext> tail = chain.Then(&StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC);
-    ASSERT_TRUE(tail.Await().IsFulfilled());
-    ASSERT_EQ(chain.GetContext()->nValue, 111);
+    ASSERT_TRUE(tail.Await().IsFulfilled());  // 未显式 Start → Await 兜底启动
+    ASSERT_EQ(spCtx->nValue, 111);
     exec.Stop();
 }
 

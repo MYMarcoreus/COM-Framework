@@ -22,7 +22,7 @@
 //   ⑥  异常转拒绝           处理器内异常 → kException，不向调用方抛出
 //   ⑦  settled 通知         OnSettled（兑现 / 拒绝都触发一次）
 //   ⑧  分叉                 同一层注册多个 then，各自独立延续
-//   ⑨  上下文创建           链内懒创建 / 外部注入
+//   ⑨  上下文创建           调用方强制传入（先备数据、再挂层启动）
 //   ⑩  Post                 无返回值任务（fire-and-forget）
 //   ⑪  并发多条链           多线程并行 + 并发 Await 同一 promise
 //   ⑫  生命周期加固         执行器析构后 promise 仍安全完成
@@ -441,28 +441,30 @@ void DemoFork()
     exec.Stop();
 }
 
-// ⑨ 上下文创建：链内懒创建（GetContext）或外部注入（构造传入）
+// ⑨ 上下文创建：调用方强制传入（框架不代建）——先备好数据，再挂层启动
 void DemoContextCreation()
 {
     common::async::CAsyncExecutor exec(2);
     ASSERT(exec.Start());
 
-    // 9.1 链内懒创建：先取上下文填初始数据，再挂层
-    common::async::CPromise<CDemoContext> chain = exec.BuildPromise<CDemoContext>();
-    ASSERT(chain.GetContext() != nullptr);  // 懒创建，恒非空
-    chain.GetContext()->nBase = 20;
-    common::async::CPromise<CDemoContext> tail = chain.Then(&StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC);
-    ASSERT(tail.Await().IsFulfilled());
-    ASSERT(chain.GetContext()->nScaled == 60);
-
-    // 9.2 外部注入：链内所有层共用外部实例（不做拷贝）
+    // 9.1 延迟起链：备好上下文 → 建链 → 挂层 → Start
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    spCtx->nBase = 5;
-    common::async::CPromise<CDemoContext> chain2 = exec.BuildPromise<CDemoContext>(spCtx);
-    ASSERT(chain2.GetContext() == spCtx);
-    ASSERT(chain2.Then(&StepScale, ASYNC_LOC).Await().IsFulfilled());
-    ASSERT(spCtx->nScaled == 15);
-    std::printf("⑨ 上下文: 懒创建=%d 外部注入=%d\n", chain.GetContext()->nScaled, spCtx->nScaled);
+    spCtx->nBase = 20;
+    common::async::CPromise<CDemoContext> chain = exec.BuildPromise<CDemoContext>(spCtx);
+    ASSERT(chain.GetContext() == spCtx);  // 恒非空，且就是传入的那个实例
+    common::async::CPromise<CDemoContext> tail = chain.Then(&StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC);
+    chain.Start();  // 挂完层才开跑
+    ASSERT(tail.Await().IsFulfilled());
+    ASSERT(spCtx->nScaled == 60);
+
+    // 9.2 立即起链：同一个上下文实例贯穿全部层（不做拷贝）
+    std::shared_ptr<CDemoContext> spCtx2 = std::make_shared<CDemoContext>();
+    spCtx2->nBase = 5;
+    common::async::CPromise<CDemoContext> chain2 = exec.NewPromise(spCtx2, &StepScale, ASYNC_LOC);
+    ASSERT(chain2.GetContext() == spCtx2);
+    ASSERT(chain2.Await().IsFulfilled());
+    ASSERT(spCtx2->nScaled == 15);
+    std::printf("⑨ 上下文: 延迟起链=%d 立即起链=%d\n", spCtx->nScaled, spCtx2->nScaled);
     exec.Stop();
 }
 

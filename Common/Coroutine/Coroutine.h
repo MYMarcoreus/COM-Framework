@@ -109,8 +109,8 @@ public:
 
     /// @brief 创建协程（未绑定执行器；经 CAsyncExecutor::CoStart 启动）。
     ///
-    /// @param spContext 共享上下文（可为空：首次 GetContext() 时懒创建）。
-    explicit CCoroutine(const std::shared_ptr<TContext>& spContext = std::shared_ptr<TContext>())
+    /// @param spContext 共享上下文（**必传**：与 promise 一致，框架不做懒创建）。
+    explicit CCoroutine(const std::shared_ptr<TContext>& spContext)
         : m_pCore(
               std::make_shared<detail::CPromiseCore<TContext> >(std::shared_ptr<detail::CExecutorHandle>(), spContext)),
           m_pSegment(std::make_shared<detail::CPromiseState>()),
@@ -140,9 +140,9 @@ public:
         return m_pSegment->Await();
     }
 
-    /// @brief 共享上下文（懒创建，恒非空）。
+    /// @brief 共享上下文（恒非空：由调用方在建协程时传入）。
     ///
-    /// 协程与它起的子 promise（NewPromise()）共用同一实例（TContext 须可默认构造）。
+    /// 协程与它起的子 promise（NewPromise()）共用同一实例。
     std::shared_ptr<TContext> GetContext() const
     {
         return m_pCore->Context();

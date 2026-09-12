@@ -234,9 +234,9 @@ public:
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
         const typename CPromise<TContext>::PromiseExecutor& fnExecutor, const CSourceLoc& loc = CSourceLoc());
 
-    // 建一条「延迟启动」的 promise 链（先挂完所有层，再 `Start()`；上下文可为空 → 懒创建）。
+    // 建一条「延迟启动」的 promise 链（先挂完所有层，再 `Start()`；上下文必传）。
     template <typename TContext>
-    CPromise<TContext> BuildPromise(const std::shared_ptr<TContext>& spContext = std::shared_ptr<TContext>());
+    CPromise<TContext> BuildPromise(const std::shared_ptr<TContext>& spContext);
 
     //================ Combine ================
 
@@ -586,7 +586,7 @@ CPromise<TContext> Gather(
 ///
 /// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
 /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
-/// @param spContext 聚合 promise 的共享上下文（可为空 → 首次取用时懒创建）。
+/// @param spContext 聚合 promise 的共享上下文（**必传**；与其他起链入口一致，框架不代建）。
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
 /// @return 聚合 promise 句柄（pending；由子 promise 的落定驱动）。
 template <typename TContext, typename... TChild>
@@ -607,7 +607,7 @@ CPromise<TContext> CAsyncExecutor::WhenAll(const std::shared_ptr<TContext>& spCo
 ///
 /// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
 /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
-/// @param spContext 聚合 promise 的共享上下文（可为空 → 首次取用时懒创建）。
+/// @param spContext 聚合 promise 的共享上下文（**必传**）。
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
 /// @return 聚合 promise 句柄（恒兑现；由子 promise 的落定驱动）。
 template <typename TContext, typename... TChild>
@@ -628,7 +628,7 @@ CPromise<TContext> CAsyncExecutor::WhenAllSettled(const std::shared_ptr<TContext
 ///
 /// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
 /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
-/// @param spContext 聚合 promise 的共享上下文（可为空 → 首次取用时懒创建）。
+/// @param spContext 聚合 promise 的共享上下文（**必传**）。
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
 /// @return 聚合 promise 句柄（由首个落定的子 promise 驱动）。
 template <typename TContext, typename... TChild>
@@ -646,7 +646,7 @@ CPromise<TContext> CAsyncExecutor::WhenRace(const std::shared_ptr<TContext>& spC
 ///
 /// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
 /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
-/// @param spContext 聚合 promise 的共享上下文（可为空 → 首次取用时懒创建）。
+/// @param spContext 聚合 promise 的共享上下文（**必传**）。
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
 /// @return 聚合 promise 句柄（由首个兑现的子 promise 驱动）。
 template <typename TContext, typename... TChild>

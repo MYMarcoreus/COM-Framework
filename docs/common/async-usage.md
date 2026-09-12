@@ -141,20 +141,23 @@ auto t2 = exec.NewPromise(spCtx, StepLoad)
 ## 5. 共享上下文（唯一数据通道）
 
 ```cpp
-// 方式 A：外部准备数据后注入
+// 上下文由调用方强制传入（框架不代建）：先备好数据，再起链
 std::shared_ptr<CMyContext> spCtx = std::make_shared<CMyContext>();
 spCtx->strRequestId = GetRequestId();
 common::async::CPromise<CMyContext> p = exec.BuildPromise<CMyContext>(spCtx);
+// 链内各层拿到的恒是同一个实例：p.GetContext() == spCtx
 
-// 方式 B：promise 内部懒创建（首次 GetContext() 时构造，恒非空）
-common::async::CPromise<CMyContext> p2 = exec.BuildPromise<CMyContext>();
-p2.GetContext()->nRetry = 3;  // 挂层前先填数据
-p2.Then(StepA).Then(StepB);
+// 延迟起链时，还可以在「建链」与「挂层」之间改数据（此刻链还没跑）
+spCtx->nRetry = 3;
+common::async::CPromise<CMyContext> tail = p.Then(StepA).Then(StepB);
+p.Start();
 ```
 
 约束与建议：
 
-- `TContext` 只在真正懒创建（调用 `GetContext()`）时才要求可默认构造；
+- **上下文必须由调用方传入**（`NewPromise` / `BuildPromise` / `CoStart` 的第一个参数）：
+  框架**不做懒创建** —— 于是 `GetContext()` 恒非空、核心不必为「可能还没准备好」加锁，
+  `TContext` 也不必可默认构造；
 - 处理器拿到的是 `const std::shared_ptr<TContext>&`（借用引用，不增加引用计数）；
   若要留给异步回调使用，自行拷贝该 `shared_ptr` 保活；
 - 同一条链的层顺序执行、**不会并发**；跨链共享上下文时并发安全由业务负责。
@@ -596,9 +599,8 @@ common::async::CPromise<Ctx> b2 = head.Then(StepC, ASYNC_LOC);
 common::async::CPromise<Ctx> tAll = exec.WhenAll(spCtx, b1, b2).Then(StepGather, ASYNC_LOC);
 common::async::CPromiseResult rAll = exec.WhenAllSettled(spCtx, b1, b2).AwaitFor(500);
 
-// 惰性上下文 / 外部注入（延迟链：取上下文 → 挂层 → Start）
-common::async::CPromise<Ctx> c1 = exec.BuildPromise<Ctx>();       // 链内懒创建
-common::async::CPromise<Ctx> c2 = exec.BuildPromise<Ctx>(spCtx);  // 外部注入
+// 延迟起链（上下文同样必传）：备好数据 → 建链 → 挂层 → Start
+common::async::CPromise<Ctx> c1 = exec.BuildPromise<Ctx>(spCtx);
 
 // 跨模块组合（纯异步、零阻塞）：桥接 + then-promise 接入（详见 6.3）
 auto fnCreateOther = [deps](const std::shared_ptr<Ctx>& sp)

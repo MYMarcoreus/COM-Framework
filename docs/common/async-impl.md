@@ -450,6 +450,10 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
    不直接依赖 `Common/Log`（避免低层反向依赖），应用侧一行接入日志 / 指标。
 8. **loc（`ASYNC_DEBUG_TRACE`）按需开启**：默认不开 —— 每层多 16 字节 + 一次 `SetLoc`，
    而目前只有调试读它；要用它做「哪一层挂了」的诊断，需让 hook 带上注册点（独立一步）。
+9. **上下文强制传入，不做懒创建**：`BuildPromise(spCtx)` / `CCoroutine(spCtx)` 的上下文参数必传。
+   权衡：懒创建能让调用方少写一行 `make_shared`，代价却是——`TContext` 必须可默认构造；
+   核心要留 mutable 成员 + mutex；`Context()` 每层多一次空判（热路径）。
+   本框架的取舍基准是：**能用编译期约束表达的，就不要留成运行时的分支持久态**。
 
 ## 11. 测试与基准
 
@@ -484,9 +488,11 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 ### 已落地的两处优化
 
-1. **热路径去锁**（`detail::CPromiseCore`）：
-   - `m_spContext` 构造后只读 → `Context()` 有一条**无锁快路径**（非空直接返回），
-     锁只留给「未传 ctx、懒创建」的冷路径（`m_spLazyContext`）；
+1. **上下文强制传入 + 热路径去锁**（`detail::CPromiseCore`）：
+   - 上下文由调用方传入（`BuildPromise(spCtx)` / `CCoroutine(spCtx)` 都去掉了默认实参）→
+     核心**再无可变共享状态**：`Context()` 直接返回成员的 `const` 引用（不加锁、不拷贝 `shared_ptr`）；
+     懒创建那一版要 mutable 成员 + mutex + 一个「可能还没准备好」的时间窗，
+     而它换来的只是调用方少写一行 `make_shared`（见 §10 第 9 条）；
    - 「是否延迟链」由 `std::atomic<bool> m_bDeferred` 无锁回答（不再是加载 `CLaunchState` 才能读到）；
    - `CLaunchState` 只在延迟链上分配 —— **普通链不再为它分配**；
 2. **handler 内联槽**（`detail::CPromiseState`）：第一个处理器就地存（§4），

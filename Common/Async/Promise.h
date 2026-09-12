@@ -508,22 +508,21 @@ public:
     /// @brief 创建核心。
     ///
     /// @param pHandle 执行器句柄（可为空：无效 promise）。
-    /// @param spContext 共享上下文（可为空：首次 GetContext() 时懒创建）。
+    /// @param spContext 共享上下文（**必传**；调用方负责在建链前备好数据，框架不管它的生命周期）。
     CPromiseCore(const std::shared_ptr<CExecutorHandle>& pHandle, const std::shared_ptr<TContext>& spContext)
-        : m_pHandle(pHandle), m_spContext(spContext), m_spLazyContext(), m_bDeferred(false), m_pLaunch()
+        : m_pHandle(pHandle), m_spContext(spContext), m_bDeferred(false), m_pLaunch()
     {}
 
-    /// @brief 共享上下文（恒非空）。
+    /// @brief 共享上下文（恒非空、构造后只读）。
     ///
-    /// 外部传入上下文时**构造后不再变**，所以热路径（每层都会取一次）走无锁快路径；
-    /// 只有没传上下文的链（`BuildPromise<T>()` / 未传 ctx 的协程）才加锁懒创建。
-    std::shared_ptr<TContext> Context() const
+    /// 上下文是**强制传入**的（没有懒创建 —— 懒创建要让上下文可默认构造、要给一个 "可能还没准备好" 的
+    /// 时间窗加锁，而收益只是省掉调用方一行 `make_shared`）。因此热路径（每层都会取一次）
+    /// 可以直接取用，既不加锁、也不拷贝 `shared_ptr`。
+    ///
+    /// @return 共享上下文（引用在核心存活期内有效；要留到别的线程请自行拷贝一份）。
+    const std::shared_ptr<TContext>& Context() const
     {
-        if (m_spContext != nullptr)
-        {
-            return m_spContext;  // 无锁：构造后只读。
-        }
-        return LazyContext();  // 冷路径：仅「未传上下文」时走。
+        return m_spContext;
     }
 
     /// @brief 执行器句柄（投递用）。
@@ -608,23 +607,10 @@ public:
     }
 
 private:
-    /// @brief 懒创建共享上下文（冷路径：只有未传 ctx 的链才会走到）。
-    std::shared_ptr<TContext> LazyContext() const
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (!m_spLazyContext)
-        {
-            m_spLazyContext = std::make_shared<TContext>();
-        }
-        return m_spLazyContext;
-    }
-
-    mutable std::mutex m_mutex;                         ///< 只保护下面的懒创建（热路径不经过它）。
-    std::shared_ptr<CExecutorHandle> m_pHandle;         ///< 执行器句柄。
-    std::shared_ptr<TContext> m_spContext;              ///< 共享上下文（构造后只读；可为空）。
-    mutable std::shared_ptr<TContext> m_spLazyContext;  ///< 懒创建出来的上下文（未传 ctx 时用）。
-    std::atomic<bool> m_bDeferred;                      ///< 是否延迟启动链（无锁读）。
-    std::shared_ptr<CLaunchState> m_pLaunch;            ///< 延迟启动载荷（仅延迟链非空）。
+    std::shared_ptr<CExecutorHandle> m_pHandle;  ///< 执行器句柄。
+    std::shared_ptr<TContext> m_spContext;       ///< 共享上下文（构造时传入，之后只读）。
+    std::atomic<bool> m_bDeferred;               ///< 是否延迟启动链（无锁读）。
+    std::shared_ptr<CLaunchState> m_pLaunch;     ///< 延迟启动载荷（仅延迟链非空）。
 };
 
 }  // namespace detail
@@ -637,7 +623,7 @@ private:
 /// 本类只是「指向某一层」的句柄：
 ///  - 起链只有**执行器上的**公开入口：`exec.NewPromise(spCtx, 首层处理器)`（立即投递首层）、
 ///    `exec.NewPromise(spCtx, executor)`（由外部回调 settle）、`exec.BuildPromise(spCtx)`（先挂层、后 `Start()`）、
-///    `exec.CoStart<T>()`（协程）；本类**不提供**任何起链入口，只做「句柄 + 加层」；
+///    `exec.CoStart<T>(spCtx)`（协程）；本类**不提供**任何起链入口，只做「句柄 + 加层」；
 ///  - `Then` / `Catch` / `Finally` 追加一层并返回指向新层的句柄（等价 JS 的
 ///    `then` / `catch` / `finally`）；
 ///  - `Await` / `OnSettled` / `IsSettled` 作用于句柄所指的那一层。
@@ -1033,9 +1019,10 @@ public:
         return m_pState != nullptr && m_pState->IsSettled();
     }
 
-    /// @brief 共享上下文（懒创建，有效 promise 上恒非空）。
+    /// @brief 共享上下文（恒非空：上下文由调用方强制传入）。
     ///
-    /// 外部可先取上下文填初始数据，再起链；也可在任意层读写。
+    /// 外部可先**备好数据再起链**（推荐写法：先 `make_shared` 填初始数据，再 NewPromise / BuildPromise）；
+    /// 也可在任意层读写。
     std::shared_ptr<TContext> GetContext() const
     {
         if (m_pCore == nullptr)
@@ -1054,13 +1041,13 @@ public:
 private:
     //================ Internal ================
 
-    /// @brief 创建「未起链」的 promise 句柄（`exec.BuildPromise` 用；上下文可懒创建）。
+    /// @brief 创建「未起链」的 promise 句柄（`exec.BuildPromise` 用）。
     ///
     /// 不对外：起链只有 `exec.NewPromise` / `exec.BuildPromise` / `exec.NewPromise(spCtx, executor)` 三条路径，
     /// 所以构造路径收在这里，由 `CAsyncExecutor`（友元）调用。
     ///
     /// @param executor 执行器（起链与续接投递用）。
-    /// @param spContext 共享上下文（可为空 → 首次取用时懒创建）。
+    /// @param spContext 共享上下文（必传，恒非空）。
     CPromise(CAsyncExecutor& executor, const std::shared_ptr<TContext>& spContext)
         : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(executor.Handle(), spContext)), m_pState()
     {}
@@ -1450,10 +1437,10 @@ CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& s
 /// @brief 建一条「延迟启动」的 promise 链（先挂完层，再 Start）。
 ///
 /// @tparam TContext 上下文类型（由 spContext 推导）。
-/// @param spContext 共享上下文（所有层共用；可为空 → 首次取用时懒创建）。
+/// @param spContext 共享上下文（**必传**；所有层共用同一实例）。
 /// @return 未启动的链句柄；`Start()`（或首次 `Await()`）后首层才投递执行。
 template <typename TContext>
-CPromise<TContext> CAsyncExecutor::BuildPromise(const std::shared_ptr<TContext>& spContext /* = nullptr */)
+CPromise<TContext> CAsyncExecutor::BuildPromise(const std::shared_ptr<TContext>& spContext)
 {
     CPromise<TContext> promise(*this, spContext);
     promise.MarkDeferred();
