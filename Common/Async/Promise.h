@@ -270,8 +270,7 @@ public:
     /// @param fnHandler 处理器（按值接收，登记时移动存储避免拷贝）。
     /// @param bGuaranteedDelivery 是否要求「送达保证」（通知用 true）。
     /// @return true 已登记 / 已投递 / 已就地送达；false 仅当层处理器已 settled 且执行器不可用。
-    bool AddHandler(
-        const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler, bool bGuaranteedDelivery = false)
+    bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler, bool bGuaranteedDelivery = false)
     {
         bool bFireNow = false;
         CPromiseResult result;
@@ -434,8 +433,7 @@ inline bool ShouldPassThrough(HandlerMode eMode, const CPromiseResult& upResult)
 /// @param upResult 上一层结果。
 /// @param ownResult 本层处理器返回的结果。
 /// @return then / catch 取 ownResult；finally 取 upResult。
-inline CPromiseResult ResolveLayerResult(
-    HandlerMode eMode, const CPromiseResult& upResult, const CPromiseResult& ownResult)
+inline CPromiseResult ResolveLayerResult(HandlerMode eMode, const CPromiseResult& upResult, const CPromiseResult& ownResult)
 {
     return (eMode == kModeFinally) ? upResult : ownResult;
 }
@@ -453,9 +451,8 @@ inline CPromiseResult ResolveLayerResult(
 /// @param eMode 处理器模式（then / catch / finally）。
 /// @return 任务体（在工作线程上执行处理器并 settle 本层状态）。
 template <typename TContext>
-std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spContext,
-    const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
-    const CPromiseResult& upResult, HandlerMode eMode)
+std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spContext, const std::shared_ptr<CPromiseState>& pState,
+    const ThenHandler<TContext>& fnHandler, const CPromiseResult& upResult, HandlerMode eMode)
 {
     ASSERT(spContext != nullptr);  // 任务体把上下文按值捕获交给处理器：必须已经备好。
     return [spContext, pState, fnHandler, upResult, eMode]()
@@ -711,8 +708,7 @@ public:
         // 首层投递的目标：延迟链登记过「指定执行器」时用它，否则用本链执行器。
         // （这里不用 `ResolveExecHandle(kAffinityExecutor, …)`：那个入口的语义是「按亲和解析」，
         //   而这里只是「有没有指定目标」这个简单判断。）
-        const std::shared_ptr<detail::CExecutorHandle> pExec =
-            pLaunch->pTarget != nullptr ? pLaunch->pTarget : m_pCore->Handle();
+        const std::shared_ptr<detail::CExecutorHandle> pExec = pLaunch->pTarget != nullptr ? pLaunch->pTarget : m_pCore->Handle();
         if (!detail::PostToHandle(pExec, std::move(fnLaunch)))
         {
             pFirst->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用。
@@ -893,8 +889,7 @@ public:
         {
             TChildPromise promiseChild = fnCreate(spSelf);  // 起子链（抛异常 → Adopt 兜底为 kException）
 
-            PromiseExecutor fnExecutor = [promiseChild, fnApply, spSelf](
-                                             const ResolveFn& fnResolve, const RejectFn& fnReject)
+            PromiseExecutor fnExecutor = [promiseChild, fnApply, spSelf](const ResolveFn& fnResolve, const RejectFn& fnReject)
             {
                 BindChildSettle(promiseChild, fnApply, spSelf, fnResolve, fnReject);  // 规则只有一份。
             };
@@ -1026,8 +1021,7 @@ private:
     ///
     /// @param pCore 共享核心（上下文 + 执行器句柄；恒非空）。
     /// @param pState 本句柄所指的层状态（可为空 = 尚未挂首层，即延迟链登记首层之前）。
-    CPromise(const std::shared_ptr<detail::CPromiseCore<TContext> >& pCore,
-        const std::shared_ptr<detail::CPromiseState>& pState)
+    CPromise(const std::shared_ptr<detail::CPromiseCore<TContext> >& pCore, const std::shared_ptr<detail::CPromiseState>& pState)
         : m_pCore(pCore), m_pState(pState)
     {
         ASSERT(pCore != nullptr);  // 句柄恒有核心（无「无效句柄」态）。
@@ -1219,8 +1213,7 @@ private:
     ///
     /// @param pState 本层状态（executor 通过 resolve / reject 收口它）。
     /// @param fnExecutor 执行体。
-    static void RunExternalExecutor(
-        const std::shared_ptr<detail::CPromiseState>& pState, const PromiseExecutor& fnExecutor)
+    static void RunExternalExecutor(const std::shared_ptr<detail::CPromiseState>& pState, const PromiseExecutor& fnExecutor)
     {
         ResolveFn fnResolve = [pState]()
         {
@@ -1266,8 +1259,7 @@ private:
         const std::shared_ptr<detail::CExecutorHandle>& pTarget = nullptr)
     {
         // 本层实际的执行器：默认本链执行器；指定执行器版用调用方给的那个。
-        const std::shared_ptr<detail::CExecutorHandle> pExec =
-            detail::ResolveExecHandle(eAffinity, pTarget, m_pCore->Handle());
+        const std::shared_ptr<detail::CExecutorHandle> pExec = detail::ResolveExecHandle(eAffinity, pTarget, m_pCore->Handle());
 
         // ① 尚未起链：本次调用即首层（起点结果视为「已兑现」），投递执行。
         //    首层总是投递（起链线程不跑业务代码）；kAffinityExecutor 时投递到指定执行器。
@@ -1288,8 +1280,8 @@ private:
                 }
                 else
                 {
-                    RegisterFirstLayer(detail::MakeHandlerRunner(
-                        m_pCore->Context(), m_pState, fnHandler, CPromiseResult::Resolve(), eMode));
+                    RegisterFirstLayer(
+                        detail::MakeHandlerRunner(m_pCore->Context(), m_pState, fnHandler, CPromiseResult::Resolve(), eMode));
                 }
                 return *this;
             }
@@ -1339,8 +1331,8 @@ private:
     /// @param pCore promise 共享核心。
     /// @param pState 状态（本句柄指向的层）。
     /// @return 指向该层的 promise 句柄。
-    static CPromise Make(const std::shared_ptr<detail::CPromiseCore<TContext> >& pCore,
-        const std::shared_ptr<detail::CPromiseState>& pState)
+    static CPromise Make(
+        const std::shared_ptr<detail::CPromiseCore<TContext> >& pCore, const std::shared_ptr<detail::CPromiseState>& pState)
     {
         return CPromise(pCore, pState);
     }

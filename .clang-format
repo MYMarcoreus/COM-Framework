@@ -34,7 +34,7 @@ AccessModifierOffset: -4
 IndentPPDirectives: BeforeHash
 
 # ---- 列宽 ----
-ColumnLimit: 120
+ColumnLimit: 130
 
 # ---- 对齐 ----
 # 续行不按开括号对齐，只缩进一个 ContinuationIndentWidth（4 格）：
