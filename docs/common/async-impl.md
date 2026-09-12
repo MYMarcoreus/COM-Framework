@@ -596,7 +596,7 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 | 部件 | 作用 |
 | --- | --- |
 | `detail::CCurrentLayerFrame` | 跑层时在 **thread_local 上压一帧**；帧对象活在各线程自己的任务体栈上 |
-| `CPromiseState::SetUpstream/Upstream/Mode` | 每层记下「挂在哪一层之下」（`weak_ptr`）与自己的模式 |
+| `CPromiseState::SetUpstream/Upstream/Mode` | 每层记下「挂在哪一层之下」（**强引用**，注册时设一次、之后只读）与自己的模式 |
 | `VisitLayerChain` / `CurrentLayer` / `DescribeLayerChain` / `DumpLayerChain` | 业务侧只读接口 |
 
 ```cpp
@@ -638,14 +638,36 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 
 ### 测试
 
-`Tests/test_async_trace.cpp`（5 例）：深度 / 模式 / 注册点逐层对得上、分叉分支各看各的上游、
-层外调用是空操作、层内抛异常后帧栈照样弹回；发布构建下反过来断言「按契约是空操作」。
+`Tests/test_async_trace.cpp` 的主用例就是**一条复杂主链**：① 具名 then（链根）→ ② 具名 then
+→ ③ `ThenInline` → ④ `ThenOn` 别的执行器 → ⑤ 被跳过的 `Catch` → ⑥ `Finally`
+→ ⑦ `ThenPromise` 内层链 → ⑧ 分叉基座 → ⑨ 两支；然后在**最深处**把整条链逐层断言出来
+（层数 / 模式 / 注册点行号 / 深度 / 「当前层」标记 / 一行描述），并逐个钉住特殊位置：
 
-> 写用例时踩到的两个坑（都记在用例注释里）：
+| 位置 | 断言到的结论 |
+| --- | --- |
+| 主链最深（分叉分支 B） | 8 层、深度 0…7，其中包含**被跳过的 `Catch` 层** |
+| 分支 A | 同一条主链前缀，但**看不到兄弟分支** |
+| `ThenOn`（另一执行器） | 换了线程，链照样完整 |
+| 内层链（`ThenPromise`） | 自成一条链，**看不到外层**（边界） |
+| `OnSettled`（落定前登记） | 在**触发它的那一层**的帧里就地执行 |
+| `OnSettled`（落定后登记） | 投递执行 → 不在任何层里（通知不是层） |
+| 协程 `CO_AWAIT` | 等的是自己起的子链（独立一条）；恢复点是否在层里取决于就地 / 投递续跑，只断言这个上界 |
+| 层内抛异常 | 抛之前链是完整的；抛之后帧栈干净 |
+
+另一个用例只钉「层外是空操作」这条契约。发布构建下反过来断言「按契约全是空操作」。
+
+> 写用例时的三个坑：
 > 1. 采集层如果带 `if (upResult.IsRejected()) return upResult;` 这种 **then 式防御**，
 >    放到 catch 位置就什么也采不到（catch 层**一定**会看到拒绝）—— 防御写得“安全”反而让用例失效；
 > 2. 采集层应该**原样透传**上一层结果：在 catch 位置返回 `Resolve()` 会把拒绝吞掉（链被“恢复”），
->    用例对链走向的预期会跟着变。
+>    用例对链走向的预期会跟着变；
+> 3. **注册点行号要单行采集**：`nLine = __LINE__ + 1;` 之后挂层语句必须落在同一行 —— 多行实参
+>    （`ASYNC_LOC` 被挤到第二行）记下的是**那一行**的行号，断言会差一行。内层链的工厂因此
+>    单独具名（`PromiseFactory fnInnerChain = ...`），再 `ThenPromise(fnInnerChain, ASYNC_LOC)` 一行写完。
+>
+> 两个「让用例确定」的手法：**手动放行门**（`StepGated` 等主线程置位才返回）保证「通知是在
+> 落定**之前**登记的」；**恢复点只断言上界**（就地续跑 → 落在被 await 的那层帧里；投递续跑 →
+> 不在层里）—— 后者取决于线程池有没有积压，钉死会变脆。
 
 ## 附：代码阅读顺序
 

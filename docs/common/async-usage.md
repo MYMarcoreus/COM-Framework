@@ -681,12 +681,13 @@ common::async::CPromise<Ctx> p =
 - 示例：`examples/main.cpp`（28 个演示：then / catch / finally / 分叉 / 深链 / 协程 / **嵌套** / **跨模块组合** / **多种 then 混用**）；
 - 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
 - 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞）；
-- 单元测试（异步共 **103 例**，全量 149 例）：`test_async_smoke.cpp`（17）对外用法逐条冒烟、
+- 单元测试（异步共 **105 例**，全量 151 例）：`test_async_smoke.cpp`（17）对外用法逐条冒烟、
   `test_async_chain.cpp`（37）promise 契约 + 协程、`test_async_combine.cpp`（12）组合器、
   `test_async_modules.cpp`（6）+ `test_async_modules_stress.cpp`（8）跨模块与极限、
   `test_async_affinity.cpp`（5）+ `test_async_affinity_override.cpp`（4）线程亲和，
   `test_async_settled_delivery.cpp`（4）通知送达、
   `test_async_robustness.cpp`（6）健壮性与诊断、`test_async_layer_rules.cpp`（2）三态语义白盒、
-  `test_async_alloc.cpp`（2）每层分配预算护栏；
+  `test_async_alloc.cpp`（2）每层分配预算护栏、
+  `test_async_trace.cpp`（2）调用链 trace（一条复杂主链看完整链 + 层外空操作契约，见 [async-impl.md](async-impl.md) §14）；
 - 基准：`Benchmark/cases/ChainCase.cpp`、`CoroutineCase.cpp`、`ResumableCase.cpp`、`StressCase.cpp`；
 - 运行：`./build.sh --tests`、`./build/debug/examples`。
