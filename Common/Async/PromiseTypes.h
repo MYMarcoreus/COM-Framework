@@ -26,6 +26,17 @@ using SettledHandler = std::function<void(CPromiseResult result)>;
 
 namespace detail {
 
+/// @brief 处理器模式（对应 JS 的 then / catch / finally）。
+///
+/// 定义放在这里（而不是 Promise.h）的原因：它是「层语义」的公共词汇 ——
+/// `Async/Trace.h` 要把当前层的模式报给业务，两边都要用；放叶子头文件里可避免循环依赖。
+enum HandlerMode
+{
+    kModeThen = 0,    ///< then(onFulfilled)：上一层兑现时执行；被拒绝则直接透传（失败即停）。
+    kModeCatch = 1,   ///< catch(onRejected)：上一层被拒绝时执行；已兑现则直接透传。
+    kModeFinally = 2  ///< finally(onFinally)：无论兑现或拒绝都执行；忽略返回值，透传上层结果。
+};
+
 /// @brief 处理器（then / catch / finally 的回调，固定签名）。
 ///
 /// 参数固定、返回固定，与上下文的具体类型解耦：

@@ -582,6 +582,71 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 | `CCoroutine::AsPromise` / `AwaitWait` / `AwaitEach` | `m_pExec != nullptr` | 必须在 `CoStart` 之后调用 |
 | `CExampleDbModule` / `CExampleAsyncModule`（业务侧样例） | 模块已启动、参数非空 | 样例示范「业务契约也用断言钉住」 |
 
+## 14. 异步调用链（trace：在层里看到自己处在哪条链上）
+
+用法见 [async-usage.md §7.4](async-usage.md)；本节记**实现与代价**。
+
+### 为什么不能靠 backtrace
+
+同步代码的调用链就是调用栈；异步里层与层之间是**投递 / 回调**，栈早断了。
+所以这里给的是**因果链**：本层 ← 谁挂的它 ← …（一棵 span 树，严格说是 DAG：分叉与组合器）。
+
+### 三个接入点（`Common/Async/Trace.h` / `Trace.cpp`）
+
+| 部件 | 作用 |
+| --- | --- |
+| `detail::CCurrentLayerFrame` | 跑层时在 **thread_local 上压一帧**；帧对象活在各线程自己的任务体栈上 |
+| `CPromiseState::SetUpstream/Upstream/Mode` | 每层记下「挂在哪一层之下」（`weak_ptr`）与自己的模式 |
+| `VisitLayerChain` / `CurrentLayer` / `DescribeLayerChain` / `DumpLayerChain` | 业务侧只读接口 |
+
+```cpp
+// MakeHandlerRunner 的任务体（唯一跑用户处理器的地方）—— 接入点就这一行
+return [spContext, pState, fnHandler, upResult, eMode]()
+{
+#if defined(ASYNC_DEBUG_TRACE)
+    const CCurrentLayerFrame frame(pState.get());
+#endif
+    ...
+};
+```
+
+### 四个设计决定（都是为了「不改签名、不增加分配」）
+
+1. **用 thread_local 而不是改处理器签名**：`ThenHandler(upResult, spCtx)` 一个字节都不动，
+   否则全框架的处理器都要改。内联级联会**嵌套**跑层，所以帧是**栈语义**（RAII 保存 / 恢复），
+   异常路径也不会漏弹（`Trace_FramePoppedAfterThrow` 守着）。
+2. **上游直接存指针（仅调试构建），不用快照链表**：快照链要每层一次 `new`，而分配护栏（§12）
+   在 debug 下跑 —— 会直接变成 3.03 次/层；直接存一个上游指针只有 16 B、**零分配**。
+   中间试过 `weak_ptr`，**行不通**：层状态是靠「上游的处理器闭包」保活的，闭包用完即毁 →
+   中间层一跑完就被释放，链被截断成两节（恰恰在最需要它的时候没用）；同理也不能
+   「落了定就把上游放掉」。所以最终是**强引用 + 注册时设一次、之后只读**：
+   只要下游还活着，上游就不会被释放 → 链总是完整的。
+   代价（**仅调试构建**）：持有尾层句柄会把整条前缀留住；发布构建下这个字段根本不存在。
+3. **当前层由帧保证存活，往上的每一跳先升强引用再访问**：否则
+   「取到裸指针 → 上一跳的引用析构 → 节点被释放」就悬垂了。
+4. **整个设施与 `ASYNC_LOC` 同一个开关**（调试构建 `ASYNC_DEBUG_TRACE`）：
+   发布构建下字段不存在、TLS 不写、接口是空操作 —— 与「发布构建零开销」一致。
+
+### 边界（写进文档，不是实现偷懒）
+
+- **只能看「当前层 + 上游」**：`Then` / `ThenPromise` 是运行期随时可挂的（settle 之后也能挂），
+  所以下游不存在「已知的形状」；
+- 分叉 → 树；组合器（`WhenAll` 一族）→ 多父一子；
+- **通知（`OnSettled`）不是层**：它不新建帧；就地送达时看到的是触发它的那一层；
+- **跨模块止于本链**：子链（`ThenBridge` / `WhenAll` 里那些）还没接进来 —— 那是下一步：
+  在 `Adopt` / `BindChildSettle` / `BindChildGather` 里把本层设为子链根的上游即可连成树。
+
+### 测试
+
+`Tests/test_async_trace.cpp`（5 例）：深度 / 模式 / 注册点逐层对得上、分叉分支各看各的上游、
+层外调用是空操作、层内抛异常后帧栈照样弹回；发布构建下反过来断言「按契约是空操作」。
+
+> 写用例时踩到的两个坑（都记在用例注释里）：
+> 1. 采集层如果带 `if (upResult.IsRejected()) return upResult;` 这种 **then 式防御**，
+>    放到 catch 位置就什么也采不到（catch 层**一定**会看到拒绝）—— 防御写得“安全”反而让用例失效；
+> 2. 采集层应该**原样透传**上一层结果：在 catch 位置返回 `Resolve()` 会把拒绝吞掉（链被“恢复”），
+>    用例对链走向的预期会跟着变。
+
 ## 附：代码阅读顺序
 
 ```text

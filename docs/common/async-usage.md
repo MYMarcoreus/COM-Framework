@@ -454,6 +454,49 @@ common::async::SetDiagnosticHandler([](const char*)
 | `exec.Post(nullptr)` | 空任务：不提交 + 报告（不再「返回 true 却什么也不做」） |
 | 层内 / 本链执行器线程上 `Await()` 未落定的层 | 极可能死锁（占住 worker / 卡住本链）—— 改用 `ThenPromise` / 协程 / `AwaitFor(ms)` |
 
+### 7.4 在层里看「我处在哪条链上」（`async/Trace.h`）
+
+同步代码 `backtrace()` 就有调用链，异步里栈早断了。本框架给的是**因果链**：
+「本层 ← 谁挂的它 ← …」，可以在**任意层处理器内部**直接取：
+
+```cpp
+#include "Async/Trace.h"
+
+static common::async::CPromiseResult StepVerify(common::async::CPromiseResult upResult,
+                                                const std::shared_ptr<CMyContext>& spCtx)
+{
+    common::async::DumpLayerChain();   // 排障：这层是谁挂上来的（debug 构建打印到 stderr）
+
+    common::async::VisitLayerChain([](const common::async::CLayerInfo& info)
+    {
+        LOG_INFO("depth=%d mode=%d %s (%s:%d)", info.nDepth, info.eMode,
+                 info.loc.szFunction, info.loc.szFile, info.loc.nLine);
+    });
+    return common::async::CPromiseResult::Resolve();
+}
+```
+
+输出形态（调试构建）：
+
+```text
+[async 链] #0 then StepVerify (login.cpp:52) <- #1 then StepLoadParam (login.cpp:41) <- #2 then (login.cpp:35)
+```
+
+| 接口 | 作用 |
+| --- | --- |
+| `CurrentLayer()` | 当前正在跑的那一层（不在层里 → `nullptr`；**返回 TLS 存储，要留住请拷贝**） |
+| `VisitLayerChain(fn)` | 从当前层往上遍历（近 → 远），深度 / 模式 / 注册点都给到 |
+| `DescribeLayerChain()` | 拼成一行（写日志 / 测试断言） |
+| `DumpLayerChain()` | 直接打印到 stderr |
+
+要注意的（异步的固有性质）：
+
+- **只看得到「当前层 + 上游」**：下游（还没跑的层）是运行期才挂的，看不到；
+- **开关与 `ASYNC_LOC` 同一个**（调试构建 `ASYNC_DEBUG_TRACE`）：发布构建下这些接口一律是空操作，**零开销**；
+- 分叉（同层多个 `Then`）→ 树；组合器（`WhenAll` 一族）→ 多父一子；
+- **跨模块止于本链**（子链是下一步的事）；
+- 机制、代价与边界见 [async-impl.md](async-impl.md) §14。
+
 ## 8. 执行器
 
 ```cpp
