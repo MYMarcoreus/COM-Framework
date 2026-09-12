@@ -112,8 +112,9 @@
 //
 // 文件结构（便于定位）：
 //   一、detail 基础设施：CPromiseState（层状态机，含处理器登记策略）/ HandlerMode、HandlerAffinity、
-//       ResolveExecHandle（执行器选择与线程亲和）/ CLaunchState（延迟启动）/ CPromiseCore（共享核心：
-//       上下文 + 执行器 + 启动状态，兼层调度策略 MakeHandlerRunner / RunHandler / PostHandler）
+//       ResolveExecHandle（执行器选择与线程亲和）/ MakeHandlerRunner（任务体构造）/ CLaunchState
+//       （延迟启动）/ CPromiseCore（共享核心：上下文 + 执行器 + 启动状态，兼层调度策略 RunHandler /
+//       PostHandler）
 //   二、CPromise：对外句柄（构造 / Start / New / 层方法 / 结果与通知 / 内部实现）
 //   三、模板方法定义：CAsyncExecutor::NewPromise、BuildPromise
 // ====================================================================
@@ -415,6 +416,41 @@ inline const std::shared_ptr<CExecutorHandle>& ResolveExecHandle(int nAffinity,
     return (nAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pChainHandle;
 }
 
+/// @brief 构造「执行本层处理器」的任务体。
+///
+/// 任务体只捕获**它真正需要的东西**：共享上下文（handler 的第二参数）与本层状态（写回结果）。
+/// 这样在途任务不需要靠核心存活（因此核心无需 `enable_shared_from_this`），
+/// 也让「保活链」短一截：任务跑完前，只有它自己用到的对象在。
+///
+/// @param spContext 共享上下文（调用方在构造任务时解析好，恒非空）。
+/// @param pState 本层状态（执行结果写入它）。
+/// @param fnHandler 处理器（固定签名）。
+/// @param upResult 上一层结果。
+/// @param nMode 处理器模式（then / catch / finally）。
+/// @return 任务体（在工作线程上执行处理器并 settle 本层状态）。
+template <typename TContext>
+std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spContext,
+                                        const std::shared_ptr<CPromiseState>& pState,
+                                        const ThenHandler<TContext>& fnHandler, const CPromiseResult& upResult,
+                                        int nMode)
+{
+    return [spContext, pState, fnHandler, upResult, nMode]()
+    {
+        CPromiseResult result;
+        try
+        {
+            const CPromiseResult own = fnHandler(upResult, spContext);
+            // finally：忽略处理器返回的成败，原样透传上一层结果（JS: finally 不改变结果）。
+            result = (nMode == kModeFinally) ? upResult : own;
+        }
+        catch (...)
+        {
+            result = CPromiseResult::Reject(kException);  // 处理器抛异常 → 拒绝（finally 抛异常同样覆盖）。
+        }
+        pState->Settle(result);  // settle 本层 → 触发下一层（同执行器内联 / 跨执行器投递）。
+    };
+}
+
 /// @brief 延迟启动状态（`BuildPromise` 建链用，整条链共享）。
 ///
 /// 普通链（`NewPromise` / 构造函数）`bDeferred == false`：行为完全不变（首层立即投递）。
@@ -441,7 +477,7 @@ struct CLaunchState
 /// 内联深度限额、投递失败以 `kStopped` 收口：这三件事只依赖「上下文 + 执行器句柄 +
 /// 层状态」，所以归在这里；`CPromise` 只管编排（挂层 / 收口 / 桥接）。
 template <typename TContext>
-class CPromiseCore : public std::enable_shared_from_this<CPromiseCore<TContext> >
+class CPromiseCore
 {
 public:
     /// @brief 创建核心。
@@ -492,36 +528,6 @@ public:
         return m_pLaunch;
     }
 
-    /// @brief 构造「执行本层处理器」的任务体（捕获自身与层状态保活）。
-    ///
-    /// @param pState 本层状态（执行结果写入它）。
-    /// @param fnHandler 处理器（固定签名）。
-    /// @param upResult 上一层结果。
-    /// @param nMode 处理器模式（then / catch / finally）。
-    /// @return 任务体（在工作线程上执行处理器并 settle 本层状态）。
-    std::function<void()> MakeHandlerRunner(const std::shared_ptr<CPromiseState>& pState,
-                                            const ThenHandler<TContext>& fnHandler, const CPromiseResult& upResult,
-                                            int nMode)
-    {
-        // 保活：任务跑完前核心不能死（依赖基类 -> 需 this-> 限定）。
-        const std::shared_ptr<CPromiseCore<TContext> > pSelf = this->shared_from_this();
-        return [pSelf, pState, fnHandler, upResult, nMode]()
-        {
-            CPromiseResult result;
-            try
-            {
-                const CPromiseResult own = fnHandler(upResult, pSelf->Context());
-                // finally：忽略处理器返回的成败，原样透传上一层结果（JS: finally 不改变结果）。
-                result = (nMode == kModeFinally) ? upResult : own;
-            }
-            catch (...)
-            {
-                result = CPromiseResult::Reject(kException);  // 处理器抛异常 → 拒绝（finally 抛异常同样覆盖）。
-            }
-            pState->Settle(result);  // settle 本层 → 触发下一层（同执行器内联 / 跨执行器投递）。
-        };
-    }
-
     /// @brief 级联执行下一层（上一层刚 settle，当前在主调方线程上）。
     ///
     /// 线程亲和：**只有当前线程已经是本链执行器的线程**时才就地内联（省一次入队 + 保序）；
@@ -536,9 +542,9 @@ public:
     /// @param pTarget 指定执行器句柄（`kAffinityExecutor` 时有效）。
     void RunHandler(const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
                     const CPromiseResult& upResult, int nMode, int nAffinity = kAffinityChain,
-                    const std::shared_ptr<CExecutorHandle>& pTarget = nullptr)
+                    const std::shared_ptr<CExecutorHandle>& pTarget = nullptr) const
     {
-        std::function<void()> fnRun = MakeHandlerRunner(pState, fnHandler, upResult, nMode);
+        std::function<void()> fnRun = MakeHandlerRunner(Context(), pState, fnHandler, upResult, nMode);
 
         // 选本层的执行器：默认本链执行器；kAffinityExecutor 用调用方指定的那个。
         const std::shared_ptr<CExecutorHandle> pExec = ResolveExecHandle(nAffinity, pTarget, Handle());
@@ -566,9 +572,9 @@ public:
     /// @param nMode 处理器模式。
     /// @param pExec 目标执行器句柄（调用方已按亲和解析好，恒非空）。
     void PostHandler(const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
-                     const CPromiseResult& upResult, int nMode, const std::shared_ptr<CExecutorHandle>& pExec)
+                     const CPromiseResult& upResult, int nMode, const std::shared_ptr<CExecutorHandle>& pExec) const
     {
-        std::function<void()> fnRun = MakeHandlerRunner(pState, fnHandler, upResult, nMode);
+        std::function<void()> fnRun = MakeHandlerRunner(Context(), pState, fnHandler, upResult, nMode);
         if (!PostToHandle(pExec, std::move(fnRun)))
         {
             pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用 → 首层被拒绝。
@@ -1269,8 +1275,8 @@ private:
                 }
                 else
                 {
-                    m_pCore->Launch()->fnLaunch =
-                        m_pCore->MakeHandlerRunner(pFirst, fnHandler, CPromiseResult::Resolve(), nMode);
+                    m_pCore->Launch()->fnLaunch = detail::MakeHandlerRunner(m_pCore->Context(), pFirst, fnHandler,
+                                                                            CPromiseResult::Resolve(), nMode);
                 }
                 return *this;
             }
