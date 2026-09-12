@@ -596,7 +596,7 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 | 部件 | 作用 |
 | --- | --- |
 | `detail::CCurrentLayerFrame` | 跑层时在 **thread_local 上压一帧**；帧对象活在各线程自己的任务体栈上 |
-| `CPromiseState::SetUpstream/Upstream/Mode` | 每层记下「挂在哪一层之下」（**强引用**，注册时设一次、之后只读）与自己的模式 |
+| `CPromiseState::SetUpstream/Upstream/Mode` | 每层记下「挂在哪一层之下」（**强引用**，注册时设一次、之后只读）与自己的模式（三项收在 `m_trace` 里，调试时一眼看完） |
 | `VisitLayerChain` / `CurrentLayer` / `DescribeLayerChain` / `DumpLayerChain` | 业务侧只读接口 |
 
 ```cpp
@@ -633,8 +633,15 @@ return [spContext, pState, fnHandler, upResult, eMode]()
   所以下游不存在「已知的形状」；
 - 分叉 → 树；组合器（`WhenAll` 一族）→ 多父一子；
 - **通知（`OnSettled`）不是层**：它不新建帧；就地送达时看到的是触发它的那一层；
-- **跨模块止于本链**：子链（`ThenBridge` / `WhenAll` 里那些）还没接进来 —— 那是下一步：
-  在 `Adopt` / `BindChildSettle` / `BindChildGather` 里把本层设为子链根的上游即可连成树。
+- **子链 → 父链（已打通）**：起链时把「正在跑的那一层」记成新链链根的父层 —— 内层链（`ThenPromise`）、
+  跨模块子链（`ThenBridge`）、组合器聚合链、层里 fire-and-forget 起的小链都能从子链里一路追回父链。
+  两个细节：
+  - 父层取的是「**真正在等这条子链的那一层**」（`Adopt` 里用 `detail::CChainAdopterScope` 显式指定）：
+    工厂是在**上游层**的 settle 路径里跑的，不指定就会落回上游层，链上会看不到 `ThenPromise` 那一层；
+  - 写入时机是**起链时、投递之前**（`StartChain` / `NewFromHandle` 里 `SetUpstream`）：
+    链根一旦跑起来就可能被读，之后只读 —— 所以这条边**天生没有竞态**，不需要额外同步。
+    例外：工厂返回的若是**别处早已建好的**链，它保留原来的归属（不重挂）；
+    协程起的子链挂在「启动协程的那一层」（`CoStart` 处，与恢复时机无关，所以是确定的）。
 
 ### 测试
 
@@ -648,11 +655,12 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 | 主链最深（分叉分支 B） | 8 层、深度 0…7，其中包含**被跳过的 `Catch` 层** |
 | 分支 A | 同一条主链前缀，但**看不到兄弟分支** |
 | `ThenOn`（另一执行器） | 换了线程，链照样完整 |
-| 内层链（`ThenPromise`） | 自成一条链，**看不到外层**（边界） |
+| 内层链（`ThenPromise`） | 链根挂在起它的那一层（`ThenPromise` 层）下面 → **一路追回主链**（8 层） |
 | `OnSettled`（落定前登记） | 在**触发它的那一层**的帧里就地执行 |
 | `OnSettled`（落定后登记） | 投递执行 → 不在任何层里（通知不是层） |
-| 协程 `CO_AWAIT` | 等的是自己起的子链（独立一条）；恢复点是否在层里取决于就地 / 投递续跑，只断言这个上界 |
+| 协程 `CO_AWAIT` | 子链挂在「启动协程的那一层」下面；恢复点是否在层里取决于就地 / 投递续跑，只断言这个上界 |
 | 层内抛异常 | 抛之前链是完整的；抛之后帧栈干净 |
+| 层外起的链 | 没有父层（链根就是链根，1 层） |
 
 另一个用例只钉「层外是空操作」这条契约。发布构建下反过来断言「按契约全是空操作」。
 

@@ -494,7 +494,8 @@ static common::async::CPromiseResult StepVerify(common::async::CPromiseResult up
 - **只看得到「当前层 + 上游」**：下游（还没跑的层）是运行期才挂的，看不到；
 - **开关与 `ASYNC_LOC` 同一个**（调试构建 `ASYNC_DEBUG_TRACE`）：发布构建下这些接口一律是空操作，**零开销**；
 - 分叉（同层多个 `Then`）→ 树；组合器（`WhenAll` 一族）→ 多父一子；
-- **跨模块止于本链**（子链是下一步的事）；
+- **子链能追回父链**：内层链（`ThenPromise`）/ 跨模块子链（`ThenBridge`）/ 协程起的子链都挂在
+  「起它的那一层」下面，从子链里能一路追回父链（层外起的链没有父层）；
 - 机制、代价与边界见 [async-impl.md](async-impl.md) §14。
 
 ## 8. 执行器

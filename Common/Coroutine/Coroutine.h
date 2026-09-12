@@ -115,6 +115,7 @@ public:
         : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(std::shared_ptr<detail::CExecutorHandle>(), spContext)),
           m_pSegment(std::make_shared<detail::CPromiseState>()),
           m_pExec(nullptr),
+          m_spOwnerLayer(),
           m_wpSelf(),
           m_hot()
     {
@@ -175,7 +176,9 @@ public:
     /// @return 指向首层的 promise 句柄（须先挂起 await，勿丢弃）。
     CPromise<TContext> NewPromise(const ThenHandler& fnHandler, const CSourceLoc& loc = CSourceLoc()) const
     {
-        return CPromise<TContext>::StartChain(m_pCore, fnHandler, loc);
+        // 父层取「启动本协程的那一层」（而不是恢复时偶然正在跑的那一层）：
+        // 协程体可能在别处的层栈里内联恢复，那样追到的父层会随调度而变。
+        return CPromise<TContext>::StartChain(m_pCore, fnHandler, loc, m_spOwnerLayer);
     }
 
 protected:
@@ -284,6 +287,8 @@ private:
     {
         BindExecutor(pExec);
         Reset();
+        // 调用链 trace：记下「启动协程的那一层」（在调用方帧里）—— 协程起的子链都挂在它下面。
+        m_spOwnerLayer = detail::CurrentLayerState();
         PostResume();
     }
 
@@ -453,8 +458,9 @@ private:
     std::shared_ptr<detail::CPromiseCore<TContext> > m_pCore;  ///< 共享核心（上下文 + 执行器句柄）。
     std::shared_ptr<detail::CPromiseState> m_pSegment;         ///< 协程完成状态（AsPromise 暴露）。
     CAsyncExecutor* m_pExec;                                   ///< 执行器指针（Resume 调度 + 子 promise 投递）。
-    std::weak_ptr<void> m_wpSelf;                              ///< 自持弱引用（生命周期加固）。
-    CHotState m_hot;                                           ///< 热状态（步号 / 终止标志 / 拒绝码）。
+    std::shared_ptr<detail::CPromiseState> m_spOwnerLayer;  ///< 启动协程的那一层（调用链 trace；未启动 → 空）。
+    std::weak_ptr<void> m_wpSelf;                           ///< 自持弱引用（生命周期加固）。
+    CHotState m_hot;                                        ///< 热状态（步号 / 终止标志 / 拒绝码）。
 };
 
 /// @brief 起协程实现（执行器入口）：创建 + 注入自持引用 + 启动。

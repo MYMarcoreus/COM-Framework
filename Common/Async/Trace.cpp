@@ -21,7 +21,7 @@ namespace detail {
 /// 帧栈顶（TLS；帧对象本身活在各线程的栈上，这里只存指针）。
 thread_local const CCurrentLayerFrame* g_pTopFrame = nullptr;
 
-CCurrentLayerFrame::CCurrentLayerFrame(const CPromiseState* pLayer) : m_pLayer(pLayer), m_pPrev(g_pTopFrame)
+CCurrentLayerFrame::CCurrentLayerFrame(const std::shared_ptr<CPromiseState>& spLayer) : m_spLayer(spLayer), m_pPrev(g_pTopFrame)
 {
     g_pTopFrame = this;
 }
@@ -36,9 +36,32 @@ const CCurrentLayerFrame* CCurrentLayerFrame::Top()
     return g_pTopFrame;
 }
 
+/// 起链父层的作用域栈顶（TLS；节点活在各自栈上）。
+thread_local const CChainAdopterScope::CNode* g_pTopAdopter = nullptr;
+
+CChainAdopterScope::CChainAdopterScope(const std::shared_ptr<CPromiseState>& spAdopter) : m_node{spAdopter, g_pTopAdopter}
+{
+    g_pTopAdopter = &m_node;
+}
+
+CChainAdopterScope::~CChainAdopterScope()
+{
+    g_pTopAdopter = m_node.pPrev;
+}
+
+std::shared_ptr<CPromiseState> CurrentLayerState()
+{
+    if (g_pTopAdopter != nullptr)
+    {
+        return g_pTopAdopter->spAdopter;  // 显式指定优先（工厂里现搭的子链）。
+    }
+    const CCurrentLayerFrame* pFrame = CCurrentLayerFrame::Top();
+    return (pFrame != nullptr) ? pFrame->LayerState() : std::shared_ptr<CPromiseState>();
+}
+
 #else
 
-CCurrentLayerFrame::CCurrentLayerFrame(const CPromiseState* pLayer) : m_pLayer(pLayer), m_pPrev(nullptr)
+CCurrentLayerFrame::CCurrentLayerFrame(const std::shared_ptr<CPromiseState>& spLayer) : m_spLayer(spLayer), m_pPrev(nullptr)
 {}
 
 CCurrentLayerFrame::~CCurrentLayerFrame()
@@ -47,6 +70,17 @@ CCurrentLayerFrame::~CCurrentLayerFrame()
 const CCurrentLayerFrame* CCurrentLayerFrame::Top()
 {
     return nullptr;
+}
+
+CChainAdopterScope::CChainAdopterScope(const std::shared_ptr<CPromiseState>& spAdopter) : m_node{spAdopter, nullptr}
+{}
+
+CChainAdopterScope::~CChainAdopterScope()
+{}
+
+std::shared_ptr<CPromiseState> CurrentLayerState()
+{
+    return std::shared_ptr<CPromiseState>();
 }
 
 #endif

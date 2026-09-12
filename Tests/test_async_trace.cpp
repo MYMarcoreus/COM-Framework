@@ -6,7 +6,8 @@
 /// → ⑤ 被跳过的 `Catch` → ⑥ `Finally` → ⑦ `ThenPromise` 内层链 → ⑧ 分叉基座
 /// → ⑨ 两支；然后在**最深的地方**把整条链逐层断言出来（层数、模式、注册点行号、
 /// 深度、当前层标记、一行描述），另外把特殊位置逐个钉住：
-///   - 内层链（`ThenPromise`）：自成一条链，看不到外层（异步链的边界，不是 bug）；
+///   - 子链 → 父链：内层链（`ThenPromise`）的链根挂在**起它的那一层**下面 → 从内层里能一路
+///     追回主链；反过来主链看不到子链（只往上游走）；层外起的链没有父层；
 ///   - 分叉：每条分支只看得到「自己 + 共同上游」，看不到兄弟分支；
 ///   - 通知（`OnSettled`）：落定前登记 → 在**触发它的那一层**的帧里就地执行；
 ///     落定后才登记 → 投递执行，此时不在任何层里（通知不是层）；
@@ -97,6 +98,7 @@ struct CTraceCtx
     int nLineInnerFirst;   ///< 内层链第 1 层注册点（在内层链的工厂里采集）
     int nLineInnerSecond;  ///< 内层链第 2 层注册点
     int nLineCoroStep;     ///< 协程里 await 的那条子链的注册点
+    int nLineStart;        ///< 层外起链时（`exec.NewPromise`）的注册点
 
     CCapture capRoot;          ///< 链根
     CCapture capInline;        ///< `ThenInline` 层
@@ -121,6 +123,7 @@ struct CTraceCtx
           nLineInnerFirst(0),
           nLineInnerSecond(0),
           nLineCoroStep(0),
+          nLineStart(0),
           capRoot(),
           capInline(),
           capOtherExec(),
@@ -508,15 +511,34 @@ TEST(Trace_CompleteChainInComplexFlow)
     const CExpect vecExpectOther[3] = {{"then", lines.nOther}, {"then", lines.nInline}, {"then", lines.nRoot}};
     AssertChain(spCtx->capOtherExec, vecExpectOther, 3);
 
-    //================ 内层链（ThenPromise）：自成一条，看不到外层 ================
-    const CExpect vecExpectInnerSecond[2] = {{"then", spCtx->nLineInnerSecond}, {"then", spCtx->nLineInnerFirst}};
-    AssertChain(spCtx->capInnerSecond, vecExpectInnerSecond, 2);
-    const CExpect vecExpectInnerFirst[1] = {{"then", spCtx->nLineInnerFirst}};
-    AssertChain(spCtx->capInnerFirst, vecExpectInnerFirst, 1);
+    //================ 子链 → 父链：内层链的链根挂在「起它的那一层」下面 ================
+    // 内层链是在 ⑥（ThenPromise 层）的工厂里现搭的 → 它的链根挂到 ⑥ 上，于是从内层最深一层
+    // 就能一路追回主链链根（内层两段 + 主链前缀 = 8 层）。
+    const CExpect vecExpectInnerSecond[8] = {
+        {"then", spCtx->nLineInnerSecond},
+        {"then", spCtx->nLineInnerFirst},
+        {"then", lines.nBridge},
+        {"finally", lines.nFinally},
+        {"catch", lines.nCatch},
+        {"then", lines.nOther},
+        {"then", lines.nInline},
+        {"then", lines.nRoot},
+    };
+    AssertChain(spCtx->capInnerSecond, vecExpectInnerSecond, 8);
 
-    // 内层链的链根没有上游 → 主链的任何一层都看不到（异步链的边界，不是 bug）。
-    ASSERT_TRUE(!HasLine(spCtx->capInnerSecond, lines.nRoot));
-    ASSERT_TRUE(!HasLine(spCtx->capInnerSecond, lines.nBridge));
+    const CExpect vecExpectInnerFirst[7] = {
+        {"then", spCtx->nLineInnerFirst},
+        {"then", lines.nBridge},
+        {"finally", lines.nFinally},
+        {"catch", lines.nCatch},
+        {"then", lines.nOther},
+        {"then", lines.nInline},
+        {"then", lines.nRoot},
+    };
+    AssertChain(spCtx->capInnerFirst, vecExpectInnerFirst, 7);
+
+    // 反过来：子链在父链的**下游**，所以主链上任何一层都看不到它（只往上游走）。
+    ASSERT_TRUE(!HasLine(spCtx->capDeepest, spCtx->nLineInnerFirst));
 
     //================ 通知：就地看得到「触发它的那一层」，投递看不到层 ================
     const CExpect vecExpectNoticeInline[1] = {{"then", nLineGated}};
@@ -577,7 +599,14 @@ TEST(Trace_NotInsideLayer)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CTraceCtx> spCtx = std::make_shared<CTraceCtx>();
+    spCtx->nLineStart = __LINE__ + 1;
     ASSERT_TRUE(exec.NewPromise(spCtx, &StepRoot, ASYNC_LOC).Await().IsFulfilled());
+
+#if defined(ASYNC_DEBUG_TRACE)
+    // 层外起的链没有「父层」—— 链根就是链根（它的上游要等有人 adopt / 或它在层里起链时才挂上）。
+    const CExpect vecExpectAlone[1] = {{"then", spCtx->nLineStart}};
+    AssertChain(spCtx->capRoot, vecExpectAlone, 1);
+#endif
 
     // 层跑在 worker 线程上；主线程（调用方）始终不在层里。
     ASSERT_TRUE(common::async::CurrentLayer() == NULL);

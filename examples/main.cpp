@@ -1,1224 +1,935 @@
-// ============================================================
-// 异步链（common::async 特化版）完整示例
+// ====================================================================
+// 异步链完整示例：**一条父链**把所有常用用法串起来，并且每个位置都能看到自己的调用链
 //
-// 本框架的链与「层间传任意值」的通用任务链相反：
-//   - 层与层之间只传递「兑现 / 拒绝」（CPromiseResult）；
-//   - 数据统一放在共享上下文（std::shared_ptr<TContext>，整条链共用同一实例）；
-//   - 层函数签名固定：
-//         CPromiseResult handler(CPromiseResult upResult, const std::shared_ptr<TContext>& spCtx);
-//     下一层据此判断上一层回调的成败；数据一律从 spCtx 读写。
+// 父链本体在 BuildOrderChain() 里，一行一层、一眼看完：
 //
-// 项目结构参考标准服务器项目：main.cpp（入口）+ Linux/Makefile（构建配置）。
-// 构建与运行：
-//   cd examples/Linux && make run            # 构建并运行（release）
-//   ./build.sh examples                      # 或经统一构建脚本
+//   ① 起链（具名 handler）   exec.NewPromise(spCtx, &StepReadOrder, ASYNC_LOC)
+//   ② then = lambda          只此一处用的小逻辑就写成 lambda
+//   ③ then 就地              ThenInline：跑在「结算它的那条线程」上，省一次投递
+//   ④ then 换执行器          ThenOn(execDb, ...)：换线程，**调用链不受影响**
+//   ⑤ 内层链（同上下文）     ThenPromise：等一条自己搭的子链（2 层）
+//   ⑥ 跨模块 / 跨上下文      ThenBridge：等别的模块（另一套 TContext），数据搬回来
+//   ⑦ 分叉                   同一层挂两支：一支继续主线（⑨），一支旁支（⑧）
+//   ⑧ 旁支 + fire-and-forget 层里 exec.Post(...)：链不等它（只写自己那一格）
+//   ⑨ 主线继续               分叉的另一支
+//   ⑩ 协程                   CO_AWAIT / CO_AWAIT_ALL（协程当父链的一步）
+//   ⑪ then 收尾 / ⑫ catch 补偿 / ⑬ finally 审计
 //
-// 用法速览（每个函数演示一类用法）：
-//   ①  NewPromise + Await   起 promise 并阻塞取结果
-//   ②  链式 then            多层顺序执行，数据走共享上下文
-//   ③  catch 看到拒绝       upResult 携带上一层结果（仅被拒绝时执行）
-//   ④  then 失败即停        后续 then 层不执行，拒绝码透传
-//   ⑤  回滚 / 恢复          catch 透传拒绝 / Resolve() 吞掉拒绝继续
-//   ⑥  异常转拒绝           处理器内异常 → kException，不向调用方抛出
-//   ⑦  settled 通知         OnSettled（兑现 / 拒绝都触发一次）
-//   ⑧  分叉                 同一层注册多个 then，各自独立延续
-//   ⑨  上下文创建           调用方强制传入（先备数据、再起链）
-//   ⑩  Post                 无返回值任务（fire-and-forget）
-//   ⑪  并发多条链           多线程并行 + 并发 Await 同一 promise
-//   ⑫  生命周期加固         执行器析构后 promise 仍安全完成
-//   ⑬  未启动执行器         起 promise 立即被拒绝（kStopped）
-//   ⑭  深链                 超过内联深度上限自动改投递
-//   ⑮  注册点源码位置       ASYNC_LOC（调试构建保存函数 / 文件 / 行号）
-//   ⑯  协程顺序 await       CO_AWAIT
-//   ⑰  协程并行 await       CO_AWAIT_ALL
-//   ⑱  协程 await 拒绝      协程终止，拒绝码透传
-//   ⑲  嵌套协程             await 子协程 AsPromise()
-//   ⑳  finally 收尾         无论兑现还是拒绝都执行，不改结果
+// 其余常用用法在 main() 里补齐：
+//   - 组合器一族：WhenAll / WhenAllSettled / WhenRace / WhenAny（都在**执行器**上）；
+//   - Await（阻塞取结果）/ AwaitFor(ms)（超时兜底）；
+//   - OnSettled / OnSettledOn（settled 通知 —— **不是层**，不产生新层帧）；
+//   - 回调式起链 exec.NewPromise(spCtx, fnStarter)（见记账模块 WriteBillAsync）；
+//   - 拒绝路径：同一条父链再跑一遍（库存不足）→ 失败即停 + catch 补偿 + finally 审计。
 //
-//   —— 嵌套用法（异步里再起异步）——
-//   ㉑  层内嵌套（阻塞）     层里起子 promise 并等它（需 ≥2 工作线程，会占住一个 worker）
-//   ㉒  层内嵌套（非阻塞）   起子 promise 后返回，由它的 settled 回调接着干活（单线程也安全）
-//   ㉓  层内 fire-and-forget 层里 Post 重活，链不等它（只写不被后续层碰的字段）
-//   ㉔  协程跨上下文嵌套     await 另一套 TContext 的子流程（同/跨上下文、多步子 promise）
-//   ㉕  并行嵌套             CO_AWAIT_ALL 里每条都是「多步子 promise + 独立上下文」
-//   ㉖  分叉 + 协程汇聚      同一层分叉两条分支，协程并行等待后汇聚（纯异步的等价写法是
-//                            exec.WhenAll，见 docs/common/async-usage.md）
-//   ㉗  跨模块组合           new Promise 桥接别的模块的 promise + then-promise 接进本流程
-//                            （纯异步、零阻塞、不用协程；单线程执行器也安全）
-//   ㉘  混用多种 then        具名异步函数 / lambda / lambda 里执行其他异步函数（等它 / 不等它）
-//                            （单独文件：examples/cases/ThenMixCase.cpp，一条链看全写法）
-// ============================================================
+// --------------------------------------------------------------------
+// 追踪（本示例的重点）：每个位置都调 TraceHere(...)，打印「正在跑的层 + 一路往上的完整链」
+//
+//   [!] 想看追踪必须用**调试构建**（trace 与注册点 ASYNC_LOC 是同一个开关）：
+//         ./build.sh --debug examples && ./build/debug/examples
+//       发布构建下这些打印只剩一行「trace 关闭」的提示（接口是空操作，零开销）。
+//
+//   [i] 子链 → 父链（已打通）：**起链时正在跑的那一层**会被记成新链「链根」的父层 ——
+//       内层链（⑤）/ 跨模块子链（⑥）/ 协程起的子链（⑩）都能从子链里一路追回父链（连成一棵树）。
+//       - 组合器（WhenAll 一族）：聚合层与各分支都挂在「发起它们的那一层」下面（多父一子）；
+//       - 分叉：每条分支只看到「自己 + 共同上游」，看不到兄弟分支（下游不往上游走）。
+// ====================================================================
+
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
+#include <functional>
 #include <memory>
-#include <stdexcept>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "Assert.h"
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
+#include "Async/Trace.h"
 #include "Coroutine/Coroutine.h"
-#include "cases/ThenMixCase.h"
 
-// 示例自我校验统一用框架通用 ASSERT（Common/Assert.h）：条件为假立即打印位置并 abort，
-// 这样示例与框架/业务代码用的是同一套断言。
-#include "Assert.h"
+using common::async::CAsyncExecutor;
+using common::async::CCoroutine;
+using common::async::CLayerInfo;
+using common::async::CPromise;
+using common::async::CPromiseResult;
 
-// ============================================================
-// 演示用共享上下文与层函数
-// ============================================================
+namespace {
 
-/// 演示用业务错误码（业务码从 kBusinessBase 起取）。
-enum DemoCode
+// ====================================================================
+// 一、通用小工具
+// ====================================================================
+
+/// 示例业务错误码（业务码从 kBusinessBase 起取）。
+enum CErrCode
 {
-    kCodeInvalid = common::async::kBusinessBase + 1,     ///< 参数非法。
-    kCodeStoreFailed = common::async::kBusinessBase + 2  ///< 落库失败。
+    kErrBadParam = common::async::kBusinessBase + 1,  ///< 参数非法。
+    kErrNoStock = common::async::kBusinessBase + 2    ///< 库存不足。
 };
 
-/// @brief 一次流程的共享数据（TContext）：各层读写它，层间只传成败。
-struct CDemoContext
+/// @brief 睡一会儿（模拟 IO；示例里不真的连数据库）。
+void SleepMs(int nMs)
 {
-    int nBase;                   ///< 输入基数。
-    int nScaled;                 ///< 缩放结果。
-    bool bFailParam;             ///< 模拟参数非法。
-    bool bFailStore;             ///< 模拟落库失败。
-    bool bRolledBack;            ///< 是否回滚。
-    std::string strTrace;        ///< 层执行轨迹。
-    std::atomic<int> nForkDone;  ///< 分叉演示：两条分支各 +1（原子，并行安全）。
-    std::atomic<int> nParDone;   ///< 并行 await 演示：三条分支各 +1（原子，并行安全）。
-
-    CDemoContext() : nBase(10), nScaled(0), bFailParam(false), bFailStore(false), bRolledBack(false), nForkDone(0), nParDone(0)
-    {}
-};
-
-/// 层：读参数。
-static common::async::CPromiseResult StepReadParam(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& spCtx)
-{
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
-    spCtx->strTrace += "读参数;";
-    return spCtx->bFailParam ? common::async::CPromiseResult::Reject(kCodeInvalid) : common::async::CPromiseResult::Resolve();
+    std::this_thread::sleep_for(std::chrono::milliseconds(nMs));
 }
 
-/// 层：缩放（基数 ×3）。
-static common::async::CPromiseResult StepScale(common::async::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& spCtx)
-{
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
-    spCtx->nScaled = spCtx->nBase * 3;
-    spCtx->strTrace += "缩放;";
-    return common::async::CPromiseResult::Resolve();
-}
-
-/// 层：落库（可模拟失败）。
-static common::async::CPromiseResult StepStore(common::async::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& spCtx)
-{
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
-    spCtx->strTrace += "落库;";
-    return spCtx->bFailStore ? common::async::CPromiseResult::Reject(kCodeStoreFailed) : common::async::CPromiseResult::Resolve();
-}
-
-/// 层（并行演示）：只写「并行分支计数」这一格。
-///
-/// 并行分支共用一个上下文时，**各分支只能写不同字段**（框架只保证同一条链内层顺序执行，
-/// 跨链并发由调用方负责 —— 见 docs/common/async-usage.md §6.5）。
-static common::async::CPromiseResult StepParBranch(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& spCtx)
-{
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
-    spCtx->nParDone.fetch_add(1);
-    return common::async::CPromiseResult::Resolve();
-}
-
-/// 层：被调用即留下痕迹（用于验证失败即停时未被执行）。
-static common::async::CPromiseResult StepCleanup(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CDemoContext>& spCtx)
-{
-    spCtx->strTrace += "清理;";
-    return common::async::CPromiseResult::Resolve();
-}
-
-/// 处理器（catch）：回滚——仅在上一层被拒绝时执行，并看得到拒绝结果。
-static common::async::CPromiseResult StepRollback(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& spCtx)
-{
-    spCtx->strTrace += "回滚;";
-    if (upResult.IsRejected())
-    {
-        spCtx->bRolledBack = true;
-        return upResult;  // 透传失败：后续 Then 层仍不执行。
-    }
-    return common::async::CPromiseResult::Resolve();
-}
-
-/// 处理器（catch）：吞掉拒绝（补偿后恢复链）。
-static common::async::CPromiseResult StepRecover(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CDemoContext>& spCtx)
-{
-    spCtx->strTrace += "恢复;";
-    return common::async::CPromiseResult::Resolve();  // Resolve() → 吞掉拒绝，promise 从本层之后继续。
-}
-
-/// 处理器：抛异常（框架捕获 → 本层被拒绝 kException）。
-static common::async::CPromiseResult StepThrow(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CDemoContext>& /*spCtx*/)
-{
-    throw std::runtime_error("演示用异常");
-}
-
-// ---------------- 嵌套演示用的上下文与处理器（子流程 / 并行分支） ----------------
-
-/// @brief 子流程上下文：与父流程的 CDemoContext **不同**，演示跨上下文嵌套。
-struct CSubContext
-{
-    int nRows;             ///< 查询到的行数。
-    std::string strTrace;  ///< 子流程轨迹。
-
-    CSubContext() : nRows(0)
-    {}
-};
-
-/// 处理器（子流程）：模拟一次查询（3 行，耗时 5ms）。
-static common::async::CPromiseResult StepQueryRows(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CSubContext>& spCtx)
-{
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));  // 模拟 IO
-    spCtx->nRows = 3;
-    spCtx->strTrace += "查询;";
-    return common::async::CPromiseResult::Resolve();
-}
-
-/// @brief 分支上下文：每条并行分支一个独立实例（并行写同一份数据不安全）。
-struct CBranchContext
-{
-    int nId;     ///< 分支编号。
-    int nValue;  ///< 分支结果。
-
-    CBranchContext() : nId(0), nValue(0)
-    {}
-};
-
-/// 处理器（分支第一步）：载入（+10，耗时 10ms）。
-static common::async::CPromiseResult StepBranchLoad(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CBranchContext>& spCtx)
-{
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));  // 模拟 IO
-    spCtx->nValue += 10;
-    return common::async::CPromiseResult::Resolve();
-}
-
-/// 处理器（分支第二步）：保存（+1）—— 与上一步用 then 串成「多步并行子流程」。
-static common::async::CPromiseResult StepBranchSave(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CBranchContext>& spCtx)
-{
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
-    spCtx->nValue += 1;
-    return common::async::CPromiseResult::Resolve();
-}
-
-/// 处理器（分叉分支）：只做原子计数（并行安全），不碰共享的可变数据。
-static common::async::CPromiseResult StepForkBranch(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& spCtx)
-{
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));  // 模拟并行工作
-    spCtx->nForkDone.fetch_add(1, std::memory_order_relaxed);
-    return common::async::CPromiseResult::Resolve();
-}
-
-// ============================================================
-// 示例自校验的小工具：把「动作」留在断言外
-//
-// 框架 `ASSERT(expr)` 在发布构建里展开为 `(void)sizeof(expr)` —— **不求值**（见
-// Common/Assert.h 与 docs/common/assert-usage.md）。所以**带副作用的调用不能直接写进 ASSERT**：
-//
-//     ASSERT(exec.Start());                   // release：执行器根本没启动
-//     ASSERT(promise.Await().IsFulfilled());  // release：根本没等
-//
-// 这样写出来的示例在 release 下会静默跑空（examples 曾因此在 release 里卡住）。下面两个 helper
-// 把「动作」留在断言外、把「判断」交给 ASSERT，调用处仍然是一行一个检查。
-// ============================================================
-
-/// @brief 启动执行器（启动失败即断言失败）。
-static void StartOrFail(common::async::CAsyncExecutor& exec)
+/// @brief 起执行器并断言成功（动作在断言外：release 下断言不求值）。
+void StartOrFail(CAsyncExecutor& exec)
 {
     const bool bStarted = exec.Start();
     ASSERT(bStarted);
 }
 
-/// @brief 阻塞取结果并断言「兑现」：副作用（Await）在断言外，release 下照样会等。
-static void AwaitOk(const common::async::CPromiseResult& result)
+#if defined(ASYNC_DEBUG_TRACE)
+
+/// @brief 层模式的文本形式（then / catch / finally）。
+const char* ModeText(common::async::detail::HandlerMode eMode)
 {
-    const bool bFulfilled = result.IsFulfilled();
-    ASSERT(bFulfilled);
-}
-
-// ① 最基本：起 promise（NewPromise）+ 阻塞取结果（Await）
-void DemoNewPromiseAndAwait()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    spCtx->nBase = 42;
-    // ASYNC_LOC：调试构建（make debug）下保存注册点的函数 / 文件 / 行号。
-    common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Await();
-    ASSERT(r.IsFulfilled());
-    ASSERT(spCtx->nBase == 42);
-    std::printf("① NewPromise + Await: 结果=%s 码=%d\n", r.IsFulfilled() ? "兑现" : "拒绝", r.Code());
-    exec.Stop();
-}
-
-// ② 链式 Then：多层顺序执行；数据经共享上下文传递（层间只传成败）
-void DemoChainThen()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    spCtx->nBase = 10;
-    common::async::CPromiseResult r =
-        exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC).Then(&StepStore, ASYNC_LOC).Await();
-    ASSERT(r.IsFulfilled());
-    ASSERT(spCtx->nScaled == 30);                                 // 数据在上下文里
-    ASSERT(spCtx->strTrace == std::string("读参数;缩放;落库;"));  // 层按注册顺序执行
-    std::printf("② 链式 Then: 缩放=%d 轨迹=%s\n", spCtx->nScaled, spCtx->strTrace.c_str());
-    exec.Stop();
-}
-
-// ③ catch 看到上一层拒绝：upResult 携带拒绝结果（仅被拒绝时执行）
-void DemoCatchSeesRejection()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    // 落库失败 → catch 层仍执行，且 upResult.IsRejected() 为真
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    spCtx->bFailStore = true;
-    common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC)
-                                          .Then(&StepScale, ASYNC_LOC)
-                                          .Then(&StepStore, ASYNC_LOC)
-                                          .Catch(&StepRollback, ASYNC_LOC)
-                                          .Await();
-    ASSERT(r.IsRejected());
-    ASSERT(spCtx->bRolledBack);  // 回滚层看到了上一层失败
-    ASSERT(spCtx->strTrace == std::string("读参数;缩放;落库;回滚;"));
-    std::printf("③ catch 看到拒绝: 回滚=%s 轨迹=%s\n", spCtx->bRolledBack ? "已执行" : "未执行", spCtx->strTrace.c_str());
-    exec.Stop();
-}
-
-// ④ 失败即停：某层失败后，后续 Then 层不再执行，失败码透传到 Get()
-void DemoThenFailFast()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    spCtx->bFailParam = true;  // 读参数层失败
-    common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC)
-                                          .Then(&StepScale, ASYNC_LOC)    // 不执行
-                                          .Then(&StepStore, ASYNC_LOC)    // 不执行
-                                          .Then(&StepCleanup, ASYNC_LOC)  // 不执行
-                                          .Await();
-    ASSERT(r.IsRejected());
-    ASSERT(r.Code() == kCodeInvalid);  // 业务拒绝码原样透传
-    ASSERT(spCtx->strTrace == std::string("读参数;"));
-    std::printf("④ then 失败即停: 码=%d（业务码从 kBusinessBase=%d 起）轨迹=%s\n", r.Code(), common::async::kBusinessBase,
-        spCtx->strTrace.c_str());
-    exec.Stop();
-}
-
-// ⑤ 回滚 / 恢复：catch 返回 upResult 即继续透传拒绝；返回 Resolve() 即吞掉拒绝继续
-void DemoCatchRollbackAndRecover()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    // 5.1 回滚后透传失败 → 后续层仍不执行
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    spCtx->bFailStore = true;
-    common::async::CPromiseResult r1 = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC)
-                                           .Then(&StepStore, ASYNC_LOC)
-                                           .Catch(&StepRollback, ASYNC_LOC)  // 透传失败
-                                           .Then(&StepCleanup, ASYNC_LOC)    // 不执行
-                                           .Await();
-    ASSERT(r1.IsRejected());
-    ASSERT(spCtx->strTrace == std::string("读参数;落库;回滚;"));
-
-    // 5.2 回滚后恢复 → 后续层重新执行
-    std::shared_ptr<CDemoContext> spCtx2 = std::make_shared<CDemoContext>();
-    spCtx2->bFailStore = true;
-    common::async::CPromiseResult r2 = exec.NewPromise(spCtx2, &StepReadParam, ASYNC_LOC)
-                                           .Then(&StepStore, ASYNC_LOC)
-                                           .Catch(&StepRecover, ASYNC_LOC)  // 吞掉失败
-                                           .Then(&StepCleanup, ASYNC_LOC)   // 执行
-                                           .Await();
-    ASSERT(r2.IsFulfilled());  // 链已恢复
-    ASSERT(spCtx2->strTrace == std::string("读参数;落库;恢复;清理;"));
-    std::printf("⑤ 回滚 / 恢复: 透传=%s 恢复后=%s\n", spCtx->strTrace.c_str(), spCtx2->strTrace.c_str());
-    exec.Stop();
-}
-
-// ⑥ 处理器内异常 → 本层被拒绝（kException），框架不向调用方抛出
-void DemoExceptionToFailed()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepThrow, ASYNC_LOC)
-                                          .Then(&StepCleanup, ASYNC_LOC)  // 不执行
-                                          .Await();
-    ASSERT(r.IsRejected());
-    ASSERT(r.Code() == static_cast<int>(common::async::kException));
-    ASSERT(spCtx->strTrace.empty());
-    std::printf("⑥ 异常转拒绝: 码=%d（kException）\n", r.Code());
-    exec.Stop();
-}
-
-// ⑦ settled 通知 OnSettled：兑现 / 拒绝都触发一次（携带最终结果）
-void DemoOnSettledCallback()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    spCtx->bFailStore = true;
-    std::atomic<int> nCode(-1);
-    std::atomic<bool> bDone(false);
-
-    common::async::CPromise<CDemoContext> chain = exec.NewPromise(spCtx, &StepStore, ASYNC_LOC);
-    chain.OnSettled(
-        [&nCode, &bDone](common::async::CPromiseResult r)
-        {
-            nCode.store(r.Code());
-            bDone.store(true);
-        });
-    chain.Await();
-    while (!bDone.load())
+    if (eMode == common::async::detail::kModeCatch)
     {
-        std::this_thread::yield();  // 完成回调可能略晚于 Get 返回
+        return "catch";
     }
-    ASSERT(nCode.load() == kCodeStoreFailed);
-    std::printf("⑦ settled 通知: 码=%d\n", nCode.load());
-    exec.Stop();
-}
-
-// ⑧ 分叉：同一层注册多个 Then，各自独立延续（共享同一上下文）
-//
-// 两条分支是**并发**跑的，所以它们用「只写自己那一格」的层（`nForkDone`，原子）——
-// 共用上下文时各分支写同一个 `std::string` / 容器就是数据竞争（见 async-usage.md §6.5）。
-void DemoFork()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    common::async::CPromise<CDemoContext> head = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC);
-
-    std::atomic<int> nDone(0);
-    common::async::CPromise<CDemoContext> branchA = head.Then(&StepForkBranch, ASYNC_LOC);
-    common::async::CPromise<CDemoContext> branchB = head.Then(&StepForkBranch, ASYNC_LOC);
-    branchA.OnSettled(
-        [&nDone](common::async::CPromiseResult)
-        {
-            nDone.fetch_add(1);
-        });
-    branchB.OnSettled(
-        [&nDone](common::async::CPromiseResult)
-        {
-            nDone.fetch_add(1);
-        });
-
-    AwaitOk(branchA.Await());
-    AwaitOk(branchB.Await());
-    while (nDone.load() < 2)
+    if (eMode == common::async::detail::kModeFinally)
     {
-        std::this_thread::yield();
+        return "finally";
     }
-    ASSERT(spCtx->nForkDone.load() == 2);               // 两条分支各执行一次
-    ASSERT(spCtx->strTrace == std::string("读参数;"));  // 首层只执行一次（分叉不重复跑首层）
-    std::printf("⑧ 分叉: 两条分支都完成，上下文共享，轨迹=%s\n", spCtx->strTrace.c_str());
-    exec.Stop();
+    return "then";
 }
 
-// ⑨ 上下文创建：调用方强制传入（框架不代建）——先备好数据，再起链
-void DemoContextCreation()
+/// @brief 取路径里的文件名部分（打印短一些）。
+const char* BaseName(const char* pszPath)
 {
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    // 9.1 多层层链：先备好上下文（含初始数据），再起链
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    spCtx->nBase = 20;
-    common::async::CPromise<CDemoContext> tail = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC);
-    ASSERT(tail.GetContext() == spCtx);  // 恒非空，且就是传入的那个实例
-    AwaitOk(tail.Await());
-    ASSERT(spCtx->nScaled == 60);
-
-    // 9.2 单层链：同一个上下文实例贯穿全部层（不做拷贝）
-    std::shared_ptr<CDemoContext> spCtx2 = std::make_shared<CDemoContext>();
-    spCtx2->nBase = 5;
-    common::async::CPromise<CDemoContext> chain2 = exec.NewPromise(spCtx2, &StepScale, ASYNC_LOC);
-    ASSERT(chain2.GetContext() == spCtx2);
-    AwaitOk(chain2.Await());
-    ASSERT(spCtx2->nScaled == 15);
-    std::printf("⑨ 上下文: 两层链=%d 单层链=%d\n", spCtx->nScaled, spCtx2->nScaled);
-    exec.Stop();
-}
-
-// ⑩ Post：无返回值任务（fire-and-forget）
-void DemoPost()
-{
-    common::async::CAsyncExecutor exec(2);
-    // 注意：`Post` 是**动作**、不是断言，所以返回值先取出来、再断言；任务体也先收进 std::function
-    // （lambda 字面量不能出现在 `(void)sizeof(expr)` 这种未求值上下文里，C++11）。
-    std::atomic<int> nDone(0);
-    const std::function<void()> fnNoop = []()
+    if (pszPath == NULL)
     {
-    };
-    const std::function<void()> fnCount = [&nDone]()
-    {
-        nDone.fetch_add(1);
-    };
-
-    const bool bPostedBeforeStart = exec.Post(fnNoop);  // 未启动：应当拒绝
-    ASSERT(!bPostedBeforeStart);
-
-    StartOrFail(exec);
-    const bool bPosted = exec.Post(fnCount);
-    ASSERT(bPosted);
-    exec.Stop();  // 等待任务完成
-    ASSERT(nDone.load() == 1);
-    const bool bPostedAfterStop = exec.Post(fnCount);  // 已停止：应当拒绝
-    ASSERT(!bPostedAfterStop);
-    std::printf("⑩ Post: 完成=%d（未启动 / 已停止均被拒绝）\n", nDone.load());
-}
-
-// ⑪ 并发多条链 + 并发 Await 同一 promise
-void DemoConcurrent()
-{
-    common::async::CAsyncExecutor exec(4);
-    StartOrFail(exec);
-
-    // 11.1 多条链并行（各链独立上下文）
-    const int kChains = 16;
-    std::vector<common::async::CPromise<CDemoContext> > chains;
-    for (int i = 0; i < kChains; ++i)
-    {
-        std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-        spCtx->nBase = i + 1;
-        chains.push_back(exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC));
+        return "?";
     }
-    int nOk = 0;
-    for (size_t i = 0; i < chains.size(); ++i)
+    const char* pszSlash = std::strrchr(pszPath, '/');
+    return pszSlash != NULL ? pszSlash + 1 : pszPath;
+}
+
+/// @brief 把注册点存的 `__PRETTY_FUNCTION__` 缩成「看得懂的那一段」。
+///
+/// 注册点存的是 `__PRETTY_FUNCTION__`（精确，但模板实参 / 匿名命名空间全在里面，很长）；
+/// 打印时只取最后一个 `::` 之后的函数名，lambda 一律显示成 `<lambda>`。
+std::string ShortFunc(const char* pszPretty)
+{
+    if (pszPretty == NULL)
     {
-        if (chains[i].Await().IsFulfilled())
+        return "(无注册点)";
+    }
+    std::string strFunc(pszPretty);
+    const size_t nParen = strFunc.find('(');
+    if (nParen != std::string::npos)
+    {
+        strFunc.erase(nParen);  // 去掉参数表
+    }
+    if (strFunc.find("<lambda") != std::string::npos)
+    {
+        return "<lambda>";
+    }
+    const size_t nScope = strFunc.rfind("::");
+    if (nScope != std::string::npos)
+    {
+        strFunc.erase(0, nScope + 2);
+    }
+    return strFunc;
+}
+
+#endif  // defined(ASYNC_DEBUG_TRACE)
+
+/// @brief 数一数当前层能看到的链有几层（发布构建下 trace 是空操作 → 恒为 0）。
+int CountChain()
+{
+    int nCount = 0;
+    common::async::VisitLayerChain(
+        [&nCount](const CLayerInfo&)
         {
-            ++nOk;
+            ++nCount;
+        });
+    return nCount;
+}
+
+/// @brief 打印「当前层 + 一路往上的完整调用链」—— 本示例要给你看的就是这个。
+///
+/// 分叉 / 协程并行 await 会让多个工作线程同时打印，所以这里加锁，免得几段输出绞在一起。
+///
+/// @param pszWhere 这是哪一步（① … ⑬）。
+void TraceHere(const char* pszWhere)
+{
+    static std::mutex s_mutex;  // 只为让本示例的输出好看
+
+    std::lock_guard<std::mutex> lock(s_mutex);
+    std::printf("\n  [%s]\n", pszWhere);
+
+#if defined(ASYNC_DEBUG_TRACE)
+    const CLayerInfo* pInfo = common::async::CurrentLayer();
+    if (pInfo == NULL)
+    {
+        std::printf("      当前不在任何层里（通知 / Post 的旁支任务 / 主线程都看不到层）\n");
+        return;
+    }
+
+    std::printf("      本层：%s   完整链 %d 层（近 → 远 = 从本层往上游追，谁挂的它）\n", ModeText(pInfo->eMode), CountChain());
+    common::async::VisitLayerChain(
+        [](const CLayerInfo& info)
+        {
+            std::printf("        #%-2d %-7s %-16s %s:%d%s\n", info.nDepth, ModeText(info.eMode),
+                ShortFunc(info.loc.szFunction).c_str(), BaseName(info.loc.szFile), info.loc.nLine,
+                info.bCurrent ? "   ← 当前层" : "");
+        });
+#else
+    std::printf("      （发布构建：trace 关闭 —— 用 ./build/debug/examples 跑，这里会打出完整调用链）\n");
+#endif
+}
+
+/// @brief 链里有没有某个注册点（用来断言「某一层不在我的链上」）。
+///
+/// 只在调试构建用得上（发布构建下 trace 是空操作、断言也不看链），所以跟着开关走。
+#if defined(ASYNC_DEBUG_TRACE)
+bool HasChainLine(const std::vector<CLayerInfo>& vecChain, int nLine)
+{
+    for (size_t i = 0; i < vecChain.size(); ++i)
+    {
+        if (vecChain[i].loc.nLine == nLine)
+        {
+            return true;
         }
     }
-    ASSERT(nOk == kChains);
-
-    // 11.2 多线程 Get 同一链（notify_all 唤醒全部等待者）
-    std::shared_ptr<CDemoContext> spShared = std::make_shared<CDemoContext>();
-    common::async::CPromise<CDemoContext> shared =
-        exec.NewPromise(spShared, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC);
-    std::atomic<int> nGot(0);
-    std::vector<std::thread> threads;
-    for (int i = 0; i < 8; ++i)
-    {
-        threads.push_back(std::thread(
-            [&shared, &nGot]()
-            {
-                if (shared.Await().IsFulfilled())
-                {
-                    nGot.fetch_add(1);
-                }
-            }));
-    }
-    for (size_t i = 0; i < threads.size(); ++i)
-    {
-        threads[i].join();
-    }
-    ASSERT(nGot.load() == 8);
-    ASSERT(spShared->strTrace == std::string("读参数;缩放;"));  // 层不会被重复执行
-    std::printf("⑪ 并发: promise=%d 并发 Await=%d\n", nOk, nGot.load());
-    exec.Stop();
+    return false;
 }
+#endif  // defined(ASYNC_DEBUG_TRACE)
 
-// ⑫ 生命周期加固：执行器析构后，已起的 promise 仍安全完成
-void DemoLifetime()
-{
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    // 句柄无默认构造：要跨作用域持有，就用 shared_ptr 装（链本身是浅句柄）。
-    std::shared_ptr<common::async::CPromise<CDemoContext> > spTail;
-    {
-        common::async::CAsyncExecutor exec(2);
-        StartOrFail(exec);
-        spTail = std::make_shared<common::async::CPromise<CDemoContext> >(
-            exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC));
-        exec.Stop();  // 停止并等待已投递任务完成
-    }  // 执行器析构：链通过共享句柄保活线程池，不悬垂
+// ====================================================================
+// 二、父链的共享上下文与各层
+// ====================================================================
 
-    AwaitOk(spTail->Await());
-    ASSERT(spCtx->nScaled == 30);
-    std::printf("⑫ 生命周期: 执行器析构后仍完成，缩放=%d\n", spCtx->nScaled);
-}
-
-// ⑬ 未启动执行器：起 promise 立即被拒绝（kStopped），Await 不阻塞
-void DemoNotStarted()
-{
-    common::async::CAsyncExecutor exec(2);
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC).Await();
-    ASSERT(r.IsRejected());
-    ASSERT(r.Code() == static_cast<int>(common::async::kStopped));
-    ASSERT(spCtx->strTrace.empty());
-    std::printf("⑬ 未启动执行器: 码=%d（kStopped）\n", r.Code());
-}
-
-// ⑭ 深链：层数超过内联深度上限时框架自动改投递（防递归爆栈）
-void DemoDeepChain()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    const int kLayers = 256;  // > detail::kMaxInlineDepth（64）
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    common::async::CPromise<CDemoContext> tail = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC);
-    for (int i = 0; i < kLayers; ++i)
-    {
-        tail = tail.Then(&StepScale, ASYNC_LOC);
-    }
-    AwaitOk(tail.Await());
-    ASSERT(spCtx->nScaled == 30);  // 缩放层重复执行，结果不变
-    std::printf("⑭ 深链: %d 层全部执行完成\n", kLayers + 1);
-    exec.Stop();
-}
-
-// ⑮ 注册点源码位置（ASYNC_LOC）：调试构建保存注册点函数 / 文件 / 行号
-void DemoSourceLoc()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    common::async::CPromise<CDemoContext> tail = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC);
-    const common::async::CSourceLoc loc = tail.Loc();
-    (void)loc;  // 调试构建下：loc.szFunction / szFile / nLine 指向注册点
-    std::printf(
-        "⑮ 注册点源码位置: 调试构建下 tail.Loc() = %s:%d\n", loc.szFile != NULL ? loc.szFile : "(发布构建为空)", loc.nLine);
-    AwaitOk(tail.Await());
-    exec.Stop();
-}
-
-// ---------------- 协程（用顺序代码 await 多条链） ----------------
-
-/// 协程：顺序 await 三条子链（子链与协程共享同一上下文）。
-class CDemoCoroutine : public common::async::CCoroutine<CDemoContext>
-{
-public:
-    using common::async::CCoroutine<CDemoContext>::CCoroutine;
-
-    void Run() override
-    {
-        CO_BEGIN();
-        CO_AWAIT(NewPromise(&StepReadParam));
-        CO_AWAIT(NewPromise(&StepScale));
-        CO_AWAIT(NewPromise(&StepStore));
-        CO_RETURN_VOID();
-        CO_END();
-    }
-};
-
-/// 协程：并行 await 多条子链。
+/// @brief 父链共享上下文：**层间只传兑现 / 拒绝，数据一律放这里**。
 ///
-/// 三条子链共用同一个上下文且**并发**执行，所以这里的层只写自己那一格（`nParDone`，原子）。
-class CParallelCoroutine : public common::async::CCoroutine<CDemoContext>
+/// 并行分支（⑧ 物流 / ⑨ 优惠券、协程并行 await 的两条子链）只能各写**不同字段** ——
+/// 框架只保证同一条链上的层顺序执行，跨链并发由调用方负责。
+struct COrderCtx
 {
-public:
-    using common::async::CCoroutine<CDemoContext>::CCoroutine;
+    // ---- 输入 ----
+    int nQty;         ///< 数量（模拟输入）。
+    bool bFailStock;  ///< true = 模拟「库存不足」（走拒绝路径）。
 
-    void Run() override
-    {
-        CO_BEGIN();
-        CO_AWAIT_ALL(NewPromise(&StepParBranch), NewPromise(&StepParBranch), NewPromise(&StepParBranch));
-        CO_RETURN_VOID();
-        CO_END();
-    }
+    // ---- 各层产出 ----
+    long nOrderId;         ///< 订单号（①）。
+    int nStock;            ///< 库存（③）。
+    int nDiscount;         ///< 折扣金额（⑤-1）。
+    int nTotal;            ///< 总额（⑤-2 算出来；⑪ 再减优惠券）。
+    int nBillNo;           ///< 账单号（⑥ 跨模块取回）。
+    int nCoupon;           ///< 优惠券（⑨）。
+    int nGift;             ///< 赠品数（⑩-2a）。
+    int nPoints;           ///< 积分（⑩-2b）。
+    int nLogistics;        ///< 物流标记（⑧ 旁支，只写自己这一格）。
+    std::string strTrace;  ///< 顺序层留下的轨迹（自校验；并行分支一律不碰它）。
+
+    // ---- 跨线程计数（并行分支 / Post 旁支用） ----
+    std::atomic<int> nSideDone;  ///< Post 出去的旁支任务完成数。
+    std::atomic<int> nCoroDone;  ///< 协程并行 await 的两条子链完成数。
+
+    // ---- 跨作用域持有句柄 / 保活 ----
+    // CPromise 没有默认构造，要跨作用域持有就用 shared_ptr<CPromise<Ctx>> 装（框架推荐写法）；
+    // 协程对象也必须活到完成，所以同样挂在这里。
+    std::shared_ptr<void> spCoroHold;                  ///< 协程对象保活。
+    std::shared_ptr<CPromise<COrderCtx> > spSideHold;  ///< 分叉旁支（⑧）的句柄。
+
+    // ---- 追踪自校验（由各层填，主线程断言） ----
+    int nAuditChain;                        ///< ⑬ 看到的链层数。
+    int nSideChain;                         ///< ⑧ 看到的链层数。
+    int nInnerChainSeen;                    ///< ⑤ 内层链里看到的层数。
+    int nModuleChainSeen;                   ///< ⑥ 跨模块子链里看到的层数。
+    int nCoroChainSeen;                     ///< ⑩-1 协程起的子链里看到的层数。
+    std::vector<CLayerInfo> vecAuditChain;  ///< ⑬ 看到的完整链快照。
+
+    COrderCtx()
+        : nQty(0),
+          bFailStock(false),
+          nOrderId(0),
+          nStock(0),
+          nDiscount(0),
+          nTotal(0),
+          nBillNo(0),
+          nCoupon(0),
+          nGift(0),
+          nPoints(0),
+          nLogistics(0),
+          strTrace(),
+          nSideDone(0),
+          nCoroDone(0),
+          spCoroHold(),
+          spSideHold(),
+          nAuditChain(0),
+          nSideChain(0),
+          nInnerChainSeen(0),
+          nModuleChainSeen(0),
+          nCoroChainSeen(0),
+          vecAuditChain()
+    {}
 };
 
-/// 协程：await 到失败 → 终止（失败码透传，后续 await 不执行）。
-class CFailCoroutine : public common::async::CCoroutine<CDemoContext>
+/// 层 ①：读订单（具名 handler；本层就是链根 —— 它没有上游）。
+CPromiseResult StepReadOrder(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
 {
-public:
-    using common::async::CCoroutine<CDemoContext>::CCoroutine;
+    (void)upResult;
+    TraceHere("① 读订单（具名 handler，链根）");
+    spCtx->nOrderId = 1001;
+    spCtx->strTrace += "读订单;";
+    return CPromiseResult::Resolve();
+}
 
-    void Run() override
+/// 层 ③：查库存。`ThenInline` = 就地执行（不投递，跑在「结算它的那条线程」上）。
+CPromiseResult StepCheckStock(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+{
+    (void)upResult;
+    TraceHere("③ 查库存（ThenInline：就地，不投递）");
+    spCtx->strTrace += "查库存;";
+    if (spCtx->bFailStock)
     {
-        CO_BEGIN();
-        CO_AWAIT(NewPromise(&StepReadParam));
-        CO_AWAIT(NewPromise(&StepStore));    // 失败
-        CO_AWAIT(NewPromise(&StepCleanup));  // 不执行
-        CO_RETURN_VOID();
-        CO_END();
+        return CPromiseResult::Reject(kErrNoStock);  // 失败即停：④…⑪ 都不执行
     }
-};
+    spCtx->nStock = 5;
+    return CPromiseResult::Resolve();
+}
 
-/// 子协程：await 一条子链。
-class CChildCoroutine : public common::async::CCoroutine<CDemoContext>
+/// 层 ④：读用户。`ThenOn(execDb, ...)` = 这一层在**别的执行器**上跑（换了线程）。
+CPromiseResult StepLoadUser(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+{
+    (void)upResult;
+    TraceHere("④ 读用户（ThenOn：换到 execDb 的线程上跑）");
+    SleepMs(2);  // 模拟一次数据访问
+    spCtx->strTrace += "读用户;";
+    return CPromiseResult::Resolve();
+}
+
+/// 层 ⑤-1：算折扣（内层链第 1 层）。
+CPromiseResult StepCalcDiscount(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+{
+    (void)upResult;
+    TraceHere("⑤-1 算折扣（内层链第 1 层）");
+    spCtx->nDiscount = 30;
+    spCtx->strTrace += "算折扣;";
+    return CPromiseResult::Resolve();
+}
+
+/// 层 ⑤-2：算总额（内层链最深一层 —— 它只看得到内层链自己）。
+CPromiseResult StepApplyDiscount(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+{
+    (void)upResult;
+    TraceHere("⑤-2 算总额（内层链最深）");
+    spCtx->nTotal = spCtx->nQty * 100 - spCtx->nDiscount;
+    spCtx->nInnerChainSeen = CountChain();  // 内层链能追回主链（父层 = ⑤ 那一层）
+    spCtx->strTrace += "算总额;";
+    return CPromiseResult::Resolve();
+}
+
+/// 层 ⑦：分叉基座（什么都不做，只为了让两支有共同的上游）。
+CPromiseResult StepForkBase(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+{
+    (void)upResult;
+    TraceHere("⑦ 分叉基座（下面两支：⑧ 旁支 / ⑨ 主线）");
+    spCtx->strTrace += "分叉;";
+    return CPromiseResult::Resolve();
+}
+
+/// 层 ⑨：优惠券（分叉的另一支，主线从这里继续）。
+CPromiseResult StepCoupon(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+{
+    (void)upResult;
+    TraceHere("⑨ 优惠券（分叉的一支：主线继续走这支）");
+    spCtx->nCoupon = 5;
+    spCtx->strTrace += "优惠券;";
+    return CPromiseResult::Resolve();
+}
+
+/// 层 ⑩-1：协程顺序 await 的那条子链。
+CPromiseResult StepCheckCoupon(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+{
+    (void)upResult;
+    TraceHere("⑩-1 协程 CO_AWAIT 的子链（挂在启动协程的那一层下面）");
+    spCtx->nCoroChainSeen = CountChain();
+    spCtx->strTrace += "协程券;";
+    return CPromiseResult::Resolve();
+}
+
+/// 层 ⑩-2a：协程并行 await 的两条子链之一（各写各的字段 —— 并行不碰 strTrace）。
+CPromiseResult StepCheckGift(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+{
+    (void)upResult;
+    TraceHere("⑩-2a 协程 CO_AWAIT_ALL 的子链之一");
+    SleepMs(3);
+    spCtx->nGift = 1;
+    spCtx->nCoroDone.fetch_add(1);
+    return CPromiseResult::Resolve();
+}
+
+/// 层 ⑩-2b：协程并行 await 的另一条子链。
+CPromiseResult StepCheckPoints(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+{
+    (void)upResult;
+    TraceHere("⑩-2b 协程 CO_AWAIT_ALL 的子链之二");
+    SleepMs(3);
+    spCtx->nPoints = 20;
+    spCtx->nCoroDone.fetch_add(1);
+    return CPromiseResult::Resolve();
+}
+
+/// 层 ⑪：落库收尾（把优惠券算进总额）。
+CPromiseResult StepSettle(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+{
+    (void)upResult;
+    TraceHere("⑪ 落库（then 收尾）");
+    spCtx->nTotal -= spCtx->nCoupon;
+    spCtx->strTrace += "落库;";
+    return CPromiseResult::Resolve();
+}
+
+/// 层 ⑫：`Catch` 补偿 —— 只在**被拒绝**时执行（成功路径上它在链里，但不执行）。
+///
+/// 这里**原样透传**上一层结果：补偿完仍然让链保持拒绝（调用方看得到失败）。
+/// 若返回 `Resolve()` 就是「吞掉拒绝、恢复链」，后面还能继续挂 then。
+CPromiseResult StepCompensate(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+{
+    TraceHere("⑫ 补偿（catch：仅被拒绝时执行）");
+    std::printf("      拒绝码=%d（业务码）\n", upResult.Code());
+    spCtx->nStock = 0;
+    spCtx->strTrace += "补偿;";
+    return upResult;
+}
+
+/// 层 ⑬：`Finally` 审计 —— 无论成败都执行、不改结果；它最深，正好看整条链。
+CPromiseResult StepAudit(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+{
+    TraceHere("⑬ 审计（finally：最深的一层，能看到整条链）");
+
+    spCtx->nAuditChain = CountChain();
+    spCtx->vecAuditChain.clear();
+    common::async::VisitLayerChain(
+        [spCtx](const CLayerInfo& info)
+        {
+            spCtx->vecAuditChain.push_back(info);
+        });
+    spCtx->strTrace += "审计;";
+
+    // 审计层本来就不该改结果：原样透传（finally 的「忽略返回值」由框架保证，这里写出来更直白）。
+    return upResult;
+}
+
+// ====================================================================
+// 三、跨模块：记账模块（自持执行器 + 自持上下文）
+// ====================================================================
+
+/// @brief 记账模块：示例里的「另一个模块」。
+///
+/// 要点（真实项目照这个来）：
+///  - **自持执行器**：跨模块只交换 promise，不传递执行器；
+///  - 自持上下文类型（`CBillCtx`），与父链的 `COrderCtx` 不同 → 演示跨上下文桥接；
+///  - **回调式起链**：`exec.NewPromise(spCtx, fnStarter)`，由外部完成回调 settle 本链。
+class CBillingModule
 {
 public:
-    using common::async::CCoroutine<CDemoContext>::CCoroutine;
-
-    void Run() override
+    /// @brief 账单子链的上下文（别的模块自己的数据，父链看不到）。
+    struct CBillCtx
     {
-        CO_BEGIN();
-        CO_AWAIT(NewPromise(&StepScale));
-        CO_RETURN_VOID();
-        CO_END();
-    }
-};
+        long nOrderId;   ///< 订单号（调用方给的）。
+        int nTotal;      ///< 金额（调用方给的）。
+        int nBillNo;     ///< 账单号（本模块生成）。
+        int nChainSeen;  ///< 本模块链上看到的层数（演示「跨模块子链能追回父链」）。
 
-/// 父协程：await 子协程（嵌套）。
-class CParentCoroutine : public common::async::CCoroutine<CDemoContext>
-{
-public:
-    explicit CParentCoroutine(const std::shared_ptr<CDemoContext>& spCtx, common::async::CAsyncExecutor* pExec)
-        : common::async::CCoroutine<CDemoContext>(spCtx), m_pExec(pExec), m_pChild()
+        CBillCtx() : nOrderId(0), nTotal(0), nBillNo(0), nChainSeen(0)
+        {}
+    };
+
+    CBillingModule() : m_exec(1), m_nNextBillNo(1000)
     {}
 
-    void Run() override
+    /// @brief 起模块（执行器启动失败返回 false）。
+    bool Start()
     {
-        CO_BEGIN();
-        CO_AWAIT(NewPromise(&StepReadParam));
-        m_pChild = m_pExec->CoStart<CChildCoroutine>(GetContext());  // 跨 await 的变量须为成员
-        CO_AWAIT(m_pChild->AsPromise());
-        CO_RETURN_VOID();
-        CO_END();
+        return m_exec.Start();
     }
 
-private:
-    common::async::CAsyncExecutor* m_pExec;
-    std::shared_ptr<CChildCoroutine> m_pChild;
-};
+    /// @brief 停模块（等正在跑的任务收尾）。
+    void Stop()
+    {
+        m_exec.Stop();
+    }
 
-// ⑯ 协程顺序 await：CO_AWAIT
-void DemoCoroutineSequential()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
+    /// @brief 对外异步函数：写一条账单。
+    ///
+    /// 回调式起链：`fnStarter` 里发起异步动作（真实场景是 IO / RPC），完成时调
+    /// `fnResolve()` / `fnReject(码)`；它只登记动作，绝不阻塞调用方线程。
+    ///
+    /// @param nOrderId 订单号。
+    /// @param nTotal 金额。
+    /// @return 子链句柄（调用方用 `ThenBridge` 等它）。
+    CPromise<CBillCtx> WriteBillAsync(long nOrderId, int nTotal)
+    {
+        const std::shared_ptr<CBillCtx> spCtx = std::make_shared<CBillCtx>();
+        spCtx->nOrderId = nOrderId;
+        spCtx->nTotal = nTotal;
+        const int nBillNo = m_nNextBillNo++;
 
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    spCtx->nBase = 7;
-    std::shared_ptr<CDemoCoroutine> pCoro = exec.CoStart<CDemoCoroutine>(spCtx);
-    const common::async::CPromiseResult r = pCoro->Await();
-    ASSERT(r.IsFulfilled());
-    ASSERT(pCoro->GetContext() == spCtx);  // 协程与子链共享同一上下文
-    ASSERT(spCtx->nScaled == 21);
-    ASSERT(spCtx->strTrace == std::string("读参数;缩放;落库;"));
-    std::printf("⑯ 协程顺序 await: 缩放=%d 轨迹=%s\n", spCtx->nScaled, spCtx->strTrace.c_str());
-    exec.Stop();
-}
-
-// ⑰ 协程并行 await：CO_AWAIT_ALL
-void DemoCoroutineParallel()
-{
-    common::async::CAsyncExecutor exec(4);
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    spCtx->nBase = 7;
-    std::shared_ptr<CParallelCoroutine> pCoro = exec.CoStart<CParallelCoroutine>(spCtx);
-    AwaitOk(pCoro->Await());
-    ASSERT(spCtx->nParDone.load() == 3);  // 三条子链都跑完（并行，先后不定）
-    std::printf("⑰ 协程并行 await: 并行分支完成=%d\n", spCtx->nParDone.load());
-    exec.Stop();
-}
-
-// ⑱ 协程 await 拒绝：协程终止，拒绝码透传，后续 await 不执行
-void DemoCoroutineAwaitRejected()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    spCtx->bFailStore = true;
-    std::shared_ptr<CFailCoroutine> pCoro = exec.CoStart<CFailCoroutine>(spCtx);
-    const common::async::CPromiseResult r = pCoro->Await();
-    ASSERT(r.IsRejected());
-    ASSERT(r.Code() == kCodeStoreFailed);
-    ASSERT(spCtx->strTrace == std::string("读参数;落库;"));  // 清理层未执行
-    std::printf("⑱ 协程 await 拒绝: 码=%d 轨迹=%s\n", r.Code(), spCtx->strTrace.c_str());
-    exec.Stop();
-}
-
-// ⑲ 嵌套协程：await 子协程（AsPromise），共用同一上下文
-void DemoCoroutineNested()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    spCtx->nBase = 4;
-    std::shared_ptr<CParentCoroutine> pCoro = exec.CoStart<CParentCoroutine>(spCtx, &exec);
-    const common::async::CPromiseResult r = pCoro->Await();
-    ASSERT(r.IsFulfilled());
-    ASSERT(spCtx->nScaled == 12);
-    ASSERT(spCtx->strTrace == std::string("读参数;缩放;"));
-    std::printf("⑲ 嵌套协程: 缩放=%d 轨迹=%s\n", spCtx->nScaled, spCtx->strTrace.c_str());
-    exec.Stop();
-}
-
-// ---------------- 嵌套用法（异步里再起异步） ----------------
-
-// ㉑ 层内嵌套（阻塞）：层里起一条子 promise 并**等它结束**。
-//     - 子流程可以用**另一套上下文**（CSubContext），直接复用已有处理器；
-//     - 代价：会占住一个工作线程，所以线程池必须还有空闲 worker —— 单线程执行器必死锁。
-void DemoNestedBlockingInLayer()
-{
-    common::async::CAsyncExecutor exec(2);  // 关键前提：≥ 2 个工作线程
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    std::shared_ptr<CSubContext> spSub = std::make_shared<CSubContext>();
-
-    const common::async::CPromiseResult r = exec.NewPromise(
-                                                    spCtx,
-                                                    [&exec, spSub](common::async::CPromiseResult upResult,
-                                                        const std::shared_ptr<CDemoContext>& sp) -> common::async::CPromiseResult
-                                                    {
-                                                        if (upResult.IsRejected())
-                                                        {
-                                                            return upResult;
-                                                        }
-                                                        // 层内嵌套：起子 promise（另一套上下文）并阻塞等它结束
-                                                        const common::async::CPromiseResult sub =
-                                                            exec.NewPromise(spSub, &StepQueryRows, ASYNC_LOC).Await();
-                                                        if (sub.IsRejected())
-                                                        {
-                                                            return sub;  // 子流程被拒绝 → 本层拒绝（拒绝码向上透传）
-                                                        }
-                                                        sp->nScaled = spSub->nRows;  // 子流程数据写回父上下文
-                                                        sp->strTrace += "父层;";
-                                                        return common::async::CPromiseResult::Resolve();
-                                                    },
-                                                    ASYNC_LOC)
-                                                .Await();
-
-    ASSERT(r.IsFulfilled());
-    ASSERT(spSub->nRows == 3);
-    ASSERT(spCtx->nScaled == 3);
-    ASSERT(spSub->strTrace == std::string("查询;"));
-    std::printf("㉑ 层内阻塞嵌套: 子流程行数=%d 父上下文缩放=%d\n", spSub->nRows, spCtx->nScaled);
-    exec.Stop();
-}
-
-// ㉒ 层内嵌套（非阻塞，回调驱动）：层里起子 promise 后立刻返回，由它的 settled 回调接着干活。
-//     - 不占线程，**单线程执行器也安全**；
-//     - 回调与后续层可能并发 —— 让它只写不被后续层碰的字段（或自行加同步）。
-void DemoNestedCallbackDrivenInLayer()
-{
-    common::async::CAsyncExecutor exec(1);  // 单线程也安全：全程不阻塞
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    std::shared_ptr<CSubContext> spSub = std::make_shared<CSubContext>();
-    std::atomic<bool> bSubDone(false);
-
-    common::async::CPromise<CDemoContext> outer = exec.NewPromise(
-        spCtx,
-        [&exec, spSub, &bSubDone](
-            common::async::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& sp) -> common::async::CPromiseResult
+        CPromise<CBillCtx>::ChainStarter fnStarter =
+            [this, spCtx, nBillNo](const CPromise<CBillCtx>::ResolveFn& fnResolve, const CPromise<CBillCtx>::RejectFn& fnReject)
         {
-            if (upResult.IsRejected())
+            // 真实场景：这里发起异步 IO（只登记回调）；示例用「投递 + 延时」模拟对方的完成通知。
+            const bool bPosted = m_exec.Post(
+                [spCtx, nBillNo, fnResolve]()
+                {
+                    SleepMs(2);
+                    spCtx->nBillNo = nBillNo;  // 写子上下文
+                    fnResolve();               // 兑现子链
+                });
+            if (!bPosted)
             {
-                return upResult;
+                fnReject(common::async::kStopped);  // 模块已停：别让子链永远挂着
             }
-            // 起子 promise 但**不等待**：由它的 settled 回调继续（回调驱动嵌套）
-            exec.NewPromise(spSub, &StepQueryRows, ASYNC_LOC)
-                .OnSettled(
-                    [sp, spSub, &bSubDone](common::async::CPromiseResult sub)
-                    {
-                        sp->nScaled = sub.IsFulfilled() ? spSub->nRows : -1;  // 回调里写父上下文
-                        bSubDone.store(true);
-                    });
-            sp->strTrace += "父层起步;";
-            return common::async::CPromiseResult::Resolve();  // 外层立刻继续，不等子流程
-        },
-        ASYNC_LOC);
+        };
 
-    AwaitOk(outer.Await());
-    while (!bSubDone.load())
-    {
-        std::this_thread::yield();  // 等子流程回调（演示用；真实业务无需等待）
-    }
-    ASSERT(spCtx->nScaled == 3);
-    std::printf("㉒ 层内非阻塞嵌套: 父链已结束，子流程回调随后写入 缩放=%d\n", spCtx->nScaled);
-    exec.Stop();
-}
-
-// ㉓ 层内 fire-and-forget：把重活 Post 出去，链继续（不等结果）。
-void DemoNestedPostInLayer()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    std::atomic<bool> bDone(false);
-
-    const common::async::CPromiseResult r =
-        exec.NewPromise(
-                spCtx,
-                [&exec, &bDone](common::async::CPromiseResult upResult,
-                    const std::shared_ptr<CDemoContext>& sp) -> common::async::CPromiseResult
-                {
-                    if (upResult.IsRejected())
-                    {
-                        return upResult;
-                    }
-                    // 重活下沉：Post 到工作线程，链不等它（fire-and-forget）
-                    const bool bOk = exec.Post(
-                        [sp, &bDone]()
-                        {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                            sp->nScaled = 99;  // 只写后续层不碰的字段（否则需自行同步）
-                            bDone.store(true);
-                        });
-                    return bOk ? common::async::CPromiseResult::Resolve()
-                               : common::async::CPromiseResult::Reject(common::async::kStopped);
-                },
-                ASYNC_LOC)
-            .Await();
-
-    ASSERT(r.IsFulfilled());
-    while (!bDone.load())
-    {
-        std::this_thread::yield();
-    }
-    ASSERT(spCtx->nScaled == 99);
-    std::printf("㉓ 层内 Post: 链立即完成，后台任务稍后写入 缩放=%d\n", spCtx->nScaled);
-    exec.Stop();
-}
-
-/// 协程：同上下文子 promise + **另一套上下文**的子 promise + 多步子 promise（嵌套）。
-class CNestedContextCoroutine : public common::async::CCoroutine<CDemoContext>
-{
-public:
-    explicit CNestedContextCoroutine(const std::shared_ptr<CDemoContext>& spCtx, common::async::CAsyncExecutor* pExec)
-        : common::async::CCoroutine<CDemoContext>(spCtx), m_pExec(pExec), m_spSub()
-    {}
-
-    void Run() override
-    {
-        CO_BEGIN();
-        CO_AWAIT(NewPromise(&StepReadParam));                               // 同上下文子 promise
-        m_spSub = std::make_shared<CSubContext>();                          // 跨 await → 成员变量
-        CO_AWAIT(m_pExec->NewPromise(m_spSub, &StepQueryRows, ASYNC_LOC));  // 跨上下文 await
-        CO_AWAIT(NewPromise(&StepScale).Then(&StepStore));                  // 多步子 promise（then 串联）
-        GetContext()->nScaled += m_spSub->nRows;                            // 恢复后把子流程结果并入
-        CO_RETURN_VOID();
-        CO_END();
-    }
-
-private:
-    common::async::CAsyncExecutor* m_pExec;
-    std::shared_ptr<CSubContext> m_spSub;
-};
-
-// ㉔ 协程跳上下文嵌套：一次跑完「同上下文子 promise + 另上下文子流程 + 多步子 promise」。
-void DemoCoroutineNestedContext()
-{
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
-
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    std::shared_ptr<CNestedContextCoroutine> pCoro = exec.CoStart<CNestedContextCoroutine>(spCtx, &exec);
-    const common::async::CPromiseResult r = pCoro->Await();
-
-    ASSERT(r.IsFulfilled());
-    ASSERT(spCtx->nScaled == 33);  // 缩放 30 + 子流程 3 行
-    ASSERT(spCtx->strTrace == std::string("读参数;缩放;落库;"));
-    std::printf("㉔ 协程跨上下文嵌套: 缩放=%d（含子流程 3 行）轨迹=%s\n", spCtx->nScaled, spCtx->strTrace.c_str());
-    exec.Stop();
-}
-
-/// 协程：并行 await 三条**多步**子 promise（每条自带独立上下文，避免并行写竞争）。
-class CParallelNestedCoroutine : public common::async::CCoroutine<CDemoContext>
-{
-public:
-    explicit CParallelNestedCoroutine(const std::shared_ptr<CDemoContext>& spCtx, common::async::CAsyncExecutor* pExec)
-        : common::async::CCoroutine<CDemoContext>(spCtx), m_pExec(pExec), m_vecBranches()
-    {}
-
-    void Run() override
-    {
-        CO_BEGIN();
-        for (int i = 0; i < 3; ++i)  // 三条分支各一份独立上下文（跨 await → 存成员保活）
+        // 模块自己的链：第 1 层（由外部回调 settle）+ 第 2 层（留痕）。
+        const CPromise<CBillCtx>::ThenHandler fnBillAudit = [](CPromiseResult upResult, const std::shared_ptr<CBillCtx>& spSelf)
         {
-            std::shared_ptr<CBranchContext> spBranch = std::make_shared<CBranchContext>();
-            spBranch->nId = i;
-            m_vecBranches.push_back(spBranch);
-        }
-        CO_AWAIT_ALL(m_pExec->NewPromise(m_vecBranches[0], &StepBranchLoad, ASYNC_LOC).Then(&StepBranchSave, ASYNC_LOC),
-            m_pExec->NewPromise(m_vecBranches[1], &StepBranchLoad, ASYNC_LOC).Then(&StepBranchSave, ASYNC_LOC),
-            m_pExec->NewPromise(m_vecBranches[2], &StepBranchLoad, ASYNC_LOC).Then(&StepBranchSave, ASYNC_LOC));
-
-        int nTotal = 0;  // 恢复后汇入父上下文
-        for (size_t i = 0; i < m_vecBranches.size(); ++i)
-        {
-            nTotal += m_vecBranches[i]->nValue;
-        }
-        GetContext()->nScaled = nTotal;
-        CO_RETURN_VOID();
-        CO_END();
+            (void)upResult;
+            TraceHere("⑥-2 记账模块自己的链（跨模块子链：能追回父链）");
+            spSelf->nChainSeen = CountChain();
+            return CPromiseResult::Resolve();
+        };
+        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC).Then(fnBillAudit, ASYNC_LOC);
     }
 
 private:
-    common::async::CAsyncExecutor* m_pExec;
-    std::vector<std::shared_ptr<CBranchContext> > m_vecBranches;
+    CAsyncExecutor m_exec;           ///< 模块自持执行器（不跨模块传递）。
+    std::atomic<int> m_nNextBillNo;  ///< 账单号自增。
 };
 
-// ㉕ 并行嵌套：CO_AWAIT_ALL 里每一条都是「多步子 promise + 独立上下文」。
-void DemoCoroutineParallelNested()
-{
-    common::async::CAsyncExecutor exec(4);
-    StartOrFail(exec);
+// ====================================================================
+// 四、协程（⑩）：协程当父链的一步
+// ====================================================================
 
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    std::shared_ptr<CParallelNestedCoroutine> pCoro = exec.CoStart<CParallelNestedCoroutine>(spCtx, &exec);
-    const common::async::CPromiseResult r = pCoro->Await();
-
-    ASSERT(r.IsFulfilled());
-    ASSERT(spCtx->nScaled == 33);  // 三条分支各 11（载入 10 + 保存 1）
-    std::printf("㉕ 并行嵌套: 三条多步分支汇聚=%d\n", spCtx->nScaled);
-    exec.Stop();
-}
-
-/// 协程：汇聚同一层分叉出的两条分支（用协程并行 await；纯异步场景可直接用 exec.WhenAll）。
-class CFanInCoroutine : public common::async::CCoroutine<CDemoContext>
+/// @brief 协程：顺序 await 一条子链 + 并行 await 两条子链。
+///
+/// await 不传数据（数据走共享上下文 `GetContext()`）；`NewPromise` 起的是**子链**，
+/// 所以子链里的层看到的是子链自己那条（看示例输出的 ⑩-1 / ⑩-2）。
+class CStepCoroutine : public CCoroutine<COrderCtx>
 {
 public:
-    explicit CFanInCoroutine(const std::shared_ptr<CDemoContext>& spCtx, common::async::CAsyncExecutor* pExec)
-        : common::async::CCoroutine<CDemoContext>(spCtx), m_pExec(pExec)
+    explicit CStepCoroutine(const std::shared_ptr<COrderCtx>& spCtx) : CCoroutine<COrderCtx>(spCtx)
     {}
 
     void Run() override
     {
         CO_BEGIN();
-        // 跨 await 的句柄须是成员（恢复时会重新进入 Run）：无默认构造 → 用 shared_ptr 装。
-        m_spHead = std::make_shared<common::async::CPromise<CDemoContext> >(
-            m_pExec->NewPromise(GetContext(), &StepReadParam, ASYNC_LOC));  // 公共前段
-        m_spBranchA = std::make_shared<common::async::CPromise<CDemoContext> >(m_spHead->Then(&StepForkBranch, ASYNC_LOC));
-        m_spBranchB = std::make_shared<common::async::CPromise<CDemoContext> >(m_spHead->Then(&StepForkBranch, ASYNC_LOC));
-        CO_AWAIT_ALL(*m_spBranchA, *m_spBranchB);  // 汇聚：等两条分支都结束
+        CO_AWAIT(NewPromise(&StepCheckCoupon, ASYNC_LOC));                                             // 顺序 await
+        CO_AWAIT_ALL(NewPromise(&StepCheckGift, ASYNC_LOC), NewPromise(&StepCheckPoints, ASYNC_LOC));  // 并行 await
         CO_RETURN_VOID();
         CO_END();
     }
-
-private:
-    common::async::CAsyncExecutor* m_pExec;
-    std::shared_ptr<common::async::CPromise<CDemoContext> > m_spHead;
-    std::shared_ptr<common::async::CPromise<CDemoContext> > m_spBranchA;
-    std::shared_ptr<common::async::CPromise<CDemoContext> > m_spBranchB;
 };
 
-// ㉖ 分叉 + 协程汇聚：两条分支并行跑，协程等全部结束（分支只写原子计数，并行安全）。
-void DemoForkAndCoroutineFanIn()
+// ====================================================================
+// 五、父链本体：一条链走完 ① … ⑬
+// ====================================================================
+
+/// @brief 父链各层的注册点（`__LINE__ + 1` 逐个采集，用于「行号对得上」的自校验）。
+///
+/// 采集条件：挂层语句必须**整行**（`ASYNC_LOC` 与调用在同一行上）—— 多行实参会把
+/// `ASYNC_LOC` 挤到第二行，记下的是那一行。所以 lambda / 工厂都先变成具名变量再挂。
+struct CLines
 {
-    common::async::CAsyncExecutor exec(2);
-    StartOrFail(exec);
+    int nReadOrder;   ///< ①
+    int nValidate;    ///< ②
+    int nCheckStock;  ///< ③
+    int nLoadUser;    ///< ④
+    int nPricing;     ///< ⑤
+    int nBilling;     ///< ⑥
+    int nForkBase;    ///< ⑦
+    int nSide;        ///< ⑧
+    int nCoupon;      ///< ⑨
+    int nCoroutine;   ///< ⑩
+    int nSettle;      ///< ⑪
+    int nCompensate;  ///< ⑫
+    int nAudit;       ///< ⑬
 
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    std::shared_ptr<CFanInCoroutine> pCoro = exec.CoStart<CFanInCoroutine>(spCtx, &exec);
-    const common::async::CPromiseResult r = pCoro->Await();
-
-    ASSERT(r.IsFulfilled());
-    ASSERT(spCtx->nForkDone.load() == 2);               // 两条分支都完成
-    ASSERT(spCtx->strTrace == std::string("读参数;"));  // 分支只计数，不写轨迹
-    std::printf("㉖ 分叉 + 协程汇聚: 两条分支完成数=%d\n", spCtx->nForkDone.load());
-    exec.Stop();
-}
-
-// ==================== 跨模块组合（纯异步：new Promise + then-promise） ====================
-
-/// 演示用业务错误码（别的模块失败）。
-enum BridgeDemoCode
-{
-    kCodeOtherModuleFailed = common::async::kBusinessBase + 11  ///< 别的模块（子流程）失败。
+    CLines()
+        : nReadOrder(0),
+          nValidate(0),
+          nCheckStock(0),
+          nLoadUser(0),
+          nPricing(0),
+          nBilling(0),
+          nForkBase(0),
+          nSide(0),
+          nCoupon(0),
+          nCoroutine(0),
+          nSettle(0),
+          nCompensate(0),
+          nAudit(0)
+    {}
 };
 
-/// @brief 「别的模块」的异步函数：返回一条 CSubContext 的 promise。
+/// @brief 搭一条「下单」父链：所有常用用法都在这一条链上（每个位置都会打印调用链）。
 ///
-/// 模拟真实项目里的下游模块（数据访问 / 远程服务）：它有自己的上下文类型，
-/// 对外只给一个 promise 句柄（内部几层异步与调用方无关）。
-///
-/// @param exec 执行器（本演示共用）。
-/// @param bFail true 时子流程失败。
-/// @return 子流程 promise 句柄。
-static common::async::CPromise<CSubContext> QueryRowsOfOtherModule(common::async::CAsyncExecutor& exec, bool bFail)
+/// @param execMain 主链执行器（2 线程：分叉两支正好一支就地、一支投递）。
+/// @param execDb 模拟「数据访问模块」的执行器（`ThenOn` 换线程用）。
+/// @param billing 记账模块（`ThenBridge` 跨模块 / 跨上下文用）。
+/// @param spCtx 共享上下文（各层读写它；层间只传成败）。
+/// @param lines 出口：各层注册点行号（自校验用）。
+/// @return 父链末尾句柄（`Catch` → `Finally`）。
+CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& execDb, CBillingModule& billing,
+    const std::shared_ptr<COrderCtx>& spCtx, CLines& lines)
 {
-    std::shared_ptr<CSubContext> spSub = std::make_shared<CSubContext>();
-    return exec.NewPromise(spSub, &StepQueryRows, ASYNC_LOC)
-        .Then(
-            [bFail](common::async::CPromiseResult upResult, const std::shared_ptr<CSubContext>& spCtx)
-            {
-                if (upResult.IsRejected())
-                {
-                    return upResult;
-                }
-                if (bFail)
-                {
-                    spCtx->strTrace += "失败;";
-                    return common::async::CPromiseResult::Reject(kCodeOtherModuleFailed);
-                }
-                return common::async::CPromiseResult::Resolve();
-            },
-            ASYNC_LOC);
-}
+    //---------------- 先把「写成 lambda 的层」与「工厂」变成具名变量 ----------------
 
-/// @brief 桥接：把「别的模块的 promise」接进本流程（等价 JS 的 new Promise）。
-///
-/// executor 里发起别的模块的调用，由它的 OnSettled 回调 resolve() / reject(码) 本 promise ——
-/// 全程只登记回调，不占线程、不阻塞（单线程执行器也安全）。
-///
-/// @param exec 执行器（本演示共用）。
-/// @param spCtx 本流程上下文。
-/// @param bFail true 时子流程失败。
-/// @return 本流程的 promise（由子流程的回调 settle）。
-static common::async::CPromise<CDemoContext> BridgeQueryOther(
-    common::async::CAsyncExecutor& exec, const std::shared_ptr<CDemoContext>& spCtx, bool bFail)
-{
-    // executor 先赋给具名变量再用：长行不会被 clang-format 对齐撑开（见 docs/vscode-clangd-format.md）。
-    common::async::CPromise<CDemoContext>::ChainStarter fnStarter =
-        [&exec, spCtx, bFail](const common::async::CPromise<CDemoContext>::ResolveFn& fnResolve,
-            const common::async::CPromise<CDemoContext>::RejectFn& fnReject)
+    /// ② 校验参数：只此一处用的小逻辑 → 写成 lambda。
+    const CPromise<COrderCtx>::ThenHandler fnValidate = [](CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spSelf)
     {
-        common::async::CPromise<CSubContext> promiseSub = QueryRowsOfOtherModule(exec, bFail);
-        std::shared_ptr<CSubContext> spSub = promiseSub.GetContext();
-        promiseSub.OnSettled(
-            [spCtx, spSub, fnResolve, fnReject](common::async::CPromiseResult result)
-            {
-                if (result.IsRejected())
-                {
-                    fnReject(result.Code());  // 跨模块拒绝码 → 本流程拒绝码（此处原样透传）。
-                    return;
-                }
-                spCtx->nScaled = spSub->nRows;  // 取回别的模块的数据，写进本流程上下文。
-                spCtx->strTrace += "桥接;";
-                fnResolve();
-            });
+        (void)upResult;
+        TraceHere("② 校验参数（then = lambda）");
+        if (spSelf->nQty <= 0)
+        {
+            return CPromiseResult::Reject(kErrBadParam);
+        }
+        spSelf->strTrace += "校验;";
+        return CPromiseResult::Resolve();
     };
-    return exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+
+    /// ⑤ 内层链工厂：返回一条**自己搭的子链**（同上下文 → 直接 adopt 进当前链）。
+    const CPromise<COrderCtx>::PromiseFactory fnPricingChain = [&execMain](const std::shared_ptr<COrderCtx>& spSelf)
+    {
+        return execMain
+            .NewPromise(spSelf, &StepCalcDiscount, ASYNC_LOC)  // ⑤-1 算折扣
+            .Then(&StepApplyDiscount, ASYNC_LOC);              // ⑤-2 算总额
+    };
+
+    /// ⑥ 跨模块「起子链」：在别的模块的执行器上跑，另一套上下文。
+    const std::function<CPromise<CBillingModule::CBillCtx>(const std::shared_ptr<COrderCtx>&)> fnCreateBill =
+        [&billing](const std::shared_ptr<COrderCtx>& spSelf)
+    {
+        return billing.WriteBillAsync(spSelf->nOrderId, spSelf->nTotal);
+    };
+
+    /// ⑥ 跨模块「搬数据」：跑在**子链的结算线程**上，只搬数据、别碰本模块状态。
+    const std::function<void(const std::shared_ptr<COrderCtx>&, const std::shared_ptr<CBillingModule::CBillCtx>&)> fnApplyBill =
+        [](const std::shared_ptr<COrderCtx>& spSelf, const std::shared_ptr<CBillingModule::CBillCtx>& spChild)
+    {
+        spSelf->nBillNo = spChild->nBillNo;
+        spSelf->nModuleChainSeen = spChild->nChainSeen;
+        spSelf->strTrace += "记账;";
+    };
+
+    /// ⑧ 分叉旁支：物流。层里再 Post 一个**不等它**的旁支任务（fire-and-forget）。
+    const CPromise<COrderCtx>::ThenHandler fnLogistics = [&execMain](
+                                                             CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spSelf)
+    {
+        (void)upResult;
+        TraceHere("⑧ 物流支（分叉的一支）");
+        const bool bPosted = execMain.Post(
+            [spSelf]()
+            {
+                SleepMs(5);  // 旁支里的重活
+                spSelf->nSideDone.fetch_add(1);
+            });
+        ASSERT(bPosted);  // 返回 false = 执行器已停 / 空任务
+        spSelf->nLogistics = 1;
+        spSelf->nSideChain = CountChain();  // 旁支看得到「自己 + 共同上游」，看不到下游
+        return CPromiseResult::Resolve();
+    };
+
+    /// ⑩ 协程当一步：起协程并返回它的 promise（由父链等它）。
+    ///     协程对象要活到完成 → 挂在上下文里（`spCoroHold` 是 `std::shared_ptr<void>`）。
+    const CPromise<COrderCtx>::PromiseFactory fnCoroutineStep = [&execMain](const std::shared_ptr<COrderCtx>& spSelf)
+    {
+        const std::shared_ptr<CStepCoroutine> pCoro = execMain.CoStart<CStepCoroutine>(spSelf);
+        spSelf->spCoroHold = pCoro;
+        return pCoro->AsPromise();
+    };
+
+    //---------------- 父链本体：一行一层，行尾注释就是步骤号 ----------------
+
+    lines.nReadOrder = __LINE__ + 1;
+    CPromise<COrderCtx> pChain = execMain.NewPromise(spCtx, &StepReadOrder, ASYNC_LOC);  // ① 起链（具名 handler）
+    lines.nValidate = __LINE__ + 1;
+    pChain = pChain.Then(fnValidate, ASYNC_LOC);  // ② then = lambda
+    lines.nCheckStock = __LINE__ + 1;
+    pChain = pChain.ThenInline(&StepCheckStock, ASYNC_LOC);  // ③ then 就地
+    lines.nLoadUser = __LINE__ + 1;
+    pChain = pChain.ThenOn(execDb, &StepLoadUser, ASYNC_LOC);  // ④ then 换执行器
+    lines.nPricing = __LINE__ + 1;
+    pChain = pChain.ThenPromise(fnPricingChain, ASYNC_LOC);  // ⑤ 内层链（等它）
+    lines.nBilling = __LINE__ + 1;
+    pChain = pChain.ThenBridge(fnCreateBill, fnApplyBill, ASYNC_LOC);  // ⑥ 跨模块 / 跨上下文
+    lines.nForkBase = __LINE__ + 1;
+    CPromise<COrderCtx> pBase = pChain.Then(&StepForkBase, ASYNC_LOC);  // ⑦ 分叉基座
+    lines.nSide = __LINE__ + 1;
+    const CPromise<COrderCtx> pSide = pBase.Then(fnLogistics, ASYNC_LOC);  // ⑧ 分叉支（旁支，单独等它）
+    lines.nCoupon = __LINE__ + 1;
+    pChain = pBase.Then(&StepCoupon, ASYNC_LOC);  // ⑨ 分叉的另一支（主线继续）
+    lines.nCoroutine = __LINE__ + 1;
+    pChain = pChain.ThenPromise(fnCoroutineStep, ASYNC_LOC);  // ⑩ 协程当一步
+    lines.nSettle = __LINE__ + 1;
+    pChain = pChain.Then(&StepSettle, ASYNC_LOC);  // ⑪ then 收尾
+    lines.nCompensate = __LINE__ + 1;
+    pChain = pChain.Catch(&StepCompensate, ASYNC_LOC);  // ⑫ catch 补偿（成功路径被跳过）
+    lines.nAudit = __LINE__ + 1;
+    pChain = pChain.Finally(&StepAudit, ASYNC_LOC);  // ⑬ finally 审计（最深）
+
+    // 旁支也得有人持有并等它（否则断言物流结果时它可能还没跑完）。
+    spCtx->spSideHold = std::make_shared<CPromise<COrderCtx> >(pSide);
+    return pChain;
 }
 
-/// ㉗ 跨模块组合：本模块的 then 链 + 别的模块的 promise（new Promise 桥接 + then-promise 接入）。
+// ====================================================================
+// 六、组合器一族（都在**执行器**上）
+// ====================================================================
+
+/// @brief 起一条「一步就完」的小链（组合器演示用）。
 ///
-/// 与 ㉑/㉒ 的区别：本形态「等」的是**另一套上下文**的异步子流程，且本流程的最终结果
-/// 含子流程结果 —— 不用协程，也不阻塞任何线程（exec 只有 1 个 worker 也能跑）。
-void DemoBridgeOtherModule()
+/// @param exec 执行器。
+/// @param spCtx 上下文。
+/// @param bReject true = 这一层拒绝。
+/// @param nCode 拒绝码（bReject 为 true 时用）。
+/// @param nSleepMs 这一层耗时（用来做 Race / Any 的先后）。
+CPromise<COrderCtx> MakeQuickChain(
+    CAsyncExecutor& exec, const std::shared_ptr<COrderCtx>& spCtx, bool bReject, int nCode, int nSleepMs)
 {
-    common::async::CAsyncExecutor exec(1);  // 单线程执行器：本形态不靠占线程来等，因此安全
-    StartOrFail(exec);
-
-    // ① 成功路径：本模块层 → 桥接（别的模块）→ 本模块层继续跑
-    std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC)
-                                                .ThenPromise(
-                                                    [&exec](const std::shared_ptr<CDemoContext>& sp)
-                                                    {
-                                                        return BridgeQueryOther(exec, sp, false);
-                                                    },
-                                                    ASYNC_LOC)
-                                                .Then(&StepStore, ASYNC_LOC)  // 子流程结束后本模块的层继续
-                                                .Await();
-    ASSERT(r.IsFulfilled());
-    ASSERT(spCtx->nScaled == 3);                                  // 别的模块的数据已取回本流程上下文
-    ASSERT(spCtx->strTrace == std::string("读参数;桥接;落库;"));  // 本地层照常串接
-    std::printf("㉗ 跨模块组合（成功）: 取回行数=%d 轨迹=%s\n", spCtx->nScaled, spCtx->strTrace.c_str());
-
-    // ② 拒绝路径：别的模块拒绝 → 本流程 then 层不执行，catch 仍可见，拒绝码透传
-    std::shared_ptr<CDemoContext> spCtx2 = std::make_shared<CDemoContext>();
-    const common::async::CPromiseResult r2 = exec.NewPromise(spCtx2, &StepReadParam, ASYNC_LOC)
-                                                 .ThenPromise(
-                                                     [&exec](const std::shared_ptr<CDemoContext>& sp)
-                                                     {
-                                                         return BridgeQueryOther(exec, sp, true);
-                                                     },
-                                                     ASYNC_LOC)
-                                                 .Then(&StepStore, ASYNC_LOC)      // 子流程被拒绝 → 不执行
-                                                 .Catch(&StepRollback, ASYNC_LOC)  // catch 仍执行（回滚）
-                                                 .Await();
-    ASSERT(r2.IsRejected());
-    ASSERT(r2.Code() == static_cast<int>(kCodeOtherModuleFailed));  // 拒绝码透传
-    ASSERT(spCtx2->nScaled == 0);                                   // 落库层未执行
-    ASSERT(spCtx2->strTrace == std::string("读参数;回滚;"));
-    std::printf("㉗ 跨模块组合（拒绝）: 拒绝码=%d 轨迹=%s\n", r2.Code(), spCtx2->strTrace.c_str());
-
-    exec.Stop();
+    const CPromise<COrderCtx>::ThenHandler fnStep = [bReject, nCode, nSleepMs](
+                                                        CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spSelf)
+    {
+        (void)upResult;
+        (void)spSelf;
+        SleepMs(nSleepMs);
+        if (bReject)
+        {
+            return CPromiseResult::Reject(nCode);
+        }
+        return CPromiseResult::Resolve();
+    };
+    return exec.NewPromise(spCtx, fnStep, ASYNC_LOC);
 }
+
+/// @brief 组合器一族：WhenAll / WhenAllSettled / WhenRace / WhenAny。
+void DemoCombinators(CAsyncExecutor& execMain)
+{
+    std::printf("\n==================== 组合器一族（聚合层没有上游 → 追踪到此为止）====================\n");
+
+    // WhenAll：全部兑现才继续；任一拒绝 → 立即失败。
+    {
+        const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
+        const CPromiseResult r =
+            execMain.WhenAll(spCtx, MakeQuickChain(execMain, spCtx, false, 0, 5), MakeQuickChain(execMain, spCtx, false, 0, 5))
+                .Await();
+        ASSERT(r.IsFulfilled());
+        std::printf("  WhenAll        （2 条都兑现）→ 兑现\n");
+    }
+
+    // WhenAllSettled：全部落定即继续（不看成败）。
+    {
+        const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
+        const CPromiseResult r = execMain
+                                     .WhenAllSettled(spCtx, MakeQuickChain(execMain, spCtx, false, 0, 5),
+                                         MakeQuickChain(execMain, spCtx, true, kErrNoStock, 5))
+                                     .Await();
+        ASSERT(r.IsFulfilled());  // 有一支被拒绝，聚合层照样兑现
+        std::printf("  WhenAllSettled （1 兑现 + 1 拒绝）→ 兑现（不看成败）\n");
+    }
+
+    // WhenRace：第一个**落定**的结果就是聚合结果（先到先得）。
+    {
+        const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
+        const CPromiseResult r = execMain
+                                     .WhenRace(spCtx, MakeQuickChain(execMain, spCtx, true, kErrNoStock, 0),
+                                         MakeQuickChain(execMain, spCtx, false, 0, 60))
+                                     .Await();
+        ASSERT(r.IsRejected());
+        ASSERT(r.Code() == static_cast<int>(kErrNoStock));  // 快的那支（拒绝）先到
+        std::printf("  WhenRace       （快=拒绝 0ms / 慢=兑现 60ms）→ 拒绝(码=%d)：先到先得\n", r.Code());
+    }
+
+    // WhenAny：第一个**兑现**的才是聚合结果（全被拒才拒绝）。
+    {
+        const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
+        const CPromiseResult r = execMain
+                                     .WhenAny(spCtx, MakeQuickChain(execMain, spCtx, true, kErrNoStock, 0),
+                                         MakeQuickChain(execMain, spCtx, false, 0, 60))
+                                     .Await();
+        ASSERT(r.IsFulfilled());  // 先到的是拒绝 → 不算，继续等兑现
+        std::printf("  WhenAny        （快=拒绝 0ms / 慢=兑现 60ms）→ 兑现（只认第一个兑现者）\n");
+    }
+}
+
+// ====================================================================
+// 七、入口
+// ====================================================================
+
+/// @brief 打印一条父链的最终结果（成功 / 拒绝两条路径共用）。
+void PrintResult(const char* pszPath, const CPromiseResult& r, const std::shared_ptr<COrderCtx>& spCtx)
+{
+    std::printf("\n  ── %s：结果=%s 拒绝码=%d\n", pszPath, r.IsFulfilled() ? "兑现" : "拒绝", r.Code());
+    std::printf("     订单=%ld 库存=%d 折扣=%d 总额=%d 账单=%d 优惠券=%d 赠品=%d 积分=%d 物流=%d\n", spCtx->nOrderId,
+        spCtx->nStock, spCtx->nDiscount, spCtx->nTotal, spCtx->nBillNo, spCtx->nCoupon, spCtx->nGift, spCtx->nPoints,
+        spCtx->nLogistics);
+    std::printf("     轨迹=%s\n", spCtx->strTrace.c_str());
+}
+
+/// @brief 断言 ⑬（finally）看到的那条链与期望逐项一致（近 → 远）。
+void AssertAuditChain(const std::shared_ptr<COrderCtx>& spCtx, const CLines& lines)
+{
+#if defined(ASYNC_DEBUG_TRACE)
+    // 近 → 远：⑬ finally → ⑫ catch → ⑪ ⑩ ⑨ ⑦ ⑥ ⑤ ④ ③ ② ①（⑧ 是分叉的另一支，不在主线上）
+    ASSERT(spCtx->nAuditChain == 12);
+    ASSERT(spCtx->vecAuditChain.size() == static_cast<size_t>(spCtx->nAuditChain));
+
+    const int vecExpect[12] = {lines.nAudit, lines.nCompensate, lines.nSettle, lines.nCoroutine, lines.nCoupon, lines.nForkBase,
+        lines.nBilling, lines.nPricing, lines.nLoadUser, lines.nCheckStock, lines.nValidate, lines.nReadOrder};
+    for (int i = 0; i < 12; ++i)
+    {
+        const CLayerInfo& info = spCtx->vecAuditChain[static_cast<size_t>(i)];
+        ASSERT(info.loc.nLine == vecExpect[i]);  // 每一层的注册点都对得上
+        ASSERT(info.nDepth == i);                // 深度 = 距当前层几跳
+        ASSERT(info.bCurrent == (i == 0));       // 只有第一项是「当前层」
+    }
+    ASSERT(spCtx->vecAuditChain[0].eMode == common::async::detail::kModeFinally);
+    ASSERT(spCtx->vecAuditChain[1].eMode == common::async::detail::kModeCatch);
+    ASSERT(spCtx->vecAuditChain[11].eMode == common::async::detail::kModeThen);  // 链根
+
+    // 分叉：兄弟分支不在我的链上（只往上游走）。
+    ASSERT(!HasChainLine(spCtx->vecAuditChain, lines.nSide));
+
+    // 子链 → 父链：子链的链根挂在「起它的那一层」下面，所以从子链里能一路追回父链。
+    ASSERT(spCtx->nInnerChainSeen == 7);   // ⑤ 内层链：自己 2 层 + ⑤④③②①
+    ASSERT(spCtx->nModuleChainSeen == 8);  // ⑥ 记账模块的链：自己 2 层 + ⑥⑤④③②①
+    ASSERT(spCtx->nCoroChainSeen == 10);   // ⑩-1 协程起的子链：自己 + ⑩⑨⑦⑥⑤④③②①
+    ASSERT(spCtx->nSideChain == 8);        // ⑧ 旁支：自己 + 共同上游 7 层（看不到下游）
+
+    std::printf(
+        "\n  追踪自校验：⑬ 看到 %d 层完整链；⑧ 旁支 %d 层；子链也能追回父链（⑤ 内层 %d 层 / ⑥ 跨模块 %d 层 / ⑩ 协程 %d 层）\n",
+        spCtx->nAuditChain, spCtx->nSideChain, spCtx->nInnerChainSeen, spCtx->nModuleChainSeen, spCtx->nCoroChainSeen);
+#else
+    // 发布构建：trace 与 ASYNC_LOC 同一个开关 → 全部接口是空操作（链是空的）。
+    (void)lines;
+    ASSERT(spCtx->nAuditChain == 0);
+    ASSERT(spCtx->vecAuditChain.empty());
+#endif
+}
+
+}  // namespace
 
 int main()
 {
-    DemoNewPromiseAndAwait();
-    DemoChainThen();
-    DemoCatchSeesRejection();
-    DemoThenFailFast();
-    DemoCatchRollbackAndRecover();
-    DemoExceptionToFailed();
-    DemoOnSettledCallback();
-    DemoFork();
-    DemoContextCreation();
-    DemoPost();
-    DemoConcurrent();
-    DemoLifetime();
-    DemoNotStarted();
-    DemoDeepChain();
-    DemoSourceLoc();
-    DemoCoroutineSequential();
-    DemoCoroutineParallel();
-    DemoCoroutineAwaitRejected();
-    DemoCoroutineNested();
-    DemoNestedBlockingInLayer();
-    DemoNestedCallbackDrivenInLayer();
-    DemoNestedPostInLayer();
-    DemoCoroutineNestedContext();
-    DemoCoroutineParallelNested();
-    DemoForkAndCoroutineFanIn();
-    DemoBridgeOtherModule();
+    std::printf("==================== 一条父链走完所有常用异步用法 ====================\n");
+#if defined(ASYNC_DEBUG_TRACE)
+    std::printf("调试构建：每个位置都会打印「完整调用链」（近 → 远 = 从本层往上游追，谁挂的它）\n");
+#else
+    std::printf("发布构建：trace 关闭（用 ./build.sh --debug examples 跑，才能看到每层的调用链）\n");
+#endif
 
-    // 单独的例子：一条链里混用多种 then（见 cases/ThenMixCase.cpp）—— 先跑、再断言结果。
-    const bool bThenMixOk = RunThenMixCase();
-    ASSERT(bThenMixOk);
+    CAsyncExecutor execMain(2);  // 主链：2 线程（分叉两支正好一支就地、一支投递）
+    CAsyncExecutor execDb(2);    // 模拟「数据访问模块」自己的执行器
+    CBillingModule billing;      // 记账模块（自持执行器 + 自持上下文）
+    StartOrFail(execMain);
+    StartOrFail(execDb);
+    const bool bBillStarted = billing.Start();
+    ASSERT(bBillStarted);
 
-    std::printf("全部演示通过 ✔（自校验用通用 ASSERT：失败会立即打印位置并中止）\n");
+    //==================== 成功路径 ====================
+    std::printf("\n==================== 成功路径 ====================\n");
+    CLines lines;
+    const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
+    spCtx->nQty = 3;
+    const CPromise<COrderCtx> pTail = BuildOrderChain(execMain, execDb, billing, spCtx, lines);
+
+    // settled 通知（OnSettled）**不是层**：登记时若还没落定 → 在触发它的那一层的帧里就地执行
+    // （此时看得到那一层）；若已落定 → 投递执行（看不到任何层）。两种都合法。
+    pTail.OnSettled(
+        [](CPromiseResult r)
+        {
+            std::printf("\n  [通知 OnSettled] 结果=%s\n", r.IsFulfilled() ? "兑现" : "拒绝");
+            TraceHere("通知 OnSettled（不是层，不产生新层帧）");
+        });
+    // 通知也可以指定在哪个执行器上跑（与 ThenOn 对称）。
+    pTail.OnSettledOn(execDb,
+        [](CPromiseResult)
+        {
+            std::printf("  [通知 OnSettledOn(execDb)] 这条通知跑在 execDb 上\n");
+        });
+
+    const CPromiseResult rOk = pTail.Await();  // 主线程不在层里 → 可以阻塞等
+    PrintResult("成功路径", rOk, spCtx);
+    ASSERT(rOk.IsFulfilled());
+    ASSERT(spCtx->nStock == 5);                 // ③
+    ASSERT(spCtx->nDiscount == 30);             // ⑤-1
+    ASSERT(spCtx->nTotal == 3 * 100 - 30 - 5);  // ⑤-2 算总额 → ⑪ 减优惠券
+    ASSERT(spCtx->nBillNo == 1000);             // ⑥ 跨模块取回账单号
+    ASSERT(spCtx->nCoupon == 5);                // ⑨
+    ASSERT(spCtx->nGift == 1);                  // ⑩-2a
+    ASSERT(spCtx->nPoints == 20);               // ⑩-2b
+    ASSERT(spCtx->nLogistics == 1);             // ⑧
+    ASSERT(spCtx->nCoroDone.load() == 2);
+    ASSERT(spCtx->nSideDone.load() == 1);  // ⑧ 里 Post 出去的旁支也跑完了
+    ASSERT(spCtx->strTrace == std::string("读订单;校验;查库存;读用户;算折扣;算总额;记账;分叉;优惠券;协程券;落库;审计;"));
+
+    // 旁支（⑧）单独等一次，顺便看它那条链。
+    const std::shared_ptr<CPromise<COrderCtx> > spSide = spCtx->spSideHold;
+    ASSERT(spSide != nullptr);
+    ASSERT(spSide->Await().IsFulfilled());
+
+    AssertAuditChain(spCtx, lines);
+
+    //==================== 拒绝路径（同一条父链：库存不足）====================
+    std::printf("\n==================== 拒绝路径（同一条父链：库存不足）====================\n");
+    CLines linesFail;
+    const std::shared_ptr<COrderCtx> spCtxFail = std::make_shared<COrderCtx>();
+    spCtxFail->nQty = 3;
+    spCtxFail->bFailStock = true;
+    const CPromise<COrderCtx> pTailFail = BuildOrderChain(execMain, execDb, billing, spCtxFail, linesFail);
+    const CPromiseResult rFail = pTailFail.Await();
+    PrintResult("拒绝路径", rFail, spCtxFail);
+    ASSERT(rFail.IsRejected());
+    ASSERT(rFail.Code() == static_cast<int>(kErrNoStock));                        // ③ 的拒绝码原样透传到调用方
+    ASSERT(spCtxFail->nTotal == 0);                                               // ⑤⑨⑪ 都没执行（失败即停）
+    ASSERT(spCtxFail->nBillNo == 0);                                              // ⑥ 跨模块也没发起
+    ASSERT(spCtxFail->strTrace == std::string("读订单;校验;查库存;补偿;审计;"));  // ⑫ 补偿 + ⑬ 审计执行了
+
+    const std::shared_ptr<CPromise<COrderCtx> > spSideFail = spCtxFail->spSideHold;
+    ASSERT(spSideFail != nullptr);
+    const CPromiseResult rSideFail = spSideFail->Await();
+    // 旁支（⑧）挂在 ⑦ 之下，而主线在 ③ 就失败了 —— 拒绝会沿分叉传播：旁支自己没执行，
+    // 但它的句柄同样以这个拒绝码结束（「失败即停」对每一支都成立）。
+    ASSERT(rSideFail.IsRejected());
+    ASSERT(rSideFail.Code() == static_cast<int>(kErrNoStock));
+    ASSERT(spCtxFail->nLogistics == 0);  // ⑧ 确实没跑
+
+#if defined(ASYNC_DEBUG_TRACE)
+    // 被跳过的那几层照样在链上 —— 追踪不受「失败即停」影响（它们只是没执行而已）。
+    ASSERT(spCtxFail->nAuditChain == spCtx->nAuditChain);                  // 链长和成功路径一样
+    ASSERT(HasChainLine(spCtxFail->vecAuditChain, linesFail.nSettle));     // ⑪ 在链上
+    ASSERT(HasChainLine(spCtxFail->vecAuditChain, linesFail.nCoroutine));  // ⑩ 在链上
+    ASSERT(spCtxFail->strTrace.find("落库;") == std::string::npos);        // 但它确实没执行（轨迹为证）
+#endif
+
+    //==================== 其余常用用法 ====================
+    DemoCombinators(execMain);
+
+    // AwaitFor：超时兜底（返回 kStopped；不落定、不取消）。
+    std::printf("\n==================== Await / AwaitFor ====================\n");
+    {
+        const std::shared_ptr<COrderCtx> spSlow = std::make_shared<COrderCtx>();
+        const CPromiseResult rSlow = MakeQuickChain(execMain, spSlow, false, 0, 200).AwaitFor(20);
+        ASSERT(rSlow.IsRejected());
+        ASSERT(rSlow.Code() == static_cast<int>(common::async::kStopped));  // 超时 → kStopped
+        std::printf("  AwaitFor(20ms) 等一个 200ms 的层 → 拒绝码=%d（kStopped：兜底）\n", rSlow.Code());
+    }
+
+    std::printf("\n全部演示通过 ✔（自校验用通用 ASSERT：失败会立即打印位置并中止）\n");
+
+    execMain.Stop();
+    execDb.Stop();
+    billing.Stop();
     return 0;
 }
