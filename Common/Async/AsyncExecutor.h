@@ -139,8 +139,8 @@ struct CInlineGuard
 inline const std::shared_ptr<CExecutorHandle>& ResolveExecHandle(HandlerAffinity eAffinity,
     const std::shared_ptr<CExecutorHandle>& pTarget, const std::shared_ptr<CExecutorHandle>& pChainHandle)
 {
-    // 注意：pTarget 为空是**合法**的（= 没指定目标 → 退回本链执行器），
-    // 所以这里不能断言非空 —— 调用方（如延迟链的 Start）会借此解析「未指定」的形态。
+    // 注意：pTarget 为空是**合法**的（= 没指定目标 → 退回本链执行器）：
+    // `kAffinityChain` / `kAffinityInline` 两档本来就不给 pTarget（调用方传默认实参 nullptr）。
     return (eAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pChainHandle;
 }
 

@@ -21,7 +21,7 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 - **调度**（跑在哪条线程：亲和 / 就地内联 / 投递 / 深度限额）在执行器侧：
   `detail::HandlerAffinity`、`detail::ResolveExecHandle`、`detail::ShouldInline`、`detail::DispatchInlineOrPost`。
 - **编排**（层语义：then / catch / finally 三态、失败即停、桥接、通知）在 promise 侧，
-  其中 `RunHandler` / `PostHandler` 只做「造任务体 + 失败收口」。
+  其中 `RunHandler` 只做「造任务体 + 失败收口」，**首层**的「建层 + 强制投递」收在 `CPromise::StartChain` 一处。
 
 文件划分（`Common/Async/`）：
 
@@ -111,7 +111,7 @@ class CPromiseState
 以 `exec.NewPromise(spCtx, f0).Then(f1).Then(f2)` 为例：
 
 ```text
-① NewPromise：建核心（spCtx + 句柄）+ 建状态 s0 → PostHandler（投递 f0，起点结果 Resolve）
+① NewPromise → StartChain（建核心：spCtx + 句柄；建首层状态 s0；投递 f0，起点结果 Resolve）
                        ↓（工作线程 W）
 ② f0(Resolve, spCtx) 执行 → s0.Settle(r0)
        ├─ 已登记处理器（f1 那层的 s1）：r0 被拒绝？→ s1.Settle(r0)（失败即停，f1 不执行）
@@ -124,7 +124,8 @@ class CPromiseState
 
 要点：
 
-- **首层必须投递**（`PostHandler`）：起 promise 的线程不执行任何业务代码；
+- **首层必须投递**（`CPromise::StartChain`：直走 `PostToHandle`，不走亲和分派、不内联）：
+  起 promise 的线程不执行任何业务代码；
 - **后续层级联**（`RunHandler` → `detail::DispatchInlineOrPost`）：若当前线程已是本链执行器的线程 → 就地内联
   （省一次入队）；否则投递回本链执行器（判定集中在执行器侧的 `detail::ShouldInline`）；
   **否则（跨执行器，比如被调模块 settle 本链）投递回本链执行器** —— 见「线程亲和」；
@@ -183,6 +184,11 @@ else
 `Await()` 也不再需要「自动启动」兜底。需要「先搭好再跑」的写法见
 [async-usage.md §9.2](async-usage.md)（`exec.Post` 包一段构链）。
 
+后续又顺手把它的**最后一点影子**收干净了（2026-09-12，同一分支）：
+句柄的「尚未挂首层」中间态（`m_pState == nullptr`）随它一起消失 —— 现在起链 = 建首层状态 + 投递首层，
+是一个原子动作（`CPromise::StartChain`），于是 `Append` / `ThenPromise` 各少一条分支，
+`CPromise` 里 5 处空判退化为构造断言，不变式从「或有层」变成**「句柄恒指向一个层」**。
+
 ## 6. 处理器模式分派（then / catch / finally）
 
 三态语义只有两个集中点（纯函数，`Tests/test_async_layer_rules.cpp` 直测它们）：
@@ -219,8 +225,9 @@ result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownR
 - `finally`：返回值被忽略，原样透传 `upResult`；只有抛异常才会改变结果（→ `Reject(kException)`），
   与 JS `finally` 语义一致。
 
-**首层特例**：尚未起链时第一次 `Then` / `Catch` / `Finally` 即首层，起点结果视为「已兑现」。
-因此 `Catch` 作为首层不会执行（没有可处理的拒绝），直接以 `Resolve()` settle。
+**首层固定在链首、且恒以 then 语义执行**：起链时那一层就是`StartChain` 建好的首层（起点结果视为
+「已兑现」），因此 `Catch` / `Finally` 永远只会是「追加层」—— 挂在首层之后时，上一层已兑现，
+`Catch` 不执行（没有可处理的拒绝）。
 
 ### 6.1 跨模块组合的三个原语（`exec.NewPromise(spCtx, executor)` / `ThenPromise` / `ThenBridge`）
 
@@ -311,7 +318,7 @@ ThenBridge(fnCreate, fnApply, loc)
 | --- | --- |
 | 一条链的层不并发 | 状态只在 `Settle` 时按序触发一次处理器，级联在同一线程推进 |
 | 同一状态只 settle 一次 | `Settle` 锁内 `m_bSettled` 判定，后续调用直接返回 |
-| 处理器不在起链线程执行 | 首层固定走 `PostHandler` |
+| 处理器不在起链线程执行 | 首层固定走 `CPromise::StartChain`（强制投递） |
 | **每层都在本链执行器线程上** | 线程亲和：`RunHandler` 先判 `IsInExecutorThread`，不满足就投递回本链执行器 || **跨模块返回的层回本模块** | 同上（被调模块 settle 本链时，本链层不在被调模块线程跑） |
 | 回调不持锁 | `Settle` 先换出处理器列表，再锁外调用 |
 | 无悬垂 | 句柄 / 状态 / 上下文均为 `shared_ptr`，被续接与句柄共同持有 |
@@ -567,8 +574,8 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 | 位置 | 断言 | 理由 |
 | --- | --- | --- |
 | `CPromiseCore` 构造 | `spContext != nullptr` | 上下文强制传入（§10 第 9 条） |
-| `CPromise` 私有构造 | `pCore != nullptr` | 句柄恒有核心（无无效句柄态） |
-| `MakeHandlerRunner` / `RunHandler` / `PostHandler` | `spContext` / `pState` 非空 | 内部调用不变量 |
+| `CPromise` 私有构造 | `pCore != nullptr` / `pState != nullptr` | 句柄恒有核心、**恒指向一个层**（无「未挂首层」态） |
+| `MakeHandlerRunner` / `RunHandler` | `spContext` / `pState` 非空 | 内部调用不变量 |
 | ~~`CPromise::Start` / `IsStarted` / `RegisterFirstLayer` / `Append`（延迟分支）~~ | ~~延迟链的载荷非空~~ | 延迟启动已移除（§5.1），相应断言一并删除 |
 | `CPromiseResult::Reject` | `nCode != kFulfilled` | 用 0 当拒绝码会把失败当成功 |
 | `CCoroutine` 构造 | `spContext != nullptr` | 与 promise 一致 |

@@ -112,8 +112,7 @@ public:
     ///
     /// @param spContext 共享上下文（**必传**：与 promise 一致，框架不做懒创建）。
     explicit CCoroutine(const std::shared_ptr<TContext>& spContext)
-        : m_pCore(
-              std::make_shared<detail::CPromiseCore<TContext> >(std::shared_ptr<detail::CExecutorHandle>(), spContext)),
+        : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(std::shared_ptr<detail::CExecutorHandle>(), spContext)),
           m_pSegment(std::make_shared<detail::CPromiseState>()),
           m_pExec(nullptr),
           m_wpSelf(),
@@ -168,15 +167,15 @@ public:
     /// @brief 起一条子 promise（复用本协程的执行器与共享上下文）。
     ///
     /// 供协程体内 await 使用：CO_AWAIT(NewPromise(StepLoad))。
+    /// 与 `exec.NewPromise(spCtx, handler)` 走同一条起链路径（建首层 + 强制投递首层）；
+    /// 未启动（`m_pExec == nullptr`，句柄还是空）时首层投递失败 → 该 promise 以 kStopped 被拒绝。
     ///
     /// @param fnHandler 首层处理器（固定签名）。
     /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
-    /// @return 已投递首层的 promise 句柄（须先挂起 await，勿丢弃）。
+    /// @return 指向首层的 promise 句柄（须先挂起 await，勿丢弃）。
     CPromise<TContext> NewPromise(const ThenHandler& fnHandler, const CSourceLoc& loc = CSourceLoc()) const
     {
-        CPromise<TContext> promise = CPromise<TContext>::Make(m_pCore, std::shared_ptr<detail::CPromiseState>());
-        promise.Then(fnHandler, loc);  // 首个 Then 即首层（起点结果视为已兑现）。
-        return promise;
+        return CPromise<TContext>::StartChain(m_pCore, fnHandler, loc);
     }
 
 protected:
@@ -418,8 +417,7 @@ private:
     /// @param promise 当前注册的 promise。
     /// @param rest 其余 promise。
     template <typename TOtherContext, typename... TRest>
-    void AwaitEach(
-        const std::shared_ptr<detail::CAwaitAllGroup>& pGroup, const CPromise<TOtherContext>& promise, TRest&&... rest)
+    void AwaitEach(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup, const CPromise<TOtherContext>& promise, TRest&&... rest)
     {
         ASSERT_MSG(m_pExec != nullptr, "await 只能在 CoStart 启动之后（协程体 Run() 内）调用");
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
@@ -454,9 +452,9 @@ private:
 
     std::shared_ptr<detail::CPromiseCore<TContext> > m_pCore;  ///< 共享核心（上下文 + 执行器句柄）。
     std::shared_ptr<detail::CPromiseState> m_pSegment;         ///< 协程完成状态（AsPromise 暴露）。
-    CAsyncExecutor* m_pExec;       ///< 执行器指针（Resume 调度 + 子 promise 投递）。
-    std::weak_ptr<void> m_wpSelf;  ///< 自持弱引用（生命周期加固）。
-    CHotState m_hot;               ///< 热状态（步号 / 终止标志 / 拒绝码）。
+    CAsyncExecutor* m_pExec;                                   ///< 执行器指针（Resume 调度 + 子 promise 投递）。
+    std::weak_ptr<void> m_wpSelf;                              ///< 自持弱引用（生命周期加固）。
+    CHotState m_hot;                                           ///< 热状态（步号 / 终止标志 / 拒绝码）。
 };
 
 /// @brief 起协程实现（执行器入口）：创建 + 注入自持引用 + 启动。

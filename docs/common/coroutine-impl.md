@@ -187,15 +187,15 @@ CPromise<TContext> AsPromise() const
 
 CPromise<TContext> NewPromise(const ThenHandler& fnHandler, const CSourceLoc& loc) const
 {
-    CPromise<TContext> promise = CPromise<TContext>::Make(m_pCore, std::shared_ptr<detail::CPromiseState>());
-    promise.Then(fnHandler, loc);  // 首个 Then 即首层（起点结果视为已兑现）
-    return promise;
+    return CPromise<TContext>::StartChain(m_pCore, fnHandler, loc);
 }
 ```
 
-- `Make` 是 `CPromise` 的私有工厂，`CCoroutine<TContext>` 是其友元；
+- `Make` / `StartChain` 都是 `CPromise` 的私有工厂，`CCoroutine<TContext>` 是其友元；
 - 子 promise 与协程共用 `m_pCore`（同一上下文 + 同一执行器句柄），因此
   「协程里看到的数据」与「子 promise 写的数据」是同一份；
+- `StartChain` 与 `exec.NewPromise(spCtx, handler)` 是**同一条起链路径**（建首层状态 + 强制投递首层），
+  只是这里复用了协程已有的核心（而不是新建一个）；
 - 协程的 `m_pSegment` 同时是「协程完成状态」与「AsPromise 的当前状态」。
 
 ## 9. 与 promise 的关系

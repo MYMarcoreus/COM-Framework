@@ -69,8 +69,8 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 | 位置 | 断言 |
 | --- | --- |
 | `Common/Async/Promise.h`：`CPromiseCore` 构造 | 共享上下文非空 |
-| `Common/Async/Promise.h`：`CPromise` 私有构造 | 共享核心非空（无「无效句柄」态） |
-| `Common/Async/Promise.h`：`MakeHandlerRunner` / `RunHandler` / `PostHandler` | 上下文 / 层状态非空 |
+| `Common/Async/Promise.h`：`CPromise` 私有构造 | 共享核心非空、所指层状态非空（句柄恒指向一个层） |
+| `Common/Async/Promise.h`：`MakeHandlerRunner` / `RunHandler` | 上下文 / 层状态非空 |
 | `Common/Async/PromiseResult.h`：`Reject` | 拒绝码不是 0（0 是兑现码） |
 | `Common/Coroutine/Coroutine.h`：构造 / `Await` / `AsPromise` / `AwaitWait` / `AwaitEach` | 上下文非空；必须在 `CoStart` 之后 |
 | `ServerExample/Module/Example{Db,Async}Module.cpp` | 模块已启动、入参非空（业务侧示范） |

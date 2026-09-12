@@ -195,8 +195,9 @@ promiseStock.OnSettled([...](common::async::CPromiseResult result) { /* 回调 *
 
 链路一步步是：
 
-1. 被调模块的执行器已 `Stop()` → 它内部 `NewPromise` 的投递失败 → `CPromiseCore::PostHandler` 里
-   `pState->Settle(CPromiseResult::Reject(kStopped))` —— **这一步是对的**，子 promise 立即落定为 `kStopped`；
+1. 被调模块的执行器已 `Stop()` → 它内部 `NewPromise` 的投递失败 → `CPromise::StartChain`（当时的
+   `CPromiseCore::PostHandler`）里 `pState->Settle(CPromiseResult::Reject(kStopped))`
+   —— **这一步是对的**，子 promise 立即落定为 `kStopped`；
 2. 调用方紧接着 `OnSettled(...)`，此时子 promise **已经 settled** → `CPromiseState::AddHandler` 走路径 ②
    → `PostToHandle(pHandle, ...)` 用的是**被调模块的执行器**（已停止）→ 返回 `false`，
    **回调永远不会执行**；
@@ -244,17 +245,15 @@ bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandl
 > 病因从 API 上消失），`SettledNotice_InvalidPromiseReturnsFalse` 用例随之删除——
 > 现在没有“无效 promise”这种对象了。
 
-### 2.4 写作建议（现已可选）
+### 2.4 写作建议（已无必要）
 
-检查返回值已是冗余保险，但保留也无害（不再有“漏检就挂死”的风险）：
+`OnSettled` 现在是 `void`，“检查返回值”这件事**在 API 上已不存在**（上面那段 `if (!bOk)` 模板已删除）：
 
 ```cpp
-const bool bOk = promiseStock.OnSettled([...](common::async::CPromiseResult result) { /* 桥接回调 */ });
-if (!bOk)
-{
-    fnReject(common::async::kStopped);  // 现只会在 promise 无效时触发；留作防御
-}
+promiseStock.OnSettled([...](common::async::CPromiseResult result) { /* 桥接回调 */ });
 ```
+
+登记即生效，不会丢、也不会让本层永久 pending —— 桥接代码不会再因为漏检而挂死。
 
 多分支汇聚（手写 `when_all`）时仍要保证“剩余计数”被减到 0 —— 那是业务自己的计数逻辑，
 与送达保证无关（`JoinBranches` 里就是这么处理的）。

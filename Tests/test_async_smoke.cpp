@@ -9,7 +9,7 @@
 ///  - 跨模块桥接：两个模块各持执行器，只通过 promise 交接；
 ///  - 处理器抛异常 → kException，finally / OnSettled 仍执行；
 ///  - OnSettled 旁路通知：不改结果、可多次登记；
-///  - 未起链时 Catch / Finally / ThenPromise 作首层；
+///  - Catch / Finally 紧挂在链首之后（起点已兑现 → Catch 不执行）；
 ///  - 单线程执行器下嵌套 + 旁支全部完成（证明「不占 worker、不阻塞」）；
 ///  - 执行器未启动 → kStopped；Await 取最终结果；上下文为全链同一实例。
 
@@ -503,10 +503,10 @@ TEST(Smoke_OnSettledSideChannel)
     exec.Stop();
 }
 
-// ==================== 6. 未起链时的首层语义 ====================
+// ==================== 6. Catch / Finally 挂在链首附近 ====================
 
-/// @brief 未起链时 Catch / Finally 也能当首层（起点结果视为已兑现）。
-TEST(Smoke_FirstLayerCatchFinally)
+/// @brief 链首之后紧挂 Catch / Finally：起点已兑现 → Catch 不执行，Finally 照跑。
+TEST(Smoke_CatchFinallyRightAfterHead)
 {
     common::async::CAsyncExecutor exec(2);
     ASSERT_TRUE(exec.Start());
@@ -521,8 +521,7 @@ TEST(Smoke_FirstLayerCatchFinally)
     ASSERT_EQ(spCtx->nCatchRuns, 0);
     ASSERT_EQ(spCtx->nFinallyRuns, 1);
 
-    // 独立的 promise：Catch 直接作首层（起点兑现 → 不执行）——
-    // 写法：先用【一层的链】把链起起来，再在它上面挂 Catch（起点仍视为已兑现）。
+    // 独立的 promise：Catch 挂在首层之后（首层起点兑现 → Catch 不执行）。
     std::shared_ptr<CSmokeCtx> spCtx2 = std::make_shared<CSmokeCtx>();
     common::async::CPromise<CSmokeCtx> p2 = exec.NewPromise(spCtx2, &StepAdd1, ASYNC_LOC);
     const common::async::CPromiseResult r2 = p2.Catch(&StepCatchRecover, ASYNC_LOC).Await();

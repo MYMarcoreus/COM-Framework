@@ -24,6 +24,21 @@
 //
 // 错误码约定：框架保留 1..kBusinessBase 之前的区间（见 PromiseCode），
 // 业务错误码自行从 kBusinessBase 起取，框架不解释业务码含义。
+//
+// 框架错误码一览（要查「这个码是谁产生的」只看这一张表）：
+//
+//   码          含义                    产生点（框架侧唯一来源）
+//   ----------  ----------------------  --------------------------------------------------------------
+//   kFulfilled  已兑现                  默认构造 / CPromiseResult::Resolve()
+//   kRejected   已拒绝（默认码）        Reject() 的默认实参；组合器空集合的 race / any；
+//                                       NewPromise(spCtx, executor) 没给 executor
+//   kStopped    执行器不可用 / 没等到    ① 投递失败（PostToHandle 返回 false）→ 本层被拒绝；
+//                                       ② AwaitFor(ms) 超时 → **只告诉调用方「没等到」**，
+//                                          本层没被落定、链仍在后台跑（两者共用一码，不区分）
+//   kException  处理器 / executor / 搬运抛了异常   各 catch(...) 兜底处（层 / executor / 桥接搬运）
+//
+// 分流建议：`码 >= kBusinessBase` 是业务拒绝；其余三个（kRejected / kStopped / kException）
+// 属系统侧失败，通常统一记录日志后以业务语义向调用方收口。
 // ====================================================================
 
 namespace common {
