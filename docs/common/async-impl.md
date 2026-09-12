@@ -88,7 +88,7 @@ class CPromiseState
     std::vector<Handler> m_vecHandlers;  // 第二个起（同层分叉）才用
     std::atomic<bool> m_bSettled;        // 自旋读 + 等待谓词
     CPromiseResult m_result;             // settled 后有效
-    CSourceLoc m_loc;                    // 注册点（仅调试构建）
+    CLayerInfo m_trace;                 // trace 记录（注册点 + 上游 + 层号/链号…；仅调试构建）
 };
 ```
 
@@ -97,7 +97,7 @@ class CPromiseState
 | `Settle(result)` | 首次生效：锁内置结果与 `m_bSettled`，换出「内联槽 + 处理器列表」，`notify_all` 后在**锁外**按序调用（内联槽在前） |
 | `AddHandler(handle, cb)` | pending → 登记返回 true（第一个进内联槽，其余进列表）；已 settled → 投递 `cb` 到执行器异步触发；已 settled 且执行器不可用 → false |
 | `Await()` | 先自旋 50μs，再在条件变量上阻塞；`notify_all` 支持多线程等待同一 promise |
-| `SetLoc/Loc` | 注册点源码位置（发布构建空实现） |
+| `SetTraceLink/LayerInfo/SetLoc`（仅调试构建） | trace 记录：注册点、上游层、模式、层号/链号（§14） |
 
 三个关键设计：
 
@@ -426,16 +426,20 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 ## 9. 源码位置调试（ASYNC_LOC）
 
 ```cpp
-#if defined(__linux__) && !defined(__OPTIMIZE__)
+// Common/Async/SourceLoc.h
+#if FRAMEWORK_DEBUG                                     // = 未定义 NDEBUG 且未开优化
     #define ASYNC_DEBUG_TRACE 1
 #endif
 #define ASYNC_LOC common::async::CSourceLoc(__PRETTY_FUNCTION__, __FILE__, __LINE__)
 ```
 
-- 调试构建（`-O0`）：每个状态保存注册点函数名 / 文件 / 行号 → 调试器 watch 状态对象的
-  `m_loc` 即可定位「这一层是谁注册的」；
-- 发布构建（`-O2`）：`CSourceLoc` 为空、**不保存**，`SetLoc/Loc` 退化为空操作（零开销）；
-- 处理器常是一串 lambda，注册点信息是定位「哪一层被拒绝」的最直接手段。
+- 调试构建（`-O0`）：每个层状态保存注册点函数名 / 文件 / 行号 —— 调试器里看状态的
+  `m_trace.loc`，或用 §14 的 trace 接口（`DescribeLayer`）就能知道「这一层是谁注册的」；
+- 发布构建（`-O2`）：`CSourceLoc` 为空位置、**不保存**（`ASYNC_LOC` 展开成空位置），零开销；
+- 处理器常是一串 lambda，注册点信息是定位「哪一层被拒绝」的最直接手段；
+- 判定收在 [Common/Assert.h](../Common/Assert.h) 的 `FRAMEWORK_DEBUG` 一处（并见
+  [assert-usage.md](assert-usage.md)）：`ASYNC_DEBUG_TRACE` 跟着它走 ——
+  **注册点、trace 设施、断言三者同一个开关**。
 
 ## 10. 设计取舍
 
@@ -454,8 +458,9 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
    池层吞异常会丢掉「谁抛的」这唯一的线索，而 async 边界知道自己在跑谁的回调、能报告出来。
 7. **诊断出口是进程级单槽 + 可替换**（`SetDiagnosticHandler`）：默认 debug 打印 stderr、发布忽略；
    不直接依赖 `Common/Log`（避免低层反向依赖），应用侧一行接入日志 / 指标。
-8. **loc（`ASYNC_DEBUG_TRACE`）按需开启**：默认不开 —— 每层多 16 字节 + 一次 `SetLoc`，
-   而目前只有调试读它；要用它做「哪一层挂了」的诊断，需让 hook 带上注册点（独立一步）。
+8. **loc / trace 跟着 `FRAMEWORK_DEBUG` 走，不做独立开关**：调试构建自动开启（每层多 16 字节 + 一次
+   `SetLoc`），发布构建整段不参与编译 —— 少一个要记住的宏，也不会出现「开了 loc 却没开 trace」
+   这类半开状态（两者本来就是同一件事：定位层）。
 9. **上下文强制传入，不做懒创建**：`NewPromise(spCtx, …)` / `CCoroutine(spCtx)` 的上下文参数必传。
    权衡：懒创建能让调用方少写一行 `make_shared`，代价却是——`TContext` 必须可默认构造；
    核心要留 mutable 成员 + mutex；`Context()` 每层多一次空判（热路径）。
@@ -596,8 +601,8 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 | 部件 | 作用 |
 | --- | --- |
 | `detail::CCurrentLayerFrame` | 跑层时在 **thread_local 上压一帧**；帧对象活在各线程自己的任务体栈上 |
-| `CPromiseState::SetUpstream/Upstream/Mode` | 每层记下「挂在哪一层之下」（**强引用**，注册时设一次、之后只读）与自己的模式（三项收在 `m_trace` 里，调试时一眼看完） |
-| `VisitLayerChain` / `CurrentLayer` / `DescribeLayerChain` / `DumpLayerChain` | 业务侧只读接口 |
+| `CPromiseState::SetTraceLink(upstream, mode, bChainRoot, nChainId)` | 每层记下「挂在哪一层之下」（**强引用**，注册时设一次、之后只读）、自己的模式、是不是链根、链号 —— 全写进一个 `m_trace`（`CLayerInfo`） |
+| `VisitLayerChain` / `CurrentLayer` / `DescribeLayer` / `DescribeLayerChain` / `DumpLayerChain` | 业务侧只读接口 |
 
 ```cpp
 // MakeHandlerRunner 的任务体（唯一跑用户处理器的地方）—— 接入点就这一行
@@ -609,6 +614,35 @@ return [spContext, pState, fnHandler, upResult, eMode]()
     ...
 };
 ```
+
+### 一层记什么（`CLayerInfo`：一份数据一个类型）
+
+以前是「层状态里一份记录 + 对外一份视图」两个结构，字段大半重复；现在**合成一个**
+`CLayerInfo`：上半部分是层自己的记录，下半部分是遍历时算出来的视图字段（层状态里不存这些）。
+遍历时把记录原样带出来、只补视图字段 —— 不用逐字段搬运，也不用维护两份结构的同步。
+
+| 分组 | 字段 | 说明 |
+| --- | --- | --- |
+| 记录（写一次，之后只读） | `loc` / `eMode` | 注册点（`ASYNC_LOC`）、模式（then / catch / finally） |
+| | `upstream` | 上游层（**强引用**，见下）；链根为空 |
+| | `nLayerId` / `nChainId` | 全局递增的层号 / 链号（链号在链根分配，子链与父链不同号） |
+| | `bChainRoot` / `bSubChain` | 是不是链根 / 是不是「挂在别的层下面」的子链链根 |
+| | `tid` / `nSelfMs` / `tCreated` | 实际跑在哪条线程 / 本层处理器耗时 / 创建时刻 |
+| 视图（遍历时算） | `nDepth` / `bCurrent` | 距当前层几跳 / 是不是正在执行的那一层 |
+| | `nAgeMs` / `nSelfMs` | 年龄 = 创建到现在（链根上 = 整条链的年龄）；当前层的耗时用实时值 |
+| | `bSettled` / `bFulfilled` / `nCode` | 落定与否 / 结果是否兑现 / 结果码 |
+
+`DescribeLayer(info)` 把上面这些拼成一行（`examples` 里 ①…⑬ 每个位置打印的就是它）：
+
+```text
+#0  then    BuildOrderChain  main.cpp:641  链#1 层#3 龄=0ms 本层=0ms 结果=未落定 tid=…  ← 当前层
+#1  then    BuildOrderChain  main.cpp:639  链#1 层#2 龄=0ms 本层=0ms 结果=兑现   tid=…
+#2  then    BuildOrderChain  main.cpp:637  链#1 层#1 龄=0ms 本层=0ms 结果=兑现   tid=… [链根]
+```
+
+「结果」是在**读的时候**从层状态里取的（`TryGetResult()`，锁内拷一份），所以正在跑的当前层
+显示「未落定」、跑完的层显示兑现 / 拒绝（含业务码）—— 失败路径上「被跳过的层照样在链上、
+但结果停在上一层的拒绝码」一眼就能看出来。
 
 ### 四个设计决定（都是为了「不改签名、不增加分配」）
 
@@ -624,8 +658,11 @@ return [spContext, pState, fnHandler, upResult, eMode]()
    代价（**仅调试构建**）：持有尾层句柄会把整条前缀留住；发布构建下这个字段根本不存在。
 3. **当前层由帧保证存活，往上的每一跳先升强引用再访问**：否则
    「取到裸指针 → 上一跳的引用析构 → 节点被释放」就悬垂了。
-4. **整个设施与 `ASYNC_LOC` 同一个开关**（调试构建 `ASYNC_DEBUG_TRACE`）：
-   发布构建下字段不存在、TLS 不写、接口是空操作 —— 与「发布构建零开销」一致。
+4. **整个设施与 `ASYNC_LOC` 同一个开关**（调试构建 `ASYNC_DEBUG_TRACE`），并且**只在调试构建存在**：
+   发布构建下 `CLayerInfo` 与所有函数整段在 `#if` 之外 —— **不是空操作版本**，连类型都拿不到。
+   这样「调试专用」在编译期就是明确的，也不会留下一堆返回空值的假接口；
+   代价是调用点要自己包 `#if defined(ASYNC_DEBUG_TRACE)`（示例里用 `TRACE_ONLY` 宏压成一行）。
+   编辑器里这段代码发灰 = clangd 按 release 解析了，见 [vscode-clangd-format.md §7](../vscode-clangd-format.md)。
 
 ### 边界（写进文档，不是实现偷懒）
 

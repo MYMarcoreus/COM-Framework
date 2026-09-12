@@ -1,29 +1,204 @@
 #include "Async/Trace.h"
 
-#include <cstdio>
-
-#include "Async/Promise.h"  // 只有这里要看 CPromiseState 的内部（Loc / Mode / Upstream）。
-
 // ====================================================================
 // 异步调用链（trace）的实现 —— 见 Trace.h 的说明
 //
-// 结构很小：一个 thread_local 帧栈 + 顺着每层的上游指针（强引用，注册时设一次）向上走。
-// 全部在 `ASYNC_DEBUG_TRACE`（= 调试构建）下生效，发布构建编译成空操作。
+// 整段只在 `ASYNC_DEBUG_TRACE`（= 调试构建）下参与编译：发布构建下这里是个空文件
+// （没有「空操作版本」——接口本身就不存在）。
+//
+// 结构很小：一个 thread_local 帧栈 + 顺着每层的上游强引用向上走；走的时候把「视图字段」
+// （深度 / 当前层 / 年龄 / 结果）填进那层记录里带出来，所以调用方拿到的一层既有
+// 「它是谁」，也有「它跑得怎么样」。
 // ====================================================================
+
+#if defined(ASYNC_DEBUG_TRACE)
+
+    #include <atomic>
+    #include <chrono>
+    #include <cstdio>
+    #include <cstring>
+    #include <sstream>
+
+    #include "Async/Promise.h"  // 只有这里要看 CPromiseState 的内部（记录读写 / 结果）。
 
 namespace common {
 namespace async {
 
+namespace {
+
+/// @brief 距 t0 多久（毫秒）。
+///
+/// @param t0 起点时刻（steady_clock：只看差值，与绝对时间无关）。
+/// @return 毫秒数。
+long long MsSince(const std::chrono::steady_clock::time_point& t0)
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+}
+
+/// @brief 层模式的文本（then / catch / finally）。
+///
+/// @param eMode 层模式。
+/// @return 文本。
+const char* ModeText(detail::HandlerMode eMode)
+{
+    if (eMode == detail::kModeCatch)
+    {
+        return "catch";
+    }
+    if (eMode == detail::kModeFinally)
+    {
+        return "finally";
+    }
+    return "then";
+}
+
+/// @brief 取路径里的文件名部分（打印短一些）。
+///
+/// @param pszPath 路径（可为空）。
+/// @return 文件名（空路径 → `"?"`）。
+const char* BaseName(const char* pszPath)
+{
+    if (pszPath == NULL)
+    {
+        return "?";
+    }
+    const char* pszSlash = std::strrchr(pszPath, '/');
+    return pszSlash != NULL ? pszSlash + 1 : pszPath;
+}
+
+/// @brief 把注册点存的 `__PRETTY_FUNCTION__` 缩成「看得懂的那一段」。
+///
+/// 注册点存的是 `__PRETTY_FUNCTION__`（精确，但模板实参 / 匿名命名空间全在里面，很长）；
+/// 打印时只取最后一个 `::` 之后的函数名，lambda 一律显示成 `<lambda>`。
+///
+/// @param pszPretty 注册点存的函数名（可为空）。
+/// @return 短函数名。
+std::string ShortFunc(const char* pszPretty)
+{
+    if (pszPretty == NULL)
+    {
+        return "(无注册点)";
+    }
+    std::string strFunc(pszPretty);
+    const size_t nParen = strFunc.find('(');
+    if (nParen != std::string::npos)
+    {
+        strFunc.erase(nParen);  // 去掉参数表
+    }
+    if (strFunc.find("<lambda") != std::string::npos)
+    {
+        return "<lambda>";
+    }
+    const size_t nScope = strFunc.rfind("::");
+    if (nScope != std::string::npos)
+    {
+        strFunc.erase(0, nScope + 2);
+    }
+    return strFunc;
+}
+
+/// @brief 线程 id 的文本（还没跑过 → `"-"`）。
+///
+/// @param tid 线程 id。
+/// @return 文本（libstdc++ 下就是线程号，可拿去和 gdb / htop 里的对）。
+std::string ThreadText(const std::thread::id& tid)
+{
+    if (tid == std::thread::id())
+    {
+        return "-";
+    }
+    std::ostringstream oss;
+    oss << tid;
+    return oss.str();
+}
+
+/// @brief 落定结果的文本（还没落定 → 未落定）。
+///
+/// @param info 一层。
+/// @return `「未落定」/「兑现」/「拒绝(码)」`。
+std::string ResultText(const CLayerInfo& info)
+{
+    if (!info.bSettled)
+    {
+        return "未落定";
+    }
+    if (info.bFulfilled)
+    {
+        return "兑现";
+    }
+    char szBuf[32];
+    std::snprintf(szBuf, sizeof(szBuf), "拒绝(%d)", info.nCode);
+    return std::string(szBuf);
+}
+
+/// @brief 链根标记的文本（空 / `[链根]` / `[子链根]`）。
+///
+/// @param info 一层。
+/// @return 文本。
+const char* ChainRootText(const CLayerInfo& info)
+{
+    if (!info.bChainRoot)
+    {
+        return "";
+    }
+    return info.bSubChain ? " [子链根]" : " [链根]";
+}
+
+/// @brief 填「视图字段」（层状态里不存这些：深度 / 当前层 / 年龄 / 结果）。
+///
+/// @param info 本层信息（其余字段来自层状态里的那份记录）。
+/// @param layer 层状态（取结果用）。
+/// @param nSelfMs 本层耗时（当前层：帧算的「已经跑了多久」；上游层：记录里的实际耗时）。
+/// @param nDepth 距当前层几跳。
+/// @param bCurrent 是不是正在执行的那一层。
+void FillView(CLayerInfo& info, const detail::CPromiseState& layer, long long nSelfMs, int nDepth, bool bCurrent)
+{
+    info.nDepth = nDepth;
+    info.bCurrent = bCurrent;
+    info.nAgeMs = MsSince(info.tCreated);
+    info.nSelfMs = nSelfMs;
+
+    // 上游层的结果：带锁读（trace 会从别的线程看已经落定的上游层）。
+    CPromiseResult result;
+    info.bSettled = layer.TryGetResult(result);
+    if (info.bSettled)
+    {
+        info.bFulfilled = result.IsFulfilled();
+        info.nCode = result.Code();
+    }
+}
+
+}  // namespace
+
 namespace detail {
 
-#if defined(ASYNC_DEBUG_TRACE)
+/// 层号计数器（从 1 开始；0 表示「没有层号」）。
+std::atomic<unsigned> g_nNextLayerId(1);
+
+/// 链号计数器（从 1 开始）。
+std::atomic<unsigned> g_nNextChainId(1);
+
+unsigned NextLayerId()
+{
+    return g_nNextLayerId.fetch_add(1);
+}
+
+unsigned NextChainId()
+{
+    return g_nNextChainId.fetch_add(1);
+}
 
 /// 帧栈顶（TLS；帧对象本身活在各线程的栈上，这里只存指针）。
 thread_local const CCurrentLayerFrame* g_pTopFrame = nullptr;
 
-CCurrentLayerFrame::CCurrentLayerFrame(const std::shared_ptr<CPromiseState>& spLayer) : m_spLayer(spLayer), m_pPrev(g_pTopFrame)
+CCurrentLayerFrame::CCurrentLayerFrame(const std::shared_ptr<CPromiseState>& spLayer)
+    : m_spLayer(spLayer), m_pPrev(g_pTopFrame), m_t0(std::chrono::steady_clock::now())
 {
     g_pTopFrame = this;
+    if (m_spLayer != nullptr)
+    {
+        m_spLayer->SetRunningThread(std::this_thread::get_id());  // 「这层跑在哪条线程上」：开跑时写一次。
+    }
 }
 
 CCurrentLayerFrame::~CCurrentLayerFrame()
@@ -34,6 +209,11 @@ CCurrentLayerFrame::~CCurrentLayerFrame()
 const CCurrentLayerFrame* CCurrentLayerFrame::Top()
 {
     return g_pTopFrame;
+}
+
+long long CCurrentLayerFrame::ElapsedMs() const
+{
+    return MsSince(m_t0);
 }
 
 /// 起链父层的作用域栈顶（TLS；节点活在各自栈上）。
@@ -53,41 +233,13 @@ std::shared_ptr<CPromiseState> CurrentLayerState()
 {
     if (g_pTopAdopter != nullptr)
     {
-        return g_pTopAdopter->spAdopter;  // 显式指定优先（工厂里现搭的子链）。
+        return g_pTopAdopter->spAdopter;  // 显式指定优先（工厂里现搭的子链 / 协程的子链）。
     }
     const CCurrentLayerFrame* pFrame = CCurrentLayerFrame::Top();
     return (pFrame != nullptr) ? pFrame->LayerState() : std::shared_ptr<CPromiseState>();
 }
 
-#else
-
-CCurrentLayerFrame::CCurrentLayerFrame(const std::shared_ptr<CPromiseState>& spLayer) : m_spLayer(spLayer), m_pPrev(nullptr)
-{}
-
-CCurrentLayerFrame::~CCurrentLayerFrame()
-{}
-
-const CCurrentLayerFrame* CCurrentLayerFrame::Top()
-{
-    return nullptr;
-}
-
-CChainAdopterScope::CChainAdopterScope(const std::shared_ptr<CPromiseState>& spAdopter) : m_node{spAdopter, nullptr}
-{}
-
-CChainAdopterScope::~CChainAdopterScope()
-{}
-
-std::shared_ptr<CPromiseState> CurrentLayerState()
-{
-    return std::shared_ptr<CPromiseState>();
-}
-
-#endif
-
 }  // namespace detail
-
-#if defined(ASYNC_DEBUG_TRACE)
 
 const CLayerInfo* CurrentLayer()
 {
@@ -99,10 +251,8 @@ const CLayerInfo* CurrentLayer()
 
     // TLS 存储：同一线程内「当前层」只有一个，复用一块空间（不分配、无锁）。
     static thread_local CLayerInfo s_info;
-    s_info.loc = pFrame->Layer()->Loc();
-    s_info.eMode = pFrame->Layer()->Mode();
-    s_info.nDepth = 0;
-    s_info.bCurrent = true;
+    s_info = pFrame->Layer()->LayerInfo();                             // 记录原样带出来
+    FillView(s_info, *pFrame->Layer(), pFrame->ElapsedMs(), 0, true);  // 再填视图字段
     return &s_info;
 }
 
@@ -114,25 +264,26 @@ bool VisitLayerChain(const std::function<void(const CLayerInfo&)>& fnVisit)
         return false;
     }
 
-    CLayerInfo info;
-    info.bCurrent = true;
-
-    // 当前层由帧自己保证存活（它正在跑）；往上的每一跳要**先升成强引用再访问** ——
-    // 否则「拿到裸指针 → 上一跳的强引用析构 → 节点被释放」就会悬垂。
+    // 当前层由帧自己保证存活（它正在跑）；往上的每一跳先把上游**升成强引用**再访问
+    // （当前层的记录里本来就存着上游的强引用，取出来拿着它去 fetch 下一层即可）。
     const detail::CPromiseState* pLayer = pFrame->Layer();
-    std::shared_ptr<detail::CPromiseState> spKeepAlive;
-    while (pLayer != nullptr)
+    CLayerInfo info = pLayer->LayerInfo();
+    int nDepth = 0;
+    bool bCurrent = true;
+    while (true)
     {
-        info.loc = pLayer->Loc();
-        info.eMode = pLayer->Mode();
+        FillView(info, *pLayer, bCurrent ? pFrame->ElapsedMs() : info.nSelfMs, nDepth, bCurrent);
         fnVisit(info);
 
-        ++info.nDepth;
-        info.bCurrent = false;
-
-        const std::shared_ptr<detail::CPromiseState> spUpstream = pLayer->Upstream();
-        spKeepAlive = spUpstream;   // 保活到下一轮访问完
-        pLayer = spUpstream.get();  // 空 → 到链根了
+        if (info.upstream == nullptr)
+        {
+            break;  // 到链根了
+        }
+        const std::shared_ptr<detail::CPromiseState> spUpstream = info.upstream;  // 保活到下一轮访问完
+        pLayer = spUpstream.get();
+        info = pLayer->LayerInfo();
+        ++nDepth;
+        bCurrent = false;
     }
     return true;
 }
@@ -143,27 +294,28 @@ std::string DescribeLayerChain()
     VisitLayerChain(
         [&strChain](const CLayerInfo& info)
         {
-            const char* pszMode = "then";
-            if (info.eMode == detail::kModeCatch)
-            {
-                pszMode = "catch";
-            }
-            else if (info.eMode == detail::kModeFinally)
-            {
-                pszMode = "finally";
-            }
             if (!strChain.empty())
             {
                 strChain += " <- ";
             }
 
             char szBuf[256];
-            std::snprintf(szBuf, sizeof(szBuf), "#%d %s %s (%s:%d)", info.nDepth, pszMode,
+            std::snprintf(szBuf, sizeof(szBuf), "#%d %s %s (%s:%d)", info.nDepth, ModeText(info.eMode),
                 info.loc.szFunction != NULL ? info.loc.szFunction : "(无注册点)", info.loc.szFile != NULL ? info.loc.szFile : "?",
                 info.loc.nLine);
             strChain += szBuf;
         });
     return strChain;
+}
+
+std::string DescribeLayer(const CLayerInfo& info)
+{
+    char szBuf[512];
+    std::snprintf(szBuf, sizeof(szBuf), "#%-2d %-7s %-16s %s:%d  链#%u 层#%u 龄=%lldms 本层=%lldms 结果=%-8s tid=%-7s%s%s",
+        info.nDepth, ModeText(info.eMode), ShortFunc(info.loc.szFunction).c_str(), BaseName(info.loc.szFile), info.loc.nLine,
+        info.nChainId, info.nLayerId, info.nAgeMs, info.nSelfMs, ResultText(info).c_str(), ThreadText(info.tid).c_str(),
+        ChainRootText(info), info.bCurrent ? "  ← 当前层" : "");
+    return std::string(szBuf);
 }
 
 void DumpLayerChain()
@@ -177,28 +329,7 @@ void DumpLayerChain()
     std::fprintf(stderr, "[async 链] %s\n", strChain.c_str());
 }
 
-#else
-
-const CLayerInfo* CurrentLayer()
-{
-    return nullptr;  // 发布构建：trace 是空操作（与 ASYNC_LOC 同一个开关）。
-}
-
-bool VisitLayerChain(const std::function<void(const CLayerInfo&)>& fnVisit)
-{
-    (void)fnVisit;
-    return false;
-}
-
-std::string DescribeLayerChain()
-{
-    return std::string();
-}
-
-void DumpLayerChain()
-{}
-
-#endif
-
 }  // namespace async
 }  // namespace common
+
+#endif  // defined(ASYNC_DEBUG_TRACE)

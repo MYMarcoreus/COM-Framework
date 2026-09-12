@@ -465,34 +465,44 @@ common::async::SetDiagnosticHandler([](const char*)
 static common::async::CPromiseResult StepVerify(common::async::CPromiseResult upResult,
                                                 const std::shared_ptr<CMyContext>& spCtx)
 {
-    common::async::DumpLayerChain();   // 排障：这层是谁挂上来的（debug 构建打印到 stderr）
+#if defined(ASYNC_DEBUG_TRACE)   // 整套设施只在调试构建存在（见下）
+    common::async::DumpLayerChain();   // 排障：这层是谁挂上来的
 
     common::async::VisitLayerChain([](const common::async::CLayerInfo& info)
     {
-        LOG_INFO("depth=%d mode=%d %s (%s:%d)", info.nDepth, info.eMode,
-                 info.loc.szFunction, info.loc.szFile, info.loc.nLine);
+        // DescribeLayer：一层 → 一行富信息（注册点 + 层号/链号 + 线程 + 耗时 + 结果）
+        LOG_INFO("%s", common::async::DescribeLayer(info).c_str());
     });
+#endif
     return common::async::CPromiseResult::Resolve();
 }
 ```
 
-输出形态（调试构建）：
+输出形态（调试构建，近 → 远）：
 
 ```text
-[async 链] #0 then StepVerify (login.cpp:52) <- #1 then StepLoadParam (login.cpp:41) <- #2 then (login.cpp:35)
+#0  then    BuildOrderChain  main.cpp:641  链#1 层#3 龄=0ms 本层=0ms 结果=未落定 tid=…  ← 当前层
+#1  then    BuildOrderChain  main.cpp:639  链#1 层#2 龄=0ms 本层=0ms 结果=兑现   tid=…
+#2  then    BuildOrderChain  main.cpp:637  链#1 层#1 龄=0ms 本层=0ms 结果=兑现   tid=… [链根]
 ```
 
 | 接口 | 作用 |
 | --- | --- |
 | `CurrentLayer()` | 当前正在跑的那一层（不在层里 → `nullptr`；**返回 TLS 存储，要留住请拷贝**） |
-| `VisitLayerChain(fn)` | 从当前层往上遍历（近 → 远），深度 / 模式 / 注册点都给到 |
-| `DescribeLayerChain()` | 拼成一行（写日志 / 测试断言） |
+| `VisitLayerChain(fn)` | 从当前层往上遍历（近 → 远）：给到**视图字段**（`nDepth` / `bCurrent` / `nAgeMs` / `bSettled` / `bFulfilled` / `nCode`）与**层自己的记录**（`loc` / `eMode` / `nLayerId` / `nChainId` / `bChainRoot` / `bSubChain` / `tid` / `nSelfMs`） |
+| `DescribeLayer(info)` | 一层 → 一行富信息（写日志 / 测试断言） |
+| `DescribeLayerChain()` | 整条链拼成一行（`#0 … <- #1 …`） |
 | `DumpLayerChain()` | 直接打印到 stderr |
 
 要注意的（异步的固有性质）：
 
 - **只看得到「当前层 + 上游」**：下游（还没跑的层）是运行期才挂的，看不到；
-- **开关与 `ASYNC_LOC` 同一个**（调试构建 `ASYNC_DEBUG_TRACE`）：发布构建下这些接口一律是空操作，**零开销**；
+- **整套设施只在调试构建存在**（开关与 `ASYNC_LOC` 同一个：`ASYNC_DEBUG_TRACE`）：
+  发布构建下 `CLayerInfo` 与所有接口**整段不参与编译 —— 不是「空操作版本」**，
+  所以要写 trace 的地方得自己包 `#if defined(ASYNC_DEBUG_TRACE)`；
+  示例里用 `TRACE_ONLY(stmt)` 宏把它压成一行（release 展开为空，零开销）；
+- **编辑器里这段代码发灰**？那是 clangd 按 release 解析了（编译数据库的模式问题）——
+  见 [vscode-clangd-format.md §7](../vscode-clangd-format.md)；
 - 分叉（同层多个 `Then`）→ 树；组合器（`WhenAll` 一族）→ 多父一子；
 - **子链能追回父链**：内层链（`ThenPromise`）/ 跨模块子链（`ThenBridge`）/ 协程起的子链都挂在
   「起它的那一层」下面，从子链里能一路追回父链（层外起的链没有父层）；

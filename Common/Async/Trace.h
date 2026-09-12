@@ -1,9 +1,5 @@
 #pragma once
 
-#include <functional>
-#include <string>
-
-#include "Async/PromiseTypes.h"
 #include "Async/SourceLoc.h"
 
 // ====================================================================
@@ -20,12 +16,26 @@
 //     common::async::DumpLayerChain();                  // 排障：这层是谁挂上来的
 //     common::async::VisitLayerChain([](const common::async::CLayerInfo& info)
 //     {
-//         Log("depth=%d mode=%d %s (%s:%d)", info.nDepth, info.eMode,
-//             info.loc.szFunction, info.loc.szFile, info.loc.nLine);
+//         Log("%s", common::async::DescribeLayer(info).c_str());   // 一行富信息
 //     });
 //     ...
 // }
 // @endcode
+//
+// --------------------------------------------------------------------
+// **只在调试构建存在**：整套东西与注册点 `ASYNC_LOC` 同一个开关
+// （`ASYNC_DEBUG_TRACE`，见 SourceLoc.h —— 判定 = 未定义 `NDEBUG` 且未开优化）。
+//
+// 发布构建下这个头文件**什么也不提供**：`CLayerInfo` 与所有函数整段不参与编译
+// （不是「空操作版本」—— 拿不到类型、也调不到函数），所以要写 trace 相关代码的地方
+// 得自己包住：
+// @code
+// #if defined(ASYNC_DEBUG_TRACE)
+//     common::async::DumpLayerChain();
+// #endif
+// @endcode
+// 这样「调试专用」在编译期就是清楚的，也不会在发布构建里留下一堆返回空值的假接口。
+// --------------------------------------------------------------------
 //
 // 机制（**不改处理器签名**）：
 //  - 跑层时在 thread_local 上压一个「当前层」帧（`detail::CCurrentLayerFrame`，帧活在任务体的栈上）；
@@ -34,12 +44,9 @@
 //    持有尾层句柄会把整条前缀留住）；
 //  - `VisitLayerChain` = 当前层 + 顺上游指针一直走到链根。
 //
-// 开关：与注册点 `ASYNC_LOC` 同一个（调试构建 `ASYNC_DEBUG_TRACE`，见 SourceLoc.h）——
-// 发布构建下本文件所有接口都是空操作（`CurrentLayer()` 返回 nullptr），零开销。
-//
-// 子链 → 父链（子链不再是一条孤链）：**起链时正在跑的那一层**会被记成新链「链根」的父层
-// （`detail::CurrentLayerState()`）。内层链（`ThenPromise`）、跨模块子链（`ThenBridge`）、
-// 组合器聚合链、层里 fire-and-forget 起的小链，因此都能从子链里一路追回父链 —— 一棵树 / DAG。
+// 子链 → 父链（子链不是孤链）：**起链时正在跑的那一层**会被记成新链「链根」的父层。
+// 内层链（`ThenPromise`）、跨模块子链（`ThenBridge`）、组合器聚合链、层里 fire-and-forget
+// 起的小链，因此都能从子链里一路追回父链 —— 一棵树 / DAG。
 // 例外：工厂返回的若是**别处早已建好**的链，它保留原来的归属（不重挂）；
 //       协程起的子链挂在「启动协程的那一层」（`CoStart` 处）。
 //
@@ -50,23 +57,75 @@
 //    就地送达时看到的是**触发它的那一层**（帧还在栈上）。
 // ====================================================================
 
+#if defined(ASYNC_DEBUG_TRACE)
+
+    #include <chrono>
+    #include <functional>
+    #include <string>
+    #include <thread>
+
+    #include "Async/PromiseTypes.h"
+
 namespace common {
 namespace async {
 
 namespace detail {
-class CPromiseState;  // 前置声明（帧持它的强引用：起链时要把「父层」交给新链）。
+class CPromiseState;  // 前置声明（帧/记录里持它的强引用：起链时要把「父层」交给新链）。
+
+/// @brief 下一个「层号」（全局递增；日志里对同一层反复对账用）。
+unsigned NextLayerId();
+
+/// @brief 下一个「链号」（全局递增；链号在**链根**创建时分配，追加的层继承）。
+unsigned NextChainId();
 }  // namespace detail
 
-/// @brief 链上的一层（`CurrentLayer` / `VisitLayerChain` 的结果）。
+/// @brief 一层的 trace 信息 —— **既是层状态里存的记录，也是遍历时给调用方的视图**。
+///
+/// 一份数据一个类型：上半部分是「层自己的记录」（创建 / 开跑 / 落定时各写一次，之后只读），
+/// 遍历时原样带出来；下半部分是「本次遍历算出来的视图字段」（层状态里不存它们）。
+/// 所以不需要「内部记录 + 对外视图」两份结构，也不用在遍历时逐字段搬运。
 struct CLayerInfo
 {
-    CSourceLoc loc;             ///< 注册点（发布构建为空；调试构建 = `ASYNC_LOC` 传入的位置）。
-    detail::HandlerMode eMode;  ///< then / catch / finally。
-    int nDepth;                 ///< 距当前层几跳（0 = 正在执行的那一层）。
-    bool bCurrent;              ///< 是不是正在执行的那一层。
+    //================ 层状态里存的（写一次，之后只读） ================
 
-    /// @brief 默认：空信息。
-    CLayerInfo() : loc(), eMode(detail::kModeThen), nDepth(0), bCurrent(false)
+    CSourceLoc loc;                                   ///< 注册点（`ASYNC_LOC` 传入的位置）。
+    detail::HandlerMode eMode;                        ///< then / catch / finally。
+    std::shared_ptr<detail::CPromiseState> upstream;  ///< 上游层（谁挂的它；链根 → 空）。
+    unsigned nLayerId;                                ///< 层号（全局唯一，按创建顺序递增）。
+    unsigned nChainId;                                ///< 链号（链根创建时分配；子链与父链不同号）。
+    bool bChainRoot;                                  ///< 是不是「它那条链」的链根。
+    bool bSubChain;                                   ///< 链根且起链时挂在别的层下面（= 子链）。
+    std::thread::id tid;                              ///< 实际跑在哪条线程上（还没跑过 → 默认 id）。
+    long long nSelfMs;                                ///< 本层处理器耗时（落定前写一次）。
+    std::chrono::steady_clock::time_point tCreated;   ///< 层状态创建时刻（算年龄用）。
+
+    //================ 遍历时填的视图字段 ================
+
+    int nDepth;        ///< 距当前层几跳（0 = 正在执行的那一层）。
+    bool bCurrent;     ///< 是不是正在执行的那一层。
+    long long nAgeMs;  ///< 本层状态创建 → 现在（链根上 = 整条链的年龄）。
+    bool bSettled;     ///< 是否已落定（正在跑的当前层恒为 false）。
+    bool bFulfilled;   ///< 落定结果是否兑现（`bSettled` 为 true 时有意义）。
+    int nCode;         ///< 落定结果码（`bSettled` 为 true 时有意义）。
+
+    /// @brief 默认：空信息（创建时刻取当下；视图字段为 0）。
+    CLayerInfo()
+        : loc(),
+          eMode(detail::kModeThen),
+          upstream(),
+          nLayerId(0),
+          nChainId(0),
+          bChainRoot(false),
+          bSubChain(false),
+          tid(),
+          nSelfMs(0),
+          tCreated(std::chrono::steady_clock::now()),
+          nDepth(0),
+          bCurrent(false),
+          nAgeMs(0),
+          bSettled(false),
+          bFulfilled(false),
+          nCode(0)
     {}
 };
 
@@ -75,6 +134,27 @@ struct CLayerInfo
 /// 「正在执行」= 某个层处理器的函数体里（内联级联时是最内层那个）。
 /// **返回值指向 thread_local 存储**：下次调用会被覆盖，要留住请自行拷贝。
 const CLayerInfo* CurrentLayer();
+
+/// @brief 遍历「当前层 → 上游链」（由近到远），一直走到链根。
+///
+/// @param fnVisit 访问器（每层调用一次）。
+/// @return true = 确实在层里且至少访问了一层；false = 不在层里（此时不调用访问器）。
+bool VisitLayerChain(const std::function<void(const CLayerInfo&)>& fnVisit);
+
+/// @brief 把「当前层 → 上游链」拼成一行（便于写日志 / 测试断言）。
+///
+/// @return 形如 `#0 then StepC (trace.cpp:42) <- #1 then StepB (trace.cpp:38)`；
+///         不在层里返回空串。
+std::string DescribeLayerChain();
+
+/// @brief 把一层拼成**一行富信息**（注册点 + 层号/链号 + 线程 + 耗时 + 结果）。
+///
+/// @param info 一层（`CurrentLayer()` / `VisitLayerChain()` 给的）。
+/// @return 一行。
+std::string DescribeLayer(const CLayerInfo& info);
+
+/// @brief 把「当前层 → 上游链」打印到 stderr。
+void DumpLayerChain();
 
 namespace detail {
 
@@ -91,18 +171,18 @@ namespace detail {
 /// @return 父层（没有 → 空 shared_ptr）。
 std::shared_ptr<CPromiseState> CurrentLayerState();
 
-/// @brief 起链父层的显式作用域（RAII）—— 工厂里现搭的子链，链根挂在**本层**下面。
+/// @brief 起链父层的显式作用域（RAII）—— 作用域内起的链，链根挂在指定那一层下面。
 ///
-/// 为什么需要显式指定：`Adopt`（`ThenPromise`）/ `ThenBridge` 的工厂是在**上游层**的 settle
-/// 路径里执行的，此时帧栈顶是上游层，而「正在等子链的那一层」才是子链真正的主人。
-/// 例：`pA.ThenPromise(工厂)` 里起的子链，应该挂在「`ThenPromise` 返回的那一层」下面，
-/// 而不是落回 `pA`（否则链上会看不到那一层）。
+/// 两个使用场合：
+///  - `Adopt`（`ThenPromise`）/ `ThenBridge` 的工厂：工厂是在**上游层**的 settle 路径里跑的，
+///    只靠帧栈顶会落回上游层、链上就看不到 `ThenPromise` 那一层 —— 这里显式指定「正在等子链的本层」；
+///  - 协程的 `NewPromise`：把父层钉成「启动协程的那一层」（与恢复时机无关，所以是确定的）。
 class CChainAdopterScope
 {
 public:
     /// @brief 在作用域内，起链父层固定为 spAdopter（空 = 不指定，落回帧栈顶）。
     ///
-    /// @param spAdopter 父层（正在等子链的那一层）。
+    /// @param spAdopter 父层。
     explicit CChainAdopterScope(const std::shared_ptr<CPromiseState>& spAdopter);
 
     /// @brief 退出作用域（恢复外层）。
@@ -122,25 +202,6 @@ private:
     CNode m_node;  ///< 本作用域的节点（构造时压栈、析构时弹栈）。
 };
 
-}  // namespace detail
-
-/// @brief 遍历「当前层 → 上游链」（由近到远），一直走到链根。
-///
-/// @param fnVisit 访问器（每层调用一次）。
-/// @return true = 确实在层里且至少访问了一层；false = 不在层里（此时不调用访问器）。
-bool VisitLayerChain(const std::function<void(const CLayerInfo&)>& fnVisit);
-
-/// @brief 把「当前层 → 上游链」拼成一行（便于写日志 / 测试断言）。
-///
-/// @return 形如 `#0 then StepC (trace.cpp:42) <- #1 then StepB (trace.cpp:38)`；
-///         不在层里返回空串。
-std::string DescribeLayerChain();
-
-/// @brief 把「当前层 → 上游链」打印到 stderr（调试构建；发布构建空操作）。
-void DumpLayerChain();
-
-namespace detail {
-
 /// @brief 当前层帧（thread_local 栈；帧对象活在跑层任务体的栈上 → 零分配）。
 ///
 /// 内联级联会**嵌套跑层**（外层处理器里内联跑下一层），所以是**栈语义**：
@@ -148,7 +209,7 @@ namespace detail {
 class CCurrentLayerFrame
 {
 public:
-    /// @brief 压栈（记录「当前层」）。
+    /// @brief 压栈（记录「当前层」并记下它的线程与开始时刻）。
     ///
     /// @param spLayer 本帧对应的层（持强引用：`LayerState()` 要把「父层」交给新起的链）。
     explicit CCurrentLayerFrame(const std::shared_ptr<CPromiseState>& spLayer);
@@ -174,6 +235,9 @@ public:
         return m_spLayer;
     }
 
+    /// @brief 本层从开始跑到现在的毫秒数（`CurrentLayer()` 报「已跑多久」用）。
+    long long ElapsedMs() const;
+
     /// @brief 外层帧。
     const CCurrentLayerFrame* Prev() const
     {
@@ -183,8 +247,11 @@ public:
 private:
     std::shared_ptr<CPromiseState> m_spLayer;  ///< 本帧的层（强引用：它正在跑，本帧作用域内必然存活）。
     const CCurrentLayerFrame* m_pPrev;         ///< 外层帧（thread_local 栈）。
+    std::chrono::steady_clock::time_point m_t0;  ///< 本层开始跑的时刻（算耗时用）。
 };
 
 }  // namespace detail
 }  // namespace async
 }  // namespace common
+
+#endif  // defined(ASYNC_DEBUG_TRACE)

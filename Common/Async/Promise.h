@@ -139,7 +139,7 @@
 // @endcode
 //
 // 文件结构（便于定位）：
-//   一、detail 基础设施：CPromiseState（层状态机，含处理器登记策略 / 注册点 / 上游指针）、
+//   一、detail 基础设施：CPromiseState（层状态机，含处理器登记策略；trace 记录只在调试构建）
 //       ShouldPassThrough・ResolveLayerResult（三态语义）/ MakeHandlerRunner（任务体构造）
 //       / CPromiseCore（共享核心：上下文 + 执行器句柄，兼层调度入口）
 //       注：`HandlerMode`（then / catch / finally）在 "Async/PromiseTypes.h"；
@@ -222,27 +222,7 @@ inline void RunNoticeOn(
     }
 }
 
-class CPromiseState;  // 前置声明（trace 信息里要存它的强引用）。
-
-#if defined(ASYNC_DEBUG_TRACE)
-
-/// @brief 一层的「调用链 trace 信息」（**只在调试构建存在**）。
-///
-/// 把注册点 / 上游 / 模式收成**一个成员**（`CPromiseState::m_trace`），好处有二：
-///  - 调试器里展开一个层状态就多一层 `m_trace`，三项信息聚在一处，不用在成员列表里找；
-///  - 「哪些字段是为 trace 而存的」一眼可辨（发布构建下连这个成员都不存在）。
-struct CLayerTraceInfo
-{
-    CSourceLoc loc;                             ///< 注册点源码位置（`ASYNC_LOC`）。
-    std::shared_ptr<CPromiseState> spUpstream;  ///< 上游层（注册时设一次、之后只读）。
-    HandlerMode eMode;                          ///< 本层模式（默认 then：首层 / 链根不经过 Append）。
-
-    /// @brief 空信息（无上游、模式 then）。
-    CLayerTraceInfo() : loc(), spUpstream(), eMode(kModeThen)
-    {}
-};
-
-#endif  // defined(ASYNC_DEBUG_TRACE)
+class CPromiseState;  // 前置声明（层状态自己也不在 trace 里被引用，这里只为了让下面的注释好写）。
 
 /// @brief promise 状态（对应 JS 中「每个 then 返回的新 promise」的状态）。
 ///
@@ -417,82 +397,114 @@ public:
         return m_bSettled.load(std::memory_order_relaxed);
     }
 
-    /// @brief 设置本层的注册点源码位置（调试用；发布构建为空操作）。
+#if defined(ASYNC_DEBUG_TRACE)
+
+    //================ 调用链 trace（**只在调试构建存在**） ================
+    //
+    // 发布构建下这段整段不参与编译（连同上面的 m_trace 成员）：trace 不是「空操作版本」，
+    // 而是根本没有 —— 调用方要写 trace 相关代码，请自己用 #if defined(ASYNC_DEBUG_TRACE) 包住。
+
+    /// @brief 设置本层的注册点源码位置。
     ///
     /// @param loc 源码位置（建议传 ASYNC_LOC）。
     void SetLoc(const CSourceLoc& loc)
     {
-#if defined(ASYNC_DEBUG_TRACE)
         m_trace.loc = loc;
-#else
-        (void)loc;
-#endif
     }
 
-    /// @brief 获取本层注册点源码位置（发布构建恒为空）。
-    CSourceLoc Loc() const
-    {
-#if defined(ASYNC_DEBUG_TRACE)
-        return m_trace.loc;
-#else
-        return CSourceLoc();
-#endif
-    }
-
-    /// @brief 记下「本层挂在哪一层之下」（调用链 trace 用；仅调试构建真的存）。
+    /// @brief 记下本层在调用链里的位置：上游层 + 模式 + 它在哪条链上。
     ///
-    /// 用**强引用**：层的状态是靠「上游的处理器闭包」保活的，闭包用完即毁 —— 用弱引用的话，
-    /// 中间层跑完就被释放，链会被截断，而那正是排障最需要它的时候。
-    /// 因此这些链接**一次写入、之后只读**（注册时设一次，永不释放），代价自然就是
-    /// 「只要下游还活着，上游就不会被释放」—— 调试构建下整条链随尾层句柄存活；
-    /// 发布构建根本没有这个字段。
+    /// 上游用**强引用**：层的状态是靠「上游的处理器闭包」保活的，闭包用完即毁 —— 用弱引用的话，
+    /// 中间层跑完就被释放，链会被截断，而那正是排障最需要它的时候。因此这些链接
+    /// **一次写入、之后只读**（注册时设一次，永不释放），代价就是「只要下游还活着，
+    /// 上游就不会被释放」—— 调试构建下整条链随尾层句柄存活。
     ///
-    /// @param pUpstream 上游层（本层被挂到它上面；空 = 起链的首层 / 执行器直接造的链根）。
+    /// @param pUpstream 上游层（本层被挂到它上面；空 = 首层 / 层外起的链根）。
     /// @param eMode 本层模式（then / catch / finally）。
-    void SetUpstream(const std::shared_ptr<CPromiseState>& pUpstream, HandlerMode eMode)
+    /// @param bChainRoot 本层是不是「它那条链」的链根（起链的两处为 true，追加层为 false）。
+    /// @param nChainId 本层的链号（链根：新分配的号；追加层：传上游的链号）。
+    void SetTraceLink(const std::shared_ptr<CPromiseState>& pUpstream, HandlerMode eMode, bool bChainRoot, unsigned nChainId)
     {
-#if defined(ASYNC_DEBUG_TRACE)
-        m_trace.spUpstream = pUpstream;
+        m_trace.upstream = pUpstream;
         m_trace.eMode = eMode;
-#else
-        (void)pUpstream;
-        (void)eMode;
-#endif
+        m_trace.bChainRoot = bChainRoot;
+        m_trace.bSubChain = bChainRoot && (pUpstream != nullptr);  // 链根且有父层 = 子链
+        m_trace.nChainId = nChainId;
     }
 
-    /// @brief 上游层（调用链 trace 用；首层 / 链根 → 空）。
-    std::shared_ptr<CPromiseState> Upstream() const
+    /// @brief 分配层号（创建层状态时调一次）。
+    ///
+    /// @param nLayerId 层号（`detail::NextLayerId()`）。
+    void SetLayerId(unsigned nLayerId)
     {
-#if defined(ASYNC_DEBUG_TRACE)
-        return m_trace.spUpstream;
-#else
-        return std::shared_ptr<CPromiseState>();
-#endif
+        m_trace.nLayerId = nLayerId;
     }
 
-    /// @brief 本层模式（调用链 trace 用；发布构建恒为 then）。
-    HandlerMode Mode() const
+    /// @brief 记下「本层跑在哪条线程上」（开跑时由帧写一次，之后只读）。
+    ///
+    /// @param tid 当前线程 id。
+    void SetRunningThread(const std::thread::id& tid)
     {
-#if defined(ASYNC_DEBUG_TRACE)
-        return m_trace.eMode;
-#else
-        return kModeThen;
-#endif
+        m_trace.tid = tid;
     }
+
+    /// @brief 记下本层处理器的耗时（落定前写一次）。
+    ///
+    /// @param nMs 毫秒数。
+    void SetSelfDurationMs(long long nMs)
+    {
+        m_trace.nSelfMs = nMs;
+    }
+
+    /// @brief 本层链号（追加层用它继承上游的链号）。
+    ///
+    /// @return 链号。
+    unsigned ChainId() const
+    {
+        return m_trace.nChainId;
+    }
+
+    /// @brief 本层的 trace 记录（**拷贝**）。
+    ///
+    /// 遍历（`VisitLayerChain` / `CurrentLayer`）拿到它之后会在上面填「视图字段」
+    /// （深度 / 当前层 / 年龄 / 结果），不会影响层状态里存的那份。
+    ///
+    /// @return 本层记录。
+    CLayerInfo LayerInfo() const
+    {
+        return m_trace;
+    }
+
+    /// @brief 取本层落定结果（链上能直接看到上游是兑现还是拒绝）。
+    ///
+    /// 带锁读：与 `Settle` 的写入同步（trace 会从**别的线程**看已经落定的上游层）。
+    ///
+    /// @param out 落定结果（返回 true 时有效）。
+    /// @return 已落定 → true。
+    bool TryGetResult(CPromiseResult& out) const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_bSettled.load(std::memory_order_relaxed))
+        {
+            return false;
+        }
+        out = m_result;
+        return true;
+    }
+
+#endif  // defined(ASYNC_DEBUG_TRACE)
 
 private:
-    std::mutex m_mutex;                  ///< 保护结果与处理器列表。
+    mutable std::mutex m_mutex;          ///< 保护结果与处理器列表（mutable：trace 的只读取结果要加锁）。
     std::condition_variable m_cv;        ///< 通知等待者。
     Handler m_handlerInline;             ///< 第一个处理器（1:1 链常态，免 vector 分配）。
     std::vector<Handler> m_vecHandlers;  ///< 第二个起（同层分叉）才用。
     std::atomic<bool> m_bSettled;        ///< 是否已 settled（自旋读用）。
     CPromiseResult m_result;             ///< 最终结果（settled 后有效）。
 #if defined(ASYNC_DEBUG_TRACE)
-
-    /// 调用链 trace 信息（注册点 / 上游 / 模式）。打成一个结构：调试器里展开一层就看完，
-    /// 也让「哪些字段是为 trace 存的」一目了然。默认 then：**首层**与「由执行器直接造的链根」
-    /// 都没有上游、不经过 `Append`，但它们的语义就是 then（起点结果视为已兑现）。
-    CLayerTraceInfo m_trace;
+    /// 本层的 trace 记录（注册点 / 上游 / 模式 / 层号 / 链号 / 线程 / 耗时）。
+    /// 类型就是 `CLayerInfo`（既是存储记录也是遍历视图，只此一份，没有第二个结构）。
+    CLayerInfo m_trace;
 #endif
 };
 
@@ -554,6 +566,9 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spConte
         {
             result = CPromiseResult::Reject(kException);  // 处理器抛异常 → 拒绝（finally 抛异常同样覆盖）。
         }
+#if defined(ASYNC_DEBUG_TRACE)
+        pState->SetSelfDurationMs(frame.ElapsedMs());  // trace：本层耗时（落定前写一次）。
+#endif
         pState->Settle(result);  // settle 本层 → 触发下一层（同执行器内联 / 跨执行器投递）。
     };
 }
@@ -784,7 +799,9 @@ public:
         const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = m_pCore;
         const std::shared_ptr<detail::CPromiseState> pUpState = m_pState;
         const std::shared_ptr<detail::CPromiseState> pNextState = NewLayerState(loc);
-        pNextState->SetUpstream(pUpState, detail::kModeThen);  // 调用链 trace（仅调试构建真的存）。
+#if defined(ASYNC_DEBUG_TRACE)
+        pNextState->SetTraceLink(pUpState, detail::kModeThen, /* bChainRoot = */ false, pUpState->ChainId());
+#endif
 
         const bool bOk = pUpState->AddHandler(pCore->Handle(),
             [pCore, pNextState, fnFactory](const CPromiseResult& upResult)
@@ -837,8 +854,8 @@ public:
             {
                 BindChildSettle(promiseChild, fnApply, spSelf, fnResolve, fnReject);  // 规则只有一份。
             };
-            // 父层 = 桥接层（工厂跑在它的帧里）：这一层（以及它等到的子链）都能追回本链。
-            return NewFromHandle(pCore->Handle(), spSelf, fnStarter, loc, detail::CurrentLayerState());
+            // 父层 = 桥接层（工厂跑在它下面的作用域里）：这一层（以及它等到的子链）都能追回本链。
+            return NewFromHandle(pCore->Handle(), spSelf, fnStarter, loc);
         };
         return ThenPromise(fnFactory, loc);
     }
@@ -940,11 +957,15 @@ public:
         return m_pCore->Context();
     }
 
-    /// @brief 本层的注册点源码位置（调试用；发布构建恒为空）。
+    /// @brief 本层的注册点源码位置（**只在调试构建存在**：发布构建没有 trace）。
+    ///
+    /// @return 注册点（`ASYNC_LOC` 传入的位置）。
+#if defined(ASYNC_DEBUG_TRACE)
     CSourceLoc Loc() const
     {
-        return m_pState->Loc();
+        return m_pState->LayerInfo().loc;
     }
+#endif
 
 private:
     //================ Internal ================
@@ -976,15 +997,17 @@ private:
     /// @param pCore 共享核心（上下文 + 执行器句柄；恒非空）。
     /// @param fnHandler 首层处理器。
     /// @param loc 注册点源码位置。
-    /// @param spParent 链根的**父层**（调用链 trace：起链时正在跑的那一层；不在层里 → 空）。
     /// @return 指向首层的句柄（pending；执行器不可用时已被拒绝为 kStopped）。
-    static CPromise StartChain(const std::shared_ptr<detail::CPromiseCore<TContext> >& pCore, const ThenHandler& fnHandler,
-        const CSourceLoc& loc, const std::shared_ptr<detail::CPromiseState>& spParent)
+    static CPromise StartChain(
+        const std::shared_ptr<detail::CPromiseCore<TContext> >& pCore, const ThenHandler& fnHandler, const CSourceLoc& loc)
     {
         const std::shared_ptr<detail::CPromiseState> pState = NewLayerState(loc);
 
-        // 父层必须在**投递之前**写好：链根一旦跑起来就可能被读，之后就只读了（发布构建此调用为空操作）。
-        pState->SetUpstream(spParent, detail::kModeThen);
+#if defined(ASYNC_DEBUG_TRACE)
+        // trace：新链的链根挂在「起链时正在跑的层」下面 —— 这就是「子链 → 父链」那条边。
+        // 必须在**投递之前**写好：链根一旦跑起来就可能被读，之后就只读了。
+        pState->SetTraceLink(detail::CurrentLayerState(), detail::kModeThen, /* bChainRoot = */ true, detail::NextChainId());
+#endif
 
         // 起点结果视为「已兑现」；首层恒以 then 语义执行（catch / finally 是追加层的写法）。
         std::function<void()> fnRun =
@@ -1025,7 +1048,12 @@ private:
     static std::shared_ptr<detail::CPromiseState> NewLayerState(const CSourceLoc& loc)
     {
         const std::shared_ptr<detail::CPromiseState> pState = std::make_shared<detail::CPromiseState>();
+#if defined(ASYNC_DEBUG_TRACE)
         pState->SetLoc(loc);
+        pState->SetLayerId(detail::NextLayerId());  // trace：层号（创建即定，日志对账用）。
+#else
+        (void)loc;
+#endif
         return pState;
     }
 
@@ -1095,16 +1123,20 @@ private:
     /// @param spContext 共享上下文（本 promise 所有层共用该实例）。
     /// @param fnStarter 起链回调（拿到 resolve / reject 句柄）。
     /// @param loc 注册点源码位置。
-    /// @param spParent 链根的**父层**（调用链 trace：起链时正在跑的那一层；不在层里 → 空）。
     /// @return 指向本 promise 的句柄（pending；由 fnStarter 触发 settle）。
     static CPromise NewFromHandle(const std::shared_ptr<detail::CExecutorHandle>& pHandle,
-        const std::shared_ptr<TContext>& spContext, const ChainStarter& fnStarter, const CSourceLoc& loc,
-        const std::shared_ptr<detail::CPromiseState>& spParent)
+        const std::shared_ptr<TContext>& spContext, const ChainStarter& fnStarter, const CSourceLoc& loc)
     {
         // 待定：等外部 settle。
         const std::shared_ptr<detail::CPromiseState> pState = std::make_shared<detail::CPromiseState>();
+#if defined(ASYNC_DEBUG_TRACE)
         pState->SetLoc(loc);
-        pState->SetUpstream(spParent, detail::kModeThen);  // 调用链 trace（仅调试构建真的存）。
+        pState->SetLayerId(detail::NextLayerId());  // trace：层号。
+        // trace：链根挂在「起链时正在跑的层」下面（父层必须在投递 / 启动之前写好）。
+        pState->SetTraceLink(detail::CurrentLayerState(), detail::kModeThen, /* bChainRoot = */ true, detail::NextChainId());
+#else
+        (void)loc;
+#endif
 
         // 这里恒为「立即启动」：与 JS 的 `new Promise(executor)` 一样，起链回调当场同步执行。
         RunChainStarter(pState, fnStarter);
@@ -1129,9 +1161,11 @@ private:
 
         try
         {
-            // 调用链 trace：作用域内的起链都把新链根挂在「正在等子链的本层」下面
+#if defined(ASYNC_DEBUG_TRACE)
+            // trace：作用域内的起链都把新链根挂在「正在等子链的本层」下面
             // （工厂是在**上游层**的 settle 路径里跑的，不指定的话会落回上游层）。
             const detail::CChainAdopterScope scope(pState);
+#endif
             const CPromise promiseChild = fnFactory(pCore->Context());
             // 通知恒送达（没有返回值）→ 子链落定即收口本层。
             promiseChild.OnSettled(
@@ -1195,7 +1229,9 @@ private:
         const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = m_pCore;
         const std::shared_ptr<detail::CPromiseState> pUpState = m_pState;
         const std::shared_ptr<detail::CPromiseState> pNextState = NewLayerState(loc);
-        pNextState->SetUpstream(pUpState, eMode);  // 调用链 trace（仅调试构建真的存）。
+#if defined(ASYNC_DEBUG_TRACE)
+        pNextState->SetTraceLink(pUpState, eMode, /* bChainRoot = */ false, pUpState->ChainId());
+#endif
 
         // 本层实际的执行器：默认本链执行器；指定执行器版用调用方给的那个。
         const std::shared_ptr<detail::CExecutorHandle> pExec = detail::ResolveExecHandle(eAffinity, pTarget, pCore->Handle());
@@ -1263,9 +1299,7 @@ CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& s
     typename CPromise<TContext>::ThenHandler fnHandler, const CSourceLoc& loc /* = CSourceLoc() */)
 {
     // 起链 = 建核心（共享上下文 + 本执行器句柄）+ 起首层（建层状态 + 投递执行），只有这一条路。
-    // 父层 = 起链时正在跑的那一层（调用链 trace）：本层里起的链因此能一路追回本层与它的上游。
-    return CPromise<TContext>::StartChain(
-        std::make_shared<detail::CPromiseCore<TContext> >(Handle(), spContext), fnHandler, loc, detail::CurrentLayerState());
+    return CPromise<TContext>::StartChain(std::make_shared<detail::CPromiseCore<TContext> >(Handle(), spContext), fnHandler, loc);
 }
 
 /// @brief 起链实现（对齐 JS `new Promise(executor)`）：由 `fnStarter` 里的 resolve / reject 兑现。
@@ -1283,7 +1317,7 @@ template <typename TContext>
 CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& spContext,
     const typename CPromise<TContext>::ChainStarter& fnStarter, const CSourceLoc& loc /* = CSourceLoc() */)
 {
-    return CPromise<TContext>::NewFromHandle(Handle(), spContext, fnStarter, loc, detail::CurrentLayerState());
+    return CPromise<TContext>::NewFromHandle(Handle(), spContext, fnStarter, loc);
 }
 
 }  // namespace async

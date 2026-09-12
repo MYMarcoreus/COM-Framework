@@ -36,13 +36,20 @@
 
 using common::async::CAsyncExecutor;
 using common::async::CCoroutine;
-using common::async::CLayerInfo;
 using common::async::CPromise;
 using common::async::CPromiseResult;
 
+#if defined(ASYNC_DEBUG_TRACE)
+using common::async::CLayerInfo;  // 只有调试构建有 trace 类型
+#endif
+
 namespace {
 
+#if defined(ASYNC_DEBUG_TRACE)
+
 /// @brief 一个「位置」采集到的东西（在层处理器里现场取一份快照）。
+///
+/// 只在调试构建定义：发布构建没有 `CLayerInfo`（trace 整段不存在），也没有可采集的东西。
 struct CCapture
 {
     bool bHasCurrent;                  ///< `CurrentLayer()` 是否非空。
@@ -54,6 +61,8 @@ struct CCapture
     CCapture() : bHasCurrent(false), infoCurrent(), bVisited(false), vecChain(), strChain()
     {}
 };
+
+#endif  // defined(ASYNC_DEBUG_TRACE)
 
 /// @brief 期望的链：逐层的（模式, 注册点行号）。
 struct CExpect
@@ -95,6 +104,8 @@ struct CTraceCtx
     std::atomic<bool> bNoticeDone;  ///< 「落定前登记」的通知已送达
     std::atomic<bool> bPostedDone;  ///< 「落定后登记」的通知已送达
 
+    // 下面这些只在调试构建存在（发布构建根本没有 trace：类型与函数整段不参与编译）。
+#if defined(ASYNC_DEBUG_TRACE)
     int nLineInnerFirst;   ///< 内层链第 1 层注册点（在内层链的工厂里采集）
     int nLineInnerSecond;  ///< 内层链第 2 层注册点
     int nLineCoroStep;     ///< 协程里 await 的那条子链的注册点
@@ -112,6 +123,7 @@ struct CTraceCtx
     CCapture capCoroStep;      ///< 协程 `CO_AWAIT` 等的那条子链的层
     CCapture capCoroAfter;     ///< 协程体：`CO_AWAIT` 返回之后
     CCapture capThrowing;      ///< 抛异常那一层（抛之前采集）
+#endif
 
     CTraceCtx()
         : nValue(0),
@@ -119,7 +131,9 @@ struct CTraceCtx
           bFinallyRan(false),
           bGateOpened(false),
           bNoticeDone(false),
-          bPostedDone(false),
+          bPostedDone(false)
+#if defined(ASYNC_DEBUG_TRACE)
+          ,
           nLineInnerFirst(0),
           nLineInnerSecond(0),
           nLineCoroStep(0),
@@ -136,8 +150,11 @@ struct CTraceCtx
           capCoroStep(),
           capCoroAfter(),
           capThrowing()
+#endif
     {}
 };
+
+#if defined(ASYNC_DEBUG_TRACE)
 
 /// @brief 采集「当前层 + 上游链」的现场快照（在层处理器里调用）。
 void CaptureNow(CCapture& cap)
@@ -160,9 +177,7 @@ void CaptureNow(CCapture& cap)
 
 /// @brief 层模式的文本形式（与 `DescribeLayerChain()` 的写法一致）。
 ///
-/// 下面这几个助手只在调试构建用得上（发布构建下 trace 是空操作），所以跟着开关走 ——
-/// 否则发布构建会报 `-Wunused-function`。
-#if defined(ASYNC_DEBUG_TRACE)
+/// 下面这些助手只在调试构建有 trace 时用得上，所以整段跟着开关走。
 const char* ModeText(common::async::detail::HandlerMode eMode)
 {
     if (eMode == common::async::detail::kModeCatch)
@@ -224,6 +239,25 @@ int CountArrows(const std::string& strChain)
 }
 #endif  // defined(ASYNC_DEBUG_TRACE)
 
+/// 采集一步（调试构建）；发布构建没有 trace，这一步不参与。
+///
+/// 写成宏是为了让两份构建共用同一套处理器代码（否则每个处理器里都要写一段 `#if`）。
+#if defined(ASYNC_DEBUG_TRACE)
+    #define TRACE_CAPTURE(member) CaptureNow(spCtx->member)
+#else
+    /// 发布构建：没有 trace 可采（顺手把形参用掉，免得 `-Wunused-parameter`）。
+    #define TRACE_CAPTURE(member) ((void)spCtx)
+#endif
+
+/// 记一个「注册点行号」（只有调试构建需要：发布构建既没有 trace，也就没有行号可比）。
+///
+/// `__LINE__` 在宏调用那一行展开 → `+1` 就是紧接着的挂层语句，两份构建都不受影响。
+#if defined(ASYNC_DEBUG_TRACE)
+    #define TRACE_LINE(assign) assign
+#else
+    #define TRACE_LINE(assign) ((void)0)
+#endif
+
 /// @brief 等一个由工作线程置位的标志（有上限；超时返回 false —— 别让用例挂死）。
 bool WaitFlag(const std::atomic<bool>& bFlag, int nMaxMs = 3000)
 {
@@ -245,7 +279,7 @@ bool WaitFlag(const std::atomic<bool>& bFlag, int nMaxMs = 3000)
 CPromiseResult StepRoot(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
 {
     (void)upResult;
-    CaptureNow(spCtx->capRoot);
+    TRACE_CAPTURE(capRoot);
     ++spCtx->nValue;
     return CPromiseResult::Resolve();
 }
@@ -254,7 +288,7 @@ CPromiseResult StepRoot(CPromiseResult upResult, const std::shared_ptr<CTraceCtx
 CPromiseResult StepInline(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
 {
     (void)upResult;
-    CaptureNow(spCtx->capInline);
+    TRACE_CAPTURE(capInline);
     return CPromiseResult::Resolve();
 }
 
@@ -262,7 +296,7 @@ CPromiseResult StepInline(CPromiseResult upResult, const std::shared_ptr<CTraceC
 CPromiseResult StepOnOtherExec(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
 {
     (void)upResult;
-    CaptureNow(spCtx->capOtherExec);
+    TRACE_CAPTURE(capOtherExec);
     return CPromiseResult::Resolve();
 }
 
@@ -286,7 +320,7 @@ CPromiseResult StepFinally(CPromiseResult upResult, const std::shared_ptr<CTrace
 CPromiseResult StepInnerFirst(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
 {
     (void)upResult;
-    CaptureNow(spCtx->capInnerFirst);
+    TRACE_CAPTURE(capInnerFirst);
     return CPromiseResult::Resolve();
 }
 
@@ -294,7 +328,7 @@ CPromiseResult StepInnerFirst(CPromiseResult upResult, const std::shared_ptr<CTr
 CPromiseResult StepInnerSecond(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
 {
     (void)upResult;
-    CaptureNow(spCtx->capInnerSecond);
+    TRACE_CAPTURE(capInnerSecond);
     return CPromiseResult::Resolve();
 }
 
@@ -310,7 +344,7 @@ CPromiseResult StepForkBase(CPromiseResult upResult, const std::shared_ptr<CTrac
 CPromiseResult StepBranchA(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
 {
     (void)upResult;
-    CaptureNow(spCtx->capBranchA);
+    TRACE_CAPTURE(capBranchA);
     return CPromiseResult::Resolve();
 }
 
@@ -318,7 +352,7 @@ CPromiseResult StepBranchA(CPromiseResult upResult, const std::shared_ptr<CTrace
 CPromiseResult StepBranchB(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
 {
     (void)upResult;
-    CaptureNow(spCtx->capDeepest);
+    TRACE_CAPTURE(capDeepest);
     return CPromiseResult::Resolve();
 }
 
@@ -340,7 +374,7 @@ CPromiseResult StepGated(CPromiseResult upResult, const std::shared_ptr<CTraceCt
 CPromiseResult StepCoroutineStep(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
 {
     (void)upResult;
-    CaptureNow(spCtx->capCoroStep);
+    TRACE_CAPTURE(capCoroStep);
     return CPromiseResult::Resolve();
 }
 
@@ -348,7 +382,7 @@ CPromiseResult StepCoroutineStep(CPromiseResult upResult, const std::shared_ptr<
 CPromiseResult StepCaptureThenThrow(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
 {
     (void)upResult;
-    CaptureNow(spCtx->capThrowing);
+    TRACE_CAPTURE(capThrowing);
     throw std::runtime_error("trace 用例：层内故意抛异常");
 }
 
@@ -369,9 +403,11 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        GetContext()->nLineCoroStep = __LINE__ + 1;  // 下一行是子链的注册点
+        TRACE_LINE(GetContext()->nLineCoroStep = __LINE__ + 1);  // 下一行（CO_AWAIT）才是注册点
         CO_AWAIT(NewPromise(&StepCoroutineStep, ASYNC_LOC));
-        CaptureNow(GetContext()->capCoroAfter);
+#if defined(ASYNC_DEBUG_TRACE)
+        CaptureNow(GetContext()->capCoroAfter);  // 恢复点：看还在不在层里
+#endif
         CO_RETURN_VOID();
         CO_END();
     }
@@ -393,9 +429,9 @@ TEST(Trace_CompleteChainInComplexFlow)
     // 内层链的工厂（单独具名：这样 `ThenPromise` 那一行能整行写下，注册点行号好断言）。
     CPromise<CTraceCtx>::PromiseFactory fnInnerChain = [&execMain, spCtx](const std::shared_ptr<CTraceCtx>& spInnerCtx)
     {
-        spCtx->nLineInnerFirst = __LINE__ + 1;
+        TRACE_LINE(spCtx->nLineInnerFirst = __LINE__ + 1);
         CPromise<CTraceCtx> pInner = execMain.NewPromise(spInnerCtx, &StepInnerFirst, ASYNC_LOC);
-        spCtx->nLineInnerSecond = __LINE__ + 1;
+        TRACE_LINE(spCtx->nLineInnerSecond = __LINE__ + 1);
         return pInner.Then(&StepInnerSecond, ASYNC_LOC);
     };
 
@@ -434,7 +470,9 @@ TEST(Trace_CompleteChainInComplexFlow)
     pGated.OnSettled(
         [spGateCtx](CPromiseResult)
         {
+#if defined(ASYNC_DEBUG_TRACE)
             CaptureNow(spGateCtx->capNoticeInline);
+#endif
             spGateCtx->bNoticeDone.store(true);
         });
     spGateCtx->bGateOpened.store(true);  // 放行：这一层这才落定（通知必定已登记）
@@ -446,7 +484,9 @@ TEST(Trace_CompleteChainInComplexFlow)
     pGated.OnSettled(
         [spGateCtx](CPromiseResult)
         {
+#if defined(ASYNC_DEBUG_TRACE)
             CaptureNow(spGateCtx->capNoticePosted);
+#endif
             spGateCtx->bPostedDone.store(true);
         });
     ASSERT_TRUE(WaitFlag(spGateCtx->bPostedDone));
@@ -568,17 +608,14 @@ TEST(Trace_CompleteChainInComplexFlow)
 
 #else
 
-    // 发布构建：trace 与 `ASYNC_LOC` 同一个开关 → 全部接口是空操作。
+    // 发布构建：trace 整段不存在（接口都没有），这里只确认「流程本身」跑对了 ——
+    // 采集 / 链断言这两组东西在发布构建里根本不参与编译。
     (void)lines;
     (void)nLineGated;
-    ASSERT_TRUE(!spCtx->capDeepest.bVisited);
-    ASSERT_TRUE(!spCtx->capDeepest.bHasCurrent);
-    ASSERT_TRUE(spCtx->capDeepest.vecChain.empty());
-    ASSERT_TRUE(spCtx->capDeepest.strChain.empty());
-    ASSERT_TRUE(!spGateCtx->capNoticeInline.bVisited);
-    ASSERT_TRUE(!spCtx->capCoroAfter.bHasCurrent);
-    ASSERT_TRUE(common::async::CurrentLayer() == NULL);
-    ASSERT_TRUE(common::async::DescribeLayerChain().empty());
+    ASSERT_EQ(spCtx->nValue, 1);                 // 主链跑过
+    ASSERT_TRUE(spCtx->bFinallyRan.load());      // finally 层执行了
+    ASSERT_TRUE(spGateCtx->bNoticeDone.load());  // 通知送达
+    ASSERT_TRUE(spGateCtx->bPostedDone.load());
 
 #endif
 
@@ -586,7 +623,11 @@ TEST(Trace_CompleteChainInComplexFlow)
     execSide.Stop();
 }
 
+#if defined(ASYNC_DEBUG_TRACE)
+
 /// @brief 层外调用：不是层 → 拿不到当前层，遍历返回 false（不崩）。
+///
+/// 整个用例都是「层外契约」（调的全是 trace 接口），所以只在调试构建存在。
 TEST(Trace_NotInsideLayer)
 {
     ASSERT_TRUE(common::async::CurrentLayer() == NULL);
@@ -602,14 +643,14 @@ TEST(Trace_NotInsideLayer)
     spCtx->nLineStart = __LINE__ + 1;
     ASSERT_TRUE(exec.NewPromise(spCtx, &StepRoot, ASYNC_LOC).Await().IsFulfilled());
 
-#if defined(ASYNC_DEBUG_TRACE)
     // 层外起的链没有「父层」—— 链根就是链根（它的上游要等有人 adopt / 或它在层里起链时才挂上）。
     const CExpect vecExpectAlone[1] = {{"then", spCtx->nLineStart}};
     AssertChain(spCtx->capRoot, vecExpectAlone, 1);
-#endif
 
     // 层跑在 worker 线程上；主线程（调用方）始终不在层里。
     ASSERT_TRUE(common::async::CurrentLayer() == NULL);
     ASSERT_TRUE(common::async::DescribeLayerChain().empty());
     exec.Stop();
 }
+
+#endif  // defined(ASYNC_DEBUG_TRACE)

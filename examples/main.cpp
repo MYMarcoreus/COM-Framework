@@ -54,9 +54,11 @@
 
 using common::async::CAsyncExecutor;
 using common::async::CCoroutine;
-using common::async::CLayerInfo;
 using common::async::CPromise;
 using common::async::CPromiseResult;
+#if defined(ASYNC_DEBUG_TRACE)
+using common::async::CLayerInfo;
+#endif
 
 namespace {
 
@@ -86,62 +88,7 @@ void StartOrFail(CAsyncExecutor& exec)
 
 #if defined(ASYNC_DEBUG_TRACE)
 
-/// @brief 层模式的文本形式（then / catch / finally）。
-const char* ModeText(common::async::detail::HandlerMode eMode)
-{
-    if (eMode == common::async::detail::kModeCatch)
-    {
-        return "catch";
-    }
-    if (eMode == common::async::detail::kModeFinally)
-    {
-        return "finally";
-    }
-    return "then";
-}
-
-/// @brief 取路径里的文件名部分（打印短一些）。
-const char* BaseName(const char* pszPath)
-{
-    if (pszPath == NULL)
-    {
-        return "?";
-    }
-    const char* pszSlash = std::strrchr(pszPath, '/');
-    return pszSlash != NULL ? pszSlash + 1 : pszPath;
-}
-
-/// @brief 把注册点存的 `__PRETTY_FUNCTION__` 缩成「看得懂的那一段」。
-///
-/// 注册点存的是 `__PRETTY_FUNCTION__`（精确，但模板实参 / 匿名命名空间全在里面，很长）；
-/// 打印时只取最后一个 `::` 之后的函数名，lambda 一律显示成 `<lambda>`。
-std::string ShortFunc(const char* pszPretty)
-{
-    if (pszPretty == NULL)
-    {
-        return "(无注册点)";
-    }
-    std::string strFunc(pszPretty);
-    const size_t nParen = strFunc.find('(');
-    if (nParen != std::string::npos)
-    {
-        strFunc.erase(nParen);  // 去掉参数表
-    }
-    if (strFunc.find("<lambda") != std::string::npos)
-    {
-        return "<lambda>";
-    }
-    const size_t nScope = strFunc.rfind("::");
-    if (nScope != std::string::npos)
-    {
-        strFunc.erase(0, nScope + 2);
-    }
-    return strFunc;
-}
-
-#endif  // defined(ASYNC_DEBUG_TRACE)
-
-/// @brief 数一数当前层能看到的链有几层（发布构建下 trace 是空操作 → 恒为 0）。
+/// @brief 数一数当前层能看到的链有几层。
 int CountChain()
 {
     int nCount = 0;
@@ -152,6 +99,27 @@ int CountChain()
         });
     return nCount;
 }
+
+#endif  // defined(ASYNC_DEBUG_TRACE)
+
+/// 只有调试构建才存在的动作（发布构建根本没有 trace）。
+///
+/// 写成宏是为了让两份构建共用同一套处理器代码（否则每个处理器里都要写一段 `#if`）。
+#if defined(ASYNC_DEBUG_TRACE)
+    #define TRACE_ONLY(stmt) stmt
+#else
+    #define TRACE_ONLY(stmt) ((void)0)
+#endif
+
+/// 某个参数只在调试构建的 trace 代码里用到时，用它「消费」一下。
+///
+/// 发布构建下 `TRACE_ONLY(...)` 展开为空，参数就没人碰了，编译器会报
+/// `-Wunused-parameter`；这里补一次无害的读取。
+#if defined(ASYNC_DEBUG_TRACE)
+    #define TRACE_USE(x) ((void)0)
+#else
+    #define TRACE_USE(x) ((void)(x))
+#endif
 
 /// @brief 打印「当前层 + 一路往上的完整调用链」—— 本示例要给你看的就是这个。
 ///
@@ -173,16 +141,21 @@ void TraceHere(const char* pszWhere)
         return;
     }
 
-    std::printf("      本层：%s   完整链 %d 层（近 → 远 = 从本层往上游追，谁挂的它）\n", ModeText(pInfo->eMode), CountChain());
+    // 一行一层：`DescribeLayer` 把「注册点 + 链号/层号 + 线程 + 耗时 + 结果」都拼好了。
+    std::printf("      本层 + 完整链 %d 层（近 → 远 = 从本层往上游追，谁挂的它）\n", CountChain());
     common::async::VisitLayerChain(
         [](const CLayerInfo& info)
         {
-            std::printf("        #%-2d %-7s %-16s %s:%d%s\n", info.nDepth, ModeText(info.eMode),
-                ShortFunc(info.loc.szFunction).c_str(), BaseName(info.loc.szFile), info.loc.nLine,
-                info.bCurrent ? "   ← 当前层" : "");
+            std::printf("        %s\n", common::async::DescribeLayer(info).c_str());
         });
 #else
-    std::printf("      （发布构建：trace 关闭 —— 用 ./build/debug/examples 跑，这里会打出完整调用链）\n");
+    // 发布构建没有 trace（取链的接口根本不存在）—— 每个位置都打这句就太吵了，只提示一次。
+    static bool s_bNoticed = false;
+    if (!s_bNoticed)
+    {
+        s_bNoticed = true;
+        std::printf("      （发布构建：trace 只在调试构建存在 —— 用 ./build/debug/examples 跑，这里会打出完整调用链）\n");
+    }
 #endif
 }
 
@@ -239,13 +212,15 @@ struct COrderCtx
     std::shared_ptr<void> spCoroHold;                  ///< 协程对象保活。
     std::shared_ptr<CPromise<COrderCtx> > spSideHold;  ///< 分叉旁支（⑧）的句柄。
 
-    // ---- 追踪自校验（由各层填，主线程断言） ----
-    int nAuditChain;                        ///< ⑬ 看到的链层数。
-    int nSideChain;                         ///< ⑧ 看到的链层数。
-    int nInnerChainSeen;                    ///< ⑤ 内层链里看到的层数。
-    int nModuleChainSeen;                   ///< ⑥ 跨模块子链里看到的层数。
-    int nCoroChainSeen;                     ///< ⑩-1 协程起的子链里看到的层数。
+    // ---- 追踪自校验（由各层填，主线程断言；其中 vecAuditChain 只在调试构建存在） ----
+    int nAuditChain;       ///< ⑬ 看到的链层数。
+    int nSideChain;        ///< ⑧ 看到的链层数。
+    int nInnerChainSeen;   ///< ⑤ 内层链里看到的层数。
+    int nModuleChainSeen;  ///< ⑥ 跨模块子链里看到的层数。
+    int nCoroChainSeen;    ///< ⑩-1 协程起的子链里看到的层数。
+#if defined(ASYNC_DEBUG_TRACE)
     std::vector<CLayerInfo> vecAuditChain;  ///< ⑬ 看到的完整链快照。
+#endif
 
     COrderCtx()
         : nQty(0),
@@ -268,10 +243,27 @@ struct COrderCtx
           nSideChain(0),
           nInnerChainSeen(0),
           nModuleChainSeen(0),
-          nCoroChainSeen(0),
-          vecAuditChain()
+          nCoroChainSeen(0)
     {}
 };
+
+#if defined(ASYNC_DEBUG_TRACE)
+/// @brief 把「当前层 + 一路往上的完整链」抄进上下文（⑬ 审计层用它做全链自校验）。
+///
+/// 抄下来是为了**离开层之后**再断言：层里只能看，主线程要等两条链都跑完才核对。
+///
+/// @param spCtx 父链上下文（快照写进 vecAuditChain / nAuditChain）。
+void CaptureAuditChain(const std::shared_ptr<COrderCtx>& spCtx)
+{
+    spCtx->vecAuditChain.clear();
+    common::async::VisitLayerChain(
+        [spCtx](const CLayerInfo& info)
+        {
+            spCtx->vecAuditChain.push_back(info);
+        });
+    spCtx->nAuditChain = static_cast<int>(spCtx->vecAuditChain.size());
+}
+#endif  // defined(ASYNC_DEBUG_TRACE)
 
 /// 层 ①：读订单（具名 handler；本层就是链根 —— 它没有上游）。
 CPromiseResult StepReadOrder(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
@@ -323,7 +315,7 @@ CPromiseResult StepApplyDiscount(CPromiseResult upResult, const std::shared_ptr<
     (void)upResult;
     TraceHere("⑤-2 算总额（内层链最深）");
     spCtx->nTotal = spCtx->nQty * 100 - spCtx->nDiscount;
-    spCtx->nInnerChainSeen = CountChain();  // 内层链能追回主链（父层 = ⑤ 那一层）
+    TRACE_ONLY(spCtx->nInnerChainSeen = CountChain());  // 内层链能追回主链（父层 = ⑤ 那一层）
     spCtx->strTrace += "算总额;";
     return CPromiseResult::Resolve();
 }
@@ -352,7 +344,7 @@ CPromiseResult StepCheckCoupon(CPromiseResult upResult, const std::shared_ptr<CO
 {
     (void)upResult;
     TraceHere("⑩-1 协程 CO_AWAIT 的子链（挂在启动协程的那一层下面）");
-    spCtx->nCoroChainSeen = CountChain();
+    TRACE_ONLY(spCtx->nCoroChainSeen = CountChain());
     spCtx->strTrace += "协程券;";
     return CPromiseResult::Resolve();
 }
@@ -407,13 +399,7 @@ CPromiseResult StepAudit(CPromiseResult upResult, const std::shared_ptr<COrderCt
 {
     TraceHere("⑬ 审计（finally：最深的一层，能看到整条链）");
 
-    spCtx->nAuditChain = CountChain();
-    spCtx->vecAuditChain.clear();
-    common::async::VisitLayerChain(
-        [spCtx](const CLayerInfo& info)
-        {
-            spCtx->vecAuditChain.push_back(info);
-        });
+    TRACE_ONLY(CaptureAuditChain(spCtx));  // ⑬ 最深，把整条链抄下来（只有调试构建有 trace）
     spCtx->strTrace += "审计;";
 
     // 审计层本来就不该改结果：原样透传（finally 的「忽略返回值」由框架保证，这里写出来更直白）。
@@ -496,11 +482,14 @@ public:
         const CPromise<CBillCtx>::ThenHandler fnBillAudit = [](CPromiseResult upResult, const std::shared_ptr<CBillCtx>& spSelf)
         {
             (void)upResult;
+            TRACE_USE(spSelf);  // 发布构建下 spSelf 只被 trace 代码用到
             TraceHere("⑥-2 记账模块自己的链（跨模块子链：能追回父链）");
-            spSelf->nChainSeen = CountChain();
+            TRACE_ONLY(spSelf->nChainSeen = CountChain());
             return CPromiseResult::Resolve();
         };
-        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC).Then(fnBillAudit, ASYNC_LOC);
+        return m_exec
+            .NewPromise(spCtx, fnStarter, ASYNC_LOC)  //
+            .Then(fnBillAudit, ASYNC_LOC);
     }
 
 private:
@@ -525,8 +514,10 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&StepCheckCoupon, ASYNC_LOC));                                             // 顺序 await
-        CO_AWAIT_ALL(NewPromise(&StepCheckGift, ASYNC_LOC), NewPromise(&StepCheckPoints, ASYNC_LOC));  // 并行 await
+        CO_AWAIT(NewPromise(&StepCheckCoupon, ASYNC_LOC));  // 顺序 await
+        CO_AWAIT_ALL(                                       //
+            NewPromise(&StepCheckGift, ASYNC_LOC),          //
+            NewPromise(&StepCheckPoints, ASYNC_LOC));       // 并行 await
         CO_RETURN_VOID();
         CO_END();
     }
@@ -637,7 +628,7 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
             });
         ASSERT(bPosted);  // 返回 false = 执行器已停 / 空任务
         spSelf->nLogistics = 1;
-        spSelf->nSideChain = CountChain();  // 旁支看得到「自己 + 共同上游」，看不到下游
+        TRACE_ONLY(spSelf->nSideChain = CountChain());  // 旁支看得到「自己 + 共同上游」，看不到下游
         return CPromiseResult::Resolve();
     };
 
@@ -731,10 +722,12 @@ void DemoCombinators(CAsyncExecutor& execMain)
     // WhenAllSettled：全部落定即继续（不看成败）。
     {
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
-        const CPromiseResult r = execMain
-                                     .WhenAllSettled(spCtx, MakeQuickChain(execMain, spCtx, false, 0, 5),
-                                         MakeQuickChain(execMain, spCtx, true, kErrNoStock, 5))
-                                     .Await();
+        const CPromiseResult r =  //
+            execMain
+                .WhenAllSettled(spCtx,                             //
+                    MakeQuickChain(execMain, spCtx, false, 0, 5),  //
+                    MakeQuickChain(execMain, spCtx, true, kErrNoStock, 5))
+                .Await();
         ASSERT(r.IsFulfilled());  // 有一支被拒绝，聚合层照样兑现
         std::printf("  WhenAllSettled （1 兑现 + 1 拒绝）→ 兑现（不看成败）\n");
     }
@@ -742,10 +735,12 @@ void DemoCombinators(CAsyncExecutor& execMain)
     // WhenRace：第一个**落定**的结果就是聚合结果（先到先得）。
     {
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
-        const CPromiseResult r = execMain
-                                     .WhenRace(spCtx, MakeQuickChain(execMain, spCtx, true, kErrNoStock, 0),
-                                         MakeQuickChain(execMain, spCtx, false, 0, 60))
-                                     .Await();
+        const CPromiseResult r =  //
+            execMain
+                .WhenRace(spCtx,                                            //
+                    MakeQuickChain(execMain, spCtx, true, kErrNoStock, 0),  //
+                    MakeQuickChain(execMain, spCtx, false, 0, 60))          //
+                .Await();
         ASSERT(r.IsRejected());
         ASSERT(r.Code() == static_cast<int>(kErrNoStock));  // 快的那支（拒绝）先到
         std::printf("  WhenRace       （快=拒绝 0ms / 慢=兑现 60ms）→ 拒绝(码=%d)：先到先得\n", r.Code());
@@ -811,10 +806,10 @@ void AssertAuditChain(const std::shared_ptr<COrderCtx>& spCtx, const CLines& lin
         "\n  追踪自校验：⑬ 看到 %d 层完整链；⑧ 旁支 %d 层；子链也能追回父链（⑤ 内层 %d 层 / ⑥ 跨模块 %d 层 / ⑩ 协程 %d 层）\n",
         spCtx->nAuditChain, spCtx->nSideChain, spCtx->nInnerChainSeen, spCtx->nModuleChainSeen, spCtx->nCoroChainSeen);
 #else
-    // 发布构建：trace 与 ASYNC_LOC 同一个开关 → 全部接口是空操作（链是空的）。
+    // 发布构建：trace 只在调试构建存在（没有取链的接口，也就没链可查），这里只确认
+    // 「没人往里填过数」——链相关的字段全是 0。
     (void)lines;
     ASSERT(spCtx->nAuditChain == 0);
-    ASSERT(spCtx->vecAuditChain.empty());
 #endif
 }
 
