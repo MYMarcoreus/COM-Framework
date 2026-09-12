@@ -208,8 +208,8 @@ A2 批量消费、A4 work-stealing、B6 固定缓冲容器），证伪本身就�
 - 现象：一层 promise 的开销几乎全在堆分配上 —— 同机微基准 `make_shared`（136B）≈ **15 ns**，
   无竞争 `mutex` lock+unlock ≈ **2.4 ns**；所以先减分配，而不是先动锁；
 - 方案（`detail::CPromiseCore` / `CPromiseState`）：
-  1. `m_spContext` 构造后只读 → `Context()` 走**无锁快路径**；「是否延迟链」改为
-     `std::atomic<bool>` 无锁读；`CLaunchState` **只在延迟链上分配**（普通链不再为它分配）；
+  1. `m_spContext` 构造后只读 → `Context()` 走**无锁快路径**（「是否延迟链」那个原子与
+     `CLaunchState` 载荷已在后续「移除延迟启动」时一并删掉）；
   2. 第一个处理器存进 `CPromiseState` 的内联槽，1:1 链不再为 `std::vector` 缓冲分配；
 - 结果（release，同机 3 次取中位数，stash 做真对照）：建链 3 → **2 次/层**；
   `CPromise x100` 60.50→55.94 µs（-7.5%）、`deep x256` 147.34→125.22 µs（-15.0%）、

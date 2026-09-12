@@ -43,8 +43,7 @@ struct CSmokeCtx
 };
 
 /// 层：值 +1。
-static common::async::CPromiseResult StepAdd1(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spCtx)
+static common::async::CPromiseResult StepAdd1(common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spCtx)
 {
     ++spCtx->nValue;
     ++spCtx->nSteps;
@@ -64,8 +63,7 @@ static common::async::CPromiseResult StepAdd10(
 }
 
 /// 层：按上下文里的码制造拒绝。
-static common::async::CPromiseResult StepFail(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spCtx)
+static common::async::CPromiseResult StepFail(common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spCtx)
 {
     ++spCtx->nSteps;
     spCtx->strTrace += "F";
@@ -73,8 +71,7 @@ static common::async::CPromiseResult StepFail(
 }
 
 /// 层：记录轨迹（用来验证「失败后不再执行」）。
-static common::async::CPromiseResult StepMark(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spCtx)
+static common::async::CPromiseResult StepMark(common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spCtx)
 {
     ++spCtx->nSteps;
     spCtx->strTrace += "X";
@@ -176,7 +173,7 @@ TEST(Smoke_MixedUsagesTrace)
                                                 .Then(fnLambda, ASYNC_LOC)                // ② lambda
                                                 .ThenPromise(fnInner, ASYNC_LOC)          // ④ 内层链（等它）
                                                 .Then(fnSide, ASYNC_LOC)                  // ⑤ 旁支（不等）
-                                                .Catch(&StepCatchPass, ASYNC_LOC)  // catch（兑现时不执行）
+                                                .Catch(&StepCatchPass, ASYNC_LOC)         // catch（兑现时不执行）
                                                 .Finally(&StepFinallyIgnoreReturn, ASYNC_LOC)
                                                 .Await();
     WaitSide(spCtx, 500);
@@ -251,8 +248,7 @@ TEST(Smoke_ThenPromiseDeepInner)
     {
         return exec.NewPromise(spSelf, &StepAdd10, ASYNC_LOC);
     };
-    common::async::CPromise<CSmokeCtx>::PromiseFactory fnMid = [&exec, fnDeepest](
-                                                                   const std::shared_ptr<CSmokeCtx>& spSelf)
+    common::async::CPromise<CSmokeCtx>::PromiseFactory fnMid = [&exec, fnDeepest](const std::shared_ptr<CSmokeCtx>& spSelf)
     {
         return exec.NewPromise(spSelf, &StepMark, ASYNC_LOC).ThenPromise(fnDeepest, ASYNC_LOC);
     };
@@ -330,17 +326,16 @@ TEST(Smoke_NewBadExecutor)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtxThrow = std::make_shared<CSmokeCtx>();
-    const common::async::CPromiseResult rThrow =
-        exec.NewPromise(
-                spCtxThrow,
+    const common::async::CPromiseResult rThrow = exec.NewPromise(
+                                                         spCtxThrow,
 
-                [](const common::async::CPromise<CSmokeCtx>::ResolveFn& /*fnResolve*/,
-                    const common::async::CPromise<CSmokeCtx>::RejectFn& /*fnReject*/)
-                {
-                    throw std::runtime_error("executor boom");
-                },
-                ASYNC_LOC)
-            .Await();
+                                                         [](const common::async::CPromise<CSmokeCtx>::ResolveFn& /*fnResolve*/,
+                                                             const common::async::CPromise<CSmokeCtx>::RejectFn& /*fnReject*/)
+                                                         {
+                                                             throw std::runtime_error("executor boom");
+                                                         },
+                                                         ASYNC_LOC)
+                                                     .Await();
     ASSERT_TRUE(rThrow.IsRejected());
     ASSERT_EQ(rThrow.Code(), static_cast<int>(common::async::kException));
 
@@ -473,8 +468,7 @@ TEST(Smoke_OnSettledSideChannel)
     spCtx->nFailCode = common::async::kBusinessBase + 8;  // 注意：0 表示兑现，别用 0 当错误码
     std::atomic<int> nOk(0);
     std::atomic<int> nFail(0);
-    common::async::CPromise<CSmokeCtx> p =
-        exec.NewPromise(spCtx, &StepFail, ASYNC_LOC).Catch(&StepCatchPass, ASYNC_LOC);
+    common::async::CPromise<CSmokeCtx> p = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC).Catch(&StepCatchPass, ASYNC_LOC);
     p.OnSettled(
         [&nOk, &nFail](common::async::CPromiseResult r)
         {
@@ -527,9 +521,10 @@ TEST(Smoke_FirstLayerCatchFinally)
     ASSERT_EQ(spCtx->nCatchRuns, 0);
     ASSERT_EQ(spCtx->nFinallyRuns, 1);
 
-    // 独立的 promise：Catch 直接作首层（起点兑现 → 不执行）
+    // 独立的 promise：Catch 直接作首层（起点兑现 → 不执行）——
+    // 写法：先用【一层的链】把链起起来，再在它上面挂 Catch（起点仍视为已兑现）。
     std::shared_ptr<CSmokeCtx> spCtx2 = std::make_shared<CSmokeCtx>();
-    common::async::CPromise<CSmokeCtx> p2 = exec.BuildPromise<CSmokeCtx>(spCtx2);
+    common::async::CPromise<CSmokeCtx> p2 = exec.NewPromise(spCtx2, &StepAdd1, ASYNC_LOC);
     const common::async::CPromiseResult r2 = p2.Catch(&StepCatchRecover, ASYNC_LOC).Await();
     ASSERT_TRUE(r2.IsFulfilled());
     ASSERT_EQ(spCtx2->nCatchRuns, 0);
@@ -576,10 +571,8 @@ TEST(Smoke_BridgeTwoModules)
         return execOrder.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
     };
 
-    const common::async::CPromiseResult r = execOrder.NewPromise(spCtx, &StepAdd1, ASYNC_LOC)
-                                                .ThenPromise(fnBridge, ASYNC_LOC)
-                                                .Then(&StepMark, ASYNC_LOC)
-                                                .Await();
+    const common::async::CPromiseResult r =
+        execOrder.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).ThenPromise(fnBridge, ASYNC_LOC).Then(&StepMark, ASYNC_LOC).Await();
 
     ASSERT_TRUE(r.IsFulfilled());
     ASSERT_EQ(spCtx->nValue, 11);

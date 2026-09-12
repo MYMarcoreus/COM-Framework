@@ -165,10 +165,13 @@ else
   亲和三档（`kAffinityChain` 默认 / `kAffinityInline` 就地 / `kAffinityExecutor` 指定）已实现，
   对外 API 为 `ThenInline` / `ThenOn`（只影响那一层，之后的层回本链执行器）；
   验收：`Tests/test_async_affinity_override.cpp`（4 例）；文档：async-usage §9、async-impl §8.1；
-- **C（build-then-start）**：全链挂完再投递首层 —— **已完成（2026-09-11）**：
-  新增 `CAsyncExecutor::BuildPromise(spCtx)` + `CPromise::Start()`（幂等；`Await()` 对未启动的延迟链
-  自动 `Start()` 兜底；`New(...)` 的 executor 也延后到轮到该层才执行；首层启动尊重 `ThenOn` 的目标执行器）。
-  验收：`Tests/test_async_build_start.cpp`（7 例）；文档：async-usage §9.2、async-impl §5.1。
+- **C（build-then-start）**：全链挂完再投递首层 —— **2026-09-11 实现，2026-09-12 移除**：
+  曾新增 `CAsyncExecutor::BuildPromise(spCtx)` + `CPromise::Start()`；
+  **移除理由**：线程亲和（问题①）之后「挂层早/晚」不再改变可见行为（都回本链执行器），
+  延迟启动只剩「少一次投递」；而它让链多出一种启动形态（核心带 `m_bDeferred` + 载荷、
+  多处分支 + `Await()` 自动开的隐式行为）。需要「构链期不跑业务代码」时改用
+  `exec.Post(...)` 把整段构链放执行器线程上完成。详见 [async-impl §5.1](async-impl.md) 与
+  [async-usage §9.2](async-usage.md)。
 
 ---
 
@@ -272,8 +275,9 @@ if (!bOk)
 | `EnterOrderStep` / `LeaveOrderStep` / `EnterStockStep` / `LeaveStockStep` / `SleepMs` | 探针包装与模拟耗时（传空探针即空操作） |
 | `CCalleeCtx` / `CCalleeModule` | 两步被调模块：自持 1 线程执行器、`QueryStockAsync()` / `Stop()`、可配 `nDelayMs` 与 `bReject` |
 
-测试文件只留「本用例自己的订单模块与断言」：`test_async_affinity_override.cpp` 与
-`test_async_build_start.cpp` 保留各自的一步被调模块（轨迹约定与 `B1;B2;` 不同），不强行统一。
+测试文件只留「本用例自己的订单模块与断言」：`test_async_affinity_override.cpp` 保留自己的
+一步被调模块（轨迹约定与 `B1;B2;` 不同），不强行统一（`test_async_build_start.cpp` 已随
+「延迟启动移除」一起删除，2026-09-12）。
 
 ### 3.2 用例清单
 

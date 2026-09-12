@@ -22,7 +22,7 @@
 //   ⑥  异常转拒绝           处理器内异常 → kException，不向调用方抛出
 //   ⑦  settled 通知         OnSettled（兑现 / 拒绝都触发一次）
 //   ⑧  分叉                 同一层注册多个 then，各自独立延续
-//   ⑨  上下文创建           调用方强制传入（先备数据、再挂层启动）
+//   ⑨  上下文创建           调用方强制传入（先备数据、再起链）
 //   ⑩  Post                 无返回值任务（fire-and-forget）
 //   ⑪  并发多条链           多线程并行 + 并发 Await 同一 promise
 //   ⑫  生命周期加固         执行器析构后 promise 仍安全完成
@@ -101,13 +101,11 @@ static common::async::CPromiseResult StepReadParam(
         return upResult;
     }
     spCtx->strTrace += "读参数;";
-    return spCtx->bFailParam ? common::async::CPromiseResult::Reject(kCodeInvalid)
-                             : common::async::CPromiseResult::Resolve();
+    return spCtx->bFailParam ? common::async::CPromiseResult::Reject(kCodeInvalid) : common::async::CPromiseResult::Resolve();
 }
 
 /// 层：缩放（基数 ×3）。
-static common::async::CPromiseResult StepScale(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& spCtx)
+static common::async::CPromiseResult StepScale(common::async::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& spCtx)
 {
     if (upResult.IsRejected())
     {
@@ -119,16 +117,14 @@ static common::async::CPromiseResult StepScale(
 }
 
 /// 层：落库（可模拟失败）。
-static common::async::CPromiseResult StepStore(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& spCtx)
+static common::async::CPromiseResult StepStore(common::async::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& spCtx)
 {
     if (upResult.IsRejected())
     {
         return upResult;
     }
     spCtx->strTrace += "落库;";
-    return spCtx->bFailStore ? common::async::CPromiseResult::Reject(kCodeStoreFailed)
-                             : common::async::CPromiseResult::Resolve();
+    return spCtx->bFailStore ? common::async::CPromiseResult::Reject(kCodeStoreFailed) : common::async::CPromiseResult::Resolve();
 }
 
 /// 层：被调用即留下痕迹（用于验证失败即停时未被执行）。
@@ -265,10 +261,8 @@ void DemoChainThen()
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     spCtx->nBase = 10;
-    common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC)
-                                          .Then(&StepScale, ASYNC_LOC)
-                                          .Then(&StepStore, ASYNC_LOC)
-                                          .Await();
+    common::async::CPromiseResult r =
+        exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC).Then(&StepStore, ASYNC_LOC).Await();
     ASSERT(r.IsFulfilled());
     ASSERT(spCtx->nScaled == 30);                                 // 数据在上下文里
     ASSERT(spCtx->strTrace == std::string("读参数;缩放;落库;"));  // 层按注册顺序执行
@@ -293,8 +287,7 @@ void DemoCatchSeesRejection()
     ASSERT(r.IsRejected());
     ASSERT(spCtx->bRolledBack);  // 回滚层看到了上一层失败
     ASSERT(spCtx->strTrace == std::string("读参数;缩放;落库;回滚;"));
-    std::printf(
-        "③ catch 看到拒绝: 回滚=%s 轨迹=%s\n", spCtx->bRolledBack ? "已执行" : "未执行", spCtx->strTrace.c_str());
+    std::printf("③ catch 看到拒绝: 回滚=%s 轨迹=%s\n", spCtx->bRolledBack ? "已执行" : "未执行", spCtx->strTrace.c_str());
     exec.Stop();
 }
 
@@ -314,8 +307,8 @@ void DemoThenFailFast()
     ASSERT(r.IsRejected());
     ASSERT(r.Code() == kCodeInvalid);  // 业务拒绝码原样透传
     ASSERT(spCtx->strTrace == std::string("读参数;"));
-    std::printf("④ then 失败即停: 码=%d（业务码从 kBusinessBase=%d 起）轨迹=%s\n", r.Code(),
-        common::async::kBusinessBase, spCtx->strTrace.c_str());
+    std::printf("④ then 失败即停: 码=%d（业务码从 kBusinessBase=%d 起）轨迹=%s\n", r.Code(), common::async::kBusinessBase,
+        spCtx->strTrace.c_str());
     exec.Stop();
 }
 
@@ -429,30 +422,28 @@ void DemoFork()
     exec.Stop();
 }
 
-// ⑨ 上下文创建：调用方强制传入（框架不代建）——先备好数据，再挂层启动
+// ⑨ 上下文创建：调用方强制传入（框架不代建）——先备好数据，再起链
 void DemoContextCreation()
 {
     common::async::CAsyncExecutor exec(2);
     ASSERT(exec.Start());
 
-    // 9.1 延迟起链：备好上下文 → 建链 → 挂层 → Start
+    // 9.1 多层层链：先备好上下文（含初始数据），再起链
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     spCtx->nBase = 20;
-    common::async::CPromise<CDemoContext> chain = exec.BuildPromise<CDemoContext>(spCtx);
-    ASSERT(chain.GetContext() == spCtx);  // 恒非空，且就是传入的那个实例
-    common::async::CPromise<CDemoContext> tail = chain.Then(&StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC);
-    chain.Start();  // 挂完层才开跑
+    common::async::CPromise<CDemoContext> tail = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC);
+    ASSERT(tail.GetContext() == spCtx);  // 恒非空，且就是传入的那个实例
     ASSERT(tail.Await().IsFulfilled());
     ASSERT(spCtx->nScaled == 60);
 
-    // 9.2 立即起链：同一个上下文实例贯穿全部层（不做拷贝）
+    // 9.2 单层链：同一个上下文实例贯穿全部层（不做拷贝）
     std::shared_ptr<CDemoContext> spCtx2 = std::make_shared<CDemoContext>();
     spCtx2->nBase = 5;
     common::async::CPromise<CDemoContext> chain2 = exec.NewPromise(spCtx2, &StepScale, ASYNC_LOC);
     ASSERT(chain2.GetContext() == spCtx2);
     ASSERT(chain2.Await().IsFulfilled());
     ASSERT(spCtx2->nScaled == 15);
-    std::printf("⑨ 上下文: 延迟起链=%d 立即起链=%d\n", spCtx->nScaled, spCtx2->nScaled);
+    std::printf("⑨ 上下文: 两层链=%d 单层链=%d\n", spCtx->nScaled, spCtx2->nScaled);
     exec.Stop();
 }
 
@@ -558,8 +549,7 @@ void DemoNotStarted()
 {
     common::async::CAsyncExecutor exec(2);
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    common::async::CPromiseResult r =
-        exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC).Await();
+    common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC).Await();
     ASSERT(r.IsRejected());
     ASSERT(r.Code() == static_cast<int>(common::async::kStopped));
     ASSERT(spCtx->strTrace.empty());
@@ -592,12 +582,11 @@ void DemoSourceLoc()
     ASSERT(exec.Start());
 
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
-    common::async::CPromise<CDemoContext> tail =
-        exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC);
+    common::async::CPromise<CDemoContext> tail = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC).Then(&StepScale, ASYNC_LOC);
     const common::async::CSourceLoc loc = tail.Loc();
     (void)loc;  // 调试构建下：loc.szFunction / szFile / nLine 指向注册点
-    std::printf("⑮ 注册点源码位置: 调试构建下 tail.Loc() = %s:%d\n", loc.szFile != NULL ? loc.szFile : "(发布构建为空)",
-        loc.nLine);
+    std::printf(
+        "⑮ 注册点源码位置: 调试构建下 tail.Loc() = %s:%d\n", loc.szFile != NULL ? loc.szFile : "(发布构建为空)", loc.nLine);
     ASSERT(tail.Await().IsFulfilled());
     exec.Stop();
 }
@@ -771,28 +760,28 @@ void DemoNestedBlockingInLayer()
     std::shared_ptr<CDemoContext> spCtx = std::make_shared<CDemoContext>();
     std::shared_ptr<CSubContext> spSub = std::make_shared<CSubContext>();
 
-    const common::async::CPromiseResult r =
-        exec.NewPromise(
-                spCtx,
-                [&exec, spSub](common::async::CPromiseResult upResult,
-                    const std::shared_ptr<CDemoContext>& sp) -> common::async::CPromiseResult
-                {
-                    if (upResult.IsRejected())
-                    {
-                        return upResult;
-                    }
-                    // 层内嵌套：起子 promise（另一套上下文）并阻塞等它结束
-                    const common::async::CPromiseResult sub = exec.NewPromise(spSub, &StepQueryRows, ASYNC_LOC).Await();
-                    if (sub.IsRejected())
-                    {
-                        return sub;  // 子流程被拒绝 → 本层拒绝（拒绝码向上透传）
-                    }
-                    sp->nScaled = spSub->nRows;  // 子流程数据写回父上下文
-                    sp->strTrace += "父层;";
-                    return common::async::CPromiseResult::Resolve();
-                },
-                ASYNC_LOC)
-            .Await();
+    const common::async::CPromiseResult r = exec.NewPromise(
+                                                    spCtx,
+                                                    [&exec, spSub](common::async::CPromiseResult upResult,
+                                                        const std::shared_ptr<CDemoContext>& sp) -> common::async::CPromiseResult
+                                                    {
+                                                        if (upResult.IsRejected())
+                                                        {
+                                                            return upResult;
+                                                        }
+                                                        // 层内嵌套：起子 promise（另一套上下文）并阻塞等它结束
+                                                        const common::async::CPromiseResult sub =
+                                                            exec.NewPromise(spSub, &StepQueryRows, ASYNC_LOC).Await();
+                                                        if (sub.IsRejected())
+                                                        {
+                                                            return sub;  // 子流程被拒绝 → 本层拒绝（拒绝码向上透传）
+                                                        }
+                                                        sp->nScaled = spSub->nRows;  // 子流程数据写回父上下文
+                                                        sp->strTrace += "父层;";
+                                                        return common::async::CPromiseResult::Resolve();
+                                                    },
+                                                    ASYNC_LOC)
+                                                .Await();
 
     ASSERT(r.IsFulfilled());
     ASSERT(spSub->nRows == 3);
@@ -816,8 +805,8 @@ void DemoNestedCallbackDrivenInLayer()
 
     common::async::CPromise<CDemoContext> outer = exec.NewPromise(
         spCtx,
-        [&exec, spSub, &bSubDone](common::async::CPromiseResult upResult,
-            const std::shared_ptr<CDemoContext>& sp) -> common::async::CPromiseResult
+        [&exec, spSub, &bSubDone](
+            common::async::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& sp) -> common::async::CPromiseResult
         {
             if (upResult.IsRejected())
             {
@@ -997,10 +986,8 @@ public:
         // 跨 await 的句柄须是成员（恢复时会重新进入 Run）：无默认构造 → 用 shared_ptr 装。
         m_spHead = std::make_shared<common::async::CPromise<CDemoContext> >(
             m_pExec->NewPromise(GetContext(), &StepReadParam, ASYNC_LOC));  // 公共前段
-        m_spBranchA =
-            std::make_shared<common::async::CPromise<CDemoContext> >(m_spHead->Then(&StepForkBranch, ASYNC_LOC));
-        m_spBranchB =
-            std::make_shared<common::async::CPromise<CDemoContext> >(m_spHead->Then(&StepForkBranch, ASYNC_LOC));
+        m_spBranchA = std::make_shared<common::async::CPromise<CDemoContext> >(m_spHead->Then(&StepForkBranch, ASYNC_LOC));
+        m_spBranchB = std::make_shared<common::async::CPromise<CDemoContext> >(m_spHead->Then(&StepForkBranch, ASYNC_LOC));
         CO_AWAIT_ALL(*m_spBranchA, *m_spBranchB);  // 汇聚：等两条分支都结束
         CO_RETURN_VOID();
         CO_END();

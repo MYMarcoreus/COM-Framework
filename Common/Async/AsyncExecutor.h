@@ -17,7 +17,7 @@
 // 异步执行器（调度层）
 //
 // 职责：持有工作线程池，提供「投递执行」与「起链入口」—— 起 promise / 起协程
-// （`NewPromise` / `BuildPromise` / `CoStart` ）以及把多个子 promise 汇成一条聚合链的
+// （`NewPromise` / `CoStart` / 组合器）以及把多个子 promise 汇成一条聚合链的
 // 「并行组合」（`WhenAll` 一族）。
 // 不做链式编排（`Then` 一族见 Promise.h）、不做顺序化（见 Coroutine/Coroutine.h）。
 //
@@ -37,7 +37,7 @@ namespace common {
 namespace async {
 
 template <typename TContext>
-class CPromise;  // 前置声明（NewPromise / BuildPromise / WhenAll 返回 promise 句柄）。
+class CPromise;  // 前置声明（NewPromise / WhenAll 返回 promise 句柄）。
 
 template <typename TContext>
 class CCoroutine;  // 前置声明（CoStart 返回协程句柄）。
@@ -93,8 +93,8 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
 /// 描述的是「层语义」，归 promise 侧。
 enum HandlerAffinity
 {
-    kAffinityChain = 0,  ///< 默认：本链执行器线程（同执行器内联；跨执行器投递回本链执行器）。
-    kAffinityInline = 1,  ///< 就地：在「结算本层的那条线程」上执行（不投递，不要求线程亲和）。
+    kAffinityChain = 0,    ///< 默认：本链执行器线程（同执行器内联；跨执行器投递回本链执行器）。
+    kAffinityInline = 1,   ///< 就地：在「结算本层的那条线程」上执行（不投递，不要求线程亲和）。
     kAffinityExecutor = 2  ///< 指定执行器：在给定执行器线程上执行（同线程内联，否则投递）。
 };
 
@@ -156,8 +156,7 @@ inline const std::shared_ptr<CExecutorHandle>& ResolveExecHandle(HandlerAffinity
 /// @param pExec 目标执行器句柄（调用方已用 `ResolveExecHandle` 解析好）。
 /// @param bRequireIdle 是否要求线程池无积压才内联。
 /// @return true = 调用方应当直接执行任务体；false = 应当投递。
-inline bool ShouldInline(
-    HandlerAffinity eAffinity, const std::shared_ptr<CExecutorHandle>& pExec, bool bRequireIdle = false)
+inline bool ShouldInline(HandlerAffinity eAffinity, const std::shared_ptr<CExecutorHandle>& pExec, bool bRequireIdle = false)
 {
     const bool bInline = (eAffinity == kAffinityInline) || IsInExecutorThread(pExec);
     if (!bInline || InlineDepth() >= kMaxInlineDepth)
@@ -228,17 +227,13 @@ public:
 
     // 起 promise（等价 JS `new Promise(executor)`）：创建 promise 并投递首层。
     template <typename TContext>
-    CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
-        typename CPromise<TContext>::ThenHandler fnHandler, const CSourceLoc& loc = CSourceLoc());
+    CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext, typename CPromise<TContext>::ThenHandler fnHandler,
+        const CSourceLoc& loc = CSourceLoc());
 
     // 起 promise（对齐 JS `new Promise((resolve, reject) => ...)`）：由 fnExecutor 内部的 resolve / reject 兑现。
     template <typename TContext>
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
         const typename CPromise<TContext>::PromiseExecutor& fnExecutor, const CSourceLoc& loc = CSourceLoc());
-
-    // 建一条「延迟启动」的 promise 链（先挂完所有层，再 `Start()`；上下文必传）。
-    template <typename TContext>
-    CPromise<TContext> BuildPromise(const std::shared_ptr<TContext>& spContext);
 
     //================ Combine ================
 
@@ -294,7 +289,7 @@ private:
 // 组合器（`exec.WhenAll` 一族：把多个子 promise 汇成一条**聚合链**）
 //
 // 对齐 JS `Promise.all` / `allSettled` / `race` / `any`：新造一条「由子 promise 的落定驱动」的
-// 聚合链，与 `NewPromise` / `BuildPromise` 同族的起链入口（完整语义文档见本节各入口定义）。
+// 聚合链，与 `NewPromise` 同族的起链入口（完整语义文档见本节各入口定义）。
 //
 // 为什么实现能放在本文件（这里只前置声明了 `CPromise`）：对 `CPromise` 的每一处使用都落在
 // **模板的依赖上下文**里（`promiseChild.OnSettled(...)`、限定名
@@ -311,10 +306,10 @@ namespace detail {
 /// @brief 组合器策略（`WhenAll` / `WhenAllSettled` / `WhenRace` / `WhenAny` 四档）。
 enum GatherPolicy
 {
-    kGatherAll = 0,  ///< 对齐 JS `Promise.all`：全部兑现才兑现；任一拒绝立即以该拒绝码拒绝。
+    kGatherAll = 0,         ///< 对齐 JS `Promise.all`：全部兑现才兑现；任一拒绝立即以该拒绝码拒绝。
     kGatherAllSettled = 1,  ///< 对齐 JS `Promise.allSettled`：全部落定即兑现（不看各分支成败）。
     kGatherRace = 2,        ///< 对齐 JS `Promise.race`：首个落定者定结果（兑现 / 拒绝皆可）。
-    kGatherAny = 3  ///< 对齐 JS `Promise.any`：首个兑现者兑现；全部拒绝才以首个拒绝码拒绝。
+    kGatherAny = 3          ///< 对齐 JS `Promise.any`：首个兑现者兑现；全部拒绝才以首个拒绝码拒绝。
 };
 
 /// @brief 一处子 promise 都没有时的收口结果（对齐 JS）。
@@ -345,8 +340,8 @@ public:
     /// @param nTotal 子 promise 总数（> 0；空集合由调用方在收口前先处理）。
     /// @param fnResolve 兑现聚合链的当前层。
     /// @param fnReject 拒绝聚合链的当前层。
-    CGatherState(GatherPolicy ePolicy, int nTotal, const std::function<void()>& fnResolve,
-        const std::function<void(int)>& fnReject)
+    CGatherState(
+        GatherPolicy ePolicy, int nTotal, const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
         : m_ePolicy(ePolicy),
           m_nPending(nTotal),
           m_bRejectSeen(false),
@@ -471,8 +466,8 @@ void BindChildGather(const std::shared_ptr<CGatherState>& pGather, const CPromis
 /// @param vecOut 登记动作列表（追加到末尾）。
 /// @param promiseChild 子 promise。
 template <typename TChildContext>
-void AppendGatherBindings(std::vector<std::function<void(const std::shared_ptr<CGatherState>&)> >& vecOut,
-    const CPromise<TChildContext>& promiseChild)
+void AppendGatherBindings(
+    std::vector<std::function<void(const std::shared_ptr<CGatherState>&)> >& vecOut, const CPromise<TChildContext>& promiseChild)
 {
     vecOut.push_back(
         [promiseChild](const std::shared_ptr<CGatherState>& pGather)
@@ -531,32 +526,31 @@ CPromise<TContext> Gather(
     {
         // 一处子 promise 都没有：按策略直接收口（语义只有 `ResolveEmptyGather` 一处）。
         const CPromiseResult emptyResult = ResolveEmptyGather(ePolicy);
-        return executor.NewPromise(spContext,
-            typename CPromise<TContext>::PromiseExecutor(
-                [emptyResult](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
-                {
-                    if (emptyResult.IsFulfilled())
-                    {
-                        fnResolve();
-                        return;
-                    }
-                    fnReject(emptyResult.Code());
-                }));
+        return executor.NewPromise(
+            spContext, typename CPromise<TContext>::PromiseExecutor(
+                           [emptyResult](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
+                           {
+                               if (emptyResult.IsFulfilled())
+                               {
+                                   fnResolve();
+                                   return;
+                               }
+                               fnReject(emptyResult.Code());
+                           }));
     }
 
     const int nTotal = static_cast<int>(vecBindings.size());
-    return executor.NewPromise(
-        spContext, typename CPromise<TContext>::PromiseExecutor(
-                       [ePolicy, nTotal, vecBindings](
-                           const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
-                       {
-                           const std::shared_ptr<CGatherState> pGather =
-                               std::make_shared<CGatherState>(ePolicy, nTotal, fnResolve, fnReject);
-                           for (size_t i = 0; i < vecBindings.size(); ++i)
-                           {
-                               vecBindings[i](pGather);  // 登记动作恒非空。
-                           }
-                       }));
+    return executor.NewPromise(spContext,
+        typename CPromise<TContext>::PromiseExecutor(
+            [ePolicy, nTotal, vecBindings](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
+            {
+                const std::shared_ptr<CGatherState> pGather =
+                    std::make_shared<CGatherState>(ePolicy, nTotal, fnResolve, fnReject);
+                for (size_t i = 0; i < vecBindings.size(); ++i)
+                {
+                    vecBindings[i](pGather);  // 登记动作恒非空。
+                }
+            }));
 }
 
 }  // namespace detail

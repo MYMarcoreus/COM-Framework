@@ -6,7 +6,7 @@
 ## 1. 总体架构
 
 ```text
-CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start/Stop/Post/NewPromise/BuildPromise/WhenAll 一族）
+CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start/Stop/Post/NewPromise/WhenAll 一族）
     │  Handle()（shared_ptr<CExecutorHandle>）
     ├── CPromise<TContext>     编排层：承诺状态（每层一个）+ 共享上下文
     │        │
@@ -17,7 +17,7 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 职责边界（「谁决定什么」）：
 
 - **起链**只在执行器上：`exec.NewPromise(spCtx, 首层)` / `exec.NewPromise(spCtx, executor)` /
-  `exec.BuildPromise(spCtx)` / `exec.CoStart<T>()`；`CPromise` 只提供「句柄 + 加层」，没有任何起链入口。
+  `exec.NewPromise(spCtx, …)`（两个重载）/ `exec.CoStart<T>(spCtx)`；`CPromise` 只提供「句柄 + 加层」，没有任何起链入口。
 - **调度**（跑在哪条线程：亲和 / 就地内联 / 投递 / 深度限额）在执行器侧：
   `detail::HandlerAffinity`、`detail::ResolveExecHandle`、`detail::ShouldInline`、`detail::DispatchInlineOrPost`。
 - **编排**（层语义：then / catch / finally 三态、失败即停、桥接、通知）在 promise 侧，
@@ -152,35 +152,36 @@ else
 因此「promise + 协程」混合递归也被同一上限保护；加上①后，深度只在**同一执行器线程内**累加，
 跨模块不会涨栈。
 
-### 5.1 两种启动模式：立即启动 vs 延迟启动（`BuildPromise`，改进 C）
+### 5.1 起链只有一种语义：立即投递首层（**延迟启动已移除**）
 
-| 模式 | 入口 | 追加层 | 首层何时投递 |
-| --- | --- | --- | --- |
-| 立即启动（默认） | `exec.NewPromise(spCtx, 首层)` / `CPromise(exec, spCtx, 首层)` | 链已在跑，追加可能落在“已 settled”路径上 | 调用即投递 |
-| 延迟启动 | `exec.BuildPromise(spCtx)` | 只登记（首层动作暂存在 `CLaunchState::fnLaunch`） | `Start()`（或首次 `Await()`）才投递 |
+| 入口 | 首层何时投递 | 追加层 |
+| --- | --- | --- |
+| `exec.NewPromise(spCtx, 首层处理器)` | 调用即投递（与 JS 的 `new Promise(executor)` 一致） | 上游未 settle 时登记、已 settle 时投递回本链执行器 |
+| `exec.NewPromise(spCtx, executor)` | 由 executor 里的 `resolve()` / `reject(码)` 决定（executor 当场同步执行） | 同上 |
 
-```cpp
-// Common/Async/Promise.h
-extern struct CLaunchState
-{
-    bool bStarted;
-    std::function<void()> fnLaunch;
-    std::shared_ptr<CPromiseState> pFirst;
-    std::shared_ptr<CExecutorHandle> pTarget;
-};
-// 核心侧：std::atomic<bool> m_bDeferred —— 无锁回答「是不是延迟链」；
-//         std::shared_ptr<CLaunchState> m_pLaunch —— 载荷，**仅延迟链非空**（普通链一份都不分配）；
-// Append / ThenPromise / New 在 IsDeferred() 时只登记启动动作；Start() 投递它（幂等）；
-// Await() 发现“延迟链未启动”则自动 Start()（兜底）。
-```
+**为什么删掉「延迟启动」（原 `BuildPromise` + `Start()` + `CLaunchState`，2026-09-11 引入，2026-09-12 移除）**：
 
-要点：
+1. 当初引入它是为了解决「跨模块续接时挂层与执行赛跑」。但**线程亲和**（§8.1）之后这个赛跑已经没有行为差异：
+   层**恒在本链执行器**上跑 —— 挂层早于上游 settle 就地/投递到本链执行器，挂晚了走「已 settled → 投递回本链执行器」，
+   两条路径的**可见结果完全一样**（只是多一次入队）。延迟启动买到的只剩「少一次投递」。
+2. 它唯一独有的能力是「构链期完全不跑业务代码」，而这用一行 `exec.Post(...)` 就能自建：
+   ```cpp
+   exec.Post([&exec, spCtx]()
+   {
+       // 整段构链在执行器线程上同步做完；首层投递出去时，链已挂完
+       common::async::CPromise<Ctx> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Then(StepB, ASYNC_LOC);
+       p.OnSettled(...);
+   });
+   ```
+3. 它让**同一个类型承担两种启动模式**：`CPromiseCore` 要带 `m_bDeferred` 原子 + `m_pLaunch` 载荷，
+   `Append` / `ThenPromise` / `WaitInternal` / `IsStarted` 都要各留一条「延迟链」分支，
+   而 `Start()` 还需一个 `Await()` 自动兜底的隐式行为 —— 合计约 110 行代码与若干分支，
+   换来的只是「少一次投递」。按「**能用编译期/单一语义表达的，就不要留成运行时的分支持久态**」
+   （§10 第 9、10 条），这笔交易不划算。
 
-- 延迟链**构链期不跑任何业务代码**（连 `New(...)` 的 executor 都延后到轮到该层才执行）；
-- 所有层都在首层开跑前登记完毕 → 跨模块续接不再出现“补登”的时序差异（对第 7 节的两种注册时机是个限定）；
-- 首层启动仍尊重 `kAffinityExecutor`（`pTarget`），启动失败（执行器已停）以 `kStopped` 收口首层；
-- `Await()` 对未启动的延迟链自动 `Start()`，所以漏写 `Start()` 不会死等；
-- 普通链行为完全不变（`IsDeferred() == false`），且不付延迟链的任何存储代价。
+**现在的行为**：`CPromise` 恒「已起链」，没有 `IsDeferred()` / `IsStarted()` / `Start()`；
+`Await()` 也不再需要「自动启动」兜底。需要「先搭好再跑」的写法见
+[async-usage.md §9.2](async-usage.md)（`exec.Post` 包一段构链）。
 
 ## 6. 处理器模式分派（then / catch / finally）
 
@@ -239,10 +240,8 @@ result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownR
   子 promise 的拒绝码**原样**成为本层拒绝码（后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
 - **保活**：子 promise 的最后一段由「上一段 handler 捕获下一段」链保活，本层 state 被子 promise
   的 `OnSettled` handler 捕获 —— 即使句柄被丢弃，在途的整条链仍安全跑完；
-- **`New` 恒为「立即启动」**：它建的是独立新链（`CPromiseCore` 新建 → 延迟启动状态必为 false），
-  executor 当场同步执行；「挂完层再跑」的等待语义由**轮到该层**保证 ——
-  `BuildPromise` 链里同样如此（首层/各层的投递时机才是 `bDeferred` 生效的地方）。
-  所以 `New` / `ThenBridge` 不需要（也不再）判 `bDeferred`。
+- **`New` 恒为「立即启动」**：它建的是独立新链，executor 当场同步执行；
+  到本层的时机由「轮到该层」保证（它挂在哪一层上，就在哪一层 settle 后才执行）。
 
 `ThenBridge` 与手写版的**等价关系**（也是它的实现）：
 
@@ -264,7 +263,7 @@ ThenBridge(fnCreate, fnApply, loc)
 
 要点：
 
-- **没有新增调度路径**：亲和、送达保证、延迟启动（`BuildPromise`）全部沿用 `Adopt` / `New` / `OnSettled`
+- **没有新增调度路径**：亲和、送达保证全部沿用 `Adopt` / `New` / `OnSettled`
   既有语义 —— 所以桥接层与手写的完全逐项等价（`Tests/test_async_modules.cpp` 有对照用例）；
 - `fnApply` 跑在**子链的结算线程**上（通知不迁移）→ 只搬数据；要拒绝（业务规则）放到桥接之后的层；
 - 为什么需要 `NewFromHandle`：工厂里只有「本链执行器**句柄**」（`pCore->Handle()`），
@@ -450,7 +449,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
    不直接依赖 `Common/Log`（避免低层反向依赖），应用侧一行接入日志 / 指标。
 8. **loc（`ASYNC_DEBUG_TRACE`）按需开启**：默认不开 —— 每层多 16 字节 + 一次 `SetLoc`，
    而目前只有调试读它；要用它做「哪一层挂了」的诊断，需让 hook 带上注册点（独立一步）。
-9. **上下文强制传入，不做懒创建**：`BuildPromise(spCtx)` / `CCoroutine(spCtx)` 的上下文参数必传。
+9. **上下文强制传入，不做懒创建**：`NewPromise(spCtx, …)` / `CCoroutine(spCtx)` 的上下文参数必传。
    权衡：懒创建能让调用方少写一行 `make_shared`，代价却是——`TContext` 必须可默认构造；
    核心要留 mutable 成员 + mutex；`Context()` 每层多一次空判（热路径）。
    本框架的取舍基准是：**能用编译期约束表达的，就不要留成运行时的分支持久态**。
@@ -488,7 +487,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 | 阶段 | 次数/层 | 内容 |
 | --- | --- | --- |
-| 建链（`BuildPromise` + `Then` × N） | **2** | `make_shared<CPromiseState>`（层状态，168B）+ 处理器 `std::function`（88B） |
+| 建链（`NewPromise` + `Then` × N） | **2** | `make_shared<CPromiseState>`（层状态，168B）+ 处理器 `std::function`（88B） |
 | 跑链（`Start` + `Await`） | **1** | 投递给执行器的任务体（`MakeHandlerRunner`，72B） |
 
 字节数建链 ≈ **257 字节/层**（release；debug 多一份 `CSourceLoc` → ≈ 281 字节/层），
@@ -498,12 +497,11 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 ### 已落地的两处优化
 
 1. **上下文强制传入 + 热路径去锁**（`detail::CPromiseCore`）：
-   - 上下文由调用方传入（`BuildPromise(spCtx)` / `CCoroutine(spCtx)` 都去掉了默认实参）→
+   - 上下文由调用方传入（`NewPromise(spCtx, …)` / `CCoroutine(spCtx)` 都去掉了默认实参）→
      核心**再无可变共享状态**：`Context()` 直接返回成员的 `const` 引用（不加锁、不拷贝 `shared_ptr`）；
      懒创建那一版要 mutable 成员 + mutex + 一个「可能还没准备好」的时间窗，
      而它换来的只是调用方少写一行 `make_shared`（见 §10 第 9 条）；
-   - 「是否延迟链」由 `std::atomic<bool> m_bDeferred` 无锁回答（不再是加载 `CLaunchState` 才能读到）；
-   - `CLaunchState` 只在延迟链上分配 —— **普通链不再为它分配**；
+   - 上下文强制传入、层状态只建一次 —— 核心不再有「是否延迟链」这类分支（延迟启动已移除，见 §5.1）；
 2. **handler 内联槽**（`detail::CPromiseState`）：第一个处理器就地存（§4），
    1:1 链每层省掉 `std::vector` 的缓冲分配。
 
@@ -527,7 +525,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 ```cpp
 CAllocCounter counter;  // 开表
-common::async::CPromise<CCtx> tail = exec.BuildPromise<CCtx>(spCtx);
+common::async::CPromise<CCtx> tail = exec.NewPromise(spCtx, &StepBump, ASYNC_LOC);
 for (int i = 0; i < nLayers; ++i)
 {
     tail = tail.Then(&StepBump, ASYNC_LOC);
@@ -540,7 +538,9 @@ ASSERT_TRUE(counter.Counts() <= 2 * nLayers + 8);
 
 - **只设上限，不设下限**：后续把每层做到 1 次（把任务体也塞进层状态）也应照样通过；
 - 用 100 层与 500 层的**差值**再断言一次「每多一层 ≤ 2 次」，避免每链常数掩盖线性增长；
-- 测量窗口里不能打印 / 构造容器，否则会把无关分配算进去；用**延迟起链**（`BuildPromise`）取值，
+- 测量窗口里不能打印 / 构造容器，否则会把无关分配算进去；**在层函数内部测量**建链
+  （单线程执行器此刻被本层占用 → 新建链不会立即开跑，窗口里只有建链分配；见
+  `Tests/test_async_alloc.cpp` 的 `StepMeasureBuild`）；
   普通起链（`NewPromise`）首层会立刻开跑，worker 的执行分配会掺进窗口，结果不确定。
 
 ### 还没做的（按收益排序）
@@ -569,7 +569,7 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 | `CPromiseCore` 构造 | `spContext != nullptr` | 上下文强制传入（§10 第 9 条） |
 | `CPromise` 私有构造 | `pCore != nullptr` | 句柄恒有核心（无无效句柄态） |
 | `MakeHandlerRunner` / `RunHandler` / `PostHandler` | `spContext` / `pState` 非空 | 内部调用不变量 |
-| `CPromise::Start` / `IsStarted` / `RegisterFirstLayer` / `Append`（延迟分支） | 延迟链的载荷非空 | 「有载荷」是延迟链的定义 |
+| ~~`CPromise::Start` / `IsStarted` / `RegisterFirstLayer` / `Append`（延迟分支）~~ | ~~延迟链的载荷非空~~ | 延迟启动已移除（§5.1），相应断言一并删除 |
 | `CPromiseResult::Reject` | `nCode != kFulfilled` | 用 0 当拒绝码会把失败当成功 |
 | `CCoroutine` 构造 | `spContext != nullptr` | 与 promise 一致 |
 | `CCoroutine::AsPromise` / `AwaitWait` / `AwaitEach` | `m_pExec != nullptr` | 必须在 `CoStart` 之后调用 |

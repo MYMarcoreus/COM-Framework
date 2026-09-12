@@ -1,7 +1,7 @@
 #include "Async/AsyncExecutor.h"
 
 // ====================================================================
-// 非模板成员定义（模板成员 NewPromise / BuildPromise / CoStart / 组合器分别在
+// 非模板成员定义（模板成员 NewPromise / CoStart / 组合器分别在
 // Promise.h / Coroutine/Coroutine.h / 本头文件的组合器一节内定义）。非模板类 CAsyncExecutor 的
 // 成员定义放本文件，避免头文件中定义导致多 TU 重复定义（ODR 违规）。
 //

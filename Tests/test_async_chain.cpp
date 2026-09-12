@@ -46,8 +46,7 @@ struct CTestContext
 };
 
 /// 层：值 +1（上一层失败则透传，属防御性写法）。
-static common::async::CPromiseResult StepAdd1(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepAdd1(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
 {
     if (upResult.IsRejected())
     {
@@ -61,8 +60,7 @@ static common::async::CPromiseResult StepAdd1(
 }
 
 /// 层：值 +10。
-static common::async::CPromiseResult StepAdd10(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepAdd10(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
 {
     if (upResult.IsRejected())
     {
@@ -76,8 +74,7 @@ static common::async::CPromiseResult StepAdd10(
 }
 
 /// 分叉用例专用层：分支 A 只写自己的字段（不碰分支 B 也会写的字段）。
-static common::async::CPromiseResult StepForkA(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepForkA(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
 {
     if (upResult.IsRejected())
     {
@@ -88,8 +85,7 @@ static common::async::CPromiseResult StepForkA(
 }
 
 /// 分叉用例专用层：分支 B 只写自己的字段。
-static common::async::CPromiseResult StepForkB(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepForkB(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
 {
     if (upResult.IsRejected())
     {
@@ -100,8 +96,7 @@ static common::async::CPromiseResult StepForkB(
 }
 
 /// 层：按上下文里的错误码制造失败。
-static common::async::CPromiseResult StepFail(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepFail(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
 {
     if (upResult.IsRejected())
     {
@@ -212,19 +207,20 @@ TEST(Promise_ThenSequence)
     exec.Stop();
 }
 
-/// @brief 先建延迟链、再填初始数据、最后挂层启动（上下文由调用方强制传入，框架不代建）。
-TEST(Promise_BuildThenFillContext)
+/// @brief 上下文由调用方强制传入：先备好数据再起链，链内各层共用同一实例。
+TEST(Promise_ContextPreparedBeforeChain)
 {
     common::async::CAsyncExecutor exec(2);
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
-    common::async::CPromise<CTestContext> chain = exec.BuildPromise<CTestContext>(spCtx);
-    ASSERT_TRUE(chain.GetContext() == spCtx);  // 恒非空，且就是传入的那个实例
-    chain.GetContext()->nValue = 100;          // 建链与挂层之间改数据：此刻链还没开跑
+    spCtx->nValue = 100;  // 起链前就把初始数据备好（框架不代建上下文）
 
-    common::async::CPromise<CTestContext> tail = chain.Then(&StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC);
-    ASSERT_TRUE(tail.Await().IsFulfilled());  // 未显式 Start → Await 兜底启动
+    common::async::CPromise<CTestContext> chain = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC);
+    ASSERT_TRUE(chain.GetContext() == spCtx);  // 恒非空，且就是传入的那个实例
+
+    common::async::CPromise<CTestContext> tail = chain.Then(&StepAdd10, ASYNC_LOC);
+    ASSERT_TRUE(tail.Await().IsFulfilled());
     ASSERT_EQ(spCtx->nValue, 111);
     exec.Stop();
 }
@@ -236,10 +232,10 @@ TEST(Promise_ExternalContext)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
-    common::async::CPromise<CTestContext> chain = exec.BuildPromise<CTestContext>(spCtx);
+    common::async::CPromise<CTestContext> chain = exec.NewPromise(spCtx, &StepAdd10, ASYNC_LOC);
     ASSERT_TRUE(chain.GetContext() == spCtx);  // 同一实例，不做拷贝
 
-    ASSERT_TRUE(chain.Then(&StepAdd10, ASYNC_LOC).Await().IsFulfilled());
+    ASSERT_TRUE(chain.Await().IsFulfilled());
     ASSERT_EQ(spCtx->nValue, 10);
     exec.Stop();
 }
@@ -255,9 +251,8 @@ TEST(Promise_ThenFailFast)
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
     spCtx->nFailCode = common::async::kBusinessBase + 7;
 
-    common::async::CPromise<CTestContext> tail = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC)
-                                                     .Then(&StepFail, ASYNC_LOC)
-                                                     .Then(&StepShouldNotRun, ASYNC_LOC);  // 不执行
+    common::async::CPromise<CTestContext> tail =
+        exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Then(&StepFail, ASYNC_LOC).Then(&StepShouldNotRun, ASYNC_LOC);  // 不执行
     const common::async::CPromiseResult r = tail.Await();
 
     ASSERT_TRUE(r.IsRejected());
@@ -274,8 +269,7 @@ TEST(Promise_ExceptionRejects)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
-    common::async::CPromise<CTestContext> tail =
-        exec.NewPromise(spCtx, &StepThrow, ASYNC_LOC).Then(&StepShouldNotRun, ASYNC_LOC);
+    common::async::CPromise<CTestContext> tail = exec.NewPromise(spCtx, &StepThrow, ASYNC_LOC).Then(&StepShouldNotRun, ASYNC_LOC);
     const common::async::CPromiseResult r = tail.Await();
 
     ASSERT_TRUE(r.IsRejected());
@@ -338,8 +332,7 @@ TEST(Promise_OnSettledCallback)
     std::shared_ptr<CTestContext> spOk = std::make_shared<CTestContext>();
     std::atomic<int> nOk(0);
     std::atomic<bool> bOkDone(false);
-    common::async::CPromise<CTestContext> chainOk =
-        exec.NewPromise(spOk, &StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC);
+    common::async::CPromise<CTestContext> chainOk = exec.NewPromise(spOk, &StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC);
     chainOk.OnSettled(
         [&nOk, &bOkDone](common::async::CPromiseResult r)
         {
@@ -448,8 +441,7 @@ TEST(Promise_NotStarted)
     common::async::CAsyncExecutor exec(2);
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
 
-    common::async::CPromise<CTestContext> tail =
-        exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC);
+    common::async::CPromise<CTestContext> tail = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC);
     const common::async::CPromiseResult r = tail.Await();
 
     ASSERT_TRUE(r.IsRejected());
@@ -526,8 +518,7 @@ TEST(Promise_ConcurrentAwait)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
-    common::async::CPromise<CTestContext> tail =
-        exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC);
+    common::async::CPromise<CTestContext> tail = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC);
 
     std::atomic<int> nOk(0);
     std::vector<std::thread> threads;

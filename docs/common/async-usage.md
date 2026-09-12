@@ -144,18 +144,14 @@ auto t2 = exec.NewPromise(spCtx, StepLoad)
 // 上下文由调用方强制传入（框架不代建）：先备好数据，再起链
 std::shared_ptr<CMyContext> spCtx = std::make_shared<CMyContext>();
 spCtx->strRequestId = GetRequestId();
-common::async::CPromise<CMyContext> p = exec.BuildPromise<CMyContext>(spCtx);
+spCtx->nRetry = 3;  // 所有初始字段都在起链前填好
+common::async::CPromise<CMyContext> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Then(StepB, ASYNC_LOC);
 // 链内各层拿到的恒是同一个实例：p.GetContext() == spCtx
-
-// 延迟起链时，还可以在「建链」与「挂层」之间改数据（此刻链还没跑）
-spCtx->nRetry = 3;
-common::async::CPromise<CMyContext> tail = p.Then(StepA).Then(StepB);
-p.Start();
 ```
 
 约束与建议：
 
-- **上下文必须由调用方传入**（`NewPromise` / `BuildPromise` / `CoStart` 的第一个参数）：
+- **上下文必须由调用方传入**（`NewPromise` / `CoStart` 的第一个参数）：
   框架**不做懒创建** —— 于是 `GetContext()` 恒非空、核心不必为「可能还没准备好」加锁，
   `TContext` 也不必可默认构造；
 - 处理器拿到的是 `const std::shared_ptr<TContext>&`（借用引用，不增加引用计数）；
@@ -483,31 +479,25 @@ exec.NewPromise(spCtx, StepLoad, ASYNC_LOC)
 - **不要把 `ThenOn` 用来跨模块传执行器**（执行器是模块私有资源，跨模块只交换 promise + 上下文）；
 - 两种写法都只影响**那一层**：之后的层仍按默认亲和回本链执行器；内联深度超 `kMaxInlineDepth` 依旧改投递（防爆栈）。
 
-### 9.2 先建链、后启动（`BuildPromise` + `Start`）
+### 9.2 起链只有一种语义：**立即投递首层**
 
-`NewPromise` 一返回就把首层投递出去了（链边跑边搭）；需要“先把链完全搭好、再开始跑”时用 `BuildPromise`：
+`exec.NewPromise(...)`（两个重载）**一返回就已经把首层投递出去**了（链边跑边搭），
+与 JS 的 `new Promise(executor)` 一致 —— 框架**不提供**「延迟启动」（原来那套
+`BuildPromise` + `Start()` 已移除，理由见 [async-impl.md](async-impl.md) §5.1）。
+
+若确实需要「构链期间不跑业务代码」（例如先把所有层与依赖准备好再开跑），
+用一次 `exec.Post(...)` 把整段构链放到执行器线程上完成即可 —— 这比框架内置一种第二形态更划算：
 
 ```cpp
-common::async::CPromise<COrderCtx> p = exec.BuildPromise(spCtx)
-                                           .Then(StepLoad, ASYNC_LOC)                  // 只登记，不跑
-                                           .ThenPromise(fnCallOtherModule, ASYNC_LOC)  // 跨模块调用此时也没发起
-                                           .Then(StepAfterBridge, ASYNC_LOC);
-
-// 此处可以放心地再改上下文 / 再挂层：没有任何层在跑
-p.Start();  // 此刻才把 StepLoad 投递到执行器
-common::async::CPromiseResult r = p.Await();
+exec.Post([&exec, spCtx]()
+{
+    // 这一段整体跑在执行器线程上；首层投递出去时，链已经挂完
+    common::async::CPromise<COrderCtx> p = exec.NewPromise(spCtx, StepLoad, ASYNC_LOC)
+                                               .ThenPromise(fnCallOtherModule, ASYNC_LOC)
+                                               .Then(StepAfterBridge, ASYNC_LOC);
+    p.OnSettled([](common::async::CPromiseResult r) { /* 收尾 */ });
+});
 ```
-
-| 事实 | 说明 |
-| --- | --- |
-| 构链期 | **不跑任何业务代码**（含 `New(...)` 的发起也不会执行） |
-| `Start()` | 投递首层；**幂等**（重复调用无副作用）；普通链（`NewPromise`）调用它无副作用 |
-| 漏写 `Start()` | 直接 `Await()` 会**自动启动**（兜底，不会死等） |
-| 执行器不可用 | 首层以 `kStopped` 收口（下游继续透传） |
-| `Start()` 后追加层 | 仍可用：新层按亲和回本链执行器（“已 settled 后补登”路径） |
-| 空链（没挂过任何层） | `Start()` 无动作；`Await()` 仍是既有的“无状态句柄”语义（`kStopped`） |
-
-好处：构链期间可放心初始化上下文；所有层都在首层开跑前登记完毕（跨模块续接不会出现“补登”的时序差异）。
 
 ## 10. 组合器：并行汇聚（`WhenAll` / `WhenAllSettled` / `WhenRace` / `WhenAny`）
 
@@ -597,8 +587,8 @@ common::async::CPromise<Ctx> b2 = head.Then(StepC, ASYNC_LOC);
 common::async::CPromise<Ctx> tAll = exec.WhenAll(spCtx, b1, b2).Then(StepGather, ASYNC_LOC);
 common::async::CPromiseResult rAll = exec.WhenAllSettled(spCtx, b1, b2).AwaitFor(500);
 
-// 延迟起链（上下文同样必传）：备好数据 → 建链 → 挂层 → Start
-common::async::CPromise<Ctx> c1 = exec.BuildPromise<Ctx>(spCtx);
+// 起链（上下文必传）：先备好数据，再 NewPromise；想「构链期不跑业务代码」用 exec.Post 包一段（§9.2）
+common::async::CPromise<Ctx> c1 = exec.NewPromise(spCtx, StepA, ASYNC_LOC);
 
 // 跨模块组合（纯异步、零阻塞）：桥接 + then-promise 接入（详见 6.3）
 auto fnCreateOther = [deps](const std::shared_ptr<Ctx>& sp)
@@ -630,12 +620,12 @@ common::async::CPromise<Ctx> p =
 - 示例：`examples/main.cpp`（28 个演示：then / catch / finally / 分叉 / 深链 / 协程 / **嵌套** / **跨模块组合** / **多种 then 混用**）；
 - 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
 - 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞）；
-- 单元测试（异步共 **110 例**，全量 156 例）：`test_async_smoke.cpp`（17）对外用法逐条冒烟、
-  `test_async_chain.cpp`（37）promise 契约 + 协程、`test_async_combine.cpp`（13）组合器、
-  `test_async_modules.cpp`（7）+ `test_async_modules_stress.cpp`（8）跨模块与极限、
+- 单元测试（异步共 **103 例**，全量 149 例）：`test_async_smoke.cpp`（17）对外用法逐条冒烟、
+  `test_async_chain.cpp`（37）promise 契约 + 协程、`test_async_combine.cpp`（12）组合器、
+  `test_async_modules.cpp`（6）+ `test_async_modules_stress.cpp`（8）跨模块与极限、
   `test_async_affinity.cpp`（5）+ `test_async_affinity_override.cpp`（4）线程亲和，
-  `test_async_build_start.cpp`（7）延迟启动、`test_async_settled_delivery.cpp`（5）通知送达、
-  `test_async_robustness.cpp`（7）健壮性与诊断、`test_async_layer_rules.cpp`（2）三态语义白盒、
+  `test_async_settled_delivery.cpp`（4）通知送达、
+  `test_async_robustness.cpp`（6）健壮性与诊断、`test_async_layer_rules.cpp`（2）三态语义白盒、
   `test_async_alloc.cpp`（2）每层分配预算护栏；
 - 基准：`Benchmark/cases/ChainCase.cpp`、`CoroutineCase.cpp`、`ResumableCase.cpp`、`StressCase.cpp`；
 - 运行：`./build.sh --tests`、`./build/debug/examples`。

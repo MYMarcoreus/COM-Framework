@@ -7,20 +7,26 @@
 /// relaxed 读。窗口外不计数的原因见 `CAllocCounter`。
 ///
 /// 当前预算（steady state，`Common/Async/Promise.h`；数字为实测值）：
-///  - 建链：**2 次/层** —— `make_shared<CPromiseState>`（层状态）+ 处理器
-///    `std::function`；每链另有不超过 8 次的常数（核心、延迟起链载荷、首层 runner）；
-///  - 跑链：**1 次/层** —— 投递给执行器的任务体（`MakeHandlerRunner`）；
-///  - 断言只设上限，因此后续把每层做到 1 次（把任务体塞进层状态）也会通过。
+///  - 建链（挂层）：**2 次/层** —— `make_shared<CPromiseState>`（层状态）+ 处理器
+///    `std::function`；每链另有不超过 8 次的常数（核心、首层 runner）；
+///  - 跑链（任务体投递）：**1 次/层** —— `MakeHandlerRunner` 造的任务体（`Post` 路径）；
+///  - 合计 **3 次/层**；断言只设上限，因此后续把每层做到 2 次（把任务体塞进层状态）也会通过。
+///
+/// 怎么把「建链」与「跑链」分开量：**在层函数内部测量** —— 单线程执行器此刻正被本层占用，
+/// 新建的链不会立刻开跑，于是窗口里只有建链分配（框架已不再提供「延迟启动」，
+/// 不需要它也能拿到确定的测量窗口）。
 ///
 /// 覆盖：
-///  - 建链：绝对上限 + 「不随层数增长」的差值检查（消掉每链常数）；
-///  - 跑链：含内联级联（前 kMaxInlineDepth 层）与改投递（其余层）两段路径。
+///  - 挂层：绝对上限 + 「不随层数增长」的差值检查（消掉每链常数）；
+///  - 任务体投递：`Post` 路径的每次分配（链的每一层都要投一个）；
+///  - 两者合起来 = 一条 N 层链的 3 次/层（建链 2 + 跑链 1）。
 
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <new>
+#include <thread>
 
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
@@ -194,48 +200,45 @@ private:
 /// @brief 分配计数测试的共享上下文（本身不分配内存）。
 struct CAllocCtx
 {
-    long long nValue;  ///< 层函数累加值，用于确认层真的执行过。
+    long long nValue;                      ///< 层函数累加值，用于确认层真的执行过。
+    common::async::CAsyncExecutor* pExec;  ///< 测量用执行器（层内起链，见文件头）。
+    std::shared_ptr<CAllocCtx> spOther;    ///< 测量用上下文（预先造好，避免污染窗口）。
+    int nMeasureLayers;                    ///< 本次测量层数。
+    long long nMeasuredCounts;             ///< 输出：测量到的分配次数。
+    long long nMeasuredBytes;              ///< 输出：测量到的分配字节数。
 
-    CAllocCtx() : nValue(0)
+    CAllocCtx() : nValue(0), pExec(nullptr), spOther(), nMeasureLayers(0), nMeasuredCounts(0), nMeasuredBytes(0)
     {}
 };
 
 /// 层：上下文计数 +1。
-static common::async::CPromiseResult StepBump(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CAllocCtx>& spCtx)
+static common::async::CPromiseResult StepBump(common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CAllocCtx>& spCtx)
 {
     ++spCtx->nValue;
     return common::async::CPromiseResult::Resolve();
 }
 
-// ==================== 建链分配预算 ====================
-
-/// @brief 建一条 `nLayers` 层的延迟起链（`BuildPromise` + `Then`），并统计该阶段分配。
+/// 层：在层内测量「建一条 nMeasureLayers 层的链」的堆分配。
 ///
-/// 用延迟起链是刻意的：起链前不会有任何层执行，测量窗口内只有建链分配，结果确定；
-/// 若用 `NewPromise`，首层会立即投递到执行器，worker 的执行分配会掺进窗口里。
-///
-/// @param exec 执行器（已启动）。
-/// @param spCtx 共享上下文。
-/// @param nLayers 层数。
-/// @param nCountsOut 输出：该阶段的堆分配次数。
-/// @param nBytesOut 输出：该阶段的堆分配字节数。
-/// @return 链尾 promise（未起链）。
-static common::async::CPromise<CAllocCtx> BuildThenChain(common::async::CAsyncExecutor& exec,
-    const std::shared_ptr<CAllocCtx>& spCtx, int nLayers, long long& nCountsOut, long long& nBytesOut)
+/// 此刻执行器线程正被本层占用（单线程执行器）→ 新建链的首层不会立即执行，
+/// 窗口里只有建链分配，结果确定。
+static common::async::CPromiseResult StepMeasureBuild(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CAllocCtx>& spCtx)
 {
     CAllocCounter counter;
-    common::async::CPromise<CAllocCtx> tail = exec.BuildPromise<CAllocCtx>(spCtx);
-    for (int i = 0; i < nLayers; ++i)
+    common::async::CPromise<CAllocCtx> tail = spCtx->pExec->NewPromise(spCtx->spOther, &StepBump, ASYNC_LOC);
+    for (int i = 0; i < spCtx->nMeasureLayers; ++i)
     {
         tail = tail.Then(&StepBump, ASYNC_LOC);
     }
     counter.Stop();
 
-    nCountsOut = counter.Counts();
-    nBytesOut = counter.Bytes();
-    return tail;
+    spCtx->nMeasuredCounts = counter.Counts();
+    spCtx->nMeasuredBytes = counter.Bytes();
+    return common::async::CPromiseResult::Resolve();
 }
+
+// ==================== 建链分配预算 ====================
 
 /// @brief 建链每层堆分配 ≤ 2 次，且不随层数增长。
 TEST(AsyncAlloc_BuildBudget)
@@ -247,17 +250,22 @@ TEST(AsyncAlloc_BuildBudget)
     common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
     std::shared_ptr<CAllocCtx> spCtx = std::make_shared<CAllocCtx>();
+    spCtx->pExec = &exec;
+    spCtx->spOther = std::make_shared<CAllocCtx>();
 
-    long long nSmallCounts = 0;
-    long long nSmallBytes = 0;
-    long long nBigCounts = 0;
-    long long nBigBytes = 0;
-    common::async::CPromise<CAllocCtx> smallChain =
-        BuildThenChain(exec, spCtx, kSmallLayers, nSmallCounts, nSmallBytes);
-    common::async::CPromise<CAllocCtx> bigChain = BuildThenChain(exec, spCtx, kBigLayers, nBigCounts, nBigBytes);
+    // 每次测量都在「被测量的层内」进行（单线程执行器被本层占着 → 新建链不会立即开跑）。
+    spCtx->nMeasureLayers = kSmallLayers;
+    ASSERT_TRUE(exec.NewPromise(spCtx, &StepMeasureBuild, ASYNC_LOC).Await().IsFulfilled());
+    const long long nSmallCounts = spCtx->nMeasuredCounts;
+    const long long nSmallBytes = spCtx->nMeasuredBytes;
 
-    std::printf("      %d 层：%lld 次 / %lld 字节（每层 %.2f 次、%.0f 字节）\n", kSmallLayers, nSmallCounts,
-        nSmallBytes, static_cast<double>(nSmallCounts) / kSmallLayers, static_cast<double>(nSmallBytes) / kSmallLayers);
+    spCtx->nMeasureLayers = kBigLayers;
+    ASSERT_TRUE(exec.NewPromise(spCtx, &StepMeasureBuild, ASYNC_LOC).Await().IsFulfilled());
+    const long long nBigCounts = spCtx->nMeasuredCounts;
+    const long long nBigBytes = spCtx->nMeasuredBytes;
+
+    std::printf("      %d 层：%lld 次 / %lld 字节（每层 %.2f 次、%.0f 字节）\n", kSmallLayers, nSmallCounts, nSmallBytes,
+        static_cast<double>(nSmallCounts) / kSmallLayers, static_cast<double>(nSmallBytes) / kSmallLayers);
     std::printf("      %d 层：%lld 次 / %lld 字节（每层 %.2f 次、%.0f 字节）\n", kBigLayers, nBigCounts, nBigBytes,
         static_cast<double>(nBigCounts) / kBigLayers, static_cast<double>(nBigBytes) / kBigLayers);
 
@@ -267,37 +275,62 @@ TEST(AsyncAlloc_BuildBudget)
     // 差值检查：多出的层只应带来 2 次/层的成本（消掉每链常数，避免常数掩盖线性增长）。
     ASSERT_TRUE(nBigCounts - nSmallCounts <= 2 * (kBigLayers - kSmallLayers) + kSlack);
 
-    // 链还没起链，层函数一次都不该跑。
+    // 测量层本身只计数、不改 nValue（被测量的链用的是 spOther）。
     ASSERT_EQ(spCtx->nValue, 0);
     exec.Stop();
 }
 
 // ==================== 跑链分配预算 ====================
 
-/// @brief 跑链每层堆分配 ≤ 1 次（投递给执行器的任务体）。
+/// @brief 跑链每层堆分配 ≤ 1 次 —— 每个层任务体（`MakeHandlerRunner`）。
+///
+/// 把「建链」与「跑链」分开的诀窍：先用一个**占位任务把唯一的 worker 占住**，
+/// 于是窗口外建好的链只登记、不执行（首层在队列里等着）。窗口内放行并等待，
+/// 整条链就在这次等待里跑完 —— 窗口里只有跑链分配，与调度时序无关。
 TEST(AsyncAlloc_RunBudget)
 {
     const int kLayers = 200;  ///< 层数（> kMaxInlineDepth，覆盖「内联级联」与「改投递」两段路径）。
-    const int kSlack = 8;  ///< 每链常数分配的余量。
+    const int kSlack = 8;     ///< 常数余量。
 
     common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
+
+    // 占位任务：占住唯一 worker，直到本测试放行。
+    std::atomic<bool> bOccupied(false);
+    std::atomic<bool> bRelease(false);
+    ASSERT_TRUE(exec.Post(
+        [&bOccupied, &bRelease]()
+        {
+            bOccupied.store(true);
+            while (!bRelease.load())
+            {
+                std::this_thread::yield();
+            }
+        }));
+    while (!bOccupied.load())
+    {
+        std::this_thread::yield();
+    }
+
+    // 窗口外：建一条 N 层链（worker 被占住 → 首层只入队，不执行）。
     std::shared_ptr<CAllocCtx> spCtx = std::make_shared<CAllocCtx>();
+    common::async::CPromise<CAllocCtx> chain = exec.NewPromise(spCtx, &StepBump, ASYNC_LOC);
+    for (int i = 0; i < kLayers; ++i)
+    {
+        chain = chain.Then(&StepBump, ASYNC_LOC);
+    }
 
-    long long nBuildCounts = 0;
-    long long nBuildBytes = 0;
-    common::async::CPromise<CAllocCtx> chain = BuildThenChain(exec, spCtx, kLayers, nBuildCounts, nBuildBytes);
-
+    // 窗口内：放行 worker 并等链跑完 → 统计到的就是「跑链」的分配。
     CAllocCounter counter;
-    chain.Start();
-    const common::async::CPromiseResult result = chain.Await();
+    bRelease.store(true);
+    const common::async::CPromiseResult result = chain.AwaitFor(5000);
     counter.Stop();
 
-    std::printf("      %d 层：建链 %lld 次，跑链 %lld 次 / %lld 字节（每层 %.2f 次）\n", kLayers, nBuildCounts,
-        counter.Counts(), counter.Bytes(), static_cast<double>(counter.Counts()) / kLayers);
+    std::printf("      %d 层：跑链 %lld 次（每层 %.2f 次）\n", kLayers, counter.Counts(),
+        static_cast<double>(counter.Counts()) / kLayers);
 
     ASSERT_TRUE(result.IsFulfilled());
-    ASSERT_EQ(spCtx->nValue, static_cast<long long>(kLayers));
+    ASSERT_EQ(spCtx->nValue, static_cast<long long>(kLayers) + 1);
     ASSERT_TRUE(counter.Counts() <= kLayers + kSlack);
     exec.Stop();
 }
