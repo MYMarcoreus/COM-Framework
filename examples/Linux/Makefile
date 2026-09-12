@@ -81,10 +81,13 @@ $(foreach src,$(COMMON_SRCS),$(eval $(call compile-common,$(src))))
 run: $(TARGET)
 	$(TARGET)
 
-# 生成 compile_commands.json（供 clangd，compiledb 以 dry-run 捕获全部编译命令）
+# 生成 compile_commands.json（供 clangd，compiledb 以 dry-run 捕获全部编译命令）。
+# BUILD_MODE / CXXFLAGS 必须透传：否则内层 make 落回本 Makefile 的默认值（release：
+# -O2 -DNDEBUG），clangd 便按发布构建解析，`#if FRAMEWORK_DEBUG` 里的东西会被判成
+# 未启用（代码灰掉、无法高亮跳转）。
 .PHONY: compiledb
 compiledb:
-	compiledb -n -o $(ROOT)/compile_commands.json make all
+	compiledb -n -o $(ROOT)/compile_commands.json $(MAKE) objects BUILD_MODE=$(BUILD_MODE) CXXFLAGS="$(CXXFLAGS)"
 
 .PHONY: clean
 clean:

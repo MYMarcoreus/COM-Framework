@@ -10,14 +10,27 @@
 # 需要重刷编译数据库，否则诊断与跳转会失真：
 #     ./build.sh --compiledb [项目...]
 # ====================================================================
-CompileFlags: {}
+CompileFlags:
+  # 让编辑器始终「看得见」调试构建专属的代码（trace：`#if defined(ASYNC_DEBUG_TRACE)`）。
+  #
+  # 背景：`ASYNC_DEBUG_TRACE` 由 SourceLoc.h 按 Assert.h 的 `FRAMEWORK_DEBUG` 自动定义
+  # （= 未定义 NDEBUG 且未开优化）。而各项目的 compile_commands.json 是**按某一次构建的模式**
+  # 生成的：若上次是 release（`-O2 -DNDEBUG`），编辑器就会把 `#if defined(ASYNC_DEBUG_TRACE)`
+  # 整段判成未启用 —— 表现为代码被灰掉、`Trace.h` / `Promise.h` 里的 trace 代码无法高亮跳转。
+  #
+  # 这里显式定义（只在编辑器里生效，不影响任何实际构建），开发期看到的就是**调试分支**：
+  #   - 与 SourceLoc.h 里的 `#define ASYNC_DEBUG_TRACE 1` 替换列表一致 → 不会触发重定义告警；
+  #   - 想看 release 分支（`#else`，例如 ASYNC_LOC 退化为空位置）时，把它注释掉并重刷编译数据库：
+  #         ./build.sh --release --compiledb [项目...]
+  Add: [-DASYNC_DEBUG_TRACE]
 
-# 格式化：使用项目根 .clang-format（默认值即 file，这里显式写出来，避免旧版
-# clangd / 其它扩展回落到 Google / LLVM 默认风格 —— 那是「缩进看起来不对」的常见原因）。
+# 格式化：交给项目根 .clang-format（clangd 的默认行为就是「用文件风格」）。
+# 不要写 `FormatStyle:` —— clangd 无此键，只会告警并忽略；也不要写 `Style: file` ——
+# clangd 18 要求 `Style` 是字典（`Style: {BasedOnStyle: ...}`），写成标量会 **整体报错**，
+# 报错会让整份 .clangd 被丢弃（连 CompileFlags 也不生效），比告警更糟。
 #
 # 注意：.clang-format 里用了 LambdaBodyIndentation（clang-format 13 起支持），
 # 低版本 clangd 会把 lambda 体缩进排错。本仓库要求 clangd >= 13（开发机为 18）。
-FormatStyle: file
 
 # 诊断：不显示「头文件可以省略」这类建议性提示（与 .clang-format / IWYU 的取舍冲突，
 # 只会淹没真正的编译错误）。

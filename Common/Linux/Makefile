@@ -65,13 +65,18 @@ $(foreach src,$(SRCS),$(eval $(call compile-obj,$(src))))
 # 生成 compile_commands.json（供 clangd 使用）
 # ------------------------------------------------------------------
 
+# 编译数据库（clangd）必须与**真实构建同参**：build.sh 以 BUILD_MODE + CXXFLAGS 两个变量
+# 驱动构建，这里把它们原样透传给内层 make。否则内层会落回本 Makefile 的默认值（release：
+# -O2 -DNDEBUG），clangd 便按发布构建解析 —— `#if FRAMEWORK_DEBUG` 里的东西（trace 的
+# 链信息、层注册点、断言）会被判成未启用：代码灰掉、无法高亮跳转。
+# 只编译对象（不链接、不递归构建依赖项目），避免别的项目的命令混进本项目数据库。
 .PHONY: compile_commands.json
 compile_commands.json:
-	bear --output $(ROOT)/compile_commands.json -- make clean all
+	bear --output $(ROOT)/compile_commands.json -- $(MAKE) clean objects BUILD_MODE=$(BUILD_MODE) CXXFLAGS="$(CXXFLAGS)"
 
 .PHONY: compiledb
 compiledb:
-	compiledb -n -o $(ROOT)/compile_commands.json make debug
+	compiledb -n -o $(ROOT)/compile_commands.json $(MAKE) objects BUILD_MODE=$(BUILD_MODE) CXXFLAGS="$(CXXFLAGS)"
 
 .PHONY: debug
 debug:

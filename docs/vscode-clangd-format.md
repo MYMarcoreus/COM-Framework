@@ -8,7 +8,7 @@
 | 文件 | 作用 |
 | --- | --- |
 | `.vscode/settings.json` | `[cpp]` / `[c]` 默认格式化器 = clangd、保存即格式化；缩进 4 空格、120 列标尺、关闭 `detectIndentation` |
-| `.clangd` | clangd 自身配置：`FormatStyle: file`（用项目 `.clang-format`）、不显示「头文件可省略」提示；编译数据库按「源文件所在目录向上查找」自动识别 |
+| `.clangd` | clangd 自身配置：不显示「头文件可省略」提示 + **编辑器里显式定义 `ASYNC_DEBUG_TRACE`**（让调试构建专属代码可见，见 §7）；格式化风格交给默认的「用项目 `.clang-format`」（clangd 没有 `FormatStyle` 这个键，写 `Style: file` 反而会让整份配置报错 —— 见 §7）；编译数据库按「源文件所在目录向上查找」自动识别 |
 | `.clang-format` | 真正的排版规则：4 空格 / Allman / 120 列 / `LambdaBodyIndentation: OuterScope` / **函数体与 lambda 体都不写单行**（`AllowShortFunctionsOnASingleLine: None`、`AllowShortLambdasOnASingleLine: None`） |
 
 **要求 clangd ≥ 13**（`.clang-format` 用了 `LambdaBodyIndentation`，13 起支持；本机为 18）。
@@ -33,8 +33,8 @@ find . -name '*.cpp' -not -path './build/*' -not -path './ThirdParty/*' | xargs 
    本仓库默认已设为 clangd，可在「设置 → 文本编辑器 → 格式化」里恢复；
 3. **`editor.detectIndentation` 打开**：VS Code 会按文件内容猜 tabSize（看到 2 空格就按 2 排），
    本仓库已关闭；
-4. **编译数据库过期**：clangd 拿不到 `-I` / `-std`，代码按错误解析，格式化也会乱 →
-   重刷：`./build.sh --compiledb [项目...]`。
+4. **编译数据库过期 / 模式不对**：clangd 拿不到 `-I` / `-std` / 宏，代码按错误解析，格式化也会乱 →
+   重刷：`./build.sh --compiledb [项目...]`（默认 debug；要 release 视图用 `--release --compiledb`，见 §7）。
 
 ## 4. 长参数行 / lambda 的排版
 
@@ -169,3 +169,65 @@ clang-format --style=file --dry-run --Werror $FILES   # 校验：0 违规
 
 历史：`Align` → `DontAlign` 见提交 `style: 续行不对齐开括号（AlignAfterOpenBracket: DontAlign）`
 （56 文件重排 + 0 违规 + 145 例全绿）。
+
+## 7. 让编辑器看到「调试构建专属」的代码（宏 / 编译数据库模式）
+
+背景：本仓库有**只在调试构建存在**的代码，典型是异步调用链 trace
+（`#if defined(ASYNC_DEBUG_TRACE)`，见 [common/async-impl.md](common/async-impl.md) §14）：
+发布构建下这些类型与函数**根本不存在**。
+
+如果编译数据库是按 release 生成的（`-O2 -DNDEBUG`），clangd 就会把整段 `#if` 判成未启用：
+**代码发灰、无法高亮跳转、补全里也看不到** —— 这**不是**代码问题，也不是 clangd 坏了。
+
+### 7.1 为什么会不同模式（两个独立原因）
+
+1. **生成数据库时要带上模式**。`build.sh` 用 `BUILD_MODE` + `CXXFLAGS` 两个变量驱动构建，
+   所以各项目 Makefile 的 `compiledb` 目标必须把它们原样透传给内层 make
+   （否则内层落回 Makefile 默认值 = release）：
+
+   ```bash
+   ./build.sh --compiledb            # 默认 debug：编辑器看到的与开发构建一致
+   ./build.sh --release --compiledb  # 只在真的要按 release 视图看代码时才用
+   ```
+
+2. **同一个头文件会被不同项目的数据库引用**。clangd 给头文件挑编译命令时，
+   会从「包含它的 TU」里选一个：`Common/Async/Promise.h` 同时出现在 Common（debug）与
+   Tests / examples / Benchmark（各自可能不同）的数据库里。因此**只要有一份数据库是 release，
+   就不能保证头文件用调试参数解析**。
+
+### 7.2 兜底：在 `.clangd` 里固定「调试视图」
+
+仓库根的 [`.clangd`](../.clangd) 里给编辑器单独加了宏：
+
+```yaml
+CompileFlags:
+  Add: [-DASYNC_DEBUG_TRACE]   # 只影响编辑器解析，不影响任何真实构建
+```
+
+于是无论编译数据库是哪个模式，编辑器都按「调试构建」解析：trace / 断言那段代码可编辑、可跳转。
+代价是 release 分支（`#else`）会发灰 —— 开发时看的就是调试分支，这是刻意的取舍；
+真要核对 release 分支，把这一行注释掉再 `./build.sh --release --compiledb`。
+
+改完 `.clangd` 后让配置生效：命令面板 → `clangd: Restart language server`。
+
+### 7.3 `.clangd` 里不要写的两个键（都踩过）
+
+| 写法 | 后果 |
+| --- | --- |
+| `FormatStyle: file` | clangd **没有**这个键 → 启动日志告警 `Unknown Config key 'FormatStyle'`，该行被忽略（格式化会落到 clangd 默认风格，通常仍是「文件风格」，所以平时看不出问题） |
+| `Style: file` | clangd 18 要求 `Style` 是**字典**（`Style: {BasedOnStyle: ...}`）→ 标量会报 `Style should be a dictionary`，而配置**一旦报错整份 `.clangd` 被丢弃**（连 `CompileFlags` 也不生效，宏兜底也跟着失效） |
+
+格式化用「项目 `.clang-format`」本来就是 clangd 的默认行为，**不要在 `.clangd` 里重复声明**。
+
+### 7.4 排错三步
+
+```bash
+clangd --version                              # 需要 >= 13
+clangd --check=Common/Async/Promise.h         # 看它实际用的编译命令与诊断
+#   → 日志里 `Compile command inferred from ...` 那行就是真正生效的参数
+#   → 若出现 `config error at .clangd`，先修配置（配置报错时整份文件不生效）
+./build.sh --compiledb                        # 仍然不对：重刷数据库（默认 debug）
+```
+
+注意 `clangd --check=<头文件>` 会把头文件**孤立编译**，对不是自包含的头文件会产生一批无关诊断；
+判断「真错误」请看 `--check=<某个 .cpp>`（真实 TU）或直接构建。

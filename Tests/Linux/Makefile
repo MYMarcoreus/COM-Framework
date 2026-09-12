@@ -35,6 +35,10 @@ DEPS := $(OBJS:.o=.d)
 
 all: $(TARGET)
 
+# 只编译对象（不链接）：编译数据库走这里，避免链接命令与依赖库混进数据库
+.PHONY: objects
+objects: $(OBJS)
+
 .PHONY: run
 run: $(TARGET)
 	$(TARGET)
@@ -54,7 +58,7 @@ $(foreach src,$(SRCS),$(eval $(call compile-obj,$(src))))
 
 .PHONY: compiledb
 compiledb:
-	compiledb -n -o $(ROOT)/compile_commands.json make all
+	compiledb -n -o $(ROOT)/compile_commands.json $(MAKE) objects BUILD_MODE=$(BUILD_MODE) CXXFLAGS="$(CXXFLAGS)"
 
 .PHONY: clean
 clean:

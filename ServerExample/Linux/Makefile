@@ -86,12 +86,14 @@ $(COMMON_LIB):
 # 方式一：bear
 .PHONY: compile_commands.json
 compile_commands.json:
-	bear --output $(ROOT)/compile_commands.json -- make clean objects
+	bear --output $(ROOT)/compile_commands.json -- $(MAKE) clean objects BUILD_MODE=$(BUILD_MODE) CXXFLAGS="$(CXXFLAGS)"
 
-# 方式二：compiledb（只编译本项目对象，避免递归构建 ServerCore 污染编译数据库）
+# 方式二：compiledb（只编译本项目对象，避免递归构建 ServerCore 污染编译数据库；
+#          BUILD_MODE / CXXFLAGS 必须透传，否则数据库会按默认的 release 生成，
+#          clangd 便把 `#if FRAMEWORK_DEBUG` 判成未启用）
 .PHONY: compiledb
 compiledb:
-	compiledb -n -o $(ROOT)/compile_commands.json make debug_objects
+	compiledb -n -o $(ROOT)/compile_commands.json $(MAKE) objects BUILD_MODE=$(BUILD_MODE) CXXFLAGS="$(CXXFLAGS)"
 
 # 调试构建（-O0 关闭优化，便于调试）
 .PHONY: debug

@@ -12,7 +12,7 @@ WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 选项：
 #   -d, --debug      调试构建（-O0；默认模式）
 #   -r, --release    发布构建（-O2）
-#   -c, --compiledb  生成所有项目 + examples 的 compile_commands.json（clangd）
+#   -c, --compiledb  生成 compile_commands.json（clangd；按当前构建模式，默认 debug）
 #   -t, --tests      构建并运行单元测试（./build/tests）
 #   -C, --clean      清理所有构建产物
 #   -l, --list        列出自动发现的项目（可构建）
@@ -50,7 +50,7 @@ COM-Framework 统一构建脚本
 选项:
   -d, --debug      调试构建（-O0；默认模式）
   -r, --release    发布构建（-O2）
-  -c, --compiledb  生成所有项目 + examples 的 compile_commands.json（clangd）
+  -c, --compiledb  生成 compile_commands.json（clangd；按当前构建模式，默认 debug）
   -t, --tests      构建并运行单元测试（./build/tests）
   -C, --clean      清理所有构建产物
   -l, --list        列出自动发现的项目（可构建）
@@ -111,7 +111,9 @@ clean_project() {
 compiledb_project() {
     local p=$1
     echo "Generating compile_commands.json for $p ..."
-    (cd "$WORKSPACE_ROOT/$p/Linux" && make compiledb BUILD_MODE=$MODE)
+    # CXXFLAGS 一并透传：编译数据库必须与真实构建同参，否则 clangd 会按别的模式解析
+    # （如落回 Makefile 默认的 release → `#if FRAMEWORK_DEBUG` 全被当未启用、代码灰掉）
+    (cd "$WORKSPACE_ROOT/$p/Linux" && make compiledb BUILD_MODE=$MODE CXXFLAGS="$FLAGS")
 }
 
 parse_args() {
