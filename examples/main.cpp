@@ -87,8 +87,9 @@ struct CDemoContext
     bool bRolledBack;            ///< 是否回滚。
     std::string strTrace;        ///< 层执行轨迹。
     std::atomic<int> nForkDone;  ///< 分叉演示：两条分支各 +1（原子，并行安全）。
+    std::atomic<int> nParDone;   ///< 并行 await 演示：三条分支各 +1（原子，并行安全）。
 
-    CDemoContext() : nBase(10), nScaled(0), bFailParam(false), bFailStore(false), bRolledBack(false), nForkDone(0)
+    CDemoContext() : nBase(10), nScaled(0), bFailParam(false), bFailStore(false), bRolledBack(false), nForkDone(0), nParDone(0)
     {}
 };
 
@@ -125,6 +126,21 @@ static common::async::CPromiseResult StepStore(common::async::CPromiseResult upR
     }
     spCtx->strTrace += "落库;";
     return spCtx->bFailStore ? common::async::CPromiseResult::Reject(kCodeStoreFailed) : common::async::CPromiseResult::Resolve();
+}
+
+/// 层（并行演示）：只写「并行分支计数」这一格。
+///
+/// 并行分支共用一个上下文时，**各分支只能写不同字段**（框架只保证同一条链内层顺序执行，
+/// 跨链并发由调用方负责 —— 见 docs/common/async-usage.md §6.5）。
+static common::async::CPromiseResult StepParBranch(
+    common::async::CPromiseResult upResult, const std::shared_ptr<CDemoContext>& spCtx)
+{
+    if (upResult.IsRejected())
+    {
+        return upResult;
+    }
+    spCtx->nParDone.fetch_add(1);
+    return common::async::CPromiseResult::Resolve();
 }
 
 /// 层：被调用即留下痕迹（用于验证失败即停时未被执行）。
@@ -389,6 +405,9 @@ void DemoOnSettledCallback()
 }
 
 // ⑧ 分叉：同一层注册多个 Then，各自独立延续（共享同一上下文）
+//
+// 两条分支是**并发**跑的，所以它们用「只写自己那一格」的层（`nForkDone`，原子）——
+// 共用上下文时各分支写同一个 `std::string` / 容器就是数据竞争（见 async-usage.md §6.5）。
 void DemoFork()
 {
     common::async::CAsyncExecutor exec(2);
@@ -398,8 +417,8 @@ void DemoFork()
     common::async::CPromise<CDemoContext> head = exec.NewPromise(spCtx, &StepReadParam, ASYNC_LOC);
 
     std::atomic<int> nDone(0);
-    common::async::CPromise<CDemoContext> branchA = head.Then(&StepScale, ASYNC_LOC);
-    common::async::CPromise<CDemoContext> branchB = head.Then(&StepStore, ASYNC_LOC);
+    common::async::CPromise<CDemoContext> branchA = head.Then(&StepForkBranch, ASYNC_LOC);
+    common::async::CPromise<CDemoContext> branchB = head.Then(&StepForkBranch, ASYNC_LOC);
     branchA.OnSettled(
         [&nDone](common::async::CPromiseResult)
         {
@@ -417,7 +436,8 @@ void DemoFork()
     {
         std::this_thread::yield();
     }
-    ASSERT(spCtx->nScaled == 30);
+    ASSERT(spCtx->nForkDone.load() == 2);               // 两条分支各执行一次
+    ASSERT(spCtx->strTrace == std::string("读参数;"));  // 首层只执行一次（分叉不重复跑首层）
     std::printf("⑧ 分叉: 两条分支都完成，上下文共享，轨迹=%s\n", spCtx->strTrace.c_str());
     exec.Stop();
 }
@@ -451,25 +471,25 @@ void DemoContextCreation()
 void DemoPost()
 {
     common::async::CAsyncExecutor exec(2);
-    ASSERT(!exec.Post(
-        []()
-        {
-        }));  // 未启动：拒绝
+    // 注意：任务体要先收进 std::function 再交给 ASSERT —— 发布构建里 `ASSERT(expr)` 展开为
+    // `(void)sizeof(expr)`（**不求值**，见 Assert.h），而 lambda 字面量在 C++11 里不能出现在
+    // 未求值上下文（直接用 `ASSERT(exec.Post([]{ … }))` 只有 debug 构建编得过）。
+    std::atomic<int> nDone(0);
+    const std::function<void()> fnNoop = []()
+    {
+    };
+    const std::function<void()> fnCount = [&nDone]()
+    {
+        nDone.fetch_add(1);
+    };
+
+    ASSERT(!exec.Post(fnNoop));  // 未启动：拒绝
 
     ASSERT(exec.Start());
-    std::atomic<int> nDone(0);
-    ASSERT(exec.Post(
-        [&nDone]()
-        {
-            nDone.fetch_add(1);
-        }));
+    ASSERT(exec.Post(fnCount));
     exec.Stop();  // 等待任务完成
     ASSERT(nDone.load() == 1);
-    ASSERT(!exec.Post(
-        [&nDone]()
-        {
-            nDone.fetch_add(1);
-        }));  // 已停止：拒绝
+    ASSERT(!exec.Post(fnCount));  // 已停止：拒绝
     std::printf("⑩ Post: 完成=%d（未启动 / 已停止均被拒绝）\n", nDone.load());
 }
 
@@ -611,6 +631,8 @@ public:
 };
 
 /// 协程：并行 await 多条子链。
+///
+/// 三条子链共用同一个上下文且**并发**执行，所以这里的层只写自己那一格（`nParDone`，原子）。
 class CParallelCoroutine : public common::async::CCoroutine<CDemoContext>
 {
 public:
@@ -619,7 +641,7 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT_ALL(NewPromise(&StepReadParam), NewPromise(&StepScale), NewPromise(&StepStore));
+        CO_AWAIT_ALL(NewPromise(&StepParBranch), NewPromise(&StepParBranch), NewPromise(&StepParBranch));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -708,8 +730,8 @@ void DemoCoroutineParallel()
     spCtx->nBase = 7;
     std::shared_ptr<CParallelCoroutine> pCoro = exec.CoStart<CParallelCoroutine>(spCtx);
     ASSERT(pCoro->Await().IsFulfilled());
-    ASSERT(spCtx->nScaled == 21);  // 数据在上下文里（顺序不定）
-    std::printf("⑰ 协程并行 await: 缩放=%d 轨迹=%s\n", spCtx->nScaled, spCtx->strTrace.c_str());
+    ASSERT(spCtx->nParDone.load() == 3);  // 三条子链都跑完（并行，先后不定）
+    std::printf("⑰ 协程并行 await: 并行分支完成=%d\n", spCtx->nParDone.load());
     exec.Stop();
 }
 

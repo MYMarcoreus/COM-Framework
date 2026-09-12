@@ -41,7 +41,12 @@ struct CTestContext
     std::atomic<int> nForkA;  ///< 分叉分支 A 的执行次数。
     std::atomic<int> nForkB;  ///< 分叉分支 B 的执行次数。
 
-    CTestContext() : nValue(0), nSteps(0), nCatchRuns(0), nSeenOk(0), nSeenFailed(0), nFailCode(0), nForkA(0), nForkB(0)
+    // 并行 await 用例专用：同上契约（两条子链在同一上下文上**并发**执行）。
+    std::atomic<int> nParA;  ///< 并行分支 A 的执行次数。
+    std::atomic<int> nParB;  ///< 并行分支 B 的执行次数。
+
+    CTestContext()
+        : nValue(0), nSteps(0), nCatchRuns(0), nSeenOk(0), nSeenFailed(0), nFailCode(0), nForkA(0), nForkB(0), nParA(0), nParB(0)
     {}
 };
 
@@ -92,6 +97,29 @@ static common::async::CPromiseResult StepForkB(common::async::CPromiseResult upR
         return upResult;
     }
     spCtx->nForkB.fetch_add(1);
+    return common::async::CPromiseResult::Resolve();
+}
+
+/// 并行 await 用例专用层：分支 A 只写自己的字段（两条子链在同一上下文上并发执行，
+/// 若都去写 `nValue` / `strTrace` 就是真实数据竞争 —— 见 Promise.h 文件头「并发注意」）。
+static common::async::CPromiseResult StepParA(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+{
+    if (upResult.IsRejected())
+    {
+        return upResult;
+    }
+    spCtx->nParA.fetch_add(1);
+    return common::async::CPromiseResult::Resolve();
+}
+
+/// 并行 await 用例专用层：分支 B 只写自己的字段。
+static common::async::CPromiseResult StepParB(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+{
+    if (upResult.IsRejected())
+    {
+        return upResult;
+    }
+    spCtx->nParB.fetch_add(1);
     return common::async::CPromiseResult::Resolve();
 }
 
@@ -701,7 +729,7 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT_ALL(NewPromise(&StepAdd1), NewPromise(&StepAdd10));
+        CO_AWAIT_ALL(NewPromise(&StepParA), NewPromise(&StepParB));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -793,6 +821,9 @@ TEST(Coro_Sequential)
 }
 
 /// @brief 协程并行 await（CO_AWAIT_ALL）。
+///
+/// 两条子链在同一上下文上并发跑，所以**各写自己的字段**（框架只保证同一条链的层顺序执行，
+/// 跨链并发由调用方负责 —— 都写 `nValue` 就是数据竞争，TSan 会报）。
 TEST(Coro_Parallel)
 {
     common::async::CAsyncExecutor exec(4);
@@ -802,7 +833,8 @@ TEST(Coro_Parallel)
     std::shared_ptr<CParallelCoro> pCoro = exec.CoStart<CParallelCoro>(spCtx);
 
     ASSERT_TRUE(pCoro->Await().IsFulfilled());
-    ASSERT_EQ(spCtx->nValue, 11);  // 1 + 10（并行，顺序不定）
+    ASSERT_EQ(spCtx->nParA.load(), 1);  // 分支 A 执行一次
+    ASSERT_EQ(spCtx->nParB.load(), 1);  // 分支 B 执行一次（并行，先后不定）
     exec.Stop();
 }
 
