@@ -29,8 +29,6 @@ using asynctest::CCalleeCtx;
 using asynctest::CCalleeModule;
 using asynctest::CStepProbe;
 using asynctest::CTraceSink;
-using asynctest::EnterStep;
-using asynctest::LeaveStep;
 using asynctest::SleepMs;
 
 // ==================== 订单模块（调用方） ====================

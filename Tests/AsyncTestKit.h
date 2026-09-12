@@ -90,7 +90,6 @@ struct CStepProbe
     std::atomic<int> nStockInFlight;     ///< 被调模块步骤当前并发数。
     std::atomic<int> nStockMaxInFlight;  ///< 被调模块步骤并发峰值。
     std::atomic<int> nStockSteps;        ///< 被调模块步骤总数。
-    std::atomic<int> nBranchFail;        ///< 分叉/汇聚用例的失败分支数。
 
     CStepProbe()
         : nOrderInFlight(0),
@@ -98,8 +97,7 @@ struct CStepProbe
           nOrderSteps(0),
           nStockInFlight(0),
           nStockMaxInFlight(0),
-          nStockSteps(0),
-          nBranchFail(0)
+          nStockSteps(0)
     {}
 
     /// @brief 更新峰值。
@@ -141,7 +139,7 @@ struct CStepProbe
     }
 };
 
-// ---- 探针的自由函数入口（未接探针时空操作；两种命名风格都保留，便于各用例直白书写） ----
+// ---- 探针的自由函数入口（未接探针时空操作） ----
 
 /// @brief 调用方模块步骤进入。
 inline void EnterOrderStep(const std::shared_ptr<CStepProbe>& pProbe)
@@ -179,19 +177,7 @@ inline void LeaveStockStep(const std::shared_ptr<CStepProbe>& pProbe)
     }
 }
 
-/// @brief 被调模块步骤进入（简写）。
-inline void EnterStep(const std::shared_ptr<CStepProbe>& pProbe)
-{
-    EnterStockStep(pProbe);
-}
-
-/// @brief 被调模块步骤离开（简写）。
-inline void LeaveStep(const std::shared_ptr<CStepProbe>& pProbe)
-{
-    LeaveStockStep(pProbe);
-}
-
-/// @brief 模拟耗时（拉长窗口，便于暴露并发重叠 / 固定“挂层早于 settle”的时序）。
+/// @brief 模拟耗时（拉长窗口，便于暴露并发重叠）。
 inline void SleepMs(int nMs)
 {
     if (nMs > 0)

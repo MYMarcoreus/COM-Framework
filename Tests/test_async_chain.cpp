@@ -37,7 +37,11 @@ struct CTestContext
     std::thread::id workerId;  ///< 最后一个执行层的工作线程 id。
     std::string strTrace;      ///< 层执行轨迹（每层一个字符）。
 
-    CTestContext() : nValue(0), nSteps(0), nCatchRuns(0), nSeenOk(0), nSeenFailed(0), nFailCode(0)
+    // 分叉用例专用：两条分支并发跑，按「共用上下文只写不同字段」的契约各写自己的一格。
+    std::atomic<int> nForkA;  ///< 分叉分支 A 的执行次数。
+    std::atomic<int> nForkB;  ///< 分叉分支 B 的执行次数。
+
+    CTestContext() : nValue(0), nSteps(0), nCatchRuns(0), nSeenOk(0), nSeenFailed(0), nFailCode(0), nForkA(0), nForkB(0)
     {}
 };
 
@@ -68,6 +72,30 @@ static common::async::CPromiseResult StepAdd10(
     ++spCtx->nSteps;
     spCtx->workerId = std::this_thread::get_id();
     spCtx->strTrace += "2";
+    return common::async::CPromiseResult::Resolve();
+}
+
+/// 分叉用例专用层：分支 A 只写自己的字段（不碰分支 B 也会写的字段）。
+static common::async::CPromiseResult StepForkA(
+    common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+{
+    if (upResult.IsRejected())
+    {
+        return upResult;
+    }
+    spCtx->nForkA.fetch_add(1);
+    return common::async::CPromiseResult::Resolve();
+}
+
+/// 分叉用例专用层：分支 B 只写自己的字段。
+static common::async::CPromiseResult StepForkB(
+    common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+{
+    if (upResult.IsRejected())
+    {
+        return upResult;
+    }
+    spCtx->nForkB.fetch_add(1);
     return common::async::CPromiseResult::Resolve();
 }
 
@@ -357,8 +385,10 @@ TEST(Promise_Fork)
     common::async::CPromise<CTestContext> head = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC);
 
     std::atomic<int> nDone(0);
-    common::async::CPromise<CTestContext> branchA = head.Then(&StepAdd1, ASYNC_LOC);
-    common::async::CPromise<CTestContext> branchB = head.Then(&StepAdd10, ASYNC_LOC);
+    common::async::CPromise<CTestContext> branchA = head.Then(&StepForkA, ASYNC_LOC);
+    common::async::CPromise<CTestContext> branchB = head.Then(&StepForkB, ASYNC_LOC);
+    ASSERT_TRUE(branchA.GetContext() == spCtx);  // 三条链（首层 + 两条分支）共用同一上下文实例
+    ASSERT_TRUE(branchB.GetContext() == spCtx);
     branchA.OnSettled(
         [&nDone](common::async::CPromiseResult)
         {
@@ -376,7 +406,9 @@ TEST(Promise_Fork)
     {
         std::this_thread::yield();
     }
-    ASSERT_EQ(spCtx->nValue, 12);  // 1（首层）+ 1 + 10
+    ASSERT_EQ(spCtx->nValue, 1);  // 首层那一次（两条分支只写各自字段，不动 nValue）
+    ASSERT_EQ(spCtx->nForkA, 1);  // 分支 A 执行一次
+    ASSERT_EQ(spCtx->nForkB, 1);  // 分支 B 执行一次
     exec.Stop();
 }
 

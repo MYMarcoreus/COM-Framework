@@ -304,9 +304,16 @@ g++ -std=c++11 -fsanitize=thread -g -O1 -pthread -ICommon -ITests \
 /tmp/tsan_async                                       # 0 条 data race
 ```
 
-> **待办（测试代码自身的问题，与本框架无关）**
-> - `Tests/test_async_chain.cpp` 的 `Promise_Fork` / `Coro_Restart` 用 2 线程执行器并发跑两条分支，
->   却让两条分支写同一个非原子的 `CTestContext` 计数器（`nValue`/`nSteps`），TSan 会报 data race；
->   修法是计数器改为 `std::atomic`（或分支各用独立上下文）。
-> - `Tests/test_async_affinity_override.cpp` 的 `ThenInline*` 用例依赖“登记时上游尚未 settle”的时间窗，
->   在 TSan（~10 倍减速）下会偶发失败，宜改为“被调模块等一个手动放行的门”而非固定 `nDelayMs`。
+> **测试代码自身的问题（已修，2026-09-12）**
+> - `Tests/test_async_chain.cpp` 的 `Promise_Fork`：2 线程执行器并发跑两条分支，却让两条分支写同一个
+>   非原子 `CTestContext` 字段 —— 违反「共用上下文只写不同字段」的契约，TSan 报 data race。
+>   已改为两条分支各写自己的字段（`nForkA` / `nForkB`，`std::atomic`）。
+> - `Tests/test_async_combine.cpp` 的 `MakeBranchStep`：多条分支并发写同一个 `idBranch`（`thread::id`）
+>   —— 已删该字段，分支线程从 `CTraceSink::ThreadOf()` 读（轨迹里本来就记了每步线程）。
+> - `Tests/test_async_affinity_override.cpp` 的 `ThenInline` 用例原依赖「登记时上游尚未 settle」的时间窗
+>   （早期靠固定 `nDelayMs`，在 TSan ~10 倍减速下偶发失败；且那些 `nDelayMs` 字段其实从未被读）。
+>   排查后发现**该用例的断言本身不可确定**：跨模块桥接的结算线程是二选一的（子 promise 若在 `Adopt`
+>   注册通知前就落定，通知会被投递回本链执行器）。已改为由用例**自己指定结算线程**（子 promise 建在
+>   旁路执行器上，挂完层后再投递结算），断言从「不是本链线程」升级为「等于结算线程」。
+>   跨模块的真实形状由 `RunDefaultAsync` / `RunOnSideAsync` 与 `test_async_affinity.cpp` 覆盖。
+>   验证：TSan 连跑 5 轮，0 竞争、异步 112 例全绿。

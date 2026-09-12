@@ -22,17 +22,18 @@
 #include "Async/PromiseResult.h"
 #include "TestFramework.h"
 
+// ==================== 手动放行的门 ====================
+
 // ==================== 被调模块（1 线程） ====================
 
 /// @brief 被调模块上下文。
 struct COverrideCalleeCtx
 {
     int nAvail;               ///< 出参：可用库存。
-    int nDelayMs;             ///< 步骤模拟耗时（让“挂层”早于 settle，用例才确定）。
     std::atomic<int> nSteps;  ///< 已执行步骤数。
     std::thread::id idStep;   ///< 步骤所在线程。
 
-    COverrideCalleeCtx() : nAvail(5), nDelayMs(0), nSteps(0)
+    COverrideCalleeCtx() : nAvail(5), nSteps(0)
     {}
 };
 
@@ -74,18 +75,18 @@ private:
 struct COverrideOrderCtx
 {
     int nOwnSteps;                         ///< 本模块自有层执行次数。
-    int nCalleeDelayMs;                    ///< 传给被调模块的每步耗时（用例确定性用）。
+    std::thread::id idSettler;             ///< 结算「子 promise」所在线程（由用例选定）。
     int nCatchRuns;                        ///< catch 执行次数。
     int nCaughtCode;                       ///< catch 收到的码。
     std::string strTrace;                  ///< 层轨迹。
     std::thread::id idFirst;               ///< 首层所在线程（主执行器线程）。
-    std::thread::id idAfterBridgeInline;   ///< `ThenInline` 层所在线程（应在被调模块线程）。
+    std::thread::id idAfterBridgeInline;   ///< `ThenInline` 层所在线程（应在结算线程）。
     std::thread::id idAfterBridgeDefault;  ///< 默认亲和层所在线程（应在主执行器线程）。
     std::thread::id idOnSide;              ///< `ThenOn(旁路执行器)` 层所在线程。
     std::thread::id idAfterSide;           ///< `ThenOn` 之后那一层所在线程（应回主执行器）。
     std::thread::id idLastOwn;             ///< 最后一个自有层所在线程。
 
-    COverrideOrderCtx() : nOwnSteps(0), nCalleeDelayMs(0), nCatchRuns(0), nCaughtCode(0)
+    COverrideOrderCtx() : nOwnSteps(0), nCatchRuns(0), nCaughtCode(0)
     {}
 };
 
@@ -105,15 +106,47 @@ public:
         m_execSide.Stop();
     }
 
-    /// @brief 用 `ThenInline` 覆盖：跨模块返回后那一层就地跑在被调模块线程上。
-    common::async::CPromise<COverrideOrderCtx> RunInlineAsync(
-        const std::shared_ptr<COverrideOrderCtx>& spCtx, const std::shared_ptr<COverrideCalleeModule>& spCallee)
+    /// @brief 用 `ThenInline` 覆盖：上游在**旁路执行器线程**上结算，本层应就地跑在那条线程上。
+    ///
+    /// 为什么上游自己建：`ThenInline` 的语义是「在**结算上游的那条线程**上就地执行」，而跨模块桥接
+    /// 的结算线程本身是**二选一**的（子 promise 若在 `Adopt` 注册通知前就已落定，通知会被投递回
+    /// 本链执行器 → 那一层就跑在本链线程上）—— 用例要断言线程，就只能由自己指定结算线程，
+    /// 否则就是赌时序（本用例早期版本靠「固定延时」赌，在 TSan 慢环境下会偶发失败）。
+    /// 跨模块的真实形状由 `RunDefaultAsync` / `RunOnSideAsync` 与 `test_async_affinity.cpp` 覆盖。
+    common::async::CPromise<COverrideOrderCtx> RunInlineWithSideChildAsync(
+        const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
-        return m_execMain.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
-            .ThenPromise(MakeCallFactory(spCallee), ASYNC_LOC)
-            .ThenInline(&StepAfterBridgeInline, ASYNC_LOC)  // ← 覆盖：就地（结算线程）
-            .Then(&StepAfterBridgeDefault, ASYNC_LOC)       // ← 默认亲和：回主执行器
-            .Catch(&StepCatch, ASYNC_LOC);
+        // 子 promise：挂在**旁路执行器**上，由本方法最后投递的那次调用结算。
+        typedef common::async::CPromise<COverrideOrderCtx> COrderPromise;
+        COrderPromise::ResolveFn fnSettleChild;
+        const COrderPromise promiseChild = COrderPromise::New(
+            m_execSide, spCtx,
+            [&fnSettleChild](const COrderPromise::ResolveFn& fnResolve, const COrderPromise::RejectFn&)
+            {
+                fnSettleChild = fnResolve;  // 先存起来，稍后在旁路线程上结算。
+            },
+            ASYNC_LOC);
+
+        common::async::CPromise<COverrideOrderCtx> chain =
+            m_execMain.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
+                .ThenPromise(
+                    [promiseChild](const std::shared_ptr<COverrideOrderCtx>&)
+                    {
+                        return promiseChild;
+                    },
+                    ASYNC_LOC)
+                .ThenInline(&StepAfterBridgeInline, ASYNC_LOC)  // ← 覆盖：就地（结算线程）
+                .Then(&StepAfterBridgeDefault, ASYNC_LOC)       // ← 默认亲和：回主执行器
+                .Catch(&StepCatch, ASYNC_LOC);
+
+        // 层已挂完（`Adopt` 已登记通知）→ 再在旁路执行器线程上结算子 promise，结算线程确定。
+        m_execSide.Post(
+            [fnSettleChild, spCtx]()
+            {
+                spCtx->idSettler = std::this_thread::get_id();
+                fnSettleChild();
+            });
+        return chain;
     }
 
     /// @brief 对照：同样位置用默认 `Then`（应回主执行器线程）。
@@ -227,7 +260,6 @@ private:
                 const common::async::CPromise<COverrideOrderCtx>::RejectFn& fnReject)
         {
             auto spCalleeCtx = std::make_shared<COverrideCalleeCtx>();
-            spCalleeCtx->nDelayMs = spCtx->nCalleeDelayMs;
             common::async::CPromise<COverrideCalleeCtx> promiseCallee = spCallee->QueryAsync(spCalleeCtx);
             promiseCallee.OnSettled(
                 [spCtx, spCalleeCtx, fnResolve, fnReject](common::async::CPromiseResult result)
@@ -250,19 +282,19 @@ private:
 
 // ==================== 用例 ====================
 
-/// @brief `ThenInline`：本层就地跑在被调模块线程上；之后的层（默认亲和）切回主执行器。
+/// @brief `ThenInline`：本层就地跑在「结算上游的那条线程」上；之后的层（默认亲和）切回本链执行器。
 TEST(AffinityOverride_ThenInlineRunsOnSettleThread)
 {
-    auto spCallee = std::make_shared<COverrideCalleeModule>();
     auto spOrder = std::make_shared<COverrideOrderModule>();
     auto spCtx = std::make_shared<COverrideOrderCtx>();
-    spCtx->nCalleeDelayMs = 10;  // 被调模块慢一点：保证“挂层”早于 settle
 
-    ASSERT_TRUE(spOrder->RunInlineAsync(spCtx, spCallee).Await().IsFulfilled());
+    // 结算线程 = 旁路执行器线程（由 RunInlineWithSideChildAsync 内部在挂完层后投递的那次调用决定）
+    ASSERT_TRUE(spOrder->RunInlineWithSideChildAsync(spCtx).Await().IsFulfilled());
 
-    ASSERT_EQ(spCtx->strTrace, std::string("A1;B1;A2i;A3;"));    // 顺序不乱
-    ASSERT_TRUE(spCtx->idAfterBridgeInline != spCtx->idFirst);   // 覆盖成功：不在主执行器上
-    ASSERT_TRUE(spCtx->idAfterBridgeDefault == spCtx->idFirst);  // 下一层回主执行器
+    ASSERT_EQ(spCtx->strTrace, std::string("A1;A2i;A3;"));        // 顺序不乱
+    ASSERT_TRUE(spCtx->idAfterBridgeInline == spCtx->idSettler);  // 覆盖成功：就地（结算线程）
+    ASSERT_TRUE(spCtx->idAfterBridgeInline != spCtx->idFirst);    // 不在本链执行器上
+    ASSERT_TRUE(spCtx->idAfterBridgeDefault == spCtx->idFirst);   // 下一层回本链执行器
     ASSERT_EQ(spCtx->nOwnSteps, 2);
     ASSERT_EQ(spCtx->nCatchRuns, 0);
 }
@@ -287,7 +319,6 @@ TEST(AffinityOverride_ThenOnRunsOnGivenExecutor)
     auto spCallee = std::make_shared<COverrideCalleeModule>();
     auto spOrder = std::make_shared<COverrideOrderModule>();
     auto spCtx = std::make_shared<COverrideOrderCtx>();
-    spCtx->nCalleeDelayMs = 10;  // 同上：固定时序
 
     ASSERT_TRUE(spOrder->RunOnSideAsync(spCtx, spCallee).Await().IsFulfilled());
 

@@ -35,8 +35,7 @@ struct CCombineCtx
     std::atomic<int> nDoneAtGather;                  ///< 汇聚层执行**那一刻**看到的已完成分支数。
     std::atomic<int> nGate;                          ///< 手动放行门（0 = 未放行）。
     int nGatherRuns;                                 ///< 汇聚层执行次数（汇聚层自己写）。
-    std::thread::id idBranch;                        ///< 分支步骤所在线程。
-    std::thread::id idGather;                        ///< 汇聚层所在线程。
+    std::thread::id idGather;                        ///< 汇聚层所在线程（只由汇聚层写）。
 
     CCombineCtx() : nDone(0), nDoneAtGather(0), nGate(0), nGatherRuns(0)
     {}
@@ -70,7 +69,6 @@ common::async::CPromise<CCombineCtx>::ThenHandler MakeBranchStep(
         {
             spCtx->spTrace->Append(strTag);
         }
-        spCtx->idBranch = std::this_thread::get_id();
         ++spCtx->nDone;
         asynctest::SleepMs(nDelayMs);
         if (bWaitGate)
@@ -405,6 +403,7 @@ TEST(Combine_AggregateLayersRunOnItsExecutor)
     execAgg.Start();
 
     std::shared_ptr<CCombineCtx> spCtx = std::make_shared<CCombineCtx>();
+    spCtx->spTrace = std::make_shared<asynctest::CTraceSink>();  // 分支步骤的线程从轨迹里读
 
     const common::async::CPromise<CCombineCtx> pA = execBranch.NewPromise(spCtx, MakeBranchStep("A"), ASYNC_LOC);
     const common::async::CPromise<CCombineCtx> pB = execBranch.NewPromise(spCtx, MakeBranchStep("B"), ASYNC_LOC);
@@ -413,7 +412,8 @@ TEST(Combine_AggregateLayersRunOnItsExecutor)
     ASSERT_TRUE(pDone.AwaitFor(3000).IsFulfilled());
 
     ASSERT_TRUE(spCtx->idGather != std::this_thread::get_id());  // 不在测试主线程上
-    ASSERT_TRUE(spCtx->idGather != spCtx->idBranch);             // 在聚合执行器上，不是分支执行器上
+    // 在聚合执行器上，不是分支执行器上（分支步骤的线程从轨迹里读：同一步可能被多条分支并发写）
+    ASSERT_TRUE(spCtx->idGather != spCtx->spTrace->ThreadOf("A"));
     ASSERT_EQ(spCtx->nGatherRuns, 1);
 
     // 聚合链上再挂一层：线程不变（仍是聚合执行器），说明聚合 promise 是一条普通链。
