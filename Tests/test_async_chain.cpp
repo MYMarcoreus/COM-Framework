@@ -18,9 +18,9 @@
 #include <thread>
 #include <vector>
 
-#include "Async/Coroutine.h"
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
+#include "Coroutine/Coroutine.h"
 #include "TestFramework.h"
 
 // ==================== 测试用共享上下文与层函数 ====================

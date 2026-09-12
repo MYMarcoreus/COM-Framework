@@ -32,7 +32,7 @@
 |---|---|---|
 | 序列化 | [serialization-usage.md](common/serialization-usage.md) | [serialization-impl.md](common/serialization-impl.md) |
 | 异步 promise（CAsyncExecutor / CPromise） | [async-usage.md](common/async-usage.md) | [async-impl.md](common/async-impl.md) |
-| 协程库（CCoroutine） | [coroutine-usage.md](common/coroutine-usage.md) | [coroutine-impl.md](common/coroutine-impl.md) |
+| 协程库（CCoroutine，`Common/Coroutine`） | [coroutine-usage.md](common/coroutine-usage.md) | [coroutine-impl.md](common/coroutine-impl.md) |
 | 组合器（`WhenAll` / `AllSettled` / `Race` / `Any`） | [async-usage.md §10](common/async-usage.md) | [async-impl.md](common/async-impl.md) |
 
 ### 示例（`docs/common/`）

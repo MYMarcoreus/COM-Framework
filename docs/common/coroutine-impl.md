@@ -1,6 +1,6 @@
 # 无栈协程 CCoroutine — 实现文档
 
-> 对应文件：`Common/Async/Coroutine.h`
+> 对应文件：`Common/Coroutine/Coroutine.h`（命名空间仍是 `common::async`）
 > 使用方式见：[coroutine-usage.md](coroutine-usage.md) ｜ promise 实现见：[async-impl.md](async-impl.md)
 
 ## 1. 原理：Duff's device 状态机

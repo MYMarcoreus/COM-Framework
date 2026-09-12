@@ -1,6 +1,6 @@
 # 无栈协程 CCoroutine — 使用文档
 
-> 对应文件：`Common/Async/Coroutine.h`（命名空间 `common::async`）
+> 对应文件：`Common/Coroutine/Coroutine.h`（命名空间仍是 `common::async`：协程与 promise 共用同一套模型）
 > 实现细节见：[coroutine-impl.md](coroutine-impl.md) ｜ promise 见：[async-usage.md](async-usage.md)
 
 ## 1. 这是什么
@@ -33,7 +33,7 @@ promise ：一层做完做下一层（then 失败即停）
 ## 3. 快速上手
 
 ```cpp
-#include "Async/Coroutine.h"
+#include "Coroutine/Coroutine.h"
 
 struct CMyContext
 {

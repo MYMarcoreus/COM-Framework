@@ -13,6 +13,11 @@
 // ====================================================================
 // CCoroutine —— 无栈协程（用顺序代码 await 多条 promise）
 //
+// 所在目录：Common/Coroutine/（顺序化是独立关注点，所以自己一个模块目录）；
+// 依赖方向：Coroutine → Async（本文件 include AsyncExecutor.h / Promise.h），**反向无依赖**；
+// 命名空间仍是 `common::async` —— 协程与 promise 共用同一套模型（同一个执行器句柄 +
+// 同一份共享上下文），拆命名空间只会让调用方多写限定名。
+//
 // 定位：promise 负责「编排」（then / catch / finally 串起来，失败即停），
 // 协程负责「顺序化」—— 用顺序代码 await 多条 promise，替代回调嵌套。
 //

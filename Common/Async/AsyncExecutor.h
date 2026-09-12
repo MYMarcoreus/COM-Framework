@@ -19,7 +19,7 @@
 // 职责：持有工作线程池，提供「投递执行」与「起链入口」—— 起 promise / 起协程
 // （`NewPromise` / `BuildPromise` / `CoStart` ）以及把多个子 promise 汇成一条聚合链的
 // 「并行组合」（`WhenAll` 一族）。
-// 不做链式编排（`Then` 一族见 Promise.h）、不做顺序化（见 Coroutine.h）。
+// 不做链式编排（`Then` 一族见 Promise.h）、不做顺序化（见 Coroutine/Coroutine.h）。
 //
 // 用法：
 //   common::async::CAsyncExecutor exec(4);

@@ -25,7 +25,7 @@
 | `Promise.race([a, b])` | `exec.WhenRace(spCtx, a, b)`（首个落定者定结果，拒绝也算结论） |
 | `Promise.any([a, b])` | `exec.WhenAny(spCtx, a, b)`（首个兑现者定结果，全拒绝才失败） |
 | `Promise.resolve(x)` / `Promise.reject(e)` | `CPromiseResult::Resolve()` / `Reject(码)`（结构化的层结果，不是通用工具函数） |
-| `async function` | 协程函数（`Common/Async/Coroutine.h`），或纯异步的「层函数 + 链」 |
+| `async function` | 协程函数（`Common/Coroutine/Coroutine.h`），或纯异步的「层函数 + 链」 |
 | `setTimeout(fn, ms)` | `exec.Post(fn)`（下一轮投递）/ 定时器组件 |
 
 ## 2. 语义差异

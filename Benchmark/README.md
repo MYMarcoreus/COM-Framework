@@ -9,7 +9,7 @@
 | `common::thread::CThreadPool` | `Common/Thread/` | mutex + condition_variable 线程池 |
 | `common::async::CAsyncExecutor` | `Common/Async/` | 异步链框架的调度层（线程池 + `Post`） |
 | `common::async::CPromise` | `Common/Async/Promise.h` | 异步 promise（then / catch / finally + 共享上下文） |
-| `common::async::CCoroutine` | `Common/Async/Coroutine.h` | 基于 promise 的无栈协程（await promise） |
+| `common::async::CCoroutine` | `Common/Coroutine/Coroutine.h` | 基于 promise 的无栈协程（await promise） |
 | `asio::post` | `ThirdParty/asio` | 行业标准第三方异步库（对比基线） |
 | `direct_call` | — | 直接函数调用（理论下限） |
 | `std::thread` | 标准库 | 每任务新建线程（最重基线） |

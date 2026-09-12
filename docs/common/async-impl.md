@@ -1,6 +1,6 @@
 # 异步 promise CPromise — 实现文档
 
-> 对应目录：`Common/Async`（命名空间 `common::async`）
+> 对应目录：`Common/Async`（命名空间 `common::async`）；协程在 `Common/Coroutine`（见 [coroutine-impl.md](coroutine-impl.md)）
 > 使用方式见：[async-usage.md](async-usage.md) ｜ 协程见：[coroutine-impl.md](coroutine-impl.md)
 
 ## 1. 总体架构
@@ -32,7 +32,7 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 | `SourceLoc.h` | `CSourceLoc` + `ASYNC_LOC`（注册点调试信息，发布构建零开销） |
 | `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle`、`detail::IsInExecutorThread`、`detail::HandlerAffinity` / `ResolveExecHandle` / `ShouldInline` / `DispatchInlineOrPost`（**调度策略**：跑在哪条线程）、组合器 `detail::Gather*` |
 | `Promise.h` | `detail::CPromiseState`、`detail::CPromiseCore<TContext>`、`CPromise<TContext>`（**编排**：层语义 / 三态 / 桥接） |
-| `Coroutine.h` | `CCoroutine<TContext>` + `CO_*` 宏 |
+| `Common/Coroutine/Coroutine.h` | `CCoroutine<TContext>` + `CO_*` 宏（**独立目录**：顺序化是另一个关注点，只依赖 `Common/Async`） |
 | `Diagnostics.h/.cpp` | 诊断钩子 `DiagnosticHandler` / `SetDiagnosticHandler` / `ReportDiagnostic`（进程级单槽；promise / 协程 / 执行器共用） |
 
 ## 2. 为什么固定签名 + 共享上下文
@@ -467,6 +467,6 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
    Common/Async/Diagnostics.{h,cpp} 诊断钩子（与执行器无关的进程级出口）
 4. Common/Async/Promise.h           状态 + 核心 + promise（重点看 Append / Settle / RunHandler）
    （层派发策略细节在 Common/Async/AsyncExecutor.h：detail::DispatchInlineOrPost / ShouldInline）
-5. Common/Async/Coroutine.h         顺序化（Duff's device 状态机）
+5. Common/Coroutine/Coroutine.h    顺序化（Duff's device 状态机）—— 另一个模块，只依赖 Async
 6. Tests/test_async_chain.cpp       行为契约
 ```

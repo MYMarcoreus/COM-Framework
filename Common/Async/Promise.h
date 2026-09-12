@@ -1366,7 +1366,7 @@ private:
 //
 // 为什么定义留在这里，而不是 AsyncExecutor.h：这两者都要**造 `CPromise` 实例**
 // （用到注入点 `exec.NewPromise(spCtx, executor)` 等内部构造路径），与 promise 机制放在一起读才完整。
-// `CoStart`（定义在 Coroutine.h）同样遵循「声明在执行器头、实现跟着机制走」。
+// `CoStart`（定义在 Coroutine/Coroutine.h）同样遵循「声明在执行器头、实现跟着机制走」。
 //
 // 组合器（`WhenAll` 一族）不在此节：它们不碰 `CPromise` 的私有构造路径，
 // 声明与实现都在 AsyncExecutor.h（该文件里对 `CPromise` 的使用全落在模板的依赖上下文）。

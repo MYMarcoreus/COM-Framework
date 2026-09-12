@@ -58,8 +58,8 @@
 #include <vector>
 
 #include "Async/AsyncExecutor.h"
-#include "Async/Coroutine.h"
 #include "Async/Promise.h"
+#include "Coroutine/Coroutine.h"
 #include "cases/ThenMixCase.h"
 
 // ============================================================

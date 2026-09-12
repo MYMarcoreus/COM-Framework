@@ -18,10 +18,10 @@
 #include <vector>
 
 #include "Async/AsyncExecutor.h"
-#include "Async/Coroutine.h"
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
 #include "AsyncTestKit.h"
+#include "Coroutine/Coroutine.h"
 #include "TestFramework.h"
 
 // 共享脚手架见 Tests/AsyncTestKit.h：被调模块（CCalleeCtx/CCalleeModule，自持 1 线程、
