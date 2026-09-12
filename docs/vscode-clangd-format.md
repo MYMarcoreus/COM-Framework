@@ -117,14 +117,48 @@ COrderP::PromiseFactory fnQueryStock = [&exec](const std::shared_ptr<COrderCtx>&
 完整示例见 `examples/cases/ThenMixCase.cpp`（一条链里混用具名 handler / lambda / lambda 内执行其他异步函数），
 精简版见 [common/async-mixed-then-example.md](common/async-mixed-then-example.md)。
 
-## 6. 为什么是 `DontAlign` 而不是 `BlockIndent`
+## 6. 为什么定稿 `DontAlign`（而不是 `Align` / `BlockIndent`）
 
-两者都能让续行只缩进一级，区别在**函数声明 / 定义的括号内换行**：
-`BlockIndent` 会把函数名或 `)` 单独断行，`DontAlign` 则保持参数紧跟在括号后、只缩进一级 ——
-后者与本仓库「访问修饰符顶格 + 续行缩进一级」的整体风格更一致。
+`AlignAfterOpenBracket` 是**全局单值**，clang-format 无法把「函数形参表」与「实参表」分开设置。
+本仓库大量在实参列表里内联 lambda，于是三种取值只能得到：
+
+| 配置 | 函数形参 | lambda 实参 |
+| --- | --- | --- |
+| `Align` | 按开括号对齐 | 跟其它实参对齐（实测 ~115 处在 17 列后，~52 处被推到 30–70 列） |
+| **`DontAlign`（采用）** | 缩进一级 | 缩进一级（实参缩进一级、lambda 体再一级、`});` 与 lambda 对齐） |
+| `AlwaysBreak` / `BlockIndent` | 换行后缩进，`BlockIndent` 还会把 `)` 单独断行 | 缩进一级 |
+
+即「形参对齐」与「lambda 实参只缩进一级」在同一份配置里**不能同时自动满足**。
+本仓库选**统一缩进一级**：规律简单、不看前文、不会随表达式长短改变形状。
+函数形参随之也缩进一级 —— 这是刻意的取舍，不是遗漏：
+
+```cpp
+    void RunHandler(const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
+        const CPromiseResult& upResult, int nMode, int nAffinity = kAffinityChain,
+        const std::shared_ptr<CExecutorHandle>& pTarget = nullptr) const
+```
+
+### 6.1 试过、但不可靠/不成立的变通（不要再试）
+
+- **`PenaltyIndentedWhitespace` 折中**（`Align` + 该罚分，让深对齐的实参自动换成换行缩进）：
+  看起来能「形参对齐 + lambda 缩进」，但阈值不稳定 —— 实测 `ResolveExecHandle`
+  / `MakeHandlerRunner` 这类长形参的自由函数声明**也跟着**被改成缩进，同一文件里两种形状混杂。
+- **靠 penalty 强制调用在开括号后换行**（`PenaltyBreakBeforeFirstCallParameter`、
+  `PenaltyBreakOpenParenthesis`）：实测无效，clang-format 仍然对齐。
+- **`AllowAllParametersOfDeclarationOnNextLine: false`**：想让声明拒绝「整体换行」而保持对齐，实测无效。
+- **`LambdaBodyIndentation: OuterScope`**：只把 lambda 体拉回外层缩进，`[` 仍在深列对齐，观感更乱。
+- **唯一能强制「开括号后换行」的写法是紧跟在 `(` 后面的注释**（`AddHandler(  //`）——
+  行尾注释、块注释、行前独立注释都无法阻止 clang-format 把实参拉回去对齐。
+  因此「按现场强制换行」需要逐个调用点加标记（约 50 处），代价大于收益，未采用。
+
+### 6.2 改动该选项时的纪律
+
 切换该选项会**影响全仓库的续行排版**，需要在同一个提交里做一次全量重排，否则新旧风格混杂：
 
 ```bash
 FILES=$(git ls-files '*.h' '*.cpp' | grep -v '^ThirdParty/') && clang-format -i --style=file $FILES
 clang-format --style=file --dry-run --Werror $FILES   # 校验：0 违规
 ```
+
+历史：`Align` → `DontAlign` 见提交 `style: 续行不对齐开括号（AlignAfterOpenBracket: DontAlign）`
+（56 文件重排 + 0 违规 + 145 例全绿）。

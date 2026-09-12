@@ -39,6 +39,9 @@ ColumnLimit: 120
 # ---- 对齐 ----
 # 续行不按开括号对齐，只缩进一个 ContinuationIndentWidth（4 格）：
 # lambda 实参、长参数表都按「多缩进一级」排，不会拉到 40+ 列去对齐。
+# 该选项全局生效，**无法**把「函数形参表」与「实参表」分开设置：
+# 选 DontAlign = 统一缩进一级（含形参）；若改回 Align，形参会对齐、但内联 lambda 实参
+# 会被推到 30–70 列。取舍理由与实测记录见 docs/vscode-clangd-format.md §6。
 AlignAfterOpenBracket: DontAlign
 # 行尾注释列对齐（成员变量注释、using 别名注释等）。
 AlignTrailingComments: true
