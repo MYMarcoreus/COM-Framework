@@ -8,7 +8,7 @@
 //
 // 注意：Submit 只负责投递；任务完成与否由调用方通过共享原子计数
 // （框架的 WaitDone / StressWindow）感知，保证三种引擎语义一致。
-// 链 / 协程用例不走本文件（它们直接使用 CAsyncExecutor::Submit / CoStart）。
+// 链 / 协程用例不走本文件（它们直接使用 exec.NewPromise 起链 / exec.CoStart 起协程）。
 // ====================================================================
 #ifndef COM_BENCHMARK_CASES_ENGINES_H
 #define COM_BENCHMARK_CASES_ENGINES_H

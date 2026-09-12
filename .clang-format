@@ -1,14 +1,14 @@
 # ====================================================================
 # COM-Framework clang-format 配置
 #
-# 以 Common/Async/AsyncExecutorNoThrow.h/.cpp 的实际排版为准重写。
+# 以仓库现有代码的实际排版为准整理（Common / ServerCore / Tests / Benchmark）。
 # 遵循项目 C++11 开发规范：
 #   - 4 空格缩进，不使用 Tab；
 #   - Allman 花括号风格（函数/类/控制语句花括号换行，namespace 保持 attach）；
 #   - 二元运算符换行时留在行尾（= / && / || …），. / -> 恒换到行首；
-#   - 嵌套模板闭合角括号保留空格（CTask<U> >，Standard: Cpp03）；
+#   - 嵌套模板闭合角括号保留空格（std::vector<std::shared_ptr<T> >，Standard: Cpp03）；
 #   - #if 内的预处理指令按嵌套层级缩进（BeforeHash）；
-#   - lambda 花括号换行、体按外层作用域缩进（OuterScope）。
+#   - lambda 花括号换行、体相对签名再缩进一级（Signature，见文末设置）。
 #
 # 注意：LambdaBodyIndentation 需要 clang-format >= 13
 #       （clangd / clang-format 13 及以上版本支持）。
@@ -17,7 +17,7 @@
 BasedOnStyle: Google
 
 # ---- 标准 / 模板 ----
-# C++11 项目，但代码统一写作 C++03 式「> >」（如 CTask<U> > / std::vector<int> >），
+# C++11 项目，但代码统一写作 C++03 式「> >」（如 std::vector<std::shared_ptr<T> >），
 # 用 Cpp03 保留闭合角括号间的空格（Cpp11+ 会合并为 >>）。
 Standard: Cpp03
 
@@ -83,13 +83,13 @@ ReflowComments: false
 BreakBeforeBinaryOperators: None
 # 构造函数初始化列表：冒号换到行首，后续初始化项对齐其下。
 BreakConstructorInitializers: BeforeColon
-# 保留大节分隔的连续空行（AsyncExecutorNoThrow.h 中节前最多 7 行）。
+# 保留大节分隔的连续空行（Promise.h 等框架头文件中节前最多 7 行）。
 MaxEmptyLinesToKeep: 7
 
 # ---- 短语句 ----
 # 函数体一律不写在单行（含类内定义）：声明与 body 分行更清晰。
 AllowShortFunctionsOnASingleLine: None
-# if 无 else 时允许单行（如 if (n < 0) return no::None;）。
+# if 无 else 时允许单行（如 if (pState == nullptr) return;）。
 AllowShortIfStatementsOnASingleLine: WithoutElse
 
 # ---- 空格 ----

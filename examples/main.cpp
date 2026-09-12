@@ -41,7 +41,8 @@
 //   ㉓  层内 fire-and-forget 层里 Post 重活，链不等它（只写不被后续层碰的字段）
 //   ㉔  协程跨上下文嵌套     await 另一套 TContext 的子流程（同/跨上下文、多步子 promise）
 //   ㉕  并行嵌套             CO_AWAIT_ALL 里每条都是「多步子 promise + 独立上下文」
-//   ㉖  分叉 + 协程汇聚      同一层分叉两条分支，协程并行等待后汇聚（无 WhenAll 时的写法）
+//   ㉖  分叉 + 协程汇聚      同一层分叉两条分支，协程并行等待后汇聚（纯异步的等价写法是
+//                            exec.WhenAll，见 docs/common/async-usage.md）
 //   ㉗  跨模块组合           new Promise 桥接别的模块的 promise + then-promise 接进本流程
 //                            （纯异步、零阻塞、不用协程；单线程执行器也安全）
 //   ㉘  混用多种 then        具名异步函数 / lambda / lambda 里执行其他异步函数（等它 / 不等它）
@@ -976,7 +977,7 @@ void DemoCoroutineParallelNested()
     exec.Stop();
 }
 
-/// 协程：汇聚同一层分叉出的两条分支（目前没有 WhenAll，用协程并行 await 就是标准写法）。
+/// 协程：汇聚同一层分叉出的两条分支（用协程并行 await；纯异步场景可直接用 exec.WhenAll）。
 class CFanInCoroutine : public no::CCoroutine<CDemoContext>
 {
 public:

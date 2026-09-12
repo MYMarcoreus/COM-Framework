@@ -46,9 +46,9 @@ struct CSourceLoc
 }  // namespace async
 }  // namespace common
 
-// 注册层时作为最后一个参数传入：
-//   exec.Submit(spCtx, StepLoad, ASYNC_LOC)
-//   chain.Then(StepSave, ASYNC_LOC)
+// 起链 / 挂层时作为最后一个参数传入：
+//   exec.NewPromise(spCtx, StepLoad, ASYNC_LOC)
+//   p.Then(StepSave, ASYNC_LOC)
 // 说明：__PRETTY_FUNCTION__ / __FILE__ 是编译期静态串（零分配、程序生命周期安全），
 //       __LINE__ 可在同一函数内区分多个注册点。
 #if defined(ASYNC_DEBUG_TRACE)
