@@ -65,6 +65,20 @@ public:
         no::SetDiagnosticHandler(nullptr);  // 恢复默认（debug 打印 stderr，发布忽略）。
     }
 
+    /// @brief 是否捕获到**完全等于**某文案的诊断（精确断言：文案改了就红，而不是默默通过）。
+    bool Has(const char* strWhat) const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (size_t i = 0; i < m_vecMessages.size(); ++i)
+        {
+            if (m_vecMessages[i] == strWhat)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// @brief 是否捕获到包含某关键字的诊断。
     bool Contains(const char* strKeyword) const
     {
@@ -148,7 +162,7 @@ TEST(Robust_NoticeThrowIsContained)
     ASSERT_TRUE(WaitFor(
         [&capture]()
         {
-            return capture.Contains("OnSettled");
+            return capture.Has(no::detail::kDiagNoticeThrow);
         }));
     exec.Stop();
 }
@@ -180,7 +194,7 @@ TEST(Robust_NoticeThrowOnGuaranteedDeliveryPath)
     ASSERT_TRUE(WaitFor(
         [&capture]()
         {
-            return capture.Contains("OnSettled");
+            return capture.Has(no::detail::kDiagNoticeThrow);
         }));
 }
 
@@ -209,10 +223,11 @@ TEST(Robust_PostedTaskThrowIsContained)
         {
             return bSecondRan.load();
         }));
-    ASSERT_TRUE(capture.Contains("exec.Post()"));
+    ASSERT_TRUE(capture.Has(no::detail::kDiagPostThrow));
 
     // 空任务：不提交 + 报告（不再返回 true 却什么也不做）。
     ASSERT_TRUE(!exec.Post(nullptr));
+    ASSERT_TRUE(capture.Has(no::detail::kDiagPostEmpty));
     exec.Stop();
 }
 
@@ -280,7 +295,7 @@ TEST(Robust_AwaitInsideLayerReportsRisk)
 
     ASSERT_TRUE(result.IsFulfilled());
     ASSERT_TRUE(spCtx->bCaught);
-    ASSERT_TRUE(capture.Contains("Await()"));  // 死锁预警已报告
+    ASSERT_TRUE(capture.Has(no::detail::kDiagAwaitRisk));  // 死锁预警已报告
     exec.Stop();
 }
 
@@ -316,9 +331,9 @@ TEST(Robust_InvalidPromiseAppendReports)
     ASSERT_TRUE(!promiseInvalid.OnSettled(
         [](no::CPromiseResult)
         {
-        }));                                        // 无效 promise 注册失败
-    ASSERT_TRUE(capture.Contains("无效 promise"));  // Then + ThenBridge 各一次（至少一次）
-    ASSERT_TRUE(capture.Count() >= 2);
+        }));                                                  // 无效 promise 注册失败
+    ASSERT_TRUE(capture.Has(no::detail::kDiagInvalidLayer));  // Then 路径
+    ASSERT_TRUE(capture.Count() >= 2);                        // Then + ThenBridge 各一次
 }
 
 // ==================== 用例：OnSettledOn（通知落到指定执行器） ====================

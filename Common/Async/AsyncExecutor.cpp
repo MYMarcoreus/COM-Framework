@@ -125,7 +125,7 @@ bool CAsyncExecutor::Post(std::function<void()> fnTask)
     }
     if (!fnTask)
     {
-        ReportDiagnostic("exec.Post(): 任务为空（未提交）");
+        ReportDiagnostic(detail::kDiagPostEmpty);
         return false;
     }
 
@@ -139,7 +139,7 @@ bool CAsyncExecutor::Post(std::function<void()> fnTask)
         }
         catch (...)
         {
-            ReportDiagnostic("exec.Post() 投递的任务抛出了异常（已兜住，未终止进程）");
+            ReportDiagnostic(detail::kDiagPostThrow);
         }
     };
     return m_pHandle->m_pPool->Submit(std::move(fnTaskGuarded));  // 移动投递；未启动 → false。

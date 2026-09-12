@@ -355,9 +355,8 @@ private:
         }
         if (m_pExec->IsInExecutorThread() && m_pExec->IsIdle() && detail::InlineDepth() < detail::kMaxInlineDepth)
         {
-            ++detail::InlineDepth();
+            detail::CInlineGuard guard;  // 深度 +1 / -1 成对。
             Resume();
-            --detail::InlineDepth();
             return;
         }
 

@@ -36,6 +36,10 @@ class CPromise;  // 前置声明（NewPromise 返回 promise 句柄）。
 
 namespace detail {
 
+/// @brief 执行器侧诊断文案（集中一处：测试断言常量，而不是去匹配子串）。
+constexpr const char* kDiagPostThrow = "exec.Post() 投递的任务抛出了异常（已兜住，未终止进程）";
+constexpr const char* kDiagPostEmpty = "exec.Post(): 任务为空（未提交）";
+
 /// @brief 执行器句柄（生命周期加固核心）。
 ///
 /// promise / 协程持有本句柄：执行器析构后线程池对象仍存活（已投递任务跑完），

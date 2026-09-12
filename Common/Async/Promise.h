@@ -133,6 +133,17 @@ class CCoroutine;
 
 namespace detail {
 
+/// @brief 诊断文案（集中一处：测试断言常量，而不是去匹配子串）。
+constexpr const char* kDiagNoticeThrow = "OnSettled 通知里抛出了异常（已忽略；通知不是层，没有结果可落）";
+constexpr const char* kDiagInvalidLayer =
+    "在无效 promise 上挂层（Then / Catch / Finally / ThenInline / ThenOn）：已忽略，该链不会跑；"
+    "请先确认 IsValid()（句柄是否已由执行器产出）";
+constexpr const char* kDiagInvalidAdopt =
+    "在无效 promise 上 ThenPromise（或 ThenBridge）：已忽略，该链不会跑；请先确认 IsValid()";
+constexpr const char* kDiagAwaitRisk =
+    "Await(): 层内（或本链执行器线程上）阻塞等待未落定的层 → 极可能死锁；"
+    "请改用 ThenPromise / ThenBridge / OnSettled 回调续跑 / 协程 CO_AWAIT，或用 AwaitFor(ms) 兜底";
+
 /// @brief 级联内联深度（线程局部）：链逐层级联时最多连续内联多少层。
 ///
 /// 超限则改为投递执行，避免超长链（数千层）在递归中爆栈。
@@ -144,6 +155,26 @@ inline int& InlineDepth()
     static thread_local int s_nInlineDepth = 0;
     return s_nInlineDepth;
 }
+
+/// @brief 内联深度的 RAII 守卫（构造 +1，析构 -1）。
+///
+/// 三处「就地内联」（层处理器 / 通知就地送达 / 协程续跑）都要配对增减；
+/// 用守卫可以避免异常或提前 `return` 漏减（漏减会让后续层被多投递，且会累积）。
+struct CInlineGuard
+{
+    CInlineGuard()
+    {
+        ++InlineDepth();
+    }
+
+    ~CInlineGuard()
+    {
+        --InlineDepth();
+    }
+
+    CInlineGuard(const CInlineGuard&) = delete;
+    CInlineGuard& operator=(const CInlineGuard&) = delete;
+};
 
 /// @brief 执行 settled 通知（异常兜底：通知里抛异常只报告，不向外抛）。
 ///
@@ -165,33 +196,7 @@ inline void RunNotice(const SettledHandler& fnSettled, const CPromiseResult& res
     }
     catch (...)
     {
-        ReportDiagnostic("OnSettled 通知里抛出了异常（已忽略；通知不是层，没有结果可落）");
-    }
-}
-
-/// @brief 在指定执行器上执行 settled 通知（`OnSettledOn` 用）。
-///
-/// 已在该执行器线程 → 就地；否则投递过去；执行器不可用 → 就地送达
-/// （与 `OnSettled` 的「保证送达」一致，绝不丢通知）。
-///
-/// @param pTarget 目标执行器句柄。
-/// @param fnSettled 通知处理器（可为空）。
-/// @param result 本层最终结果。
-inline void RunNoticeOn(const std::shared_ptr<CExecutorHandle>& pTarget, const SettledHandler& fnSettled,
-                        const CPromiseResult& result)
-{
-    if (!fnSettled)
-    {
-        return;
-    }
-
-    std::function<void()> fnRun = [fnSettled, result]()
-    {
-        RunNotice(fnSettled, result);
-    };
-    if (IsInExecutorThread(pTarget) || !PostToHandle(pTarget, std::move(fnRun)))
-    {
-        RunNotice(fnSettled, result);  // 已在目标线程 / 目标执行器不可用 → 就地（送达保证）。
+        ReportDiagnostic(kDiagNoticeThrow);
     }
 }
 
@@ -294,9 +299,10 @@ public:
             return false;  // 层处理器：执行器不可用 → 交给调用方以 kStopped 收口。
         }
 
-        ++InlineDepth();  // 通知就地送达（与其它内联路径共用深度计数，防极端嵌套）。
-        fnRun();
-        --InlineDepth();
+        {
+            CInlineGuard guard;  // 通知就地送达（与其它内联路径共用深度计数，防极端嵌套）。
+            fnRun();
+        }
         return true;
     }
 
@@ -572,9 +578,8 @@ public:
         const bool bInline = (nAffinity == kAffinityInline) || IsInExecutorThread(pExec);
         if (bInline && InlineDepth() < kMaxInlineDepth)
         {
-            ++InlineDepth();
+            CInlineGuard guard;  // 深度 +1 / -1 成对（异常 / 提前 return 也不漏减）。
             fnRun();
-            --InlineDepth();
             return;
         }
 
@@ -854,9 +859,7 @@ public:
     {
         if (m_pCore == nullptr)
         {
-            ReportDiagnostic(
-                "在无效 promise 上 ThenPromise（或 ThenBridge）：已忽略，该链不会跑；"
-                "请先确认 IsValid()");
+            ReportDiagnostic(detail::kDiagInvalidAdopt);
             return CPromise();
         }
 
@@ -1006,7 +1009,16 @@ public:
             pTarget,
             [pTarget, fnSettled](const CPromiseResult& result)
             {
-                detail::RunNoticeOn(pTarget, fnSettled, result);
+                // 已在目标线程 → 就地；否则投递过去；执行器不可用 → 就地送达（绝不丢通知）。
+                std::function<void()> fnRun = [fnSettled, result]()
+                {
+                    detail::RunNotice(fnSettled, result);
+                };
+                if (!detail::IsInExecutorThread(pTarget) && detail::PostToHandle(pTarget, std::move(fnRun)))
+                {
+                    return;  // 已投递：在目标执行器线程上执行。
+                }
+                detail::RunNotice(fnSettled, result);
             },
             /* bGuaranteedDelivery = */ true);
         return true;
@@ -1089,9 +1101,7 @@ private:
         }
         if (detail::InlineDepth() > 0 || detail::IsInExecutorThread(m_pCore->Handle()))
         {
-            ReportDiagnostic(
-                "Await(): 层内（或本链执行器线程上）阻塞等待未落定的层 → 极可能死锁；"
-                "请改用 ThenPromise / ThenBridge / OnSettled 回调续跑 / 协程 CO_AWAIT，或用 AwaitFor(ms) 兜底");
+            ReportDiagnostic(detail::kDiagAwaitRisk);
         }
     }
 
@@ -1320,9 +1330,7 @@ private:
         if (m_pCore == nullptr)
         {
             // 无效 promise（未绑定执行器）：空操作 —— 不要静默，报一次诊断便于定位误用。
-            ReportDiagnostic(
-                "在无效 promise 上挂层（Then / Catch / Finally / ThenInline / ThenOn）：已忽略，"
-                "该链不会跑；请先确认 IsValid()（句柄是否已由执行器产出）");
+            ReportDiagnostic(detail::kDiagInvalidLayer);
             return CPromise();
         }
 
