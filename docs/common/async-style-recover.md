@@ -207,7 +207,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon style_asyncpp.cpp build/de
 
 几点：
 
-- `tce.set_exception(...)` / `tce.set_value(...)` → 处理器返回 `Reject(码)` / `Resolve()`，或用 `exec.NewPromise(spCtx, executor)` 手动 `fnReject(码)` / `fnResolve()`（见 [async-style-manual-settle.md](async-style-manual-settle.md)）。
+- `tce.set_exception(...)` / `tce.set_value(...)` → 处理器返回 `Reject(码)` / `Resolve()`，或用 `exec.NewPromise(spCtx, fnStarter)` 手动 `fnReject(码)` / `fnResolve()`（见 [async-style-manual-settle.md](async-style-manual-settle.md)）。
 - `.recover(...)` → `.Catch(处理器)`：返回 `Resolve()` 表示**恢复**，链上后续 `Then` 照常执行；返回原 `upResult` 则继续往外传。
 - 两个 `catch` 子句（`RejectReason` / `std::exception`）→ 按码分流：`码 >= kBusinessBase` 是业务拒绝，`kException` / `kRejected` / `kStopped` 是系统侧。
 - `chain.get()` / `.wait()` → `.Await()`。

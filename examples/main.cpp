@@ -1118,7 +1118,7 @@ static common::async::CPromise<CDemoContext> BridgeQueryOther(
     common::async::CAsyncExecutor& exec, const std::shared_ptr<CDemoContext>& spCtx, bool bFail)
 {
     // executor 先赋给具名变量再用：长行不会被 clang-format 对齐撑开（见 docs/vscode-clangd-format.md）。
-    common::async::CPromise<CDemoContext>::PromiseExecutor fnExecutor =
+    common::async::CPromise<CDemoContext>::ChainStarter fnStarter =
         [&exec, spCtx, bFail](const common::async::CPromise<CDemoContext>::ResolveFn& fnResolve,
             const common::async::CPromise<CDemoContext>::RejectFn& fnReject)
     {
@@ -1137,7 +1137,7 @@ static common::async::CPromise<CDemoContext> BridgeQueryOther(
                 fnResolve();
             });
     };
-    return exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+    return exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
 }
 
 /// ㉗ 跨模块组合：本模块的 then 链 + 别的模块的 promise（new Promise 桥接 + then-promise 接入）。

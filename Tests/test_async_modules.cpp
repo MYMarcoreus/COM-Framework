@@ -100,8 +100,7 @@ public:
         const std::shared_ptr<COrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         // ② 起子链：把入参搬进对方上下文（跑在本模块执行器线程上，只发起不干活）。
-        auto fnCreateStock = [spStockModule](
-                                 const std::shared_ptr<COrderCtx>& spSelf) -> common::async::CPromise<CCalleeCtx>
+        auto fnCreateStock = [spStockModule](const std::shared_ptr<COrderCtx>& spSelf) -> common::async::CPromise<CCalleeCtx>
         {
             auto spStock = std::make_shared<CCalleeCtx>();
             spStock->nSku = spSelf->nSku;
@@ -169,7 +168,7 @@ private:
     common::async::CPromise<COrderCtx> BridgeQueryStock(
         const std::shared_ptr<COrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule)
     {
-        common::async::CPromise<COrderCtx>::PromiseExecutor fnExecutor =
+        common::async::CPromise<COrderCtx>::ChainStarter fnStarter =
             [spStockModule, spCtx](const common::async::CPromise<COrderCtx>::ResolveFn& fnResolve,
                 const common::async::CPromise<COrderCtx>::RejectFn& fnReject)
         {
@@ -194,7 +193,7 @@ private:
                     fnResolve();
                 });
         };
-        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
     }
 
     /// ⑤ 回到本模块线程：跨模块回调里显式投递到本模块执行器，再 settle 本层。
@@ -204,7 +203,7 @@ private:
     /// @return 由本模块执行器上的任务 settle 的 promise。
     common::async::CPromise<COrderCtx> PostBackToOwnThread(const std::shared_ptr<COrderCtx>& spCtx)
     {
-        common::async::CPromise<COrderCtx>::PromiseExecutor fnExecutor =
+        common::async::CPromise<COrderCtx>::ChainStarter fnStarter =
             [this](const common::async::CPromise<COrderCtx>::ResolveFn& fnResolve,
                 const common::async::CPromise<COrderCtx>::RejectFn& fnReject)
         {
@@ -218,7 +217,7 @@ private:
                 fnReject(common::async::kStopped);
             }
         };
-        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程；析构自动 Stop）。
@@ -402,8 +401,7 @@ TEST(Module_BridgeHelperPropagatesRejection)
     auto spCtx = std::make_shared<COrderCtx>();
     spCtx->spTrace = std::make_shared<CTraceSink>();
 
-    auto fnCreateReject = [spStockModule](
-                              const std::shared_ptr<COrderCtx>& spSelf) -> common::async::CPromise<CCalleeCtx>
+    auto fnCreateReject = [spStockModule](const std::shared_ptr<COrderCtx>& spSelf) -> common::async::CPromise<CCalleeCtx>
     {
         auto spStock = std::make_shared<CCalleeCtx>();
         spStock->bReject = true;  // 让库存模块在第二步拒绝（码 = kRejectCode = kBusinessBase）。
@@ -460,8 +458,7 @@ TEST(Module_BridgeHelperApplyThrowRejects)
     auto spCtx = std::make_shared<COrderCtx>();
     spCtx->spTrace = std::make_shared<CTraceSink>();
 
-    auto fnCreateStock = [spStockModule](
-                             const std::shared_ptr<COrderCtx>& spSelf) -> common::async::CPromise<CCalleeCtx>
+    auto fnCreateStock = [spStockModule](const std::shared_ptr<COrderCtx>& spSelf) -> common::async::CPromise<CCalleeCtx>
     {
         auto spStock = std::make_shared<CCalleeCtx>();
         spStock->spTrace = spSelf->spTrace;

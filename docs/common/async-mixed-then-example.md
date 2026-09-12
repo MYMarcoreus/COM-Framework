@@ -153,7 +153,7 @@ class COrderModule
     common::async::CPromise<COrderCtx> BridgeQuery(const std::shared_ptr<COrderCtx>& sp,
                                                    const std::shared_ptr<CStockModule>& spStockModule)
     {
-        common::async::CPromise<COrderCtx>::PromiseExecutor fnExecutor =
+        common::async::CPromise<COrderCtx>::ChainStarter fnStarter =
             [spStockModule, sp](const common::async::CPromise<COrderCtx>::ResolveFn& fnResolve,
                                 const common::async::CPromise<COrderCtx>::RejectFn& fnReject)
         {
@@ -172,7 +172,7 @@ class COrderModule
                 fnResolve();
             });
         };
-        return m_exec.NewPromise(sp, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(sp, fnStarter, ASYNC_LOC);
     }
 
     /// ④ 预占（内层链的一步）
@@ -238,6 +238,6 @@ int main()
 
 - ③ 的链跑在库存模块自己的线程池上，先后顺序靠 `OnSettled → fnResolve → 本层 settle → 下一层`
   这条依赖边保证，不靠共享线程；唯一不保证先后的是旁支 ⑤。
-- 执行器是模块私有资源，不跨模块传；调用方只拿对方的 promise（跨上下文用 `exec.NewPromise(spCtx, executor)` 桥接）。
+- 执行器是模块私有资源，不跨模块传；调用方只拿对方的 promise（跨上下文用 `exec.NewPromise(spCtx, fnStarter)` 桥接）。
 - then 里不用判断上一层：上游被拒绝时框架直接跳过本层。要看拒绝用 `Catch`，成败都收尾用 `Finally`。
 - 要「等」子链就返回它（`ThenPromise`）；普通 `Then` 的处理器只能返回 `CPromiseResult`，里面起的链主链一概不等。

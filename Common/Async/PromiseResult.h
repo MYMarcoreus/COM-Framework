@@ -31,7 +31,7 @@
 //   ----------  ----------------------  --------------------------------------------------------------
 //   kFulfilled  已兑现                  默认构造 / CPromiseResult::Resolve()
 //   kRejected   已拒绝（默认码）        Reject() 的默认实参；组合器空集合的 race / any；
-//                                       NewPromise(spCtx, executor) 没给 executor
+//                                       NewPromise(spCtx, fnStarter) 没给起链回调
 //   kStopped    执行器不可用 / 没等到    ① 投递失败（PostToHandle 返回 false）→ 本层被拒绝；
 //                                       ② AwaitFor(ms) 超时 → **只告诉调用方「没等到」**，
 //                                          本层没被落定、链仍在后台跑（两者共用一码，不区分）

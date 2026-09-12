@@ -177,8 +177,8 @@ public:
     /// @param nBranches 分支数。
     ///
     /// @return 指向最后一层的 promise。
-    common::async::CPromise<CStressOrderCtx> RunFanOutAsync(const std::shared_ptr<CStressOrderCtx>& spCtx,
-        const std::shared_ptr<CCalleeModule>& spStockModule, int nBranches)
+    common::async::CPromise<CStressOrderCtx> RunFanOutAsync(
+        const std::shared_ptr<CStressOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule, int nBranches)
     {
         return m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
             .ThenPromise(MakeJoinFactory(spStockModule, nBranches), ASYNC_LOC)
@@ -339,7 +339,7 @@ private:
     common::async::CPromise<CStressOrderCtx> BridgeQueryStock(
         const std::shared_ptr<CStressOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule)
     {
-        common::async::CPromise<CStressOrderCtx>::PromiseExecutor fnExecutor =
+        common::async::CPromise<CStressOrderCtx>::ChainStarter fnStarter =
             [spStockModule, spCtx](const common::async::CPromise<CStressOrderCtx>::ResolveFn& fnResolve,
                 const common::async::CPromise<CStressOrderCtx>::RejectFn& fnReject)
         {
@@ -366,13 +366,13 @@ private:
                     fnResolve();
                 });
         };
-        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
     }
 
     /// 回到本模块线程：跨模块回调里显式投递到本模块执行器再 settle。
     common::async::CPromise<CStressOrderCtx> PostBackToOwnThread(const std::shared_ptr<CStressOrderCtx>& spCtx)
     {
-        common::async::CPromise<CStressOrderCtx>::PromiseExecutor fnExecutor =
+        common::async::CPromise<CStressOrderCtx>::ChainStarter fnStarter =
             [this](const common::async::CPromise<CStressOrderCtx>::ResolveFn& fnResolve,
                 const common::async::CPromise<CStressOrderCtx>::RejectFn& fnReject)
         {
@@ -385,14 +385,14 @@ private:
                 fnReject(common::async::kStopped);
             }
         };
-        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
     }
 
     /// 分叉 + 汇聚：发起 nBranches 条跨模块分支，全部 settle 后 settle 本层（手写 when_all）。
-    common::async::CPromise<CStressOrderCtx> JoinBranches(const std::shared_ptr<CStressOrderCtx>& spCtx,
-        const std::shared_ptr<CCalleeModule>& spStockModule, int nBranches)
+    common::async::CPromise<CStressOrderCtx> JoinBranches(
+        const std::shared_ptr<CStressOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule, int nBranches)
     {
-        common::async::CPromise<CStressOrderCtx>::PromiseExecutor fnExecutor =
+        common::async::CPromise<CStressOrderCtx>::ChainStarter fnStarter =
             [spStockModule, spCtx, nBranches](const common::async::CPromise<CStressOrderCtx>::ResolveFn& fnResolve,
                 const common::async::CPromise<CStressOrderCtx>::RejectFn& fnReject)
         {
@@ -431,7 +431,7 @@ private:
                     });
             }
         };
-        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
@@ -506,8 +506,7 @@ TEST(ModuleStress_ManyConcurrentChains)
         nResumeOnOwn += vecCtx[i]->nResumeOnOwnThread;
     }
     // 线程亲和：200 条链的续跑全部落在本模块执行器线程上（修复前实测 57:143 二选一）
-    std::printf(
-        "      %d 条链：续跑在本模块线程 %d 条 / 在结算线程 %d 条\n", kStressChains, nResumeOnOwn, nResumeOnStock);
+    std::printf("      %d 条链：续跑在本模块线程 %d 条 / 在结算线程 %d 条\n", kStressChains, nResumeOnOwn, nResumeOnStock);
     ASSERT_EQ(nResumeOnOwn, kStressChains);
     ASSERT_EQ(nResumeOnStock, 0);
 

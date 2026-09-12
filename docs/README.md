@@ -41,7 +41,7 @@
 | 文档 | 内容 |
 |---|---|
 | [async-mixed-then-example.md](common/async-mixed-then-example.md) | 单文件示例：一条链里混用多种 then（具名函数 / lambda / 跨模块异步 / 内层链 / 旁支 / catch / finally） |
-| [async-vs-js.md](common/async-vs-js.md) | 与 JavaScript Promise 的对照：API 对应、语义差异、从 JS 迁过来容易踩的坑 |
+| [async-vs-js.md](common/async-vs-js.md) | 与 JavaScript Promise 的对照：**只对齐链语义**（调度在 JS 里无对应物，见该文 §0）、语义差异、从 JS 迁过来容易踩的坑 |
 
 ### 风格模仿（`docs/common/`）
 

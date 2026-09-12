@@ -18,7 +18,11 @@
 #include "Async/SourceLoc.h"
 
 // ====================================================================
-// CPromise —— 异步 promise（命名与语义对齐 JS 的 Promise / async-await）
+// CPromise —— 异步 promise（**链语义**对齐 JS 的 Promise / async-await）
+//
+// 注意对齐的边界：只有「链语义」（then / catch / finally / flatten / all / race…）来自 JS；
+// 「链在哪条线程上跑、谁来投递」在 JS 里由宿主事件循环隐式承担，本框架则必须显式 —— 那就是
+// CAsyncExecutor（见 AsyncExecutor.h），因此起链入口是 `exec.NewPromise(...)` 而非构造函数。
 //
 // 本框架不支持在层与层之间传递任意值：每层只产出「已兑现 / 已拒绝」
 // （CPromiseResult），数据统一放在共享上下文（std::shared_ptr<TContext>）。
@@ -28,15 +32,15 @@
 //     CPromiseResult handler(CPromiseResult upResult,              // 上一层结果
 //                            const std::shared_ptr<TContext>& spCtx); // 共享上下文
 //
-// JS 对照：
+// 语义对照（JS 的 Promise；链语义与之一致，可直接套用直觉）：
 //
 //   new Promise(executor)          →  auto p = exec.NewPromise(spCtx, StepA);   // 起链 + 首层（立即投递）
-//   new Promise((resolve, reject))  →  exec.NewPromise(spCtx, fnExecutor);     // 起链由外部 settle（回调式异步接进来）
+//   new Promise((resolve, reject))  →  exec.NewPromise(spCtx, fnStarter);      // 起链由外部 settle（回调式异步接进来）
 //     => { … 回调里 resolve()/reject()… }
 //   promise.then(onFulfilled)      →  p.Then(StepB);        // 兑现时执行，拒绝直接透传
 //   promise.catch(onRejected)      →  p.Catch(StepRollback);// 拒绝时执行，Resolve() 即恢复
 //   promise.finally(onFinally)     →  p.Finally(StepLog);   // 无论成败都执行，不改结果
-//   await promise / .then(…)       →  p.Await()             // 阻塞等待（返回 CPromiseResult）
+//   await promise                  →  p.Await()             // 阻塞等待（返回 CPromiseResult）
 //   promise 已 settle              →  p.IsSettled()
 //   resolve() / reject(reason)     →  CPromiseResult::Resolve() / CPromiseResult::Reject(码)
 //   fulfilled / rejected           →  result.IsFulfilled() / result.IsRejected()
@@ -46,6 +50,22 @@
 //   Promise.allSettled([a, b])     →  exec.WhenAllSettled(spCtx, a, b);  // 全部落定即继续（不看成败）
 //   Promise.race([a, b])           →  exec.WhenRace(spCtx, a, b);         // 首个落定者定结果
 //   Promise.any([a, b])            →  exec.WhenAny(spCtx, a, b);          // 首个兑现者定结果（全拒绝才失败）
+//
+// 对照的**边界**（重要）：上面每一行右边都比 JS 多了东西 —— `exec`（调度器）与 `spCtx`
+// （共享上下文），而且 `exec.*` 所在的那几行左边根本没有对应的 JS 写法：
+//
+//   JS 把两件事藏在语言 / 宿主里：闭包捕获一切（≈ 共享上下文）、事件循环隐式调度（≈ 执行器）。
+//   C++ 两样都没有：上下文必须作为参数传进来，**调度必须由一个显式对象承担** —— 这就是
+//   `CAsyncExecutor` 存在的全部理由（它接管了 JS 徯任务队列的角色）。所以：
+//
+//   - `exec.NewPromise` / `exec.WhenAll` 是「**执行器上的**起链入口」，不是 Promise 的
+//     构造函数 / 静态方法（JS 是 `new Promise(...)` 与 `Promise.all(...)`）；
+//   - `p.Await()`（阻塞等待）在 JS 里**没有对应物**（`await` 不占线程），它的代价与替代
+//     写法见 async-usage.md；
+//   - `ThenInline` / `ThenOn` / `OnSettledOn` / `AwaitFor` 是**线程亲和 / 超时** API，
+//     JS 同样没有（单线程事件循环不需要它们）。
+//
+// 调度侧的完整对照（Executor / io_context / TaskScheduler 等）见 AsyncExecutor.h。
 //
 // 语义要点：
 //  - then / catch / finally 都返回「指向新一层的 promise」（与 JS 一致，链式可读）；
@@ -68,8 +88,8 @@
 //      worker**，否则死锁（单线程执行器必死），只适合子流程很短且并发余量充足的场合。
 //
 // ⑤ 跨模块 / 跨上下文组合（**纯异步、零阻塞、不需要协程**）：把别的 promise 桥接进本流程 ——
-//      ① 用 `exec.NewPromise(spCtx, executor)` 造一条「由外部 settle」的 promise
-//         （executor 里发起别的模块的调用，在其 OnSettled 回调里 resolve() / reject(码)）；
+//      ① 用 `exec.NewPromise(spCtx, fnStarter)` 造一条「由外部 settle」的 promise
+//         （起链回调里发起别的模块的调用，在其 OnSettled 回调里 resolve() / reject(码)）；
 //      ② 用 `p.ThenPromise([&]{ return bridgePromise; })` 把它接进本流程（then 的 promise 版）。
 //    ③ ①② 合一、不用写样板的简写：`p.ThenBridge(fnCreate, fnApply, ASYNC_LOC)` ——
 //       fnCreate 在轮到本层时起子链，fnApply 在子链兑现时把它的上下文数据搬进本上下文。
@@ -561,7 +581,7 @@ private:
 /// 一条 promise 链 = 共享核心（上下文 + 执行器）+ 一串状态（每层一个）。
 /// 本类只是「指向某一层」的句柄：
 ///  - 起链只有**执行器上的**公开入口：`exec.NewPromise(spCtx, 首层处理器)`（立即投递首层）、
-///    `exec.NewPromise(spCtx, executor)`（由外部回调 settle）、`exec.CoStart<T>(spCtx)`（协程）；
+///    `exec.NewPromise(spCtx, fnStarter)`（由外部回调 settle）、`exec.CoStart<T>(spCtx)`（协程）；
 ///    本类**不提供**任何起链入口，只做「句柄 + 加层」；
 ///  - **没有默认构造、也没有「无效句柄」这种对象**：句柄只能由起链入口或链上的层方法产出，
 ///    而且**恒指向一个真实存在的层**（起链时首层就已建好并投递）—— 所以「忘起链就挂层」
@@ -590,7 +610,7 @@ public:
     ///
     /// 只应发起异步动作并注册回调，由回调调用 resolve() / reject(码) 兑现或拒绝本
     /// promise —— 非阻塞，不占工作线程。
-    using PromiseExecutor = std::function<void(const ResolveFn& fnResolve, const RejectFn& fnReject)>;
+    using ChainStarter = std::function<void(const ResolveFn& fnResolve, const RejectFn& fnReject)>;
 
     /// promise 工厂（ThenPromise 用）：返回一条需要等待的子 promise。
     ///
@@ -684,7 +704,7 @@ public:
     ///
     /// 全程只登记回调、不占工作线程，**不阻塞**（单线程执行器也安全）——
     /// 这是「纯异步下调用其他模块 / 另一套上下文的异步函数」的标准写法：
-    /// 子 promise 由 `exec.NewPromise(spCtx, executor)` 桥接而来（见文件头「嵌套用法⑤」）。
+    /// 子 promise 由 `exec.NewPromise(spCtx, fnStarter)` 桥接而来（见文件头「嵌套用法⑤」）。
     ///
     /// @param fnFactory 子 promise 工厂（入参为本流程共享上下文）。
     /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
@@ -742,11 +762,11 @@ public:
         {
             TChildPromise promiseChild = fnCreate(spSelf);  // 起子链（抛异常 → Adopt 兜底为 kException）
 
-            PromiseExecutor fnExecutor = [promiseChild, fnApply, spSelf](const ResolveFn& fnResolve, const RejectFn& fnReject)
+            ChainStarter fnStarter = [promiseChild, fnApply, spSelf](const ResolveFn& fnResolve, const RejectFn& fnReject)
             {
                 BindChildSettle(promiseChild, fnApply, spSelf, fnResolve, fnReject);  // 规则只有一份。
             };
-            return NewFromHandle(pCore->Handle(), spSelf, fnExecutor, loc);
+            return NewFromHandle(pCore->Handle(), spSelf, fnStarter, loc);
         };
         return ThenPromise(fnFactory, loc);
     }
@@ -805,7 +825,7 @@ public:
     ///          Await() 会占住一个 worker，若线程池已无空闲 worker，被等待的 promise
     ///          就无人执行 → **死锁**（单线程执行器必然死锁）。
     ///          要在异步流程里等异步，请优先用：
-    ///           - `ThenPromise` / `exec.NewPromise(spCtx, executor)`（纯异步、非阻塞，推荐，不需要协程）；
+    ///           - `ThenPromise` / `exec.NewPromise(spCtx, fnStarter)`（纯异步、非阻塞，推荐，不需要协程）；
     ///           - 协程的 CO_AWAIT / CO_AWAIT_ALL（非阻塞挂起）；
     ///           - 层内「起子 promise 后由 OnSettled 回调续跑」（非阻塞，回调驱动）；
     ///           - 层内「先并行起、后续层里再等」（此时子 promise 多已完成，几乎不阻塞）。
@@ -990,25 +1010,25 @@ private:
             });
     }
 
-    /// @brief 内部：用执行器**句柄**创建「由外部兑现 / 拒绝」的 promise（`NewPromise` 的 executor 版与 `ThenBridge` 共用）。
+    /// @brief 内部：用执行器**句柄**创建「由外部兑现 / 拒绝」的 promise（`NewPromise` 的 ChainStarter 版与 `ThenBridge` 共用）。
     ///
     /// 拿的是句柄而不是执行器引用 —— 桥接层（`ThenBridge`）在工厂里要用「本链执行器」的句柄，
     /// 而那时已没有 `CAsyncExecutor&` 了。
     ///
     /// @param pHandle 执行器句柄（起链与续接投递用）。
     /// @param spContext 共享上下文（本 promise 所有层共用该实例）。
-    /// @param fnExecutor 执行体（拿到 resolve / reject 句柄）。
+    /// @param fnStarter 起链回调（拿到 resolve / reject 句柄）。
     /// @param loc 注册点源码位置。
-    /// @return 指向本 promise 的句柄（pending；由 fnExecutor 触发 settle）。
+    /// @return 指向本 promise 的句柄（pending；由 fnStarter 触发 settle）。
     static CPromise NewFromHandle(const std::shared_ptr<detail::CExecutorHandle>& pHandle,
-        const std::shared_ptr<TContext>& spContext, const PromiseExecutor& fnExecutor, const CSourceLoc& loc)
+        const std::shared_ptr<TContext>& spContext, const ChainStarter& fnStarter, const CSourceLoc& loc)
     {
         // 待定：等外部 settle。
         const std::shared_ptr<detail::CPromiseState> pState = std::make_shared<detail::CPromiseState>();
         pState->SetLoc(loc);
 
-        // 这里恒为「立即启动」：executor 与 JS 的 `new Promise(executor)` 一致，当场同步执行。
-        RunExternalExecutor(pState, fnExecutor);
+        // 这里恒为「立即启动」：与 JS 的 `new Promise(executor)` 一样，起链回调当场同步执行。
+        RunChainStarter(pState, fnStarter);
         return CPromise(std::make_shared<detail::CPromiseCore<TContext> >(pHandle, spContext), pState);
     }
 
@@ -1044,11 +1064,11 @@ private:
         }
     }
 
-    /// @brief 内部：执行外部 settle 体（`exec.NewPromise(spCtx, executor)` 的 executor），把 resolve / reject 交给它。
+    /// @brief 内部：把 resolve / reject 交给起链回调（`NewPromise(spCtx, starter)` 的起链回调）。
     ///
-    /// @param pState 本层状态（executor 通过 resolve / reject 收口它）。
-    /// @param fnExecutor 执行体。
-    static void RunExternalExecutor(const std::shared_ptr<detail::CPromiseState>& pState, const PromiseExecutor& fnExecutor)
+    /// @param pState 本层状态（起链回调通过 resolve / reject 收口它）。
+    /// @param fnStarter 起链回调。
+    static void RunChainStarter(const std::shared_ptr<detail::CPromiseState>& pState, const ChainStarter& fnStarter)
     {
         ResolveFn fnResolve = [pState]()
         {
@@ -1060,9 +1080,9 @@ private:
         };
         try
         {
-            if (fnExecutor)
+            if (fnStarter)
             {
-                fnExecutor(fnResolve, fnReject);
+                fnStarter(fnResolve, fnReject);
             }
             else
             {
@@ -1071,7 +1091,7 @@ private:
         }
         catch (...)
         {
-            fnReject(kException);  // executor 内异常 → 本 promise 被拒绝（与层内异常一致）。
+            fnReject(kException);  // 起链回调内异常 → 本 promise 被拒绝（与层内异常一致）。
         }
     }
 
@@ -1142,7 +1162,7 @@ private:
 //  - 起链：`NewPromise`（两个重载）。
 //
 // 为什么定义留在这里，而不是 AsyncExecutor.h：这两者都要**造 `CPromise` 实例**
-// （用到注入点 `exec.NewPromise(spCtx, executor)` 等内部构造路径），与 promise 机制放在一起读才完整。
+// （用到注入点 `exec.NewPromise(spCtx, fnStarter)` 等内部构造路径），与 promise 机制放在一起读才完整。
 // `CoStart`（定义在 Coroutine/Coroutine.h）同样遵循「声明在执行器头、实现跟着机制走」。
 //
 // 组合器（`WhenAll` 一族）不在此节：它们不碰 `CPromise` 的私有构造路径，
@@ -1163,22 +1183,22 @@ CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& s
     return CPromise<TContext>::StartChain(std::make_shared<detail::CPromiseCore<TContext> >(Handle(), spContext), fnHandler, loc);
 }
 
-/// @brief 起链实现（对齐 JS `new Promise(executor)`）：由 `fnExecutor` 里的 resolve / reject 兑现。
+/// @brief 起链实现（对齐 JS `new Promise(executor)`）：由 `fnStarter` 里的 resolve / reject 兑现。
 ///
-/// 用途：把**其他模块 / 回调式**的异步接进本流程 —— executor 里发起调用并登记回调，
+/// 用途：把**其他模块 / 回调式**的异步接进本流程 —— 起链回调里发起调用并登记回调，
 /// 由对方的完成回调调 `fnResolve()` 兑现或 `fnReject(码)` 拒绝（非阻塞，不占 worker）。
-/// 与 JS 一致：executor **立即（同步）执行**，因此只应做「发起 + 登记回调」，不要做重活。
+/// 与 JS 一致：起链回调 **立即（同步）执行**，因此只应做「发起 + 登记回调」，不要做重活。
 ///
 /// @tparam TContext 上下文类型（由 spContext 推导）。
 /// @param spContext 共享上下文（本 promise 所有层共用该实例）。
-/// @param fnExecutor 执行体（对齐 JS executor：拿到 resolve / reject 句柄）。
+/// @param fnStarter 起链回调（对齐 JS executor：拿到 resolve / reject 句柄）。
 /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
-/// @return 指向本 promise 的句柄（pending；由 fnExecutor 触发 settle）。
+/// @return 指向本 promise 的句柄（pending；由 fnStarter 触发 settle）。
 template <typename TContext>
 CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& spContext,
-    const typename CPromise<TContext>::PromiseExecutor& fnExecutor, const CSourceLoc& loc /* = CSourceLoc() */)
+    const typename CPromise<TContext>::ChainStarter& fnStarter, const CSourceLoc& loc /* = CSourceLoc() */)
 {
-    return CPromise<TContext>::NewFromHandle(Handle(), spContext, fnExecutor, loc);
+    return CPromise<TContext>::NewFromHandle(Handle(), spContext, fnStarter, loc);
 }
 
 }  // namespace async

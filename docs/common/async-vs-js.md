@@ -1,32 +1,72 @@
-# 异步框架 vs JavaScript Promise
+# 异步框架 vs JavaScript Promise：语义对照与边界
 
-本框架的命名与语义按 JS 的 Promise / async-await 设计，能直接套用已有直觉；但 C++ 没有动态类型、
-没有单线程事件循环，所以有几处必须换写法。冒烟测试见 [`Tests/test_async_smoke.cpp`](../../Tests/test_async_smoke.cpp)，
-用法与 API 见 [async-usage.md](async-usage.md)。
+> **只有「链语义」是按 JS 的 Promise / async-await 设计的**（then / catch / finally / flatten +
+> all / allSettled / race / any），这部分可以直接套用已有直觉。
+> **调度不是 JS 的思路**：JS 的调度是隐式的（宿主事件循环 + 微任务队列），本框架必须把它显式化成
+> `CAsyncExecutor` —— 所以下文把「语义对照」与「JS 没有对应物」分开列。
+> 冒烟测试见 [`Tests/test_async_smoke.cpp`](../../Tests/test_async_smoke.cpp)，用法与 API 见
+> [async-usage.md](async-usage.md)。
 
-> 对照对象：JS 的 Promise / async-await；Promise/A+ 风格的 C++ 库（async_promise、Async++ 等）同理 ——
-> 语义一致，差别在「层间传值 vs 共享上下文」和「编译期选层 vs 运行期 thenable 探测」。
+> 更贴切的整体类比是「**JS 的链语义 + C#/Java 的显式调度模型 + 共享上下文**」——三者合起来才在
+> C++ 里成立。调度侧的同类物：Java `Executor` / `CompletableFuture`、C# `TaskScheduler` /
+> `SynchronizationContext`、Asio `io_context`、iOS `dispatch_queue`。
+> 另可参考 Promise/A+ 风格的 C++ 库（async_promise、Async++ 等）：语义一致，差别在
+> 「层间传值 vs 共享上下文」与「编译期选层 vs 运行期 thenable 探测」。
 
-## 1. 一一对应
+## 0. 为什么会有 `exec` 这个对象
+
+JS 里**根本不存在「执行器」这个概念**，因为两件事由语言 / 宿主隐式提供了：
+
+| JS 的隐式前提 | 本框架的显式对应 |
+|---|---|
+| 闭包能捕获一切，值沿链自然流动 | 显式参数 `spCtx`（`std::shared_ptr<TContext>`） |
+| 宿主事件循环 + 微任务队列决定「排到哪、什么时候跑」 | 显式对象 `CAsyncExecutor`（线程池 + 句柄） |
+| 单线程 —— 「哪条线程跑回调」不是问题 | 线程亲和：链的每一层都跑在**本链执行器**线程上（§2.5） |
+
+所以 `exec.WhenAll(spCtx, a, b)` 的两个前导参数恰好就是这两条：**在哪条线程上起聚合链** + **哪一份
+上下文**。组合器的语义是 JS 的，多出来的参数与接收者是「把隐式前提显式化」的代价。
+
+## 1. 语义对照（JS 的 Promise → 本框架）
 
 | JavaScript | 本框架 |
 |---|---|
-| `new Promise(executor)` | `exec.NewPromise(spCtx, 首层)`；由外部 settle 的用 `exec.NewPromise(spCtx, executor)` |
+| `new Promise(executor)` | `exec.NewPromise(spCtx, 首层)` ⁽¹⁾ |
+| `new Promise((resolve, reject) => …)`（由外部 settle） | `exec.NewPromise(spCtx, fnStarter)` ⁽¹⁾：起链回调里发起别的模块 / 回调式异步，由回调 `resolve()` / `reject(码)` |
 | `p.then(onFulfilled)` | `p.Then(handler)` |
 | `onFulfilled` 返回 promise（自动等待） | `p.ThenPromise(factory)`（factory 返回一条子 promise） |
 | `p.catch(onRejected)` | `p.Catch(handler)` |
-| `p.finally(onFinally)` | `p.Finally(handler)`（链上的一层）；只做旁路观察用 `p.OnSettled(cb)` |
+| `p.finally(onFinally)` | `p.Finally(handler)`（链上的一层）；只做旁路观察用 `p.OnSettled(cb)` ⁽²⁾ |
 | `resolve()` / `reject(reason)` | `CPromiseResult::Resolve()` / `CPromiseResult::Reject(码)` |
 | `fulfilled` / `rejected` | `result.IsFulfilled()` / `result.IsRejected()` |
-| `await p` | `p.Await()`（阻塞，占住一个 worker）；脚本外更推荐协程 `CO_AWAIT(p)`（非阻塞挂起） |
 | `p` 已完成 | `p.IsSettled()` |
-| `Promise.all([a, b, c])` | `exec.WhenAll(spCtx, a, b, c)`（全部兑现才继续，任一拒绝立即失败）；协程内也可 `CO_AWAIT_ALL(a, b, c)` |
-| `Promise.allSettled([a, b, c])` | `exec.WhenAllSettled(spCtx, ...)`（全部落定即兑现，不看成败） |
-| `Promise.race([a, b])` | `exec.WhenRace(spCtx, a, b)`（首个落定者定结果，拒绝也算结论） |
-| `Promise.any([a, b])` | `exec.WhenAny(spCtx, a, b)`（首个兑现者定结果，全拒绝才失败） |
+| `Promise.all([a, b, c])` | `exec.WhenAll(spCtx, a, b, c)` ⁽¹⁾（全部兑现才继续，任一拒绝立即失败）；协程内也可 `CO_AWAIT_ALL(a, b, c)` |
+| `Promise.allSettled([a, b, c])` | `exec.WhenAllSettled(spCtx, ...)` ⁽¹⁾（全部落定即兑现，不看成败） |
+| `Promise.race([a, b])` | `exec.WhenRace(spCtx, a, b)` ⁽¹⁾（首个落定者定结果，拒绝也算结论） |
+| `Promise.any([a, b])` | `exec.WhenAny(spCtx, a, b)` ⁽¹⁾（首个兑现者定结果，全拒绝才失败） |
 | `Promise.resolve(x)` / `Promise.reject(e)` | `CPromiseResult::Resolve()` / `Reject(码)`（结构化的层结果，不是通用工具函数） |
-| `async function` | 协程函数（`Common/Coroutine/Coroutine.h`），或纯异步的「层函数 + 链」 |
-| `setTimeout(fn, ms)` | `exec.Post(fn)`（下一轮投递）/ 定时器组件 |
+| `async function` | 协程函数（`Common/Coroutine/Coroutine.h`）⁽³⁾，或纯异步的「层函数 + 链」 |
+
+⁽¹⁾ **结构差异**：JS 的 `new Promise` 是**构造函数**、`Promise.all` 是**构造函数上的静态方法**；
+本框架这些都挂在**执行器实例**上（`exec.*`）—— 因为「链在哪条线程上跑」必须由调用方选（见 §0）。
+⁽²⁾ `OnSettled` 是「结算通知」，JS 里要写 `p.then(cb, cb)` 凑；它**保证送达**（执行器停了也在调用线程就地送达）。
+⁽³⁾ JS 的 `async/await` 是引擎语法糖，没有「起协程」这个调用；本框架要显式 `exec.CoStart<T>(spCtx)`。
+
+## 1.1 本框架有、JS 没有对应物
+
+| 本框架 | 作用 | 该对照谁 |
+|---|---|---|
+| `CAsyncExecutor`（及 `exec.*` 起链入口） | 线程池 + 句柄 + 停启；回答「投到哪、层跑在哪」 | Java `Executor` / C# `TaskScheduler` / Asio `io_context` |
+| `exec.Post(fn)` | 投递无返回值任务（fire-and-forget） | Asio `io_context::post` / Java `Executor.execute` |
+| `exec.CoStart<T>(spCtx)` + `CO_AWAIT` | 无栈协程（顺序代码 await 多条链） | C# `Task.Run` + `async/await` |
+| `p.Await()` | **阻塞**等待结果（占住 worker，可能死锁） | C# `Task.Wait()` / Java `future.get()` |
+| `p.AwaitFor(ms)` | 阻塞等待 + 超时（超时返 `kStopped`，不落定本层） | 要手写 `Promise.race` |
+| `p.ThenInline()` | 在**结算线程**上就地跑本层（不要求亲和） | Asio `dispatch` / C# `ConfigureAwait(false)` |
+| `p.ThenOn(exec)` | 指定执行器的线程上跑本层 | `CompletableFuture.thenApplyAsync(fn, executor)` |
+| `p.OnSettledOn(exec, cb)` | 收尾通知投到指定执行器线程 | — |
+| `exec.Stop()` + `kStopped` | 优雅关闭；停止后新投递以 `kStopped` 收口 | —— （JS 没有「运行库被关掉」这一态） |
+
+> JS 侧的 `setTimeout(fn, ms)` / `queueMicrotask(fn)` **不是** `exec.Post` 的对应物：它们是宿主 API，
+> 且不可控线程；本框架的定时请用 `Common/Timer` 组件。
 
 ## 2. 语义差异
 
@@ -96,7 +136,7 @@ p.Then([&exec](common::async::CPromiseResult, const std::shared_ptr<Ctx>& sp)  /
 ```
 
 普通 `Then` 的处理器只能返回 `CPromiseResult`，里面起的链只能是旁支；要参与当前链必须 `ThenPromise`
-（同上下文直接把子链返回即可；**跨上下文**先 `exec.NewPromise(spCtx, executor)` 桥接）。
+（同上下文直接把子链返回即可；**跨上下文**先 `exec.NewPromise(spCtx, fnStarter)` 桥接）。
 
 ### 2.4 错误是错误码，不是异常对象
 
@@ -108,7 +148,7 @@ JS 用 `reject(Error)`，可以带 message / stack；本框架用 `int` 码（�
 | `kFulfilled = 0` | 兑现 —— **注意 `Reject(0)` 等于兑现**，别拿 0 当错误码 |
 | `kRejected = 1` | 拒绝（未指定码时的默认值） |
 | `kStopped = 2` | 执行器已停止 / 投递失败 |
-| `kException = 3` | 处理器或 executor 抛了异常（框架捕获并转成拒绝，不会向调用方抛） |
+| `kException = 3` | 处理器或起链回调（`ChainStarter`）抛了异常（框架捕获并转成拒绝，不会向调用方抛） |
 
 要带上下文就打日志 / 记到共享上下文里；跨模块时在桥接层把对方的码翻译成本模块的业务码。
 
@@ -138,7 +178,7 @@ JS 里没人 `catch` 的 promise 拒绝会触发 `unhandledrejection`；本框�
 
 ### 2.7 其他差异
 
-- **无 `Promise.resolve` / thenable 探测**：跨库、跨回调式 API 的适配要显式写 `exec.NewPromise(spCtx, executor)`；
+- **无 `Promise.resolve` / thenable 探测**：跳库、跳回调式 API 的适配要显式写 `exec.NewPromise(spCtx, fnStarter)`；
 - **无 AbortController / 超时**：取消要么在每个层里检查上下文标志，要么用定时器 + `Reject(码)`；
 - **`Await()` 之外还有协程**：`CO_AWAIT` 是非阻塞挂起（不占 worker），`Await()` 是阻塞等待；
   生产代码里推荐前者，或干脆全回调（`OnSettled`）。

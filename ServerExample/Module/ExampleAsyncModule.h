@@ -30,7 +30,7 @@ namespace serverexample {
 ///  - **本模块内的异步函数**复用：LoadUserAsync（读用户）被查询 / 改名 / 删除流程
 ///    直接串接（同上下文类型，追加 handler 即可，非阻塞）；
 ///  - **其他模块的异步函数**：数据访问模块（IUserTable）的读 / 写 / 改 / 删，用
-///    `exec.NewPromise(spCtx, executor)`（等价 JS `new Promise((resolve, reject) => ...)`）桥接成本流程的
+///    `exec.NewPromise(spCtx, fnStarter)`（等价 JS `new Promise((resolve, reject) => ...)`）桥接成本流程的
 ///    promise，再用 `ThenPromise`（等价 JS 的「then 的处理器返回 promise 时等待」）
 ///    接入流程 —— 全程回调驱动、零阻塞，两个模块的线程池互不占用；
 ///  - 失败即停（then）、catch 归一化 / 恢复、finally 审计收尾、跨模块拒绝码语义转换，
@@ -68,8 +68,7 @@ private:
     // ---------------- 对外异步函数（IUserService 实现） ----------------
     common::async::CPromise<CUserOpContext> QueryUserAsync(std::uint64_t nUserId) override;
     common::async::CPromise<CUserOpContext> RegisterUserAsync(const CUserRecord& recRequest) override;
-    common::async::CPromise<CUserOpContext> RenameUserAsync(
-        std::uint64_t nUserId, const std::string& strNewName) override;
+    common::async::CPromise<CUserOpContext> RenameUserAsync(std::uint64_t nUserId, const std::string& strNewName) override;
     common::async::CPromise<CUserOpContext> RemoveUserAsync(std::uint64_t nUserId) override;
 
     // 创建业务操作上下文（设置操作名；数据访问操作上下文在构造中一并创建）。
@@ -78,9 +77,9 @@ private:
     // 定时器回调：投递一轮演示（不在定时器线程上跑业务代码）。
     void ScheduleExample();
 
-    std::int64_t m_nIntervalMs;                       ///< 演示周期（毫秒）。
-    sc::ScopedInterfacePtr<sc::ITimer> m_pTimer;      ///< 定时器接口。
-    sc::ScopedInterfacePtr<IUserTable> m_pUserTable;  ///< 数据访问模块接口（跨模块异步调用）。
+    std::int64_t m_nIntervalMs;                                   ///< 演示周期（毫秒）。
+    sc::ScopedInterfacePtr<sc::ITimer> m_pTimer;                  ///< 定时器接口。
+    sc::ScopedInterfacePtr<IUserTable> m_pUserTable;              ///< 数据访问模块接口（跨模块异步调用）。
     std::shared_ptr<common::async::CAsyncExecutor> m_spExecutor;  ///< 自建执行器（按值传给流程，保生命周期）。
     common::timer::TimerId m_tTimerId;                            ///< 周期演示定时器 id。
 };

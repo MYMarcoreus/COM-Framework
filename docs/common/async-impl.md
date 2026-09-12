@@ -16,7 +16,7 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 
 职责边界（「谁决定什么」）：
 
-- **起链**只在执行器上：`exec.NewPromise(spCtx, 首层)` / `exec.NewPromise(spCtx, executor)` /
+- **起链**只在执行器上：`exec.NewPromise(spCtx, 首层)` / `exec.NewPromise(spCtx, fnStarter)` /
   `exec.NewPromise(spCtx, …)`（两个重载）/ `exec.CoStart<T>(spCtx)`；`CPromise` 只提供「句柄 + 加层」，没有任何起链入口。
 - **调度**（跑在哪条线程：亲和 / 就地内联 / 投递 / 深度限额）在执行器侧：
   `detail::HandlerAffinity`、`detail::ResolveExecHandle`、`detail::ShouldInline`、`detail::DispatchInlineOrPost`。
@@ -158,7 +158,7 @@ else
 | 入口 | 首层何时投递 | 追加层 |
 | --- | --- | --- |
 | `exec.NewPromise(spCtx, 首层处理器)` | 调用即投递（与 JS 的 `new Promise(executor)` 一致） | 上游未 settle 时登记、已 settle 时投递回本链执行器 |
-| `exec.NewPromise(spCtx, executor)` | 由 executor 里的 `resolve()` / `reject(码)` 决定（executor 当场同步执行） | 同上 |
+| `exec.NewPromise(spCtx, fnStarter)` | 由起链回调里的 `resolve()` / `reject(码)` 决定（起链回调当场同步执行） | 同上 |
 
 **为什么删掉「延迟启动」（原 `BuildPromise` + `Start()` + `CLaunchState`，2026-09-11 引入，2026-09-12 移除）**：
 
@@ -229,11 +229,11 @@ result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownR
 「已兑现」），因此 `Catch` / `Finally` 永远只会是「追加层」—— 挂在首层之后时，上一层已兑现，
 `Catch` 不执行（没有可处理的拒绝）。
 
-### 6.1 跨模块组合的三个原语（`exec.NewPromise(spCtx, executor)` / `ThenPromise` / `ThenBridge`）
+### 6.1 跨模块组合的三个原语（`exec.NewPromise(spCtx, fnStarter)` / `ThenPromise` / `ThenBridge`）
 
 | API | JS 对照 | 实现要点 |
 | --- | --- | --- |
-| `exec.NewPromise(spCtx, executor, loc)` | `new Promise((resolve, reject) => …)` | 直接建 `CPromiseState` 并交出 `ResolveFn` / `RejectFn`（内部就是 `pState->Settle(...)`）；executor 同步执行（与 JS 一致），抛异常 → `Reject(kException)`；`Settle` 幂等，故重复 settle / settle 后异常都安全 |
+| `exec.NewPromise(spCtx, fnStarter, loc)` | `new Promise((resolve, reject) => …)` | 直接建 `CPromiseState` 并交出 `ResolveFn` / `RejectFn`（内部就是 `pState->Settle(...)`）；起链回调同步执行（与 JS 一致），抛异常 → `Reject(kException)`；`Settle` 幂等，故重复 settle / settle 后异常都安全 |
 | `CPromise<T>::ThenPromise(factory, loc)` | `then(处理器返回 promise)` 的 flatten | 建本层 state，在上游 state 上登记 handler：上游被拒 → 直接透传；上游兑现 → `Adopt()` |
 | `CPromise<T>::ThenBridge(fnCreate, fnApply, loc)` | `then` 里「等别的模块 + 取回数据」 | **上面两个原语的语法糖**：内部就是 `Adopt()` + `New`（改走句柄版 `NewFromHandle`）+ `OnSettled`，多出的只是「子链兑现时先 `fnApply` 搬数据」 |
 
@@ -247,7 +247,7 @@ result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownR
   子 promise 的拒绝码**原样**成为本层拒绝码（后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
 - **保活**：子 promise 的最后一段由「上一段 handler 捕获下一段」链保活，本层 state 被子 promise
   的 `OnSettled` handler 捕获 —— 即使句柄被丢弃，在途的整条链仍安全跑完；
-- **`New` 恒为「立即启动」**：它建的是独立新链，executor 当场同步执行；
+- **`New` 恒为「立即启动」**：它建的是独立新链，起链回调当场同步执行；
   到本层的时机由「轮到该层」保证（它挂在哪一层上，就在哪一层 settle 后才执行）。
 
 `ThenBridge` 与手写版的**等价关系**（也是它的实现）：
@@ -366,7 +366,7 @@ if (!DispatchInlineOrPost(eAffinity, pExec, std::move(fnRun)))
 - **代价**：每次跨执行器的续接多一次入队 + 唤醒（微秒级）；同执行器内仍完全内联；
   内联深度只在同一执行器线程内累加，跨模块不涨栈；
 - **边界**：亲和只作用于「层」——`OnSettled` 通知仍在**结算线程**上触发（不可用时就地送达）；
-  `New(...)` 的 executor 是「发起」语义，仍在调用线程上同步执行；`Await()` 仍占住调用线程；
+  `New(...)` 的起链回调是「发起」语义，仍在调用线程上同步执行；`Await()` 仍占住调用线程；
 - **验收**：`Tests/test_async_affinity.cpp`（5 例，默认亲和）+ `Tests/test_async_affinity_override.cpp`
   （4 例，`ThenInline` / `ThenOn` / 已停执行器 / 默认对照）+ `Tests/test_async_modules*.cpp`
   （当初发现问题的极限用例，现断言 200 条并发链 100% 落回本模块线程）。
@@ -384,7 +384,7 @@ if (!DispatchInlineOrPost(eAffinity, pExec, std::move(fnRun)))
 | 层处理器抛异常 | `MakeHandlerRunner` 的 try/catch → 本层 `kException` | 不变（本来就安全） |
 | **通知**（`OnSettled` / `OnSettledOn`）抛异常 | 异常从 `CPromiseState::Settle` 逃出 → worker 无 catch → **`std::terminate`（进程挂掉）** | `detail::RunNotice` 兜住 + 报告诊断 |
 | `exec.Post(fn)` 的任务抛异常 | 同上（同样能弄死进程） | `CAsyncExecutor::Post` 包一层 guard 兜住 + 报告 |
-| `exec.NewPromise(spCtx, executor)` 的 executor 抛异常 | `RunExternalExecutor` 兜住 → `kException` | 不变 |
+| `exec.NewPromise(spCtx, starter)` 的起链回调抛异常 | `RunChainStarter` 兜住 → `kException` | 不变 |
 | `Await()` 永久挂住 | 只能靠文档警告 | 新增 `AwaitFor(ms)`（超时返回 `kStopped`，不落定、不取消链） |
 | 层内 / 本链线程上 `Await()` 未落定的层（必死锁） | 无任何提示 | `ReportBlockingRisk()` 报诊断（**不硬失败**：等「别的线程 settle 的层」是合法的） |
 | 调用方误用（未传上下文 / 模块未启动 / 对空上下文起链） | 运行期崩在别处，难定位 | `ASSERT` 在开发期直接报位置（见 §13）；无效句柄态已从类型上消除 |
@@ -440,7 +440,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 ## 10. 设计取舍
 
 1. **eager（起链即投递）**：`NewPromise` / 带处理器的构造函数立即投递首层，
-   与 `new Promise(executor)` 立即执行 executor 一致；代价是无法在起链前再改结构。
+   与 JS 的 `new Promise(executor)` 里 executor 立即执行一致；代价是无法在起链前再改结构。
 2. **句柄指向某一层**（而非整条链）：`Then` 返回新句柄，`Await/OnSettled` 作用于句柄所指的状态。
    天然支持分叉、支持「settled 后追加层」，也不必维护「链尾」指针（分叉时链尾不唯一）。
 3. **then / catch / finally 三分**：默认安全（`then` 忘写判断也不会在拒绝后误执行后续业务），

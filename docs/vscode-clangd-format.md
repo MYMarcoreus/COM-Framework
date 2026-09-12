@@ -46,7 +46,7 @@ lambda 体再缩进一级，结尾 `});` 与 lambda 起始列对齐，不需要�
 具名变量仍有价值 —— 当 lambda 需要**复用**、需要在多处引用同一处理器时：
 
 ```cpp
-// 推荐：lambda 需要在多处复用时才先赋给具名变量（类型用 ThenHandler / PromiseFactory / PromiseExecutor）
+// 推荐：lambda 需要在多处复用时才先赋给具名变量（类型用 ThenHandler / PromiseFactory / ChainStarter）
 COrderPromise::ThenHandler fnValidate =
     [](common::async::CPromiseResult upResult, const std::shared_ptr<COrderContext>& spCtx)
 {

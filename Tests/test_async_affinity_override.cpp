@@ -113,14 +113,13 @@ public:
     /// 本链执行器 → 那一层就跑在本链线程上）—— 用例要断言线程，就只能由自己指定结算线程，
     /// 否则就是赌时序（本用例早期版本靠「固定延时」赌，在 TSan 慢环境下会偶发失败）。
     /// 跨模块的真实形状由 `RunDefaultAsync` / `RunOnSideAsync` 与 `test_async_affinity.cpp` 覆盖。
-    common::async::CPromise<COverrideOrderCtx> RunInlineWithSideChildAsync(
-        const std::shared_ptr<COverrideOrderCtx>& spCtx)
+    common::async::CPromise<COverrideOrderCtx> RunInlineWithSideChildAsync(const std::shared_ptr<COverrideOrderCtx>& spCtx)
     {
         // 子 promise：挂在**旁路执行器**上，由本方法最后投递的那次调用结算。
         typedef common::async::CPromise<COverrideOrderCtx> COrderPromise;
         COrderPromise::ResolveFn fnSettleChild;
         const COrderPromise promiseChild = m_execSide.NewPromise(spCtx,
-            COrderPromise::PromiseExecutor(
+            COrderPromise::ChainStarter(
                 [&fnSettleChild](const COrderPromise::ResolveFn& fnResolve, const COrderPromise::RejectFn&)
                 {
                     fnSettleChild = fnResolve;  // 先存起来，稍后在旁路线程上结算。
@@ -255,7 +254,7 @@ private:
     common::async::CPromise<COverrideOrderCtx> BridgeCallCallee(
         const std::shared_ptr<COverrideOrderCtx>& spCtx, const std::shared_ptr<COverrideCalleeModule>& spCallee)
     {
-        common::async::CPromise<COverrideOrderCtx>::PromiseExecutor fnExecutor =
+        common::async::CPromise<COverrideOrderCtx>::ChainStarter fnStarter =
             [spCallee, spCtx](const common::async::CPromise<COverrideOrderCtx>::ResolveFn& fnResolve,
                 const common::async::CPromise<COverrideOrderCtx>::RejectFn& fnReject)
         {
@@ -273,7 +272,7 @@ private:
                     fnResolve();
                 });
         };
-        return m_execMain.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+        return m_execMain.NewPromise(spCtx, fnStarter, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_execMain;  ///< 主执行器（链的主执行器）。

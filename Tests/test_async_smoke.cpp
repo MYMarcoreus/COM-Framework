@@ -5,7 +5,7 @@
 ///  - 一条链里混用：具名处理器 / lambda / ThenPromise（内层链）/ 旁支 / catch / finally；
 ///  - then 失败即停、catch 恢复或透传、finally 不改结果；
 ///  - ThenPromise 等子 promise（flatten）、内层拒绝码沿外层链透传；
-///  - `exec.NewPromise(spCtx, executor)`（由外部回调 settle）：resolve / reject / executor 抛异常 / 空 executor；
+///  - `exec.NewPromise(spCtx, fnStarter)`（由外部回调 settle）：resolve / reject / 起链回调抛异常 / 空回调；
 ///  - 跨模块桥接：两个模块各持执行器，只通过 promise 交接；
 ///  - 处理器抛异常 → kException，finally / OnSettled 仍执行；
 ///  - OnSettled 旁路通知：不改结果、可多次登记；
@@ -262,7 +262,7 @@ TEST(Smoke_ThenPromiseDeepInner)
     exec.Stop();
 }
 
-// ==================== 3. exec.NewPromise(spCtx, executor)：由外部回调 settle ====================
+// ==================== 3. exec.NewPromise(spCtx, fnStarter)：由外部回调 settle ====================
 
 /// @brief New 的 executor 立即执行，resolve / reject 都由外部决定。
 TEST(Smoke_NewExternalSettle)
@@ -341,7 +341,7 @@ TEST(Smoke_NewBadExecutor)
 
     std::shared_ptr<CSmokeCtx> spCtxEmpty = std::make_shared<CSmokeCtx>();
     const common::async::CPromiseResult rEmpty =
-        exec.NewPromise(spCtxEmpty, common::async::CPromise<CSmokeCtx>::PromiseExecutor(), ASYNC_LOC).Await();
+        exec.NewPromise(spCtxEmpty, common::async::CPromise<CSmokeCtx>::ChainStarter(), ASYNC_LOC).Await();
     ASSERT_TRUE(rEmpty.IsRejected());
     ASSERT_EQ(rEmpty.Code(), static_cast<int>(common::async::kRejected));
     exec.Stop();
@@ -544,7 +544,7 @@ TEST(Smoke_BridgeTwoModules)
     std::thread::id idStock;
 
     // 桥接层：发起库存模块的调用，由它的完成回调 settle 本流程的 promise
-    common::async::CPromise<CSmokeCtx>::PromiseExecutor fnExecutor =
+    common::async::CPromise<CSmokeCtx>::ChainStarter fnStarter =
         [&execStock, spCtx, &idStock](const common::async::CPromise<CSmokeCtx>::ResolveFn& fnResolve,
             const common::async::CPromise<CSmokeCtx>::RejectFn& fnReject)
     {
@@ -564,10 +564,10 @@ TEST(Smoke_BridgeTwoModules)
     };
 
     // 工厂里才发起跨模块调用（与外层链同步：③ 层被调用时才发起）
-    common::async::CPromise<CSmokeCtx>::PromiseFactory fnBridge = [&execOrder, &fnExecutor, spCtx](
+    common::async::CPromise<CSmokeCtx>::PromiseFactory fnBridge = [&execOrder, &fnStarter, spCtx](
                                                                       const std::shared_ptr<CSmokeCtx>& /*spSelf*/)
     {
-        return execOrder.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+        return execOrder.NewPromise(spCtx, fnStarter, ASYNC_LOC);
     };
 
     const common::async::CPromiseResult r =

@@ -208,8 +208,7 @@ common::async::CPromiseResult StepPrepareRename(
 /// @param spCtx 业务上下文。
 ///
 /// @return upResult（finally 忽略返回值，不改变链的走向）。
-common::async::CPromiseResult StepAudit(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CUserOpContext>& spCtx)
+common::async::CPromiseResult StepAudit(common::async::CPromiseResult upResult, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     // finally 层：成败都执行，upResult 可能是拒绝（返回值被忽略，原样透传）。
     spCtx->strTrace += "审计;";
@@ -217,8 +216,8 @@ common::async::CPromiseResult StepAudit(
     const std::string strResult = upResult.IsFulfilled()
                                       ? std::string("兑现")
                                       : ("拒绝(码=" + std::to_string(upResult.Code()) + " " + spCtx->strError + ")");
-    logger.Info("[用户业务] 审计 " + spCtx->strAction + " 用户=" + std::to_string(spCtx->nUserId) +
-                " 结果=" + strResult + " 轨迹=" + spCtx->strTrace);
+    logger.Info("[用户业务] 审计 " + spCtx->strAction + " 用户=" + std::to_string(spCtx->nUserId) + " 结果=" + strResult +
+                " 轨迹=" + spCtx->strTrace);
     return upResult;
 }
 
@@ -244,7 +243,7 @@ common::async::CPromiseResult StepAudit(
 CUserPromise BridgeQueryUser(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     // executor 先赋给具名变量再用：长行不会被 clang-format 对齐撑开（见 docs/vscode-clangd-format.md）。
-    CUserPromise::PromiseExecutor fnExecutor = [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
+    CUserPromise::ChainStarter fnStarter = [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
     {
         spCtx->spDbOp->nUserId = spCtx->nUserId;
         spCtx->spDbOp->bFound = false;
@@ -272,7 +271,7 @@ CUserPromise BridgeQueryUser(const CFlowDeps& deps, const std::shared_ptr<CUserO
                     fnReject(kUserDbUnavailable);
                 });
     };
-    return deps.spExec->NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
 }
 
 /// @brief 桥接：插入用户（数据访问模块异步插入）。
@@ -283,7 +282,7 @@ CUserPromise BridgeQueryUser(const CFlowDeps& deps, const std::shared_ptr<CUserO
 /// @return 本流程的 promise（由数据访问模块的回调 settle）。
 CUserPromise BridgeInsertUser(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
-    CUserPromise::PromiseExecutor fnExecutor = [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
+    CUserPromise::ChainStarter fnStarter = [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
     {
         spCtx->spDbOp->nUserId = spCtx->recRequest.nUserId;  // 0：由数据访问层自增分配。
         spCtx->spDbOp->recRequest = spCtx->recRequest;
@@ -311,7 +310,7 @@ CUserPromise BridgeInsertUser(const CFlowDeps& deps, const std::shared_ptr<CUser
                     fnReject(kUserDbUnavailable);
                 });
     };
-    return deps.spExec->NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
 }
 
 /// @brief 更新尝试（乐观锁冲突时在回调里重试 —— 回调驱动，不阻塞、不占线程）。
@@ -346,8 +345,8 @@ void UpdateUserAttempt(const CFlowDeps& deps, const std::shared_ptr<CUserOpConte
                 if (result.Code() != kDbVersionConflict || nAttempt >= kMaxUpdateAttempts)
                 {
                     const bool bConflict = (result.Code() == kDbVersionConflict);
-                    spCtx->strError = bConflict ? "乐观锁冲突重试次数用尽"
-                                                : ("更新失败：数据访问码=" + std::to_string(result.Code()));
+                    spCtx->strError =
+                        bConflict ? "乐观锁冲突重试次数用尽" : ("更新失败：数据访问码=" + std::to_string(result.Code()));
                     spCtx->strTrace += "失败(更新);";
                     fnReject(bConflict ? kUserVersionConflict : kUserDbUnavailable);
                     return;
@@ -370,11 +369,11 @@ void UpdateUserAttempt(const CFlowDeps& deps, const std::shared_ptr<CUserOpConte
 /// @return 本流程的 promise（由数据访问模块的回调 settle）。
 CUserPromise BridgeUpdateUser(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
-    CUserPromise::PromiseExecutor fnExecutor = [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
+    CUserPromise::ChainStarter fnStarter = [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
     {
         UpdateUserAttempt(deps, spCtx, fnResolve, fnReject, 1);
     };
-    return deps.spExec->NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
 }
 
 /// @brief 桥接：删除用户（数据访问模块异步删除）。
@@ -385,7 +384,7 @@ CUserPromise BridgeUpdateUser(const CFlowDeps& deps, const std::shared_ptr<CUser
 /// @return 本流程的 promise（由数据访问模块的回调 settle）。
 CUserPromise BridgeDeleteUser(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
-    CUserPromise::PromiseExecutor fnExecutor = [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
+    CUserPromise::ChainStarter fnStarter = [deps, spCtx](const ResolveFn& fnResolve, const RejectFn& fnReject)
     {
         spCtx->spDbOp->nUserId = spCtx->nUserId;
         deps.spTable->DeleteUserAsync(spCtx->spDbOp)
@@ -409,7 +408,7 @@ CUserPromise BridgeDeleteUser(const CFlowDeps& deps, const std::shared_ptr<CUser
                     fnReject(kUserDbUnavailable);
                 });
     };
-    return deps.spExec->NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
 }
 
 // ====================================================================
@@ -533,8 +532,7 @@ public:
     ///
     /// @param spService 业务模块接口（自持引用：回调期间模块存活）。
     /// @param spTable 数据访问模块接口（场景⑧需要直接观察数据访问层的异常语义）。
-    CDemoDriver(
-        const sc::ScopedInterfacePtr<IUserService>& spService, const sc::ScopedInterfacePtr<IUserTable>& spTable)
+    CDemoDriver(const sc::ScopedInterfacePtr<IUserService>& spService, const sc::ScopedInterfacePtr<IUserTable>& spTable)
         : m_spService(spService), m_spTable(spTable), m_nUserId(0), m_nRenamePending(0), m_strRenameSummary()
     {}
 
@@ -552,8 +550,8 @@ private:
     /// @param strScenario 场景名。
     /// @param result 本场景最终结果。
     /// @param spCtx 本场景上下文。
-    void LogScenario(const std::string& strScenario, const common::async::CPromiseResult& result,
-        const std::shared_ptr<CUserOpContext>& spCtx)
+    void LogScenario(
+        const std::string& strScenario, const common::async::CPromiseResult& result, const std::shared_ptr<CUserOpContext>& spCtx)
     {
         const std::string strLine = "[" + strScenario + "] " + DescribeResult(result) +
                                     (spCtx->strError.empty() ? std::string() : (" 说明=" + spCtx->strError)) +
@@ -622,8 +620,8 @@ private:
         promise.OnSettled(
             [spSelf, spCtx](common::async::CPromiseResult result)
             {
-                spSelf->LogScenario("演示③ 查询用户 名字=" + spCtx->recResult.strName +
-                                        " 等级=" + std::to_string(spCtx->recResult.nLevel),
+                spSelf->LogScenario(
+                    "演示③ 查询用户 名字=" + spCtx->recResult.strName + " 等级=" + std::to_string(spCtx->recResult.nLevel),
                     result, spCtx);
                 spSelf->RunRenameConcurrent();
             });
@@ -653,8 +651,8 @@ private:
         promise.OnSettled(
             [spSelf, spCtx, strTag](common::async::CPromiseResult result)
             {
-                const std::string strLine = strTag + "=" + DescribeResult(result) +
-                                            " 尝试=" + std::to_string(spCtx->nAttempt) + " 轨迹=" + spCtx->strTrace;
+                const std::string strLine = strTag + "=" + DescribeResult(result) + " 尝试=" + std::to_string(spCtx->nAttempt) +
+                                            " 轨迹=" + spCtx->strTrace;
                 {
                     // 两路回调可能在不同线程 → 汇总数据加锁。
                     std::lock_guard<std::mutex> lock(spSelf->m_mutex);
@@ -736,9 +734,8 @@ private:
         m_spTable->QueryUserAsync(spDbOp).OnSettled(
             [spSelf, spDbOp](common::async::CPromiseResult result)
             {
-                common::log::CLogger::Instance().Warn("[演示⑧] 数据访问层内异常 " + DescribeResult(result) +
-                                                      "（kException=" + std::to_string(common::async::kException) +
-                                                      "）轨迹=" + spDbOp->strTrace);
+                common::log::CLogger::Instance().Warn("[演示⑧] 数据访问层内异常 " + DescribeResult(result) + "（kException=" +
+                                                      std::to_string(common::async::kException) + "）轨迹=" + spDbOp->strTrace);
                 common::log::CLogger::Instance().Info(
                     "=========== 用户业务演示结束（全流程回调驱动，未阻塞任何线程）===========");
             });
@@ -893,12 +890,12 @@ static CFlowDeps MakeFlowDeps(
 /// @return 立即以 kUserDbUnavailable 被拒绝的 promise。
 static CUserPromise MakeRejectedPromise(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
-    CUserPromise::PromiseExecutor fnExecutor = [spCtx](const ResolveFn& /*fnResolve*/, const RejectFn& fnReject)
+    CUserPromise::ChainStarter fnStarter = [spCtx](const ResolveFn& /*fnResolve*/, const RejectFn& fnReject)
     {
         spCtx->strError = "数据访问模块不可用";
         fnReject(kUserDbUnavailable);
     };
-    return deps.spExec->NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
 }
 
 /// @brief 异步查询用户信息（读）。
@@ -945,8 +942,7 @@ common::async::CPromise<CUserOpContext> CExampleAsyncModule::RegisterUserAsync(c
 /// @param strNewName 新用户名。
 ///
 /// @return promise 句柄（冲突重试次数见上下文的 nAttempt）。
-common::async::CPromise<CUserOpContext> CExampleAsyncModule::RenameUserAsync(
-    std::uint64_t nUserId, const std::string& strNewName)
+common::async::CPromise<CUserOpContext> CExampleAsyncModule::RenameUserAsync(std::uint64_t nUserId, const std::string& strNewName)
 {
     std::shared_ptr<CUserOpContext> spCtx = MakeContext("修改用户名");
     spCtx->nUserId = nUserId;

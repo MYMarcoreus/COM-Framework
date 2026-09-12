@@ -111,8 +111,7 @@ public:
     common::async::CPromise<CCallerCtx> RunAsync(
         const std::shared_ptr<CCallerCtx>& spCtx, const std::shared_ptr<CDeliveryModule>& spCallee)
     {
-        common::async::CPromise<CCallerCtx>::PromiseFactory fnCall = [this, spCallee](
-                                                                         const std::shared_ptr<CCallerCtx>& spSelf)
+        common::async::CPromise<CCallerCtx>::PromiseFactory fnCall = [this, spCallee](const std::shared_ptr<CCallerCtx>& spSelf)
         {
             return BridgeCallCallee(spSelf, spCallee);
         };
@@ -155,7 +154,7 @@ private:
     common::async::CPromise<CCallerCtx> BridgeCallCallee(
         const std::shared_ptr<CCallerCtx>& spCtx, const std::shared_ptr<CDeliveryModule>& spCallee)
     {
-        common::async::CPromise<CCallerCtx>::PromiseExecutor fnExecutor =
+        common::async::CPromise<CCallerCtx>::ChainStarter fnStarter =
             [spCallee, spCtx](const common::async::CPromise<CCallerCtx>::ResolveFn& fnResolve,
                 const common::async::CPromise<CCallerCtx>::RejectFn& fnReject)
         {
@@ -175,7 +174,7 @@ private:
                     fnResolve();
                 });
         };
-        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。

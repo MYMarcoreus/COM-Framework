@@ -21,6 +21,21 @@
 // 「并行组合」（`WhenAll` 一族）。
 // 不做链式编排（`Then` 一族见 Promise.h）、不做顺序化（见 Coroutine/Coroutine.h）。
 //
+// 为什么要有这个类（**JS 里没有对应物**）：JS 的调度是**隐式**的 —— 由宿主事件循环 +
+// 微任务队列接管，「谁跑回调」根本不是 API 的一部分。C++ 没有宿主循环，于是三件事必须
+// 由一个显式对象回答，它们就是本类的全部职责：
+//   - 任务投到哪条线程：`Post` / `NewPromise` / `CoStart`；
+//   - 一条链的层在哪条线程上跑：线程亲和（`ThenInline` / `ThenOn` / `kAffinity*`）；
+//   - 执行器停了以后怎么办：`Stop` + 句柄加固（新投递以 `kStopped` 收口）。
+//
+// 调度对照（各自生态里的同类物）：
+//   CAsyncExecutor  ≈ Java `Executor` / C# `TaskScheduler` / Asio `io_context` / dispatch_queue
+//   exec.Post(fn)   ≈ Asio `io_context::post` / Java `Executor.execute`
+//   exec.CoStart<T> ≈ C# `Task.Run`（续跑线程由调度器决定）
+//   ThenInline/ThenOn ≈ Asio `dispatch` / C# `ConfigureAwait(false)`
+//   而 JS 这边：`setTimeout(fn, 0)` 是**宿主 API**（不在 Promise 里），`queueMicrotask(fn)`
+//   才是微任务投递 —— 两者都不可控线程，因此不能与 `Post` 画等号。
+//
 // 用法：
 //   common::async::CAsyncExecutor exec(4);
 //   exec.Start();
@@ -230,10 +245,10 @@ public:
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext, typename CPromise<TContext>::ThenHandler fnHandler,
         const CSourceLoc& loc = CSourceLoc());
 
-    // 起 promise（对齐 JS `new Promise((resolve, reject) => ...)`）：由 fnExecutor 内部的 resolve / reject 兑现。
+    // 起 promise（对齐 JS `new Promise((resolve, reject) => ...)`）：由起链回调内部的 resolve / reject 兑现。
     template <typename TContext>
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
-        const typename CPromise<TContext>::PromiseExecutor& fnExecutor, const CSourceLoc& loc = CSourceLoc());
+        const typename CPromise<TContext>::ChainStarter& fnStarter, const CSourceLoc& loc = CSourceLoc());
 
     //================ Combine ================
 
@@ -498,7 +513,7 @@ void AppendGatherBindings(std::vector<std::function<void(const std::shared_ptr<C
 /// 参数可为单个子 promise（`CPromise<任意上下文>`），也可为 `std::vector<CPromise<同上下文>>`
 /// （数量运行时确定时用），两者可混用 —— 展开后按参数顺序登记。
 ///
-/// 聚合链的当前层用 `exec.NewPromise(spCtx, executor)` 造（由外部 settle）：executor 里只做「逐个登记子 promise」，
+/// 聚合链的当前层用 `exec.NewPromise(spCtx, fnStarter)` 造（由外部 settle）：起链回调里只做「逐个登记子 promise」，
 /// 不做重活、不阻塞 —— 子 promise 落在哪个线程都不会占住聚合链的线程。
 ///
 /// 一处子 promise 都没有时直接在此收口（对齐 JS）：`all` / `allSettled` 立即兑现；
@@ -527,7 +542,7 @@ CPromise<TContext> Gather(
         // 一处子 promise 都没有：按策略直接收口（语义只有 `ResolveEmptyGather` 一处）。
         const CPromiseResult emptyResult = ResolveEmptyGather(ePolicy);
         return executor.NewPromise(
-            spContext, typename CPromise<TContext>::PromiseExecutor(
+            spContext, typename CPromise<TContext>::ChainStarter(
                            [emptyResult](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
                            {
                                if (emptyResult.IsFulfilled())
@@ -541,7 +556,7 @@ CPromise<TContext> Gather(
 
     const int nTotal = static_cast<int>(vecBindings.size());
     return executor.NewPromise(spContext,
-        typename CPromise<TContext>::PromiseExecutor(
+        typename CPromise<TContext>::ChainStarter(
             [ePolicy, nTotal, vecBindings](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
             {
                 const std::shared_ptr<CGatherState> pGather =

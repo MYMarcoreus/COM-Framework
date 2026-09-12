@@ -21,7 +21,7 @@ async::promise<Order> checkRiskAsync(const std::vector<Order>& orders)
 本框架写法（可编译运行）：
 
 ```cpp
-// 对标 async_promise：checkRisk 用 `exec.NewPromise(spCtx, executor)` 显式兑现 / 拒绝（等价 make_promise(resolve, reject)）。
+// 对标 async_promise：checkRisk 用 `exec.NewPromise(spCtx, fnStarter)` 显式兑现 / 拒绝（等价 make_promise(resolve, reject)）。
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -93,7 +93,7 @@ static common::async::CPromiseResult StepFetchOrders(common::async::CPromiseResu
 static common::async::CPromise<CFlowCtx> CheckRiskAsync(common::async::CAsyncExecutor& exec,
                                                         const std::shared_ptr<CFlowCtx>& spCtx)
 {
-    common::async::CPromise<CFlowCtx>::PromiseExecutor fnExecutive =
+    common::async::CPromise<CFlowCtx>::ChainStarter fnStarter =
         [spCtx](const common::async::CPromise<CFlowCtx>::ResolveFn& fnResolve,
                 const common::async::CPromise<CFlowCtx>::RejectFn& fnReject)
     {
@@ -112,7 +112,7 @@ static common::async::CPromise<CFlowCtx> CheckRiskAsync(common::async::CAsyncExe
         fnResolve();  // 等价 resolve(orders[0])
     };
 
-    return exec.NewPromise(spCtx, fnExecutive, ASYNC_LOC);
+    return exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
 }
 
 /// fetchPaymentAsync(order) —— 只有 checkRisk 兑现才会执行
@@ -189,7 +189,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon style_async_promise.cpp bu
 
 几点：
 
-- `make_promise([](resolve, reject) { … })` → `exec.NewPromise(spCtx, executor, ASYNC_LOC)`；executor **同步执行**，里面只发起动作 + 登记回调，不占 worker。
+- `make_promise([](resolve, reject) { … })` → `exec.NewPromise(spCtx, fnStarter, ASYNC_LOC)`；起链回调 **同步执行**，里面只发起动作 + 登记回调，不占 worker。
 - `reject(RejectReason{code, msg})` → `fnReject(码)`（reason 只剩 `int` 码）；`resolve(orders[0])` → `fnResolve()`（值写进上下文）。
 - `then` 回调里 `return` promise → `.ThenPromise(工厂)` 接住该内层 promise：外层等它 settle 才继续，拒绝码原样透传。
 - `.fail(...)` → `.Catch(处理器)`（只在被拒绝时执行）；处理器返回原 `upResult` 即继续往后传。

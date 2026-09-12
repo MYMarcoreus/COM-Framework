@@ -7,7 +7,7 @@
 //
 //   ① then = 具名异步函数            读订单（有名字、可复用、可单测；内部模拟 IO）
 //   ② then = lambda                  就地校验（只此一处用的小逻辑，不进具名函数）
-//   ③ then = 内部执行「其他异步函数」 查库存（**要等它**：ThenPromise + exec.NewPromise(spCtx, executor) 桥接）
+//   ③ then = 内部执行「其他异步函数」 查库存（**要等它**：ThenPromise + exec.NewPromise(spCtx, fnStarter) 桥接）
 //   ④ then = 具名异步函数            算折扣
 //   ④+ then = lambda 里现搭的内层 then 链（同上下文，直接 adopt 进当前链）
 //   ⑤ then = 内部执行「其他异步函数」 记账旁支（**不等它**：fire-and-forget，主链继续）

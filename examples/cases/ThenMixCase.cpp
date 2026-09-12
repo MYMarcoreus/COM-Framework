@@ -228,8 +228,8 @@ public:
         const std::shared_ptr<CStockModule>& spStockModule, const std::shared_ptr<CBillingModule>& spBillingModule)
     {
         // ③ 工厂：then 内部执行其他模块的异步函数，并等它（跨上下文 → 桥接）。
-        common::async::CPromise<COrderContext>::PromiseFactory fnQueryStock =
-            [this, spStockModule](const std::shared_ptr<COrderContext>& spCtxSelf)
+        common::async::CPromise<COrderContext>::PromiseFactory fnQueryStock = [this, spStockModule](
+                                                                                  const std::shared_ptr<COrderContext>& spCtxSelf)
         {
             return BridgeQueryStock(spCtxSelf, spStockModule);
         };
@@ -243,8 +243,7 @@ public:
 
         // ⑤ 旁支：then 内部执行其他异步函数，但不等它（fire-and-forget）。
         common::async::CPromise<COrderContext>::ThenHandler fnBillingSideBranch =
-            [spBillingModule](
-                common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtxSelf)
+            [spBillingModule](common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtxSelf)
         {
             const int nOrderId = spCtxSelf->nSku * 1000 + spCtxSelf->nQty;
             common::async::CPromise<CBillingContext> promiseBill =
@@ -314,7 +313,7 @@ private:
     common::async::CPromise<COrderContext> BridgeQueryStock(
         const std::shared_ptr<COrderContext>& spCtx, const std::shared_ptr<CStockModule>& spStockModule)
     {
-        common::async::CPromise<COrderContext>::PromiseExecutor fnExecutor =
+        common::async::CPromise<COrderContext>::ChainStarter fnStarter =
             [spStockModule, spCtx](const common::async::CPromise<COrderContext>::ResolveFn& fnResolve,
                 const common::async::CPromise<COrderContext>::RejectFn& fnReject)
         {
@@ -342,7 +341,7 @@ private:
                     fnResolve();
                 });
         };
-        return m_exec.NewPromise(spCtx, fnExecutor, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
     }
 
     /// ④ 算折扣：满 3 件 9 折（模拟业务规则）。
@@ -427,8 +426,7 @@ private:
 static void WaitSideBranch(const std::shared_ptr<COrderContext>& spCtx, int nTimeoutMs)
 {
     const int nStepMs = 2;
-    for (int nWaited = 0; nWaited < nTimeoutMs && spCtx->nBillingDone.load(std::memory_order_relaxed) == 0;
-         nWaited += nStepMs)
+    for (int nWaited = 0; nWaited < nTimeoutMs && spCtx->nBillingDone.load(std::memory_order_relaxed) == 0; nWaited += nStepMs)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(nStepMs));
     }
@@ -452,8 +450,7 @@ bool RunThenMixCase()
     spOk->nSku = 88;
     spOk->nQty = 3;  // 满 3 件 → ④ 打折
 
-    const common::async::CPromiseResult resultOk =
-        spOrderModule->PlaceOrderAsync(spOk, spStockModule, spBillingModule).Await();
+    const common::async::CPromiseResult resultOk = spOrderModule->PlaceOrderAsync(spOk, spStockModule, spBillingModule).Await();
     WaitSideBranch(spOk, 1000);  // ⑤ 是旁支：主链不等它，这里等一下再断言
 
     const bool bOkStock = (spOk->nStock == 5 && spOk->bStockEnough);
@@ -466,8 +463,7 @@ bool RunThenMixCase()
     bOk = Expect(spOk->nBillingDone.load() == 1, "正常下单：旁支记账已完成", "nBillingDone!=1") && bOk;
     bOk = Expect(spOk->bAudited, "正常下单：finally 审计已执行", "bAudited=false") && bOk;
     bOk = Expect(bOkTrace, "正常下单：执行顺序符合预期", "轨迹=" + spOk->strTrace) && bOk;
-    std::printf(
-        "㉘ 混用多种 then（正常下单）: 合计=%d 库存=%d 轨迹=%s\n", spOk->nTotal, spOk->nStock, spOk->strTrace.c_str());
+    std::printf("㉘ 混用多种 then（正常下单）: 合计=%d 库存=%d 轨迹=%s\n", spOk->nTotal, spOk->nStock, spOk->strTrace.c_str());
 
     // ---------------- 路径 ②：库存不足（③ 的桥接拒绝 → ④⑤⑥ 不执行，catch
     // 补偿后仍透传） ----------------
@@ -475,8 +471,7 @@ bool RunThenMixCase()
     spOut->nSku = 88;
     spOut->nQty = 8;  // 库存只有 5 件 → ③ 查库存后拒绝
 
-    const common::async::CPromiseResult resultOut =
-        spOrderModule->PlaceOrderAsync(spOut, spStockModule, spBillingModule).Await();
+    const common::async::CPromiseResult resultOut = spOrderModule->PlaceOrderAsync(spOut, spStockModule, spBillingModule).Await();
 
     const bool bOkOutCode = (resultOut.IsRejected() && resultOut.Code() == static_cast<int>(kCodeOutOfStock));
     const bool bOkOutTrace = (spOut->strTrace == "读订单;校验通过;查库存(5);库存不足;补偿;审计;");
@@ -492,8 +487,7 @@ bool RunThenMixCase()
     spBad->nSku = 88;
     spBad->nQty = 50;  // 单笔最多 10 件 → ② 直接拒绝
 
-    const common::async::CPromiseResult resultBad =
-        spOrderModule->PlaceOrderAsync(spBad, spStockModule, spBillingModule).Await();
+    const common::async::CPromiseResult resultBad = spOrderModule->PlaceOrderAsync(spBad, spStockModule, spBillingModule).Await();
 
     const bool bOkBadCode = (resultBad.IsRejected() && resultBad.Code() == static_cast<int>(kCodeBadOrder));
     const bool bOkBadTrace = (spBad->strTrace == "读订单;校验失败(单笔最多 10 件);审计;");

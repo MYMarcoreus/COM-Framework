@@ -1,30 +1,48 @@
 # 异步 promise CPromise — 使用文档
 
 > 对应目录：`Common/Async`（命名空间 `common::async`）；协程在 `Common/Coroutine`（见 [coroutine-usage.md](coroutine-usage.md)）
-> 命名与语义对齐 **JS 的 Promise / async-await**，便于直接套用已有直觉。
+> **链语义**对齐 JS 的 Promise / async-await；但**调度不是 JS 的思路** —— C++ 没有宿主事件循环，
+> 所以多出一个显式执行器 `CAsyncExecutor`（JS 里没有对应物），见下表与 [async-vs-js.md §0](async-vs-js.md)。
 > 实现细节见：[async-impl.md](async-impl.md) ｜ 协程见：[coroutine-usage.md](coroutine-usage.md)
 > 与 JS 的差异对照：[async-vs-js.md](async-vs-js.md) ｜ 单文件示例：[async-mixed-then-example.md](async-mixed-then-example.md)
 
 ## 1. JS 对照速查
 
+### 1.1 链语义（JS Promise → 本框架）
+
 | JS | 本框架 |
 | --- | --- |
-| `new Promise((resolve, reject) => {...})` | `exec.NewPromise(spCtx, 首层)` |
-| `new Promise` **由外部回调 settle** | `exec.NewPromise(spCtx, executor)`（executor 里拿到 resolve / reject 句柄） |
+| `new Promise((resolve, reject) => {...})` | `exec.NewPromise(spCtx, 首层)` ⁽*⁾ |
+| `new Promise` **由外部回调 settle** | `exec.NewPromise(spCtx, fnStarter)` ⁽*⁾（起链回调里拿到 resolve / reject 句柄） |
 | `promise.then(onFulfilled)` | `p.Then(处理器)` |
 | `then` 的处理器**返回 promise**（flatten） | `p.ThenPromise(子 promise 工厂)` |
 | `then` 里**等另一个模块的 promise 并把数据取回来** | `p.ThenBridge(起子链, 搬数据)`（简写，等价下行两行） |
 | `promise.catch(onRejected)` | `p.Catch(处理器)` |
 | `promise.finally(onFinally)` | `p.Finally(处理器)` |
-| `await promise` | `p.Await()`（阻塞） |
 | `promise` 已完成 | `p.IsSettled()` |
 | `resolve()` / `reject(reason)` | `CPromiseResult::Resolve()` / `CPromiseResult::Reject(码)` |
 | `fulfilled` / `rejected` | `result.IsFulfilled()` / `result.IsRejected()` |
 | 状态 pending → settled | 每个 then/catch/finally 都返回「指向新一层的 promise」 |
-| `Promise.all([a, b])` | `exec.WhenAll(spCtx, a, b)`（详见 §10）；协程内并行也可用 `CO_AWAIT_ALL(a, b)` |
-| `Promise.allSettled([a, b])` | `exec.WhenAllSettled(spCtx, a, b)` |
-| `Promise.race([a, b])` | `exec.WhenRace(spCtx, a, b)` |
-| `Promise.any([a, b])` | `exec.WhenAny(spCtx, a, b)` |
+| `Promise.all([a, b])` | `exec.WhenAll(spCtx, a, b)`（详见 §10）；协程内并行也可用 `CO_AWAIT_ALL(a, b)` ⁽*⁾ |
+| `Promise.allSettled([a, b])` | `exec.WhenAllSettled(spCtx, a, b)` ⁽*⁾ |
+| `Promise.race([a, b])` | `exec.WhenRace(spCtx, a, b)` ⁽*⁾ |
+| `Promise.any([a, b])` | `exec.WhenAny(spCtx, a, b)` ⁽*⁾ |
+
+> ⁽*⁾ **结构差异**：JS 的 `new Promise` 是构造函数、`Promise.all` 一族是构造函数上的**静态方法**；
+> 本框架挂在**执行器实例**上（`exec.*`），而且多一个 `spCtx` 参数 —— 因为 C++ 里「调度器」与
+> 「共享上下文」都必须显式传（JS 靠宿主事件循环与闭包隐式提供）。
+
+### 1.2 本框架有、JS 没有
+
+| 本框架 | 作用 |
+| --- | --- |
+| `exec.Start()` / `Stop()` / `Post(fn)` | 执行器生命周期与 fire-and-forget 投递（≈ Asio `io_context::post`） |
+| `p.Await()` | **阻塞**等待结果（占住 worker，可死锁；≈ C# `Task.Wait()`） |
+| `p.AwaitFor(ms)` | 阻塞等待 + 超时（≈ 手写 `Promise.race`） |
+| `p.ThenInline()` | 在**结算线程**上就地跑本层（≈ Asio `dispatch` / `ConfigureAwait(false)`） |
+| `p.ThenOn(exec)` | 指定执行器的线程上跑本层（≈ `thenApplyAsync(fn, executor)`） |
+| `p.OnSettledOn(exec, cb)` | 收尾通知投到指定执行器线程 |
+| `exec.CoStart<T>(spCtx)` + `CO_AWAIT` | 无栈协程（≈ C# `Task.Run` + `async/await`） |
 
 ## 2. 与「传值版任务链」的区别
 
@@ -98,7 +116,7 @@ if (r.IsFulfilled())
 
 要点：
 
-- `exec.NewPromise(spCtx, 首层)` / `CPromise(exec, spCtx, 首层)` **构造即投递**（等价 `new Promise(executor)` 立即执行 executor）；
+- `exec.NewPromise(spCtx, 首层)` **起链即投递首层**（等价 JS 里 `new Promise(executor)` 立即执行 executor）；
 - `Then` / `Catch` / `Finally` 各自返回**指向新一层的句柄**；
 - 只有最后一层的句柄取结果才有意义 —— 写成 `auto tail = exec.NewPromise(...).Then(...)` 再 `tail.Await()`；
   丢弃返回值时 `p.Await()` 等到的只是首层。
@@ -166,7 +184,7 @@ common::async::CPromise<CMyContext> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC)
 | --- | --- | --- | --- |
 | 协程内 await（**推荐**） | `CO_AWAIT(NewPromise(StepSub))`、`CO_AWAIT(pChild->AsPromise())`、`CO_AWAIT(exec.NewPromise(spOther, StepX))` | 否（挂起让出线程） | 任何「等一段异步再往下走」的场合 |
 | 协程内并行 await | `CO_AWAIT_ALL(a, b, c)` | 否 | 多段异步并行 + 汇聚 |
-| **跨模块组合**（不用协程） | `p.ThenPromise(工厂)` + `exec.NewPromise(spCtx, executor)` | 否 | 调用**其他模块 / 另一套上下文**的异步函数，且要拿到完整结果 |
+| **跨模块组合**（不用协程） | `p.ThenPromise(工厂)` + `exec.NewPromise(spCtx, fnStarter)` | 否 | 调用**其他模块 / 另一套上下文**的异步函数，且要拿到完整结果 |
 | 层内非阻塞嵌套 | 层里起子 promise，由它的 `OnSettled` 回调接着写上下文 / 起后续 | 否 | 层里「顺手起一段异步」，不关心何时回来 |
 | 层内 Post | `exec.Post(重活)` | 否 | fire-and-forget 重活下沉 |
 | 层内阻塞等待 | 层里 `sub.Await()` | **是**（占住一个 worker） | 仅当线程池还有空闲 worker（**单线程执行器必死锁**） |
@@ -222,7 +240,7 @@ exec.NewPromise(spCtx, [&exec, spSub](common::async::CPromiseResult up, const st
 }, ASYNC_LOC);
 ```
 
-### 6.3 跨模块组合：`ThenBridge`（推荐）/ `ThenPromise` + `exec.NewPromise(spCtx, executor)`
+### 6.3 跨模块组合：`ThenBridge`（推荐）/ `ThenPromise` + `exec.NewPromise(spCtx, fnStarter)`
 
 场景：模块 A 的业务流程要调「**模块 B（另一套上下文类型）**」的异步函数，
 且模块 A 的调用方希望拿到的 promise 反映**含 B 在内的完整结果**。
@@ -263,7 +281,7 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
 - 需要因业务规则拒绝（如「库存不足」）时，请在**桥接之后的层**里 `return CPromiseResult::Reject(码)`，
   不要塞进 `fnApply`（它没有返回值，也不该做业务分支）。
 
-#### 等价的手写版：`ThenPromise` + `exec.NewPromise(spCtx, executor)`（`ThenBridge` 内部就是这两步）
+#### 等价的手写版：`ThenPromise` + `exec.NewPromise(spCtx, fnStarter)`（`ThenBridge` 内部就是这两步）
 
 两步写出来就是 JS 的组合方式：
 
@@ -312,19 +330,19 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
   —— 被调模块 settle 本链时，这一层会被投递回本模块执行器（同执行器内仍然就地内联，不多花一次入队）。
   所以回调里可以直接改本模块状态，无需再显式 `exec.Post(...)`（想显式强制也仍然可用）；
   但 **`OnSettled` 通知不迁移**：它仍在结算线程（= 被调模块线程）上触发，只对「层」做亲和；
-  `exec.NewPromise(spCtx, executor)` 的 executor 是「发起」语义，仍在调用线程上同步执行。
+  `exec.NewPromise(spCtx, fnStarter)` 的起链回调是「发起」语义，仍在调用线程上同步执行。
   背景与实测：见 [async-cross-module-findings.md](async-cross-module-findings.md)；
 - **`OnSettled` 保证送达**（2026-09-11 框架修复）：子 promise 已 settled 且它的执行器不可用
-  （被调模块已停止 / 拒绝投递）时，通知改为在**调用线程**上就地执行 —— 调用方**不需要**检查返回值，
-  漏检也不会让桥接层永久 pending（返回值只在 promise 无效时为 `false`）。
+  （被调模块已停止 / 拒绝投递）时，通知改为在**调用线程**上就地执行 —— `OnSettled` 现在**没有返回值**
+  （登记即生效），漏检不可能再发生，桥接层不会因此永久 pending。
   注意「层」的语义不变：`Then` / `Catch` / `Finally` 在同样情况下仍以 `kStopped` 收口
   （停了的执行器不再跑新层）。背景见 [async-cross-module-findings.md](async-cross-module-findings.md)；
 - 子 promise 可以是**任意 promise**：同一 `TContext` 的 then 链**直接返回**就会被 adopt（无需桥接）；
-  跨上下文才需要 `exec.NewPromise(spCtx, executor)` 桥接（本节写法）。内层链被拒绝时，拒绝码会作为本层拒绝
+  跨上下文才需要 `exec.NewPromise(spCtx, fnStarter)` 桥接（本节写法）。内层链被拒绝时，拒绝码会作为本层拒绝
   沿**外层链**透传（外层后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
 - `ThenPromise` 的语义与 `Then` 一致（上层被拒绝则本层不执行），差别是**本层等子 promise**：
   子 promise 兑现 → 本层兑现；子 promise 被拒绝 → 本层以**同一拒绝码**被拒绝（`Catch` / `Finally` 仍会执行）；
-- `exec.NewPromise(spCtx, executor)` 的 executor **立即（同步）执行**（与 JS 一致），只应做「发起 + 登记回调」，
+- `exec.NewPromise(spCtx, fnStarter)` 的起链回调 **立即（同步）执行**（与 JS 一致），只应做「发起 + 登记回调」，
   由回调调 `fnResolve()` / `fnReject(码)`；
 - 桥接处是**唯一**做「跨模块拒绝码 → 业务码」语义转换的地方（例如把数据访问层的
   `kDbRowNotFound` 归一化成「兑现 + bFound=false」，把 `kException` 映射成业务码）；
@@ -613,7 +631,7 @@ common::async::CPromise<Ctx> p =
 | `OnSuccess / OnNone` | `Then` / `Catch`（统一用 `CPromiseResult` 判断） |
 | `Get()` | `Await()` |
 | `NOTHROW_LOC` | `ASYNC_LOC` |
-| flatMap（层返回 `CTask`） | 同上下文：`ThenPromise`（处理器返回 promise，框架自动等）；跨上下文：`exec.NewPromise(spCtx, executor)` 桥接（见 6.3 / 协程文档） |
+| flatMap（层返回 `CTask`） | 同上下文：`ThenPromise`（处理器返回 promise，框架自动等）；跨上下文：`exec.NewPromise(spCtx, fnStarter)` 桥接（见 6.3 / 协程文档） |
 
 ## 14. 测试与示例
 
