@@ -448,6 +448,17 @@ public:
         m_trace.tid = tid;
     }
 
+    /// @brief 记下「本层跑在哪个执行器上」（开跑时由帧写一次，之后只读）。
+    ///
+    /// 链会在几个执行器之间跳（`ThenOn`），所以这是逐层属性；名字串在执行器构造时分配一次，
+    /// 各层共享（层记录持强引用：执行器析构后已起的链还会跑完）。
+    ///
+    /// @param spExecName 执行器名（空 = 未命名）。
+    void SetTraceExec(const std::shared_ptr<const std::string>& spExecName)
+    {
+        m_trace.spExecName = spExecName;
+    }
+
     /// @brief 记下本层处理器的耗时（落定前写一次）。
     ///
     /// @param nMs 毫秒数。
@@ -642,10 +653,13 @@ public:
         const std::shared_ptr<CExecutorHandle>& pTarget = nullptr) const
     {
         ASSERT(pState != nullptr);  // 内部调用：本层状态恒存在。
+
         std::function<void()> fnRun = MakeHandlerRunner(Context(), pState, fnHandler, upResult, eMode);
 
         // 派发策略（就地 / 投递 / 深度限额 / 亲和解析）在执行器侧；这里只管「造任务体 + 失败收口」。
         const std::shared_ptr<CExecutorHandle> pExec = ResolveExecHandle(eAffinity, pTarget, Handle());
+
+        // 派发策略（就地 / 投递 / 深度限额 / 亲和解析）在执行器侧；这里只管「造任务体 + 失败收口」。
         if (!DispatchInlineOrPost(eAffinity, pExec, std::move(fnRun)))
         {
             pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用 → 本层被拒绝。

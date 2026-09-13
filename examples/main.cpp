@@ -29,6 +29,11 @@
 //         ./build.sh --debug examples && ./build/debug/examples
 //       发布构建下这些打印只剩一行「trace 关闭」的提示（接口是空操作，零开销）。
 //
+//   [i] 每层行尾的 tid 是「真正跑这一层的那条线程」，方括号里是「跑在哪个执行器上」
+//       （`CAsyncExecutor("main", 8)` 这样的名字）—— 链跳执行器时一眼看得出跳到谁家去了。
+//       同时 worker 线程也按「名字-序号」命名（`main-0`），gdb 的 `info threads` / htop
+//       里可直接对应上。
+//
 //   [i] 子链 → 父链（已打通）：**起链时正在跑的那一层**会被记成新链「链根」的父层 ——
 //       内层链（⑤）/ 跨模块子链（⑥）/ 协程起的子链（⑩）都能从子链里一路追回父链（连成一棵树）。
 //       - 组合器（WhenAll 一族）：聚合层与各分支都挂在「发起它们的那一层」下面（多父一子）；
@@ -454,7 +459,7 @@ public:
         {}
     };
 
-    CBillingModule() : m_exec(4), m_nNextBillNo(1000)
+    CBillingModule() : m_exec("billing", 4), m_nNextBillNo(1000)
     {}
 
     /// @brief 起模块（执行器启动失败返回 false）。
@@ -847,9 +852,9 @@ int main()
     std::printf("发布构建：trace 关闭（用 ./build.sh --debug examples 跑，才能看到每层的调用链）\n");
 #endif
 
-    CAsyncExecutor execMain(8);  // 主链：8 线程（分叉两支 / 协程并行 await 会**真的同时**跑）
-    CAsyncExecutor execDb(4);    // 模拟「数据访问模块」自己的执行器
-    CBillingModule billing;      // 记账模块（自持执行器 + 自持上下文）
+    CAsyncExecutor execMain("main", 8);  // 主链：8 线程（分叉两支 / 协程并行 await 会**真的同时**跑）
+    CAsyncExecutor execDb("db", 4);      // 模拟「数据访问模块」自己的执行器
+    CBillingModule billing;              // 记账模块（自持执行器 + 自持上下文，名字 billing）
     StartOrFail(execMain);
     StartOrFail(execDb);
     const bool bBillStarted = billing.Start();

@@ -628,6 +628,7 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 | | `nLayerId` / `nChainId` | 全局递增的层号 / 链号（链号在链根分配，子链与父链不同号） |
 | | `bChainRoot` / `bSubChain` | 是不是链根 / 是不是「挂在别的层下面」的子链链根 |
 | | `tid` / `nSelfMs` / `tCreated` | 实际跑在哪条线程 / 本层处理器耗时 / 创建时刻 |
+| | `spExecName` | 本层**实际跑在哪个执行器**上（执行器名）。`shared_ptr<const string>`：名字串在执行器构造时分配一次、各层共享，层记录持强引用 → 执行器析构后已起的链也不会悬垂 |
 | 视图（遍历时算） | `nDepth` / `bCurrent` | 距当前层几跳 / 是不是正在执行的那一层 |
 | | `nAgeMs` / `nSelfMs` | 年龄 = 创建到现在（链根上 = 整条链的年龄）；当前层的耗时用实时值 |
 | | `bSettled` / `bFulfilled` / `nCode` | 落定与否 / 结果是否兑现 / 结果码 |
@@ -635,10 +636,20 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 `DescribeLayer(info)` 把上面这些拼成一行（`examples` 里 ①…⑬ 每个位置打印的就是它）：
 
 ```text
-#0  then    BuildOrderChain  main.cpp:641  链#1 层#3 龄=0ms 本层=0ms 结果=未落定 tid=…  ← 当前层
-#1  then    BuildOrderChain  main.cpp:639  链#1 层#2 龄=0ms 本层=0ms 结果=兑现   tid=…
-#2  then    BuildOrderChain  main.cpp:637  链#1 层#1 龄=0ms 本层=0ms 结果=兑现   tid=… [链根]
+#0  then    BuildOrderChain  main.cpp:641  [main]       链#1  层#3   龄=0ms 本层=0ms 结果=未落定 tid=…  ← 当前层
+#1  then    BuildOrderChain  main.cpp:639  [main]       链#1  层#2   龄=0ms 本层=0ms 结果=兑现   tid=…
+#2  then    BuildOrderChain  main.cpp:637  [main]       链#1  层#1   龄=0ms 本层=0ms 结果=兑现   tid=… [链根]
 ```
+
+方括号那一列（12 列，`[name]` 连方括号一起左对齐）是**本层实际跑在哪个执行器上**。
+来源是**线程自己的归属**（`CThreadPool` 的 worker 在自己线程的 TLS 里带着池名，
+`CCurrentLayerFrame` 压帧时顺手记下来），不是「注册时指定的执行器」：
+
+- `ThenOn` / 链根 / 子链上的默认层 → 显示目标执行器的名字；
+- `ThenInline`（接着结算线程跑）→ 显示**上游当时所在**的执行器；
+- `-`：本层没跑过 handler（桥接层、被跳过的层），或者跑在**非执行器线程**上
+  （调用者线程等）—— 配合 `tid` 一起看（`tid=-` 才是「真没跑过」）；
+- 名字只在执行器构造时给（`CAsyncExecutor("db", 4)`；空串 = 未命名 → `-`）。
 
 「结果」是在**读的时候**从层状态里取的（`TryGetResult()`，锁内拷一份），所以正在跑的当前层
 显示「未落定」、跑完的层显示兑现 / 拒绝（含业务码）—— 失败路径上「被跳过的层照样在链上、

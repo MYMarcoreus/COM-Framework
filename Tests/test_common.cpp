@@ -8,8 +8,14 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
+
+#if defined(__linux__)
+    #include <pthread.h>  // pthread_getname_np：读线程名（线程池起名的用例用）。
+#endif
 
 #include "Config/Config.h"
 #include "Network/Buffer.h"
@@ -122,4 +128,64 @@ TEST(Config_LoadAndGet)
     ASSERT_EQ(config.GetString("missing", "def"), std::string("def"));
     ASSERT_EQ(config.GetInt("port", 0), 9500);
     ASSERT_EQ(config.GetInt("missing", -1), -1);
+}
+
+/// @brief 线程池给 worker 线程起名（调试用：gdb 的 `info threads` / htop 里可辨认）。
+///
+/// 在任务里读**自己**的线程名（Linux 的 `pthread_getname_np`），断言它形如 `<池名>-<序号>`。
+/// 非 Linux 平台不设线程名，这个用例只验证「不起名不影响功能」。
+TEST(ThreadPool_WorkerThreadName)
+{
+    common::thread::CThreadPool pool(2, "namedpool");
+    ASSERT_EQ(pool.Name(), std::string("namedpool"));
+    ASSERT_TRUE(pool.Start());
+
+    std::mutex mutex;
+    std::vector<std::string> vecNames;
+    std::atomic<int> nDone(0);
+    for (int i = 0; i < 10; ++i)
+    {
+        ASSERT_TRUE(pool.Submit(
+            [&mutex, &vecNames, &nDone]()
+            {
+#if defined(__linux__)
+                char szName[32] = {0};
+                pthread_getname_np(pthread_self(), szName, sizeof(szName));
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    vecNames.push_back(std::string(szName));
+                }
+#endif
+                nDone.fetch_add(1);
+            }));
+    }
+    pool.Stop();  // 等所有任务跑完
+    ASSERT_EQ(nDone.load(), 10);
+
+#if defined(__linux__)
+    ASSERT_TRUE(!vecNames.empty());
+    for (size_t i = 0; i < vecNames.size(); ++i)
+    {
+        // 形如 `namedpool-0` / `namedpool-1`（池名 + 序号）。
+        ASSERT_TRUE(vecNames[i].compare(0, 9, "namedpool") == 0);
+        ASSERT_TRUE(vecNames[i].size() > 9 && vecNames[i][9] == '-');
+    }
+#endif
+}
+
+/// @brief 未命名的线程池照常工作（不起线程名 = 保持系统默认，不影响任何行为）。
+TEST(ThreadPool_UnnamedStillWorks)
+{
+    common::thread::CThreadPool pool(1);
+    ASSERT_TRUE(pool.Name().empty());
+    ASSERT_TRUE(pool.Start());
+
+    std::atomic<int> nCounter(0);
+    ASSERT_TRUE(pool.Submit(
+        [&nCounter]()
+        {
+            nCounter.fetch_add(1);
+        }));
+    pool.Stop();
+    ASSERT_EQ(nCounter.load(), 1);
 }

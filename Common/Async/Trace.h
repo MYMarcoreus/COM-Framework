@@ -91,13 +91,21 @@ struct CLayerInfo
     CSourceLoc loc;                                   ///< 注册点（`ASYNC_LOC` 传入的位置）。
     detail::HandlerMode eMode;                        ///< then / catch / finally。
     std::shared_ptr<detail::CPromiseState> upstream;  ///< 上游层（谁挂的它；链根 → 空）。
-    unsigned nLayerId;                                ///< 层号（全局唯一，按创建顺序递增）。
-    unsigned nChainId;                                ///< 链号（链根创建时分配；子链与父链不同号）。
-    bool bChainRoot;                                  ///< 是不是「它那条链」的链根。
-    bool bSubChain;                                   ///< 链根且起链时挂在别的层下面（= 子链）。
-    std::thread::id tid;                              ///< 实际跑在哪条线程上（还没跑过 → 默认 id）。
-    long long nSelfMs;                                ///< 本层处理器耗时（落定前写一次）。
-    std::chrono::steady_clock::time_point tCreated;   ///< 层状态创建时刻（算年龄用）。
+
+    /// 本层**实际跑在哪个执行器**上（执行器名；未命名 / 直接跑在当前线程的层 → 空）。
+    ///
+    /// 链可能在几个执行器之间跳（`ThenOn`），所以这是**逐层**的属性。存 `shared_ptr`
+    /// 而不是裸指针：执行器析构后已起的链还会跑完，名字得跟着活（名字串在执行器构造时
+    /// 分配一次，各层共享）。
+    std::shared_ptr<const std::string> spExecName;
+
+    unsigned nLayerId;                               ///< 层号（全局唯一，按创建顺序递增）。
+    unsigned nChainId;                               ///< 链号（链根创建时分配；子链与父链不同号）。
+    bool bChainRoot;                                 ///< 是不是「它那条链」的链根。
+    bool bSubChain;                                  ///< 链根且起链时挂在别的层下面（= 子链）。
+    std::thread::id tid;                             ///< 实际跑在哪条线程上（还没跑过 → 默认 id）。
+    long long nSelfMs;                               ///< 本层处理器耗时（落定前写一次）。
+    std::chrono::steady_clock::time_point tCreated;  ///< 层状态创建时刻（算年龄用）。
 
     //================ 遍历时填的视图字段 ================
 
@@ -113,6 +121,7 @@ struct CLayerInfo
         : loc(),
           eMode(detail::kModeThen),
           upstream(),
+          spExecName(),
           nLayerId(0),
           nChainId(0),
           bChainRoot(false),
@@ -209,7 +218,7 @@ private:
 class CCurrentLayerFrame
 {
 public:
-    /// @brief 压栈（记录「当前层」并记下它的线程与开始时刻）。
+    /// @brief 压栈（记录「当前层」并记下它的线程、执行器与开始时刻）。
     ///
     /// @param spLayer 本帧对应的层（持强引用：`LayerState()` 要把「父层」交给新起的链）。
     explicit CCurrentLayerFrame(const std::shared_ptr<CPromiseState>& spLayer);

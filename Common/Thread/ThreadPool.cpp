@@ -1,6 +1,11 @@
 #include "Thread/ThreadPool.h"
 
 #include <chrono>
+#include <string>
+
+#if defined(__linux__)
+    #include <pthread.h>  // pthread_setname_np：给工作线程起名（调试用）。
+#endif
 
 namespace common {
 namespace thread {
@@ -10,27 +15,67 @@ namespace {
 /// @brief 当前线程所属的线程池（仅工作线程内有效，其它线程为 nullptr）。
 thread_local const CThreadPool* tl_pCurrentPool = nullptr;
 
+/// @brief 当前线程所属线程池的名字（共享所有权副本；仅工作线程内非空）。
+///
+/// 存 `shared_ptr` 而不是裸指针：上层（异步 trace）会把它记到「某一层」上，
+/// 那一层可能比线程池活得久 —— 共享所有权副本既零分配（只加引用计数）又不会悬垂。
+thread_local std::shared_ptr<const std::string> tl_spCurrentPoolName;
+
 /// @brief 工作线程作用域标记（进入设、退出清）——线程亲和的判定基础。
 struct CWorkerPoolScope
 {
-    explicit CWorkerPoolScope(const CThreadPool* pPool)
+    CWorkerPoolScope(const CThreadPool* pPool, const std::shared_ptr<const std::string>& spName)
     {
         tl_pCurrentPool = pPool;
+        tl_spCurrentPoolName = spName;
     }
 
     ~CWorkerPoolScope()
     {
         tl_pCurrentPool = nullptr;
+        tl_spCurrentPoolName.reset();
     }
 };
+
+/// @brief 给当前线程起个名字（供 gdb `info threads` / htop / top -H 里辨认）。
+///
+/// 名字取 `<池名>-<序号>`；Linux 的线程名上限是 15 字节（含结尾 `\0`），超长截断。
+/// 池名为空（或非 Linux 平台）时什么都不做 —— 线程名只是调试便利，不影响任何逻辑。
+///
+/// @param strPoolName 池名（空 = 不起名）。
+/// @param nIndex 本 worker 的序号（从 0 起）。
+void SetWorkerThreadName(const std::string& strPoolName, size_t nIndex)
+{
+#if defined(__linux__)
+    if (strPoolName.empty())
+    {
+        return;
+    }
+    std::string strName = strPoolName + "-" + std::to_string(nIndex);
+    if (strName.size() > 15)
+    {
+        strName.resize(15);
+    }
+    pthread_setname_np(pthread_self(), strName.c_str());
+#else
+    (void)strPoolName;
+    (void)nIndex;
+#endif
+}
 
 }  // namespace
 
 /// @brief 创建线程池。
 ///
 /// @param nThreadCount 工作线程数量。
-CThreadPool::CThreadPool(size_t nThreadCount)
-    : m_nPending(0), m_nIdleWorkers(0), m_nThreadCount(nThreadCount), m_bRunning(false), m_bStopping(false)
+/// @param strName 池名（只用于给工作线程起名 / 日志辨认；空 = 不起名）。
+CThreadPool::CThreadPool(size_t nThreadCount, const std::string& strName)
+    : m_nPending(0),
+      m_nIdleWorkers(0),
+      m_nThreadCount(nThreadCount),
+      m_spName(strName.empty() ? std::shared_ptr<const std::string>() : std::make_shared<const std::string>(strName)),
+      m_bRunning(false),
+      m_bStopping(false)
 {}
 
 /// @brief 销毁线程池。
@@ -56,7 +101,7 @@ bool CThreadPool::Start()
     m_nIdleWorkers = 0;  // 线程尚未投入，空闲计数清零。
     for (size_t i = 0; i < m_nThreadCount; ++i)
     {
-        m_vecWorkers.push_back(std::thread(&CThreadPool::WorkerLoop, this));
+        m_vecWorkers.push_back(std::thread(&CThreadPool::WorkerLoop, this, i));
     }
     return true;
 }
@@ -194,10 +239,17 @@ bool CThreadPool::IsInPoolThread(const CThreadPool* pPool)
     return pPool != nullptr && tl_pCurrentPool == pPool;
 }
 
-/// @brief 工作线程循环。
-void CThreadPool::WorkerLoop()
+/// @brief 当前线程所属线程池的名字。
+std::shared_ptr<const std::string> CThreadPool::CurrentPoolName()
 {
-    CWorkerPoolScope poolScope(this);  // 标记本线程归属（线程亲和判定用）。
+    return tl_spCurrentPoolName;
+}
+
+/// @brief 工作线程循环。
+void CThreadPool::WorkerLoop(size_t nIndex)
+{
+    CWorkerPoolScope poolScope(this, m_spName);  // 标记本线程归属（线程亲和判定用）。
+    SetWorkerThreadName(Name(), nIndex);         // 调试用：让这条线程在 gdb/htop 里可辨认。
     while (true)
     {
         CTask fnTask;

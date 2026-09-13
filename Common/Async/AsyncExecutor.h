@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "Async/Diagnostics.h"
@@ -71,6 +72,8 @@ struct CExecutorHandle
 {
     std::shared_ptr<common::thread::CThreadPool> m_pPool;  ///< 工作线程池。
     std::atomic<bool> m_bStopped;                          ///< 是否已停止（拒绝新投递）。
+
+    /// 执行器名（**共享**给 trace 用：层记录要长期持有它 —— 执行器析构后已起的链还会跑完，
 
     CExecutorHandle() : m_bStopped(false)
     {}
@@ -214,6 +217,26 @@ public:
     // 创建执行器（线程数默认 1）。
     explicit CAsyncExecutor(size_t nThreadCount = 1);
 
+    // 创建**具名**执行器（线程数默认 1）。
+    //
+    // 名字只用于调试，但两处都很实用：
+    //  ① 线程池的 worker 线程被命名为「<名字>-<序号>」—— gdb 的 `info threads` / htop 里直接
+    //     能看出这条线程属于哪个执行器；
+    //  ② 每层 trace 记下「这一层跑在哪个执行器上」，`DescribeLayer` 打印 `[名字]` —— 链在几个
+    //     执行器之间跳（`ThenOn`）时一眼能看出跑到谁家去了。
+    //
+    // 名字末尾会被线程名长度（15 字节）截断，所以给短一点（如 `main` / `db`）。
+    //
+    // @param strName 执行器名。
+    // @param nThreadCount 工作线程数。
+    CAsyncExecutor(const std::string& strName, size_t nThreadCount = 1);
+
+    // 执行器名（空 = 未命名）。
+    const std::string& Name() const
+    {
+        return m_strName;
+    }
+
     // 不可拷贝（拷贝会共享线程池，Stop 相互影响）。
     CAsyncExecutor(const CAsyncExecutor&) = delete;
     CAsyncExecutor& operator=(const CAsyncExecutor&) = delete;
@@ -295,8 +318,14 @@ private:
         return m_pHandle;
     }
 
-    std::shared_ptr<detail::CExecutorHandle> m_pHandle;  ///< 执行器句柄（promise / 协程共享）。
+    // 新建句柄（连同线程池对象：都带上本执行器的名字）。
+    std::shared_ptr<detail::CExecutorHandle> MakeHandle() const;
+
+    // 注意声明顺序：成员按**声明序**初始化，而 `m_pHandle` 的构造（MakeHandle）要用到名字 ——
+    // 所以 `m_strName` 必须声明在它前面。
+    std::string m_strName;                               ///< 执行器名（调试用；空 = 未命名）。
     size_t m_nThreadCount;                               ///< 工作线程数。
+    std::shared_ptr<detail::CExecutorHandle> m_pHandle;  ///< 执行器句柄（promise / 协程共享）。
 };
 
 //================ Combine ================

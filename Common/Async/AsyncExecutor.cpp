@@ -16,17 +16,34 @@ namespace async {
 /// 线程池对象始终存在但未启动；须显式 Start() 后工作线程才开始取任务。
 ///
 /// @param nThreadCount 工作线程数。
-CAsyncExecutor::CAsyncExecutor(size_t nThreadCount)
-    : m_pHandle(new detail::CExecutorHandle()),  // 句柄（线程池对象随即创建）。
-      m_nThreadCount(nThreadCount)
-{
-    m_pHandle->m_pPool.reset(new common::thread::CThreadPool(m_nThreadCount));  // 线程池对象总在（未启动）。
-}
+CAsyncExecutor::CAsyncExecutor(size_t nThreadCount) : CAsyncExecutor(std::string(), nThreadCount)
+{}
+/// @brief 创建具名异步执行器（名字只用于调试：线程名 + trace 里看得到）。
+///
+/// @param strName 执行器名（空 = 未命名）。
+/// @param nThreadCount 工作线程数。
+CAsyncExecutor::CAsyncExecutor(const std::string& strName, size_t nThreadCount)
+    : m_strName(strName),  // 必须排在 m_pHandle 之前（声明序即初始化序；MakeHandle 要用名字）。
+      m_nThreadCount(nThreadCount),
+      m_pHandle(MakeHandle())
+{}
 
 /// @brief 销毁异步执行器（停止线程池并等待已投递任务完成）。
 CAsyncExecutor::~CAsyncExecutor()
 {
     Stop();
+}
+
+/// @brief 新建句柄（连同线程池对象：都带上本执行器的名字）。
+///
+/// 前提：`m_strName` 已经初始化（它在 `m_pHandle` **之前**声明，所以构造时轮得到）。
+///
+/// @return 新句柄（线程池对象已创建但未启动）。
+std::shared_ptr<detail::CExecutorHandle> CAsyncExecutor::MakeHandle() const
+{
+    std::shared_ptr<detail::CExecutorHandle> pHandle(new detail::CExecutorHandle());
+    pHandle->m_pPool.reset(new common::thread::CThreadPool(m_nThreadCount, m_strName));
+    return pHandle;
 }
 
 /// @brief 启动工作线程。
@@ -45,8 +62,7 @@ bool CAsyncExecutor::Start()
     // 若之前 Stop 过（句柄已标记停止），重建句柄与线程池以隔离旧任务。
     if (m_pHandle->m_bStopped)
     {
-        m_pHandle.reset(new detail::CExecutorHandle());
-        m_pHandle->m_pPool.reset(new common::thread::CThreadPool(m_nThreadCount));
+        m_pHandle = MakeHandle();  // 重建：句柄、名字、线程池一起换。
     }
     return m_pHandle->m_pPool->Start();
 }

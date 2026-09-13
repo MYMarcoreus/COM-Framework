@@ -1261,11 +1261,12 @@ struct CThreadCtx
     static const int kLayers = 9;  ///< 本用例的链长（主链 7 层 + 子链 2 层）。
 
     std::thread::id aTidSelf[kLayers];  ///< 每一层**自己**记下的「我跑在哪条线程上」。
+    std::string aExecSelf[kLayers];     ///< 每一层**自己**记下的「我跑在哪个执行器上」。
     int aLine[kLayers];                 ///< 每一层的注册点行号（链形状的指纹）。
     CCapture capDeep;                   ///< 子链最深一层（采集点）的快照。
     std::atomic<bool> bOk;              ///< 链跑完了（断言只能在主测试线程做）。
 
-    CThreadCtx() : aTidSelf(), aLine(), capDeep(), bOk(false)
+    CThreadCtx() : aTidSelf(), aExecSelf(), aLine(), capDeep(), bOk(false)
     {
         for (int i = 0; i < kLayers; ++i)
         {
@@ -1274,9 +1275,19 @@ struct CThreadCtx
     }
 };
 
-/// @brief 造一个「记录自己跑在哪条线程上」的层处理器。
+/// @brief 当前线程所属线程池的名字（不在池线程上 → 空串）。
 ///
-/// @param spCtx 上下文（写 aTidSelf[nIndex]）。
+/// 层里取它 = 这一层**实际**跑在哪个执行器上（内联层是「接着上游那条线程跑」，
+/// 可能就落在别的执行器的线程上）。trace 记的必须是同一个答案。
+std::string PoolNameOfThisThread()
+{
+    const std::shared_ptr<const std::string> spName = common::thread::CThreadPool::CurrentPoolName();
+    return (spName != nullptr) ? *spName : std::string();
+}
+
+/// @brief 造一个「记录自己跑在哪条线程 / 哪个执行器上」的层处理器。
+///
+/// @param spCtx 上下文（写 aTidSelf[nIndex] / aExecSelf[nIndex]）。
 /// @param nIndex 这一层在链上的序号（0 = 链根）。
 /// @return 层处理器。
 CPromise<CThreadCtx>::ThenHandler MakeThreadStep(const std::shared_ptr<CThreadCtx>& spCtx, int nIndex)
@@ -1286,6 +1297,7 @@ CPromise<CThreadCtx>::ThenHandler MakeThreadStep(const std::shared_ptr<CThreadCt
         (void)upResult;
         (void)spSelf;
         spCtx->aTidSelf[nIndex] = std::this_thread::get_id();  // 「这一层真的跑在这条线程上」
+        spCtx->aExecSelf[nIndex] = PoolNameOfThisThread();     // 「这一层真的跑在这个执行器上」
         return CPromiseResult::Resolve();
     };
 }
@@ -1295,6 +1307,7 @@ CPromiseResult ThreadStepDeep(CPromiseResult upResult, const std::shared_ptr<CTh
 {
     (void)upResult;
     spCtx->aTidSelf[CThreadCtx::kLayers - 1] = std::this_thread::get_id();
+    spCtx->aExecSelf[CThreadCtx::kLayers - 1] = PoolNameOfThisThread();
     CaptureNow(spCtx->capDeep);
     return CPromiseResult::Resolve();
 }
@@ -1354,9 +1367,12 @@ int CountDistinctThreads(const std::vector<CLayerInfo>& vecChain)
 TEST(Trace_ManyThreadsAndThreadHops)
 {
     const int kChains = 4;
-    CAsyncExecutor execA(4);  // 3 个执行器 × 4 线程 = 12 条 worker（比别的用例都多）
-    CAsyncExecutor execB(4);
-    CAsyncExecutor execC(4);
+    CAsyncExecutor execA("hop-a", 4);  // 3 个执行器 × 4 线程 = 12 条 worker（比别的用例都多）
+    CAsyncExecutor execB("hop-b", 4);
+    CAsyncExecutor execC("hop-c", 4);
+    ASSERT_TRUE(execA.Name() == "hop-a");  // 构造时指定的名字要原样留下来
+    ASSERT_TRUE(execB.Name() == "hop-b");
+    ASSERT_TRUE(execC.Name() == "hop-c");
     ASSERT_TRUE(execA.Start());
     ASSERT_TRUE(execB.Start());
     ASSERT_TRUE(execC.Start());
@@ -1397,6 +1413,39 @@ TEST(Trace_ManyThreadsAndThreadHops)
 
         // ---- ① 形状与注册点：换线程不影响链；② 线程归属：每层 tid 等于它自己记下的 ----
         // 采集方向是「近 → 远」，所以链上第 (kLayers - 1 - k) 项就是序号 k 的那一层。
+        //
+        // 顺带把「这一层跑在哪个执行器上」也逐层钉住。两档语义：
+        //  - 投递层（链根 / `ThenOn` / 子链上的 then）：落在**指定的那个池**上 —— 确定；
+        //  - 就地层（`ThenInline`）：「接着结算它的那条线程跑」，落点看当时谁在结算：
+        //      · 常态：跟着上游跳过去的那条线程 → 落在上游那个池（②=A、④=B）；
+        //      · 另一种：注册本层时上游**已经落定**（链在别的线程上跑得比建链快）→
+        //        没有可搭的结算线程了，`AddHandler` 会把它投递到「本层解析出来的执行器」，
+        //        而就地层解析出来的就是**本链执行器** → 落在 A 上。
+        //    两种都合法（框架语义如此），所以就地层断言「两者之一」；真正钉住的是
+        //    「trace 记的 == 这一层自己看到的」（都在同一时刻取同一口井）。
+        static const char* const kExpectedExec[CThreadCtx::kLayers] = {
+            "hop-a",  // ① 链根：NewPromise(execA) → 投递到 A
+            "hop-a",  // ② 就地：接着 ① 的 A 线程跑
+            "hop-b",  // ③ ThenOn(execB) → 投递到 B
+            "hop-b",  // ④ 就地：接着 ③ 的 B 线程跑（注册晚于落定时 → 落回 A）
+            "hop-c",  // ⑤ ThenOn(execC) → 投递到 C
+            "hop-a",  // ⑥ ThenOn(execA) → 投递回 A
+            nullptr,  // ⑦ ThenPromise：桥接层，自己不做 handler（tid 也是空）
+            "hop-b",  // ⑧ 子链链根：投递到 B
+            "hop-b",  // ⑨ 子链上的 then：跟子链执行器 B
+        };
+        // 就地层的另一个合法落点（本链执行器 A）；非就地层只有唯一落点，这里填 "" = 无备选。
+        static const char* const kAltExec[CThreadCtx::kLayers] = {
+            "",       // ①
+            "",       // ②（就地，但上游就是本链执行器 A → 备选与主选同一个）
+            "",       // ③
+            "hop-a",  // ④
+            "",       // ⑤
+            "",       // ⑥
+            "",       // ⑦
+            "",       // ⑧
+            "",       // ⑨
+        };
         for (int k = 0; k < CThreadCtx::kLayers; ++k)
         {
             const CLayerInfo& info = vec[static_cast<size_t>(CThreadCtx::kLayers - 1 - k)];
@@ -1406,6 +1455,21 @@ TEST(Trace_ManyThreadsAndThreadHops)
             ASSERT_TRUE(info.bCurrent == (k == CThreadCtx::kLayers - 1));
             ASSERT_TRUE(info.tid == spCtx->aTidSelf[k]);  // 真正跑这一层的线程
             vecAllIds.push_back(info.nLayerId);
+
+            // 执行器归属：trace 记的 = 这一层自己看到的（同一时刻、同一口井）＝
+            // 按链形状推出来的落点（就地层允许「跟着上游」或「落回本链执行器」两种）。
+            if (kExpectedExec[k] == nullptr)
+            {
+                ASSERT_TRUE(info.spExecName == nullptr);  // 没跑过 handler 的层没有执行器
+                ASSERT_TRUE(spCtx->aExecSelf[k].empty());
+            }
+            else
+            {
+                ASSERT_TRUE(info.spExecName != nullptr);
+                ASSERT_EQ(*info.spExecName, spCtx->aExecSelf[k]);  // trace 记的 == 层自己看到的
+                ASSERT_TRUE(
+                    spCtx->aExecSelf[k] == std::string(kExpectedExec[k]) || spCtx->aExecSelf[k] == std::string(kAltExec[k]));
+            }
         }
 
         // 子链（⑦ 挂 ⑧）与主链是两条链：段边界落在子链链根上。

@@ -144,6 +144,15 @@ const char* ChainRootText(const CLayerInfo& info)
     return info.bSubChain ? " [子链根]" : " [链根]";
 }
 
+/// @brief 执行器名的文本（未命名 → `-`）。
+///
+/// @param info 一层。
+/// @return 名称文本。
+std::string ExecText(const CLayerInfo& info)
+{
+    return (info.spExecName != nullptr && !info.spExecName->empty()) ? *info.spExecName : std::string("-");
+}
+
 /// @brief 填「视图字段」（层状态里不存这些：深度 / 当前层 / 年龄 / 结果）。
 ///
 /// @param info 本层信息（其余字段来自层状态里的那份记录）。
@@ -198,6 +207,11 @@ CCurrentLayerFrame::CCurrentLayerFrame(const std::shared_ptr<CPromiseState>& spL
     if (m_spLayer != nullptr)
     {
         m_spLayer->SetRunningThread(std::this_thread::get_id());  // 「这层跑在哪条线程上」：开跑时写一次。
+        // 「这层跑在哪个执行器上」：同一个时机写一次。**只信线程自己的归属** ——
+        // 就地层（`ThenInline`）是「接着结算它的那条线程跑」，可能落在别的执行器的线程上，
+        // 甚至因为「注册时上游已落定」被投递回本链执行器；究竟落在谁家，只有线程自己知道。
+        // 当前线程不属于任何线程池（调用者线程等）→ 记空（打印成 `-`，与 `tid` 一起看）。
+        m_spLayer->SetTraceExec(thread::CThreadPool::CurrentPoolName());
     }
 }
 
@@ -310,9 +324,17 @@ std::string DescribeLayerChain()
 
 std::string DescribeLayer(const CLayerInfo& info)
 {
+    // 执行器名连方括号一起补到 12 列（`[main]      `）—— 方括号里不留填充空格，好读。
+    std::string strExec = "[" + ExecText(info) + "]";
+    if (strExec.size() < 12)
+    {
+        strExec.append(12 - strExec.size(), ' ');
+    }
+
     char szBuf[512];
-    std::snprintf(szBuf, sizeof(szBuf), "#%-2d %-7s %-16s %s:%d  链#%u 层#%u 龄=%lldms 本层=%lldms 结果=%-8s tid=%-7s%s%s",
-        info.nDepth, ModeText(info.eMode), ShortFunc(info.loc.szFunction).c_str(), BaseName(info.loc.szFile), info.loc.nLine,
+    std::snprintf(szBuf, sizeof(szBuf),
+        "#%-2d %-7s %-16s %s:%d  %-12.12s 链#%-2u 层#%-3u 龄=%lldms 本层=%lldms 结果=%-8s tid=%-7s%s%s", info.nDepth,
+        ModeText(info.eMode), ShortFunc(info.loc.szFunction).c_str(), BaseName(info.loc.szFile), info.loc.nLine, strExec.c_str(),
         info.nChainId, info.nLayerId, info.nAgeMs, info.nSelfMs, ResultText(info).c_str(), ThreadText(info.tid).c_str(),
         ChainRootText(info), info.bCurrent ? "  ← 当前层" : "");
     return std::string(szBuf);

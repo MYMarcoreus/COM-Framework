@@ -486,15 +486,22 @@ static common::async::CPromiseResult StepVerify(common::async::CPromiseResult up
 输出形态（调试构建，近 → 远）：
 
 ```text
-#0  then    BuildOrderChain  main.cpp:641  链#1 层#3 龄=0ms 本层=0ms 结果=未落定 tid=…  ← 当前层
-#1  then    BuildOrderChain  main.cpp:639  链#1 层#2 龄=0ms 本层=0ms 结果=兑现   tid=…
-#2  then    BuildOrderChain  main.cpp:637  链#1 层#1 龄=0ms 本层=0ms 结果=兑现   tid=… [链根]
+#0  then    BuildOrderChain  main.cpp:641  [main]       链#1  层#3   龄=0ms 本层=0ms 结果=未落定 tid=…  ← 当前层
+#1  then    BuildOrderChain  main.cpp:639  [main]       链#1  层#2   龄=0ms 本层=0ms 结果=兑现   tid=…
+#2  then    BuildOrderChain  main.cpp:637  [main]       链#1  层#1   龄=0ms 本层=0ms 结果=兑现   tid=… [链根]
 ```
+
+方括号里是**本层实际跑在哪个执行器上**（执行器名；`-` = 不在任何执行器的线程上 ——
+既包括「那层没跑过 handler」，也包括「跑在调用者线程之类非执行器线程上」，配合 `tid` 一眼分得清）。
+注意它记的是「真跑在哪」，不是「注册时指定的执行器」：`ThenOn` 那层显示目标执行器，
+`ThenInline` 这种「接着上游线程跑」的层显示上游当时所在的执行器（极少数情况下，
+本层注册时上游**已经落定** → 没有可搭的线程，会被投递回**本链执行器**）。也可以直接读
+`CLayerInfo::spExecName` 拿到名字（名字串在执行器构造时分配一次，各层共享）。
 
 | 接口 | 作用 |
 | --- | --- |
 | `CurrentLayer()` | 当前正在跑的那一层（不在层里 → `nullptr`；**返回 TLS 存储，要留住请拷贝**） |
-| `VisitLayerChain(fn)` | 从当前层往上遍历（近 → 远）：给到**视图字段**（`nDepth` / `bCurrent` / `nAgeMs` / `bSettled` / `bFulfilled` / `nCode`）与**层自己的记录**（`loc` / `eMode` / `nLayerId` / `nChainId` / `bChainRoot` / `bSubChain` / `tid` / `nSelfMs`） |
+| `VisitLayerChain(fn)` | 从当前层往上遍历（近 → 远）：给到**视图字段**（`nDepth` / `bCurrent` / `nAgeMs` / `bSettled` / `bFulfilled` / `nCode`）与**层自己的记录**（`loc` / `eMode` / `nLayerId` / `nChainId` / `bChainRoot` / `bSubChain` / `tid` / `nSelfMs` / `spExecName`） |
 | `DescribeLayer(info)` | 一层 → 一行富信息（写日志 / 测试断言） |
 | `DescribeLayerChain()` | 整条链拼成一行（`#0 … <- #1 …`） |
 | `DumpLayerChain()` | 直接打印到 stderr |
@@ -516,7 +523,8 @@ static common::async::CPromiseResult StepVerify(common::async::CPromiseResult up
 ## 8. 执行器
 
 ```cpp
-common::async::CAsyncExecutor exec(4);   // 4 个工作线程
+common::async::CAsyncExecutor exec(4);              // 4 个工作线程（未命名）
+common::async::CAsyncExecutor execDb("db", 4);      // 具名：调试用（见下）
 exec.Start();                            // 启动（未启动时起 promise 立即被拒绝 kStopped）
 exec.Post([]() { /* 无返回值任务 */ });  // fire-and-forget（返回是否提交成功）
 exec.Stop();                             // 停止并等待已投递任务完成
@@ -526,7 +534,12 @@ exec.Stop();                             // 停止并等待已投递任务完成
   投递的任务里抛异常 → 框架兜住并报告（见 7.3），**不会终止进程**；
   但线程池 `CThreadPool` 本身**不捕获异常**，所以别绕过执行器直接往线程池提交会抛异常的任务；
 - 未 `Start()` / 已 `Stop()` 时起 promise、`Post` 都不抛异常，而是被拒绝 / 返回 `false`；
-- `Stop()` 之后可再次 `Start()`（重建句柄与线程池，隔离旧任务）。
+- `Stop()` 之后可再次 `Start()`（重建句柄与线程池，隔离旧任务）；
+- **执行器名（只服务于调试）**：名字会（Linux 上）设成工作线程的 OS 线程名
+  `「<名>-<序号>」`（超 15 字节截断）—— gdb `info threads` / `htop` / `top -H` 里
+  一眼认出「这条线程是哪个模块的执行器」；同时会出现在 trace 的执行器列里（见 7.4）。
+  建议按用途取名（`db` / `net` / `billing`）；`Name()` 可读回名字，空串 = 未命名（不起线程名）。
+  非 Linux 平台只保留名字本体（不起 OS 线程名，其余行为一致）。
 
 ## 9. 执行线程控制（逐层亲和 + 建链 / 启动分离）
 
@@ -554,7 +567,11 @@ exec.NewPromise(spCtx, StepLoad, ASYNC_LOC)
 - `ThenOn` 的执行器须存活到本层执行完毕；指定执行器已 `Stop()` → 本层以 `kStopped` 收口
   （后续层跳过、`Catch` 照常执行）；
 - **不要把 `ThenOn` 用来跨模块传执行器**（执行器是模块私有资源，跨模块只交换 promise + 上下文）；
-- 两种写法都只影响**那一层**：之后的层仍按默认亲和回本链执行器；内联深度超 `kMaxInlineDepth` 依旧改投递（防爆栈）。
+- 两种写法都只影响**那一层**：之后的层仍按默认亲和回本链执行器；内联深度超 `kMaxInlineDepth` 依旧改投递（防爆栈）；
+- `ThenInline` 还有一种少见但合法的落点：本层**注册时上游已经落定**（链在别的线程上跑得比
+  建链快）→ 没有可搭的结算线程，框架按「已落定 → 投递到本层解析出的执行器」处理，
+  而就地层解析出的就是**本链执行器** → 这一层会跑在本链执行器线程上。所以就地层也别
+  假设「一定在对方线程上」，要异步一致性就用默认亲和或 `ThenOn`。
 
 ### 9.2 起链只有一种语义：**立即投递首层**
 
