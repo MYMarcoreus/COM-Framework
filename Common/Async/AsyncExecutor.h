@@ -27,6 +27,8 @@
 // 由一个显式对象回答，它们就是本类的全部职责：
 //   - 任务投到哪条线程：`Post` / `NewPromise` / `CoStart`；
 //   - 一条链的层在哪条线程上跑：**本链执行器**（同线程内联级联；跨执行器/跨模块返回则投递回本链）。
+//     （曾有过「逐层指定线程」的 `ThenInline` / `ThenOn`，2026-09-13 已移除 —— 理由见
+//      docs/common/async-impl.md §8.1「历史」：就地层的落点取决于上游何时落定，一层可能三种落点。）
 //   - 执行器停了以后怎么办：`Stop` + 句柄加固（新投递以 `kStopped` 收口）。
 //
 // 调度对照（各自生态里的同类物）：
@@ -72,8 +74,6 @@ struct CExecutorHandle
     std::shared_ptr<common::thread::CThreadPool> m_pPool;  ///< 工作线程池。
     std::atomic<bool> m_bStopped;                          ///< 是否已停止（拒绝新投递）。
 
-    /// 执行器名（**共享**给 trace 用：层记录要长期持有它 —— 执行器析构后已起的链还会跑完，
-
     CExecutorHandle() : m_bStopped(false)
     {}
 };
@@ -92,7 +92,7 @@ inline bool PostToHandle(const std::shared_ptr<CExecutorHandle>& pHandle, std::f
     return pHandle->m_pPool->Submit(std::move(fnTask));
 }
 
-/// @brief 当前线程是否是某执行器的工作线程（线程亲和判定）。
+/// @brief 当前线程是否在某个执行器的工作线程上。
 ///
 /// 层处理器只在「已经在本链执行器线程上」时就地内联，否则投递回本链执行器，
 /// 从而保证「每一层都跑在它所属链的执行器线程上」。
@@ -103,20 +103,6 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
 {
     return pHandle != nullptr && common::thread::CThreadPool::IsInPoolThread(pHandle->m_pPool.get());
 }
-
-/// @brief 层处理器的执行线程偏好（线程亲和）。
-///
-/// 属于**调度**（跑在哪条线程上），所以归执行器侧；`HandlerMode`（then / catch / finally）
-/// 描述的是「层语义」，归 promise 侧。
-///
-/// 只有**一档**（默认档）：每一层都在**本链执行器**的线程上跑 —— 已在链执行器线程上就地内联
-/// （省一次入队 + 保序），否则投递回链执行器（典型：被调模块 settle 本链的层 → 本层回到
-/// 本模块线程执行）。所以「一层跑在哪条线程上」看链的起链执行器就够了，不需要逐层去想。
-///
-/// 曾经有过「就地档 `kAffinityInline`（`ThenInline`）」与「指定执行器档 `kAffinityExecutor`
-/// （`ThenOn`）」两个逐层覆盖 —— 2026-09-13 按用户要求**整体移除**：就地层的落点取决于
-/// 「上游何时落定」（注册晚于落定就改投递回本链执行器），逐层线程归属因此不再静态可读。
-/// 要「换执行器」请用「模块自持执行器 + 子链 / `ThenBridge`」（见 docs/common/async-usage.md §9）。
 
 /// @brief 级联内联深度（线程局部）：链逐层级联时最多连续内联多少层。
 ///
@@ -169,7 +155,7 @@ inline bool ShouldInline(const std::shared_ptr<CExecutorHandle>& pExec, bool bRe
     return !bRequireIdle || (pExec != nullptr && pExec->m_pPool != nullptr && pExec->m_pPool->PendingCount() == 0);
 }
 
-/// @brief 按线程亲和派发一个任务体：就地内联 / 投递回链执行器。
+/// @brief 派发一个任务体：能就地就就地，否则投递回本链执行器。
 ///
 /// 判定见 `ShouldInline`（就地）与 `PostToHandle`（投递）。
 ///
@@ -205,8 +191,8 @@ public:
     // 名字只用于调试，但两处都很实用：
     //  ① 线程池的 worker 线程被命名为「<名字>-<序号>」—— gdb 的 `info threads` / htop 里直接
     //     能看出这条线程属于哪个执行器；
-    //     每层 trace 记下「这一层跑在哪个执行器上」，`DescribeLayer` 打印 `[名字]` —— 链跨模块接力
-    //     （子链在别的模块的执行器上跑）时一眼能看出跑到谁家去了。
+    //  ② 每层 trace 记下「这一层跑在哪个执行器上」，`DescribeLayer` 打印 `[名字]` —— 链跨模块
+    //     接力（子链在别的模块的执行器上跑）时一眼能看出跑到谁家去了。
     //
     // 名字末尾会被线程名长度（15 字节）截断，所以给短一点（如 `main` / `db`）。
     //
@@ -284,12 +270,12 @@ private:
     //================ Internal ================
 
     template <typename TContext>
-    friend class CPromise;  // 取执行器句柄（起链 / 逐层亲和 / 通知投递）。
+    friend class CPromise;  // 取执行器句柄（起链 / 通知投递）。
 
     template <typename TContext>
     friend class CCoroutine;  // 取执行器句柄 + 空闲判定（子 promise 投递 / 内联续接）。
 
-    // 当前线程是否本执行器的工作线程（线程亲和判定；框架内部用）。
+    // 当前线程是否本执行器的工作线程（框架内部用）。
     bool IsInExecutorThread() const
     {
         return detail::IsInExecutorThread(m_pHandle);

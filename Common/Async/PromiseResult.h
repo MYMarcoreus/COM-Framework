@@ -67,10 +67,7 @@ const int kBusinessBase = 100;
 /// @code
 /// CPromiseResult StepLoad(CPromiseResult upResult, const std::shared_ptr<CMyContext>& spCtx)
 /// {
-///     if (upResult.IsRejected())
-///     {
-///         return upResult;                             // 上一层被拒绝：原样透传
-///     }
+///     (void)upResult;  // then 层不看上游结果：上一层被拒绝时框架直接跳过本层（失败即停）
 ///     if (!spCtx->LoadFromDisk("data.bin"))
 ///     {
 ///         return CPromiseResult::Reject(kMyLoadFailed); // 本层拒绝

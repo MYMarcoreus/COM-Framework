@@ -5,7 +5,7 @@
 //
 //   ① 起链（具名 handler）   exec.NewPromise(spCtx, &StepReadOrder, ASYNC_LOC)
 //   ② then = lambda          只此一处用的小逻辑就写成 lambda
-//   ③ then                   本链执行器线程上就地级联（默认亲和：已在本链线程 → 不投递）
+//   ③ then                   本链执行器线程上就地级联（已在本链线程 → 不投递）
 //   ④ 子链跑在别的执行器上    ThenPromise：数据访问模块**自持** execDb，它的链在 execDb 上跑
 //   ⑤ 内层链（同上下文）     ThenPromise：等一条自己搭的子链（2 层）
 //   ⑥ 跨模块 / 跨上下文      ThenBridge：等别的模块（另一套 TContext），数据搬回来
@@ -303,11 +303,11 @@ CPromiseResult StepReadOrder(CPromiseResult upResult, const std::shared_ptr<COrd
     return CPromiseResult::Resolve();
 }
 
-/// 层 ③：查库存。默认亲和：已在本链执行器线程上 → **就地级联**（不投递，省一次入队）。
+/// 层 ③：查库存。已在本链执行器线程上 → **就地级联**（不投递，省一次入队）。
 CPromiseResult StepCheckStock(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
 {
     (void)upResult;
-    TraceHere("③ 查库存（默认亲和：本链线程上就地）");
+    TraceHere("③ 查库存（本链线程上就地）");
     spCtx->strTrace += "查库存;";
     if (spCtx->bFailStock)
     {

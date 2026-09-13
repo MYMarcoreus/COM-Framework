@@ -216,7 +216,7 @@ protected:
                 {
                     MarkTerminated(result);  // 被等待的 promise 被拒绝 → 协程终止（码透传）。
                 }
-                ResumeInline();  // 线程亲和 + 负载感知内联 / 投递。
+                ResumeInline();  // 就地续跑 / 投递回本执行器（负载感知）。
             });
     }
 
@@ -365,7 +365,7 @@ private:
         }
     }
 
-    /// @brief 内联续接（线程亲和 + 负载感知）：await 回调已运行在工作线程上，
+    /// @brief 内联续接（就地续跑 + 负载感知）：await 回调已运行在工作线程上，
     ///        只有当前线程就是本协程自己的执行器线程、且线程池无积压时才直接继续执行
     ///        协程体（省去一次入队 + 唤醒）；跨执行器（典型：等别的模块的 promise）或有
     ///        积压则投递 —— 保证协程体始终跑在自己的执行器线程上。
@@ -454,7 +454,7 @@ private:
             {
                 MarkTerminated(CPromiseResult::Reject(pGroup->nCode.load(std::memory_order_relaxed)));
             }
-            ResumeInline();  // 线程亲和 + 负载感知：就地续跑或投递回本执行器。
+            ResumeInline();  // 就地续跑或投递回本执行器（负载感知）。
         }
     }
 

@@ -57,7 +57,7 @@
 //
 //   JS 把两件事藏在语言 / 宿主里：闭包捕获一切（≈ 共享上下文）、事件循环隐式调度（≈ 执行器）。
 //   C++ 两样都没有：上下文必须作为参数传进来，**调度必须由一个显式对象承担** —— 这就是
-//   `CAsyncExecutor` 存在的全部理由（它接管了 JS 徯任务队列的角色）。所以：
+//   `CAsyncExecutor` 存在的全部理由（它接管了 JS 微任务队列的角色）。所以：
 //
 //   - `exec.NewPromise` / `exec.WhenAll` 是「**执行器上的**起链入口」，不是 Promise 的
 //     构造函数 / 静态方法（JS 是 `new Promise(...)` 与 `Promise.all(...)`）；
@@ -93,7 +93,7 @@
 //      ① 用 `exec.NewPromise(spCtx, fnStarter)` 造一条「由外部 settle」的 promise
 //         （起链回调里发起别的模块的调用，在其 OnSettled 回调里 resolve() / reject(码)）；
 //      ② 用 `p.ThenPromise([&]{ return bridgePromise; })` 把它接进本流程（then 的 promise 版）。
-//    ③ ①② 合一、不用写样板的简写：`p.ThenBridge(fnCreate, fnApply, ASYNC_LOC)` ——
+//      ③ ①② 合一、不用写样板的简写：`p.ThenBridge(fnCreate, fnApply, ASYNC_LOC)` ——
 //       fnCreate 在轮到本层时起子链，fnApply 在子链兑现时把它的上下文数据搬进本上下文。
 //    本流程的最终结果 = 含跨模块子流程的完整结果，全程不阻塞任何线程。
 //
@@ -114,7 +114,9 @@
 //
 // CPromiseResult StepReadParam(CPromiseResult upResult, const std::shared_ptr<CLoginContext>& spCtx)
 // {
-//     if (upResult.IsRejected()) { return upResult; }     // 上一层被拒绝：透传
+//     (void)upResult;                                  // then 层不看上游结果：
+//                                                      // 上一层被拒绝时框架直接跳过本层（失败即停），
+//                                                      // 要处理拒绝请用 Catch（async-usage.md §4）
 //     spCtx->strAccount = ReadAccountFromRequest();
 //     return spCtx->strAccount.empty() ? CPromiseResult::Reject(kCodeNoAccount)
 //                                      : CPromiseResult::Resolve();
@@ -243,8 +245,8 @@ public:
     /// @brief settle 本状态并触发处理器（锁外调用处理器，防重入死锁）。
     ///
     /// 仅首次生效；先唤醒等待者，再按注册顺序在锁外调用所有处理器。
-    /// 处理器在调用方（结算）线程上被触发；若它是「层处理器」，再由 `RunHandler`
-    /// 按线程亲和决定就地执行（已在本链执行器线程）还是投递回本链执行器。
+    /// 处理器在调用方（结算）线程上被触发；若它是「层处理器」，再由 `RunHandler` 派发：
+    /// 已在本链执行器线程 → 就地执行；否则投递回本链执行器。
     ///
     /// @param result 本层最终结果（已兑现 / 已拒绝）。
     void Settle(const CPromiseResult& result)
@@ -639,7 +641,7 @@ public:
 
     /// @brief 级联执行下一层（上一层刚 settle，当前在主调方线程上）。
     ///
-    /// 线程亲和：**只有当前线程已经是本链执行器的线程**时才就地内联（省一次入队 + 保序）；
+    /// **只有当前线程已经是本链执行器的线程**时才就地内联（省一次入队 + 保序）；
     /// 否则一律投递回本链执行器（典型场景：被调模块 settle 本链的层，本层就回到本模块线程执行）。
     /// 内联深度也只在同一执行器线程内累加，跨模块不会涨栈。
     ///
@@ -716,7 +718,7 @@ public:
 
     /// @brief then：上一层**兑现**时执行 fnHandler，被拒绝时直接透传（失败即停）。
     ///
-    /// 在句柄所指的层之后**追加一层**：上游未 settle 时登记（settle 时由 `RunHandler` 按线程亲和
+    /// 在句柄所指的层之后**追加一层**：上游未 settle 时登记（settle 时由 `RunHandler` 派发；
     /// 执行：同执行器内联 / 跨执行器投递回本链执行器）；已 settle 时投递到执行器异步触发。
     /// 同一层多次 Then 即分叉，各自独立延续。
     ///
@@ -810,7 +812,7 @@ public:
     ///
     /// @warning `fnApply` 在**子链的结算线程**（典型：被调模块的线程）上执行 —— 通知不迁移。
     ///          它只应做「把子上下文的数据搬进本上下文」，不要碰本模块的其他状态；
-    ///          要回到本模块线程干活，请放到桥接之后的层里（线程亲和会把它拉回本链执行器）。
+    ///          要回到本模块线程干活，请放到桥接之后的层里（那些层会回本链执行器）。
     ///
     /// @param fnCreate 子链工厂：入参为本流程共享上下文，返回要等待的子 promise（上下文类型任意）。
     /// @param fnApply 数据搬运：入参为本流程上下文与子链上下文（仅子链兑现时调用；不需要搬数据时传空 lambda）。
@@ -1190,7 +1192,7 @@ private:
     /// @brief 内部：在当前层之后**追加一层**（Then / Catch / Finally / ThenPromise / ThenBridge 共用）。
     ///
     /// 追加 = 两件事：建新层状态 + 在当前层上登记「本层跑完后启动新层」的处理器。
-    /// 当前层还没 settle 就只是登记（settle 时触发）；已 settle 则立即触发（`AddHandler` 内部按亲和派发）。
+    /// 当前层还没 settle 就只是登记（settle 时触发）；已 settle 则立即触发（`AddHandler` 内部投递）。
     ///
     /// @param fnHandler 本层处理器。
     /// @param loc 注册点源码位置。
