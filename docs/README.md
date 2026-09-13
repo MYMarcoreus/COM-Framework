@@ -45,14 +45,12 @@
 
 ### 风格模仿（`docs/common/`）
 
-把其他异步框架 / 语言的写法，用本框架临摹一遍（每篇一个可编译运行的用例）：
+把其他异步框架 / 语言的写法，用本框架临摹一遍 —— **同一个业务流**（fetchUser → fetchOrders →
+checkRisk → fetchPayment → 总额）的几种串法摆在一篇里对照，抽出来就是一个可编译可运行的程序：
 
-| 文档 | 对标写法 |
+| 文档 | 内容 |
 |---|---|
-| [async-style-coroutine.md](common/async-style-coroutine.md) | libgo：一个协程里直线书写，业务拒绝中断，统一兜底 |
-| [async-style-then-chain.md](common/async-style-then-chain.md) | JavaScript Promise：then 链 + 内层链 + reject + catch |
-| [async-style-manual-settle.md](common/async-style-manual-settle.md) | async_promise：`make_promise(resolve, reject)` 显式兑现 / 拒绝 |
-| [async-style-recover.md](common/async-style-recover.md) | Async++：手动完成 + `.recover` 分流兜底后继续链 |
+| [async-style.md](common/async-style.md) | then 链（JavaScript Promise）/ 协程（libgo）/ 手动 settle（async_promise）/ 拒绝后恢复（Async++）/ 跨模块·跨上下文（`ThenBridge`），含公共部分只写一次、一次跑完的真实输出、选型表 |
 
 ### 问题记录（`docs/common/`）
 
