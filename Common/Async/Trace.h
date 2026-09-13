@@ -13,10 +13,10 @@
 // static common::async::CPromiseResult StepVerify(common::async::CPromiseResult upResult,
 //                                                 const std::shared_ptr<Ctx>& spCtx)
 // {
-//     common::async::DumpLayerChain();                  // 排障：这层是谁挂上来的
+//     common::async::DumpLayerChain();                  // 排障：这层是谁挂上来的（多行块，一层一行）
 //     common::async::VisitLayerChain([](const common::async::CLayerInfo& info)
 //     {
-//         Log("%s", common::async::DescribeLayer(info).c_str());   // 一行富信息
+//         Log("%s", common::async::DescribeLayer(info).c_str());   // 自己控制格式：一行富信息
 //     });
 //     ...
 // }
@@ -152,7 +152,9 @@ bool VisitLayerChain(const std::function<void(const CLayerInfo&)>& fnVisit);
 
 /// @brief 把「当前层 → 上游链」拼成一行（便于写日志 / 测试断言）。
 ///
-/// @return 形如 `#0 then StepC (trace.cpp:42) <- #1 then StepB (trace.cpp:38)`；
+/// @return 形如 `#0 then StepC (trace.cpp:42) <- #1 then StepB (trace.cpp:38)`
+///         —— 只有模式 + 注册点，**不包含**执行器 / 层号 / 耗时 / 结果；
+///         要那此信息用 `DescribeLayerChainBlock()`（每层一行）或 `DescribeLayer()`。
 ///         不在层里返回空串。
 std::string DescribeLayerChain();
 
@@ -162,8 +164,31 @@ std::string DescribeLayerChain();
 /// @return 一行。
 std::string DescribeLayer(const CLayerInfo& info);
 
-/// @brief 把「当前层 → 上游链」打印到 stderr。
-void DumpLayerChain();
+/// @brief `DescribeLayerChainBlock()` / `DumpLayerChain()` 默认最多打印多少层。
+///
+/// 深链（数百层）全部打印没有读的价值，所以默认「头尾各几层 + 中间省略」；
+/// 传 0 表示不限（测试断言 / 导出用）。
+const int kDumpMaxLayers = 24;
+
+/// @brief 把「当前层 → 上游链」拼成**多行的排障文本块**（头行 + 每层一行）。
+///
+/// 与 `DescribeLayerChain()`（一行压缩链）的区别：这里是「能直接看的排障视图」——
+/// 每层用 `DescribeLayer()`（含执行器 / 层号 / 耗时 / 结果 / 当前层标记），
+/// 开头一行给总数。层数超过 `nMaxLayers` 时只打印头尾、中间用一行省略标记（`nMaxLayers <= 0` = 全部）。
+///
+/// 与 `DumpLayerChain()` 的区别：这里返回字符串（可写自己的 logger / 断言内容），
+/// 不进 stderr。
+///
+/// @param nMaxLayers 最多打印多少层（<= 0 = 不限；默认 `kDumpMaxLayers`）。
+/// @return 多行文本（末尾带换行）；不在层里返回空串。
+std::string DescribeLayerChainBlock(int nMaxLayers = kDumpMaxLayers);
+
+/// @brief 把 `DescribeLayerChainBlock()` 打印到 stderr（**整块一次写出**：多线程同时 dump 不会互相插花）。
+///
+/// 不在层里也会打一行提示（而不是什么都不打）—— 「dump 了但没输出」最容易让人误以为接口没生效。
+///
+/// @param nMaxLayers 最多打印多少层（<= 0 = 不限；默认 `kDumpMaxLayers`）。
+void DumpLayerChain(int nMaxLayers = kDumpMaxLayers);
 
 namespace detail {
 

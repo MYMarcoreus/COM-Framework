@@ -169,13 +169,11 @@ void TraceHere(const char* pszWhere)
         return;
     }
 
-    // 一行一层：`DescribeLayer` 把「注册点 + 链号/层号 + 线程 + 耗时 + 结果」都拼好了。
-    std::printf("      本层 + 完整链 %d 层（近 → 远 = 从本层往上游追，谁挂的它）\n", CountChain());
-    common::async::VisitLayerChain(
-        [](const CLayerInfo& info)
-        {
-            std::printf("        %s\n", common::async::DescribeLayer(info).c_str());
-        });
+    // 库里的「排障一键块」：头行给总数，一层一行（注册点 + 链号/层号 + 执行器 + 线程 +
+    // 耗时 + 结果），深链自动头尾 + 中间省略 —— 不必自己写 VisitLayerChain 循环。
+    // 要字符串（写自己的 logger / 断言）用 `DescribeLayerChainBlock()`；一行压缩链用
+    // `DescribeLayerChain()`；直接进 stderr 用 `DumpLayerChain()`。
+    std::printf("%s", common::async::DescribeLayerChainBlock().c_str());
 #else
     // 发布构建没有 trace（取链的接口根本不存在）—— 每个位置都打这句就太吵了，只提示一次。
     static bool s_bNoticed = false;

@@ -17,7 +17,9 @@
     #include <chrono>
     #include <cstdio>
     #include <cstring>
+    #include <mutex>
     #include <sstream>
+    #include <vector>
 
     #include "Async/Promise.h"  // 只有这里要看 CPromiseState 的内部（记录读写 / 结果）。
 
@@ -332,22 +334,72 @@ std::string DescribeLayer(const CLayerInfo& info)
 
     char szBuf[512];
     std::snprintf(szBuf, sizeof(szBuf),
-        "#%-2d %-7s %-16s %s:%d  %-12.12s 链#%-2u 层#%-3u 龄=%lldms 本层=%lldms 结果=%-8s tid=%-7s%s%s", info.nDepth,
+        "#%-3d %-7s %-16s %s:%d  %-12.12s 链#%-2u 层#%-3u 龄=%lldms 本层=%lldms 结果=%-8s tid=%-7s%s%s", info.nDepth,
         ModeText(info.eMode), ShortFunc(info.loc.szFunction).c_str(), BaseName(info.loc.szFile), info.loc.nLine, strExec.c_str(),
         info.nChainId, info.nLayerId, info.nAgeMs, info.nSelfMs, ResultText(info).c_str(), ThreadText(info.tid).c_str(),
         ChainRootText(info), info.bCurrent ? "  ← 当前层" : "");
     return std::string(szBuf);
 }
 
-void DumpLayerChain()
+std::string DescribeLayerChainBlock(int nMaxLayers)
 {
-    const std::string strChain = DescribeLayerChain();
-    if (strChain.empty())
+    // 先把整条链收一份（每层一个 CLayerInfo），再决定打印多少 —— 便于「头尾 + 中间省略」。
+    std::vector<CLayerInfo> vecChain;
+    if (!VisitLayerChain(
+            [&vecChain](const CLayerInfo& info)
+            {
+                vecChain.push_back(info);
+            }))
     {
-        std::fprintf(stderr, "[async 链] (当前不在任何层处理器里)\n");
+        return std::string();  // 不在层里：调用方自己决定怎么提示
+    }
+
+    std::string strBlock;
+    char szBuf[512];
+    std::snprintf(szBuf, sizeof(szBuf), "[async 链] 共 %d 层（近 → 远 = 从本层往上游追，谁挂的它；#0 = 当前层）\n",
+        static_cast<int>(vecChain.size()));
+    strBlock += szBuf;
+
+    // 层数超过上限：头尾各打一半，中间用一行省略标记（深链全打没有读的价值）。
+    const int nTotal = static_cast<int>(vecChain.size());
+    const bool bElide = (nMaxLayers > 0) && (nTotal > nMaxLayers);
+    const int nHead = bElide ? (nMaxLayers + 1) / 2 : nTotal;
+    const int nTail = bElide ? nMaxLayers / 2 : 0;
+    for (int i = 0; i < nHead; ++i)
+    {
+        strBlock += "  ";
+        strBlock += DescribeLayer(vecChain[static_cast<size_t>(i)]);
+        strBlock += "\n";
+    }
+    if (bElide)
+    {
+        std::snprintf(szBuf, sizeof(szBuf), "  … 省略中间 %d 层（看全部：DumpLayerChain(0) / DescribeLayerChainBlock(0)）…\n",
+            nTotal - nMaxLayers);
+        strBlock += szBuf;
+        for (int i = nTotal - nTail; i < nTotal; ++i)
+        {
+            strBlock += "  ";
+            strBlock += DescribeLayer(vecChain[static_cast<size_t>(i)]);
+            strBlock += "\n";
+        }
+    }
+    return strBlock;
+}
+
+void DumpLayerChain(int nMaxLayers)
+{
+    const std::string strBlock = DescribeLayerChainBlock(nMaxLayers);
+    if (strBlock.empty())
+    {
+        // 不在层里也要打一行：「dump 了但什么都没输出」最容易让人误以为接口没生效。
+        std::fprintf(stderr, "[async 链] （当前不在任何层处理器里：通知 / Post 的旁支任务 / 调用者线程都看不到层）\n");
         return;
     }
-    std::fprintf(stderr, "[async 链] %s\n", strChain.c_str());
+
+    // 整块一次写出，并串行化「一次 dump」：多线程同时 dump 时不会互相插花（只影响排版，不加锁地拼块也行）。
+    static std::mutex s_dumpMutex;
+    std::lock_guard<std::mutex> lock(s_dumpMutex);
+    std::fwrite(strBlock.data(), 1, strBlock.size(), stderr);
 }
 
 }  // namespace async

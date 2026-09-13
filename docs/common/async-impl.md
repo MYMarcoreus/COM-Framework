@@ -604,7 +604,7 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 | --- | --- |
 | `detail::CCurrentLayerFrame` | 跑层时在 **thread_local 上压一帧**；帧对象活在各线程自己的任务体栈上 |
 | `CPromiseState::SetTraceLink(upstream, mode, bChainRoot, nChainId)` | 每层记下「挂在哪一层之下」（**强引用**，注册时设一次、之后只读）、自己的模式、是不是链根、链号 —— 全写进一个 `m_trace`（`CLayerInfo`） |
-| `VisitLayerChain` / `CurrentLayer` / `DescribeLayer` / `DescribeLayerChain` / `DumpLayerChain` | 业务侧只读接口 |
+| `VisitLayerChain` / `CurrentLayer` / `DescribeLayer` / `DescribeLayerChain` / `DescribeLayerChainBlock` / `DumpLayerChain` | 业务侧只读接口（`DescribeLayerChain` = 一行压缩链；`*Block` / `Dump` = 逐层富信息的多行排障块，深链自动头尾 + 省略） |
 
 ```cpp
 // MakeHandlerRunner 的任务体（唯一跑用户处理器的地方）—— 接入点就这一行
@@ -702,7 +702,7 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 
 | 位置 | 断言到的结论 |
 | --- | --- |
-| 主链最深（分叉分支 B） | 8 层、深度 0…7，其中包含**被跳过的 `Catch` 层** |
+| 主链最深（分叉分支 B） | 8 层、深度 0…7，其中包含**被跳过的 `Catch` 层**；dump 块 = 头行 + 8 层（含 `← 当前层`）|
 | 分支 A | 同一条主链前缀，但**看不到兄弟分支** |
 | 跨执行器（子链跑在另一个执行器上） | 链照样完整；链上的层都在本链执行器上（父链的层从 `[trace-side]` 回到 `[trace-main]`），内层两层在同一条 worker 上且与父链线程不同 |
 | 内层链（`ThenPromise`） | 链根挂在起它的那一层（`ThenPromise` 层）下面 → **一路追回主链**（8 层） |
@@ -719,7 +719,7 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 | 多层子链（主链 → sub1 → sub2） | sub2 最深处能看到**跨 3 条链**的 7 层祖先路径；链号分成 3 段、段边界正好落在两条子链的链根上；子链链号 > 父链链号 |
 | 多层子链（同上） | **「等子链」的那一层此刻还没落定**（`ThenPromise` 要等子链落定才落定）—— 所以子链内部能看到「谁还在等我」；其余已跑过的祖先都已落定且兑现 |
 | 并发 4 条链（前缀层数 0/1/2/3 当指纹） | 每条链采到的层数与行号都等于**它自己**那条；4 条链的层号两两不同（没串链、上游没成环） |
-| 深链（256 层）+ 帧栈残留 | 深度逐层对上、链号恒定、层号沿上游严格递减；跑完 / 抛异常两条路径都不在唯一 worker 上留帧（投个探针查）；上一条链的帧不影响下一条 |
+| 深链（256 层）+ 帧栈残留 | 深度逐层对上、链号恒定、层号沿上游严格递减；跑完 / 抛异常两条路径都不在唯一 worker 上留帧（投个探针查）；上一条链的帧不影响下一条；dump 块默认头尾 + 「省略中间」（`0` = 不限，全量 257 行）|
 | 层里 fire-and-forget 起链 | 父层 = **正在跑的那一层**；同时验证`CChainAdopterScope`**弹回**了（前面那次 `ThenPromise` 留下的作用域不能劫持后面的起链） |
 
 这套用例用「注入故障」验过**有牙**：① 帧不弹栈 → 段错误；② 子链不挂父链 → 3 例失败；

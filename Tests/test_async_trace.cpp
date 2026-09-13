@@ -60,9 +60,10 @@ struct CCapture
     CLayerInfo infoCurrent;            ///< `CurrentLayer()` 的快照（拷贝）。
     bool bVisited;                     ///< `VisitLayerChain()` 的返回值。
     std::vector<CLayerInfo> vecChain;  ///< 采集到的链（近 → 远）。
-    std::string strChain;              ///< `DescribeLayerChain()` 的结果。
+    std::string strChain;              ///< `DescribeLayerChain()` 的结果（一行压缩链）。
+    std::string strDumpBlock;          ///< `DescribeLayerChainBlock()` 的结果（排障用多行块）。
 
-    CCapture() : bHasCurrent(false), infoCurrent(), bVisited(false), vecChain(), strChain()
+    CCapture() : bHasCurrent(false), infoCurrent(), bVisited(false), vecChain(), strChain(), strDumpBlock()
     {}
 };
 
@@ -181,6 +182,7 @@ void CaptureNow(CCapture& cap)
             cap.vecChain.push_back(info);
         });
     cap.strChain = common::async::DescribeLayerChain();
+    cap.strDumpBlock = common::async::DescribeLayerChainBlock();
 }
 
 /// @brief 层模式的文本形式（与 `DescribeLayerChain()` 的写法一致）。
@@ -255,6 +257,20 @@ int CountArrows(const std::string& strChain)
     for (size_t nPos = strChain.find(" <- "); nPos != std::string::npos; nPos = strChain.find(" <- ", nPos + 1))
     {
         ++nCount;
+    }
+    return nCount;
+}
+
+/// @brief 文本行数（`DescribeLayerChainBlock()` 的块：头行 + 每层一行）。
+int CountLines(const std::string& strText)
+{
+    int nCount = 0;
+    for (size_t i = 0; i < strText.size(); ++i)
+    {
+        if (strText[i] == '\n')
+        {
+            ++nCount;
+        }
     }
     return nCount;
 }
@@ -546,6 +562,14 @@ TEST(Trace_CompleteChainInComplexFlow)
     ASSERT_TRUE(spCtx->capDeepest.strChain.find("#7 then") != std::string::npos);
     ASSERT_EQ(CountArrows(spCtx->capDeepest.strChain), 7);
 
+    // 排障用的多行块（dump 接口）：头行给总数，一层一行，当前层带标记；8 层不到上限 → 不省略。
+    const std::string& strDump = spCtx->capDeepest.strDumpBlock;
+    ASSERT_TRUE(strDump.find("[async 链] 共 8 层") == 0);  // 头行先给总数
+    ASSERT_EQ(CountLines(strDump), 9);                     // 头行 + 8 层
+    ASSERT_TRUE(strDump.find("← 当前层") != std::string::npos);
+    ASSERT_TRUE(strDump.find("省略中间") == std::string::npos);
+    ASSERT_TRUE(strDump.find("[trace-main]") != std::string::npos);  // 带执行器列
+
     // 分支 A：同样是「自己 + 整条主链」，但**看不到兄弟分支**（只往上游走）。
     const CExpect vecExpectBranchA[8] = {
         {"then", lines.nBranchA, "trace-main"},
@@ -677,6 +701,9 @@ TEST(Trace_NotInsideLayer)
     // 层跑在 worker 线程上；主线程（调用方）始终不在层里。
     ASSERT_TRUE(common::async::CurrentLayer() == NULL);
     ASSERT_TRUE(common::async::DescribeLayerChain().empty());
+    ASSERT_TRUE(common::async::DescribeLayerChainBlock().empty());   // 层外没链可 dump
+    ASSERT_TRUE(common::async::DescribeLayerChainBlock(0).empty());  // 不限层数也一样
+    common::async::DumpLayerChain();                                 // 只该打一行提示（不崩）
     exec.Stop();
 }
 
@@ -1027,10 +1054,13 @@ struct CResidueCtx
     int nLineDeep;     ///< 最深一层（采集点）。
     CCapture capDeep;  ///< 最深一层的采集。
 
+    std::string strDumpDefault;  ///< 最深一层看到的 dump 块（默认上限）。
+    std::string strDumpAll;      ///< 同上，但 `DescribeLayerChainBlock(0)`（不限层数）。
+
     std::atomic<bool> bProbeDone;     ///< 探针跑完了。
     std::atomic<bool> bProbeInLayer;  ///< 探针里「看到层」了（应为 false）。
 
-    CResidueCtx() : nLineRoot(0), nLineDeep(0), capDeep(), bProbeDone(false), bProbeInLayer(false)
+    CResidueCtx() : nLineRoot(0), nLineDeep(0), capDeep(), strDumpDefault(), strDumpAll(), bProbeDone(false), bProbeInLayer(false)
     {}
 };
 
@@ -1047,6 +1077,8 @@ CPromiseResult ResidueStepDeep(CPromiseResult upResult, const std::shared_ptr<CR
 {
     (void)upResult;
     CaptureNow(spCtx->capDeep);
+    spCtx->strDumpDefault = common::async::DescribeLayerChainBlock();  // 默认上限
+    spCtx->strDumpAll = common::async::DescribeLayerChainBlock(0);     // 不限层数
     return CPromiseResult::Resolve();
 }
 
@@ -1123,6 +1155,14 @@ TEST(Trace_DeepChainAndFrameStackResidue)
         }
     }
     ASSERT_EQ(CountArrows(spCtx->capDeep.strChain), kExtraLayers);
+
+    // ---- ①-2 dump 块：深链默认「头尾各半 + 中间省略」，可选全量（0 = 不限）----
+    ASSERT_EQ(CountLines(spCtx->strDumpAll), kExtraLayers + 2);         // 头行 + 256 层（当前层 + 255 上游）
+    ASSERT_TRUE(spCtx->strDumpAll.find("#255 ") != std::string::npos);  // 走到链根了
+    ASSERT_TRUE(spCtx->strDumpAll.find("省略中间") == std::string::npos);
+    ASSERT_EQ(CountLines(spCtx->strDumpDefault), common::async::kDumpMaxLayers + 2);  // 头行 + 省略行 + 上限层数
+    ASSERT_TRUE(spCtx->strDumpDefault.find("省略中间") != std::string::npos);
+    ASSERT_TRUE(spCtx->strDumpDefault.find("← 当前层") != std::string::npos);  // 当前层一定在最前
 
     // ---- ② 正常路径跑完 → 唯一 worker 上不该留帧 ----
     PostResidueProbe(exec, spCtx);

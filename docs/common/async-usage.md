@@ -469,11 +469,11 @@ static common::async::CPromiseResult StepVerify(common::async::CPromiseResult up
                                                 const std::shared_ptr<CMyContext>& spCtx)
 {
 #if defined(ASYNC_DEBUG_TRACE)   // 整套设施只在调试构建存在（见下）
-    common::async::DumpLayerChain();   // 排障：这层是谁挂上来的
+    common::async::DumpLayerChain();   // 排障一键：一层一行的多行块（深链自动省略中间）
 
     common::async::VisitLayerChain([](const common::async::CLayerInfo& info)
     {
-        // DescribeLayer：一层 → 一行富信息（注册点 + 层号/链号 + 线程 + 耗时 + 结果）
+        // DescribeLayer：一层 → 一行富信息（可自行控制格式 / 只打关心的层）
         LOG_INFO("%s", common::async::DescribeLayer(info).c_str());
     });
 #endif
@@ -499,8 +499,18 @@ static common::async::CPromiseResult StepVerify(common::async::CPromiseResult up
 | `CurrentLayer()` | 当前正在跑的那一层（不在层里 → `nullptr`；**返回 TLS 存储，要留住请拷贝**） |
 | `VisitLayerChain(fn)` | 从当前层往上遍历（近 → 远）：给到**视图字段**（`nDepth` / `bCurrent` / `nAgeMs` / `bSettled` / `bFulfilled` / `nCode`）与**层自己的记录**（`loc` / `eMode` / `nLayerId` / `nChainId` / `bChainRoot` / `bSubChain` / `tid` / `nSelfMs` / `spExecName`） |
 | `DescribeLayer(info)` | 一层 → 一行富信息（写日志 / 测试断言） |
-| `DescribeLayerChain()` | 整条链拼成一行（`#0 … <- #1 …`） |
-| `DumpLayerChain()` | 直接打印到 stderr |
+| `DescribeLayerChain()` | 整条链拼成一行（`#0 … <- #1 …`，只有模式 + 注册点） |
+| `DescribeLayerChainBlock(nMaxLayers = 24)` | 整条链拼成**多行排障块**（头行 + 逐层富信息；超过上限就头尾 + 中间省略，`0` = 不限）—— 写自己的 logger / 断言用 |
+| `DumpLayerChain(nMaxLayers = 24)` | 就是上面那个块，直接进 stderr（**整块一次写出**，多线程同时 dump 不插花）；不在层里也会打一行提示 |
+
+`DescribeLayerChainBlock()` / `DumpLayerChain()` 的形态（`examples` 每个位置打的就是它）：
+
+```text
+[async 链] 共 3 层（近 → 远 = 从本层往上游追，谁挂的它；#0 = 当前层）
+  #0   then    BuildOrderChain  main.cpp:685  [main]       链#1  层#3   龄=0ms 本层=0ms 结果=未落定 tid=…  ← 当前层
+  #1   then    BuildOrderChain  main.cpp:683  [main]       链#1  层#2   龄=0ms 本层=0ms 结果=兑现   tid=…
+  #2   then    BuildOrderChain  main.cpp:681  [main]       链#1  层#1   龄=0ms 本层=0ms 结果=兑现   tid=… [链根]
+```
 
 要注意的（异步的固有性质）：
 
