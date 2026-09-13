@@ -5,8 +5,8 @@
 //
 //   ① 起链（具名 handler）   exec.NewPromise(spCtx, &StepReadOrder, ASYNC_LOC)
 //   ② then = lambda          只此一处用的小逻辑就写成 lambda
-//   ③ then 就地              ThenInline：跑在「结算它的那条线程」上，省一次投递
-//   ④ then 换执行器          ThenOn(execDb, ...)：换线程，**调用链不受影响**
+//   ③ then                   本链执行器线程上就地级联（默认亲和：已在本链线程 → 不投递）
+//   ④ 子链跑在别的执行器上    ThenPromise：数据访问模块**自持** execDb，它的链在 execDb 上跑
 //   ⑤ 内层链（同上下文）     ThenPromise：等一条自己搭的子链（2 层）
 //   ⑥ 跨模块 / 跨上下文      ThenBridge：等别的模块（另一套 TContext），数据搬回来
 //   ⑦ 分叉                   同一层挂两支：一支继续主线（⑨），一支旁支（⑧）
@@ -303,11 +303,11 @@ CPromiseResult StepReadOrder(CPromiseResult upResult, const std::shared_ptr<COrd
     return CPromiseResult::Resolve();
 }
 
-/// 层 ③：查库存。`ThenInline` = 就地执行（不投递，跑在「结算它的那条线程」上）。
+/// 层 ③：查库存。默认亲和：已在本链执行器线程上 → **就地级联**（不投递，省一次入队）。
 CPromiseResult StepCheckStock(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
 {
     (void)upResult;
-    TraceHere("③ 查库存（ThenInline：就地，不投递）");
+    TraceHere("③ 查库存（默认亲和：本链线程上就地）");
     spCtx->strTrace += "查库存;";
     if (spCtx->bFailStock)
     {
@@ -317,11 +317,12 @@ CPromiseResult StepCheckStock(CPromiseResult upResult, const std::shared_ptr<COr
     return CPromiseResult::Resolve();
 }
 
-/// 层 ④：读用户。`ThenOn(execDb, ...)` = 这一层在**别的执行器**上跑（换了线程）。
+/// 层 ④：读用户。由数据访问模块**自己的执行器**（execDb）跑 —— 跨模块只交换 promise + 上下文，
+/// 调用方不需要（也拿不到）对方的执行器；跑完把结果交回主链（之后的层回主链执行器）。
 CPromiseResult StepLoadUser(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
 {
     (void)upResult;
-    TraceHere("④ 读用户（ThenOn：换到 execDb 的线程上跑）");
+    TraceHere("④ 读用户（数据访问模块的 execDb 上跑）");
     SleepMs(2);  // 模拟一次数据访问
     spCtx->strTrace += "读用户;";
     return CPromiseResult::Resolve();
@@ -595,7 +596,7 @@ struct CLines
 /// @brief 搭一条「下单」父链：所有常用用法都在这一条链上（每个位置都会打印调用链）。
 ///
 /// @param execMain 主链执行器（多线程：分叉两支与协程并行 await 都会真的并发跑）。
-/// @param execDb 模拟「数据访问模块」的执行器（`ThenOn` 换线程用）。
+/// @param execDb 模拟「数据访问模块」自己的执行器（④ 「读用户」的子链在它上面跑）。
 /// @param billing 记账模块（`ThenBridge` 跨模块 / 跨上下文用）。
 /// @param spCtx 共享上下文（各层读写它；层间只传成败）。
 /// @param lines 出口：各层注册点行号（自校验用）。
@@ -616,6 +617,13 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
         }
         spSelf->strTrace += "校验;";
         return CPromiseResult::Resolve();
+    };
+
+    /// ④ 「调数据访问模块」＝在**对方自己的执行器**上起一条子链（跑完把结果交回主链）。
+    /// 这就是「想把某件事放到别的执行器上做」的标准写法：执行器是模块私有资源，不传给别人。
+    const CPromise<COrderCtx>::PromiseFactory fnLoadUser = [&execDb](const std::shared_ptr<COrderCtx>& spSelf)
+    {
+        return execDb.NewPromise(spSelf, &StepLoadUser, ASYNC_LOC);
     };
 
     /// ⑤ 内层链工厂：返回一条**自己搭的子链**（同上下文 → 直接 adopt 进当前链）。
@@ -676,9 +684,9 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
     lines.nValidate = __LINE__ + 1;
     pChain = pChain.Then(fnValidate, ASYNC_LOC);  // ② then = lambda
     lines.nCheckStock = __LINE__ + 1;
-    pChain = pChain.ThenInline(&StepCheckStock, ASYNC_LOC);  // ③ then 就地
+    pChain = pChain.Then(&StepCheckStock, ASYNC_LOC);  // ③ then（本链线程上就地）
     lines.nLoadUser = __LINE__ + 1;
-    pChain = pChain.ThenOn(execDb, &StepLoadUser, ASYNC_LOC);  // ④ then 换执行器
+    pChain = pChain.ThenPromise(fnLoadUser, ASYNC_LOC);  // ④ 子链（数据访问模块自己的执行器）
     lines.nPricing = __LINE__ + 1;
     pChain = pChain.ThenPromise(fnPricingChain, ASYNC_LOC);  // ⑤ 内层链（等它）
     lines.nBilling = __LINE__ + 1;
@@ -875,7 +883,7 @@ int main()
             std::printf("\n  [通知 OnSettled] 结果=%s\n", r.IsFulfilled() ? "兑现" : "拒绝");
             TraceHere("通知 OnSettled（不是层，不产生新层帧）");
         });
-    // 通知也可以指定在哪个执行器上跑（与 ThenOn 对称）。
+    // 通知也可以指定在哪个执行器上跑（通知不是层，与层的调度无关）。
     pTail.OnSettledOn(execDb,
         [](CPromiseResult)
         {

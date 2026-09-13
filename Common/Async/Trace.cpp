@@ -208,8 +208,7 @@ CCurrentLayerFrame::CCurrentLayerFrame(const std::shared_ptr<CPromiseState>& spL
     {
         m_spLayer->SetRunningThread(std::this_thread::get_id());  // 「这层跑在哪条线程上」：开跑时写一次。
         // 「这层跑在哪个执行器上」：同一个时机写一次。**只信线程自己的归属** ——
-        // 就地层（`ThenInline`）是「接着结算它的那条线程跑」，可能落在别的执行器的线程上，
-        // 甚至因为「注册时上游已落定」被投递回本链执行器；究竟落在谁家，只有线程自己知道。
+        // 链跨模块时会在几条链之间接力（子链跑在对方模块的执行器上），方括号换个名字就是换了个池。
         // 当前线程不属于任何线程池（调用者线程等）→ 记空（打印成 `-`，与 `tid` 一起看）。
         m_spLayer->SetTraceExec(thread::CThreadPool::CurrentPoolName());
     }

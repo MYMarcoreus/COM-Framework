@@ -39,9 +39,7 @@
 | `exec.Start()` / `Stop()` / `Post(fn)` | 执行器生命周期与 fire-and-forget 投递（≈ Asio `io_context::post`） |
 | `p.Await()` | **阻塞**等待结果（占住 worker，可死锁；≈ C# `Task.Wait()`） |
 | `p.AwaitFor(ms)` | 阻塞等待 + 超时（≈ 手写 `Promise.race`） |
-| `p.ThenInline()` | 在**结算线程**上就地跑本层（≈ Asio `dispatch` / `ConfigureAwait(false)`） |
-| `p.ThenOn(exec)` | 指定执行器的线程上跑本层（≈ `thenApplyAsync(fn, executor)`） |
-| `p.OnSettledOn(exec, cb)` | 收尾通知投到指定执行器线程 |
+| `p.OnSettledOn(exec, cb)` | 收尾通知投到指定执行器线程（**不是层**；≈ `CompletableFuture.whenCompleteAsync(fn, executor)`） |
 | `exec.CoStart<T>(spCtx)` + `CO_AWAIT` | 无栈协程（≈ C# `Task.Run` + `async/await`） |
 
 ## 2. 与「传值版任务链」的区别
@@ -493,10 +491,8 @@ static common::async::CPromiseResult StepVerify(common::async::CPromiseResult up
 
 方括号里是**本层实际跑在哪个执行器上**（执行器名；`-` = 不在任何执行器的线程上 ——
 既包括「那层没跑过 handler」，也包括「跑在调用者线程之类非执行器线程上」，配合 `tid` 一眼分得清）。
-注意它记的是「真跑在哪」，不是「注册时指定的执行器」：`ThenOn` 那层显示目标执行器，
-`ThenInline` 这种「接着上游线程跑」的层显示上游当时所在的执行器（极少数情况下，
-本层注册时上游**已经落定** → 没有可搭的线程，会被投递回**本链执行器**）。也可以直接读
-`CLayerInfo::spExecName` 拿到名字（名字串在执行器构造时分配一次，各层共享）。
+注意它记的是「真跑在哪」，不是「注册时指定的执行器」：链上的层都在**本链执行器**上（跨执行器
+就跨链 —— 子链自己的执行器会让那两层的方括号换个名字，比如 `[db]`）。
 
 | 接口 | 作用 |
 | --- | --- |
@@ -541,37 +537,37 @@ exec.Stop();                             // 停止并等待已投递任务完成
   建议按用途取名（`db` / `net` / `billing`）；`Name()` 可读回名字，空串 = 未命名（不起线程名）。
   非 Linux 平台只保留名字本体（不起 OS 线程名，其余行为一致）。
 
-## 9. 执行线程控制（逐层亲和 + 建链 / 启动分离）
+## 9. 执行线程控制
 
-### 9.1 逐层指定执行线程（`ThenInline` / `ThenOn`）
+### 9.1 一种语义：**每层都在本链执行器的线程上**
 
-默认（自 2026-09-11 的线程亲和起）：**每一层都在本链执行器线程上执行**。个别层要换个地方跑时：
+从 2026-09-11 的线程亲和起就是这个语义，现在只有这一种：
 
-| 写法 | 本层在哪跑 | 典型用途 |
-| --- | --- | --- |
-| `Then(handler)`（默认） | 本链执行器线程（同执行器内联；跨模块返回也会被拉回本模块） | 绝大多数业务层 |
-| `ThenInline(handler)` | **结算本层的那条线程**上就地跑（不投递） | 跨模块返回后只想做与对方相关的轻活，省一次回本模块的投递 |
-| `ThenOn(exec, handler)` | **指定执行器**线程上（已在该线程则就地，否则投递） | 把重活/旁路工作放到本模块的另一个执行器 |
+| 写法 | 本层在哪跑 |
+| --- | --- |
+| `Then` / `Catch` / `Finally` / `ThenPromise` / `ThenBridge` | **本链执行器线程**：已在该线程 → 就地级联（不投递）；跨执行器 / 跨模块返回 → 投递回本链执行器 |
+
+所以「某一层跑在哪条线程上」看**链的起链执行器**就够了，不需要逐层去想；跨执行器就是
+**跨链**：别的模块自持执行器、用自己的执行器起自己的链，把结果交回你的链（§6.3）：
 
 ```cpp
+// 想要「这件事在别的执行器上做」：对方自持执行器 + 起一条子链（执行器是模块私有资源，不外传）
 exec.NewPromise(spCtx, StepLoad, ASYNC_LOC)
-    .ThenPromise(fnCallOtherModule, ASYNC_LOC)
-    .ThenInline(&StepUseResultInline, ASYNC_LOC)    // 就地：或许跑在被调模块线程上
-    .ThenOn(m_execSide, &StepHeavyWork, ASYNC_LOC)  // 换到本模块的旁路执行器
-    .Then(&StepBackOnMain, ASYNC_LOC);              // 默认亲和：切回本链执行器
+    .ThenPromise(fnCallOtherModule, ASYNC_LOC)  // 对方在自己的执行器上跑自己的链，跑完交回来
+    .Then(&StepBackOnMain, ASYNC_LOC);          // 回到本链执行器（本模块线程）
 ```
 
-约束：
+要「一层换个地方跑」的旧写法（`ThenInline` 就地、`ThenOn(exec, …)` 指定执行器）已于
+**2026-09-13 按用户要求移除**，理由是它们让「一层跑在哪条线程上」不再静态可读：
 
-- `ThenInline` 的层可能跑在**别的模块的线程**上 → 里面不要碰本模块的非线程安全状态；
-- `ThenOn` 的执行器须存活到本层执行完毕；指定执行器已 `Stop()` → 本层以 `kStopped` 收口
-  （后续层跳过、`Catch` 照常执行）；
-- **不要把 `ThenOn` 用来跨模块传执行器**（执行器是模块私有资源，跨模块只交换 promise + 上下文）；
-- 两种写法都只影响**那一层**：之后的层仍按默认亲和回本链执行器；内联深度超 `kMaxInlineDepth` 依旧改投递（防爆栈）；
-- `ThenInline` 还有一种少见但合法的落点：本层**注册时上游已经落定**（链在别的线程上跑得比
-  建链快）→ 没有可搭的结算线程，框架按「已落定 → 投递到本层解析出的执行器」处理，
-  而就地层解析出的就是**本链执行器** → 这一层会跑在本链执行器线程上。所以就地层也别
-  假设「一定在对方线程上」，要异步一致性就用默认亲和或 `ThenOn`。
+- `ThenInline` 的落点取决于「上游何时落定」—— 注册早于落定 → 跟着**结算线程**（跨模块时可能是
+  别的模块的线程）；注册晚于落定 → `AddHandler` 改投递回**本链执行器**；内联深度超
+  `kMaxInlineDepth` 又改一次。同一个调用点可能有三种落点，看代码判断不出线程；
+- 两者都让层可能跑在**别人的线程**上（要碰本模块状态就错），而且 `ThenOn` 容易被误用成
+  「把执行器跨模块传递」（反模式）。
+
+保留的能力：`OnSettledOn(exec, handler)`（通知指定执行器）与协程续跑策略不变；
+内联深度限额（`kMaxInlineDepth`，防超长链爆栈）也不变。
 
 ### 9.2 起链只有一种语义：**立即投递首层**
 
@@ -641,9 +637,8 @@ common::async::CPromise<COrderCtx> pRace = exec.WhenRace(spCtx, pPrimary, pBacku
 | 事实 | 说明 |
 | --- | --- |
 | 首层 | 由 `NewPromise` / 构造函数投递到执行器，**在工作线程上执行** |
-| 后续层 | 上一层 settled 时按**线程亲和**推进：已在本链执行器线程 → 就地级联；否则投递回本链执行器 |
-| 跨模块 | 被调模块的层在它自己的执行器上跑；本链的层**恒回本模块执行器**；`OnSettled` 通知仍在结算线程 |
-| 逐层覆盖 | `ThenInline`（就地）/ `ThenOn`（指定执行器）——只影响那一层 |
+| 后续层 | 上一层 settled 时推进：已在本链执行器线程 → 就地级联；否则投递回本链执行器 |
+| 跨模块 | 被调模块的层在它自己的执行器上跑；本链的层**恒回本模块执行器**（跨执行器 = 跨链）；`OnSettled` 通知仍在结算线程 |
 | 单链并发度 | 一条链的层**顺序执行** |
 | 深链 | 连续内联超过 `kMaxInlineDepth`（64）改为投递，防递归爆栈 |
 | 分叉 | 同一层可注册多个 `Then`，各自独立延续（按序在同一执行器上推进） |
@@ -717,12 +712,11 @@ common::async::CPromise<Ctx> p =
 - 单元测试（异步共 **105 例**，全量 151 例）：`test_async_smoke.cpp`（17）对外用法逐条冒烟、
   `test_async_chain.cpp`（37）promise 契约 + 协程、`test_async_combine.cpp`（12）组合器、
   `test_async_modules.cpp`（6）+ `test_async_modules_stress.cpp`（8）跨模块与极限、
-  `test_async_affinity.cpp`（5）+ `test_async_affinity_override.cpp`（4）线程亲和，
+  `test_async_affinity.cpp`（5）跨模块线程亲和，
   `test_async_settled_delivery.cpp`（4）通知送达、
   `test_async_robustness.cpp`（6）健壮性与诊断、`test_async_layer_rules.cpp`（2）三态语义白盒、
   `test_async_alloc.cpp`（2）每层分配预算护栏、
-  `test_async_trace.cpp`（7）调用链 trace（复杂主链看完整链 / 多层子链跨链祖先路径 /
-  并发多链互不串 / 深链与帧栈无残留 / 层里起链的父层 / 多线程跳层逐层核对 tid /
-  层外空操作契约，见 [async-impl.md](async-impl.md) §14）；
+  `test_async_trace.cpp`（6）调用链 trace（复杂主链看完整链 / 多层子链跨链祖先路径 /
+  并发多链互不串 / 深链与帧栈无残留 / 层里起链的父层 / 层外空操作契约，见 [async-impl.md](async-impl.md) §14）；
 - 基准：`Benchmark/cases/ChainCase.cpp`、`CoroutineCase.cpp`、`ResumableCase.cpp`、`StressCase.cpp`；
 - 运行：`./build.sh --tests`、`./build/debug/examples`。

@@ -2,12 +2,15 @@
 /// 异步调用链（trace）：验证「在异步层里能不能看到**完整**的调用链」。
 ///
 /// 主用例 `Trace_CompleteChainInComplexFlow` 是一条把各种层形态混在一起的主链：
-/// ① 具名 then（链根）→ ② 具名 then → ③ `ThenInline` → ④ `ThenOn` 别的执行器
-/// → ⑤ 被跳过的 `Catch` → ⑥ `Finally` → ⑦ `ThenPromise` 内层链 → ⑧ 分叉基座
-/// → ⑨ 两支；然后在**最深的地方**把整条链逐层断言出来（层数、模式、注册点行号、
-/// 深度、当前层标记、一行描述），另外把特殊位置逐个钉住：
+/// ① 具名 then（链根）→ ② 具名 then（本链线程上就地级联）→ ③ 具名 then
+/// → ④ 被跳过的 `Catch` → ⑤ `Finally` → ⑥ `ThenPromise` 内层链
+/// → ⑦ 分叉基座 → ⑧/⑨ 两支；然后在**最深的地方**把整条链逐层断言出来
+/// （层数、模式、注册点行号、深度、当前层标记、**跑在哪台执行器上**、一行描述），
+/// 另外把特殊位置逐个钉住：
 ///   - 子链 → 父链：内层链（`ThenPromise`）的链根挂在**起它的那一层**下面 → 从内层里能一路
 ///     追回主链；反过来主链看不到子链（只往上游走）；层外起的链没有父层；
+///   - 跨执行器：内层链跑在**另一个执行器**上（自己的 worker），链本身不受影响 ——
+///     链上的层都在本链执行器线程上，跨执行器就跨链（也直接看执行器名那一列）；
 ///   - 分叉：每条分支只看得到「自己 + 共同上游」，看不到兄弟分支；
 ///   - 通知（`OnSettled`）：落定前登记 → 在**触发它的那一层**的帧里就地执行；
 ///     落定后才登记 → 投递执行，此时不在任何层里（通知不是层）；
@@ -65,11 +68,15 @@ struct CCapture
 
 #endif  // defined(ASYNC_DEBUG_TRACE)
 
-/// @brief 期望的链：逐层的（模式, 注册点行号）。
+/// @brief 期望的链：逐层的（模式, 注册点行号, 执行器名）。
 struct CExpect
 {
     const char* pszMode;  ///< then / catch / finally。
     int nLine;            ///< 注册点行号（`__LINE__ + 1` 采集）。
+
+    /// 本层跑在哪个执行器上：`NULL` = 不检查；`"-"` = 期望「没有执行器」
+    /// （这一层没跑过 handler，比如被跳过的 catch / 桥接层）；否则执行器名。
+    const char* pszExec;
 };
 
 /// @brief 主链各层的注册点（每个 `__LINE__ + 1` 紧跟一次挂层）。
@@ -78,8 +85,8 @@ struct CExpect
 struct CLines
 {
     int nRoot;     ///< `exec.NewPromise`（链根）
-    int nInline;   ///< `ThenInline`
-    int nOther;    ///< `ThenOn`（另一个执行器）
+    int nSecond;   ///< 第二个 then（就地级联）
+    int nThird;    ///< 第三个 then（跨执行器回来后仍在本链执行器上）
     int nCatch;    ///< `Catch`（本流程被跳过，但仍在链上）
     int nFinally;  ///< `Finally`
     int nBridge;   ///< `ThenPromise`（内层链挂在主链上的那一层）
@@ -88,7 +95,7 @@ struct CLines
     int nBranchB;  ///< 分叉分支 B
     int nThrow;    ///< 异常路径那条小链的首层
 
-    CLines() : nRoot(0), nInline(0), nOther(0), nCatch(0), nFinally(0), nBridge(0), nBase(0), nBranchA(0), nBranchB(0), nThrow(0)
+    CLines() : nRoot(0), nSecond(0), nThird(0), nCatch(0), nFinally(0), nBridge(0), nBase(0), nBranchA(0), nBranchB(0), nThrow(0)
     {}
 };
 
@@ -113,8 +120,8 @@ struct CTraceCtx
     int nLineStart;        ///< 层外起链时（`exec.NewPromise`）的注册点
 
     CCapture capRoot;          ///< 链根
-    CCapture capInline;        ///< `ThenInline` 层
-    CCapture capOtherExec;     ///< `ThenOn` 层（跑在另一个执行器上）
+    CCapture capSecond;        ///< 第二个 then 层
+    CCapture capThird;         ///< 第三个 then 层
     CCapture capDeepest;       ///< 分支 B：主链最深，看整条链
     CCapture capBranchA;       ///< 分支 A：看「自己 + 共同上游」
     CCapture capInnerFirst;    ///< 内层链第 1 层
@@ -140,8 +147,8 @@ struct CTraceCtx
           nLineCoroStep(0),
           nLineStart(0),
           capRoot(),
-          capInline(),
-          capOtherExec(),
+          capSecond(),
+          capThird(),
           capDeepest(),
           capBranchA(),
           capInnerFirst(),
@@ -195,7 +202,8 @@ const char* ModeText(common::async::detail::HandlerMode eMode)
 /// @brief 断言采集到的链与期望**逐项**一致（近 → 远）。
 ///
 /// 逐项检查模式 / 注册点行号 / 深度（第 i 项的深度必须是 i）/ 当前层标记
-/// （只有第 0 项为真）；最后再确认 `CurrentLayer()` 与链首是同一层。
+/// （只有第 0 项为真）/ 跑在哪台执行器上（`pszExec` 非空才查）；
+/// 最后再确认 `CurrentLayer()` 与链首是同一层。
 void AssertChain(const CCapture& cap, const CExpect* pExpect, int nCount)
 {
     ASSERT_TRUE(cap.bVisited);
@@ -208,6 +216,18 @@ void AssertChain(const CCapture& cap, const CExpect* pExpect, int nCount)
         ASSERT_EQ(info.loc.nLine, pExpect[i].nLine);
         ASSERT_EQ(info.nDepth, i);
         ASSERT_TRUE(info.bCurrent == (i == 0));
+        if (pExpect[i].pszExec != NULL)
+        {
+            if (pExpect[i].pszExec[0] == '-')
+            {
+                ASSERT_TRUE(info.spExecName == NULL);  // 没跑过 handler → 没有执行器
+            }
+            else
+            {
+                ASSERT_TRUE(info.spExecName != NULL);
+                ASSERT_TRUE(*info.spExecName == std::string(pExpect[i].pszExec));  // 这一层真跑在那台执行器上
+            }
+        }
     }
 
     ASSERT_TRUE(cap.infoCurrent.bCurrent);
@@ -285,19 +305,19 @@ CPromiseResult StepRoot(CPromiseResult upResult, const std::shared_ptr<CTraceCtx
     return CPromiseResult::Resolve();
 }
 
-/// 层：`ThenInline`（就地执行）。
-CPromiseResult StepInline(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
+/// 层：第二个 then（默认亲和 —— 已在本链执行器线程上，所以**就地**级联）。
+CPromiseResult StepSecond(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
 {
     (void)upResult;
-    TRACE_CAPTURE(capInline);
+    TRACE_CAPTURE(capSecond);
     return CPromiseResult::Resolve();
 }
 
-/// 层：`ThenOn`（跑在另一个执行器上 —— 换线程不影响链的可见性）。
-CPromiseResult StepOnOtherExec(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
+/// 层：第三个 then（默认亲和 —— 跨执行器回来也照样落在本链执行器线程上）。
+CPromiseResult StepThird(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
 {
     (void)upResult;
-    TRACE_CAPTURE(capOtherExec);
+    TRACE_CAPTURE(capThird);
     return CPromiseResult::Resolve();
 }
 
@@ -419,8 +439,8 @@ public:
 /// @brief 复杂主链：所有层形态串成一条链，在最深处断言**完整**调用链 + 各种特殊位置。
 TEST(Trace_CompleteChainInComplexFlow)
 {
-    CAsyncExecutor execMain(2);  // 主链：2 线程，分叉两支正好一支就地、一支投递
-    CAsyncExecutor execSide(1);  // `ThenOn` 指定的另一个执行器（换线程）
+    CAsyncExecutor execMain("trace-main", 2);  // 主链：2 线程，分叉两支正好一支就地、一支投递
+    CAsyncExecutor execSide("trace-side", 1);  // 内层链的执行器（链上唯一换执行器的地方）
     ASSERT_TRUE(execMain.Start());
     ASSERT_TRUE(execSide.Start());
 
@@ -428,10 +448,10 @@ TEST(Trace_CompleteChainInComplexFlow)
     CLines lines;
 
     // 内层链的工厂（单独具名：这样 `ThenPromise` 那一行能整行写下，注册点行号好断言）。
-    CPromise<CTraceCtx>::PromiseFactory fnInnerChain = [&execMain, spCtx](const std::shared_ptr<CTraceCtx>& spInnerCtx)
+    CPromise<CTraceCtx>::PromiseFactory fnInnerChain = [&execSide, spCtx](const std::shared_ptr<CTraceCtx>& spInnerCtx)
     {
         TRACE_LINE(spCtx->nLineInnerFirst = __LINE__ + 1);
-        CPromise<CTraceCtx> pInner = execMain.NewPromise(spInnerCtx, &StepInnerFirst, ASYNC_LOC);
+        CPromise<CTraceCtx> pInner = execSide.NewPromise(spInnerCtx, &StepInnerFirst, ASYNC_LOC);
         TRACE_LINE(spCtx->nLineInnerSecond = __LINE__ + 1);
         return pInner.Then(&StepInnerSecond, ASYNC_LOC);
     };
@@ -440,12 +460,12 @@ TEST(Trace_CompleteChainInComplexFlow)
 
     lines.nRoot = __LINE__ + 1;
     CPromise<CTraceCtx> pRoot = execMain.NewPromise(spCtx, &StepRoot, ASYNC_LOC);  // ① 链根
-    lines.nInline = __LINE__ + 1;
-    CPromise<CTraceCtx> pInline = pRoot.ThenInline(&StepInline, ASYNC_LOC);  // ② 就地
-    lines.nOther = __LINE__ + 1;
-    CPromise<CTraceCtx> pOnSide = pInline.ThenOn(execSide, &StepOnOtherExec, ASYNC_LOC);  // ③ 换执行器
+    lines.nSecond = __LINE__ + 1;
+    CPromise<CTraceCtx> pSecond = pRoot.Then(&StepSecond, ASYNC_LOC);  // ② then（本链线程上就地级联）
+    lines.nThird = __LINE__ + 1;
+    CPromise<CTraceCtx> pThird = pSecond.Then(&StepThird, ASYNC_LOC);  // ③ then（同一执行器）
     lines.nCatch = __LINE__ + 1;
-    CPromise<CTraceCtx> pCatch = pOnSide.Catch(&StepCatchSkipped, ASYNC_LOC);  // ④ 被跳过（仍在链上）
+    CPromise<CTraceCtx> pCatch = pThird.Catch(&StepCatchSkipped, ASYNC_LOC);  // ④ 被跳过（仍在链上）
     lines.nFinally = __LINE__ + 1;
     CPromise<CTraceCtx> pFinally = pCatch.Finally(&StepFinally, ASYNC_LOC);  // ⑤ 收尾
     lines.nBridge = __LINE__ + 1;
@@ -509,14 +529,14 @@ TEST(Trace_CompleteChainInComplexFlow)
 
     //================ 主链最深（分支 B）看到的是整条链：8 层，深度 0…7 ================
     const CExpect vecExpectMain[8] = {
-        {"then", lines.nBranchB},     // #0 本层（分支 B）
-        {"then", lines.nBase},        // #1 分叉基座
-        {"then", lines.nBridge},      // #2 ThenPromise（内层链挂在主链上的那一层）
-        {"finally", lines.nFinally},  // #3
-        {"catch", lines.nCatch},      // #4 被跳过的 Catch：照样在链上
-        {"then", lines.nOther},       // #5 跑在另一个执行器上的层
-        {"then", lines.nInline},      // #6 ThenInline
-        {"then", lines.nRoot},        // #7 链根（到这里再往上没有了）
+        {"then", lines.nBranchB, "trace-main"},     // #0 本层（分支 B）
+        {"then", lines.nBase, "trace-main"},        // #1 分叉基座
+        {"then", lines.nBridge, "-"},               // #2 ThenPromise（内层链挂在主链上的那一层）
+        {"finally", lines.nFinally, "trace-main"},  // #3
+        {"catch", lines.nCatch, "-"},               // #4 被跳过的 Catch：照样在链上
+        {"then", lines.nThird, "trace-main"},       // #5 第三个 then（跨执行器回来仍在本链线程上）
+        {"then", lines.nSecond, "trace-main"},      // #6 第二个 then（本链线程上就地级联）
+        {"then", lines.nRoot, "trace-main"},        // #7 链根（到这里再往上没有了）
     };
     AssertChain(spCtx->capDeepest, vecExpectMain, 8);
 
@@ -528,61 +548,67 @@ TEST(Trace_CompleteChainInComplexFlow)
 
     // 分支 A：同样是「自己 + 整条主链」，但**看不到兄弟分支**（只往上游走）。
     const CExpect vecExpectBranchA[8] = {
-        {"then", lines.nBranchA},
-        {"then", lines.nBase},
-        {"then", lines.nBridge},
-        {"finally", lines.nFinally},
-        {"catch", lines.nCatch},
-        {"then", lines.nOther},
-        {"then", lines.nInline},
-        {"then", lines.nRoot},
+        {"then", lines.nBranchA, "trace-main"},
+        {"then", lines.nBase, "trace-main"},
+        {"then", lines.nBridge, "-"},
+        {"finally", lines.nFinally, "trace-main"},
+        {"catch", lines.nCatch, "-"},
+        {"then", lines.nThird, "trace-main"},
+        {"then", lines.nSecond, "trace-main"},
+        {"then", lines.nRoot, "trace-main"},
     };
     AssertChain(spCtx->capBranchA, vecExpectBranchA, 8);
     ASSERT_TRUE(!HasLine(spCtx->capBranchA, lines.nBranchB));
     ASSERT_TRUE(!HasLine(spCtx->capDeepest, lines.nBranchA));
 
     // 中间各层：链就是「本层 + 上游」，层数 = 它在链上的位置 + 1。
-    const CExpect vecExpectRoot[1] = {{"then", lines.nRoot}};
+    const CExpect vecExpectRoot[1] = {{"then", lines.nRoot, "trace-main"}};
     AssertChain(spCtx->capRoot, vecExpectRoot, 1);
 
-    const CExpect vecExpectInline[2] = {{"then", lines.nInline}, {"then", lines.nRoot}};
-    AssertChain(spCtx->capInline, vecExpectInline, 2);
+    const CExpect vecExpectSecond[2] = {{"then", lines.nSecond, "trace-main"}, {"then", lines.nRoot, "trace-main"}};
+    AssertChain(spCtx->capSecond, vecExpectSecond, 2);
 
-    // 换执行器 / 换线程不影响链：第 3 层照样看得到「自己 + 前两层」。
-    const CExpect vecExpectOther[3] = {{"then", lines.nOther}, {"then", lines.nInline}, {"then", lines.nRoot}};
-    AssertChain(spCtx->capOtherExec, vecExpectOther, 3);
+    // 同一执行器内：第三层照样看得到「自己 + 前两层」。
+    const CExpect vecExpectThird[3] = {
+        {"then", lines.nThird, "trace-main"}, {"then", lines.nSecond, "trace-main"}, {"then", lines.nRoot, "trace-main"}};
+    AssertChain(spCtx->capThird, vecExpectThird, 3);
 
     //================ 子链 → 父链：内层链的链根挂在「起它的那一层」下面 ================
     // 内层链是在 ⑥（ThenPromise 层）的工厂里现搭的 → 它的链根挂到 ⑥ 上，于是从内层最深一层
     // 就能一路追回主链链根（内层两段 + 主链前缀 = 8 层）。
     const CExpect vecExpectInnerSecond[8] = {
-        {"then", spCtx->nLineInnerSecond},
-        {"then", spCtx->nLineInnerFirst},
-        {"then", lines.nBridge},
-        {"finally", lines.nFinally},
-        {"catch", lines.nCatch},
-        {"then", lines.nOther},
-        {"then", lines.nInline},
-        {"then", lines.nRoot},
+        {"then", spCtx->nLineInnerSecond, "trace-side"},
+        {"then", spCtx->nLineInnerFirst, "trace-side"},
+        {"then", lines.nBridge, "-"},
+        {"finally", lines.nFinally, "trace-main"},
+        {"catch", lines.nCatch, "-"},
+        {"then", lines.nThird, "trace-main"},
+        {"then", lines.nSecond, "trace-main"},
+        {"then", lines.nRoot, "trace-main"},
     };
     AssertChain(spCtx->capInnerSecond, vecExpectInnerSecond, 8);
 
     const CExpect vecExpectInnerFirst[7] = {
-        {"then", spCtx->nLineInnerFirst},
-        {"then", lines.nBridge},
-        {"finally", lines.nFinally},
-        {"catch", lines.nCatch},
-        {"then", lines.nOther},
-        {"then", lines.nInline},
-        {"then", lines.nRoot},
+        {"then", spCtx->nLineInnerFirst, "trace-side"},
+        {"then", lines.nBridge, "-"},
+        {"finally", lines.nFinally, "trace-main"},
+        {"catch", lines.nCatch, "-"},
+        {"then", lines.nThird, "trace-main"},
+        {"then", lines.nSecond, "trace-main"},
+        {"then", lines.nRoot, "trace-main"},
     };
     AssertChain(spCtx->capInnerFirst, vecExpectInnerFirst, 7);
 
     // 反过来：子链在父链的**下游**，所以主链上任何一层都看不到它（只往上游走）。
     ASSERT_TRUE(!HasLine(spCtx->capDeepest, spCtx->nLineInnerFirst));
 
+    //================ 跨执行器：内层链在 execSide 的线程上，链本身不受影响 ================
+    // （「层都在本链执行器线程上」—— 跨执行器的是**另一条链**：内层链有自己的执行器。）
+    ASSERT_TRUE(spCtx->capInnerSecond.vecChain[0].tid == spCtx->capInnerSecond.vecChain[1].tid);  // 内层两层同一条 worker
+    ASSERT_TRUE(spCtx->capInnerSecond.vecChain[0].tid != spCtx->capInnerSecond.vecChain[3].tid);  // 与父链线程不同
+
     //================ 通知：就地看得到「触发它的那一层」，投递看不到层 ================
-    const CExpect vecExpectNoticeInline[1] = {{"then", nLineGated}};
+    const CExpect vecExpectNoticeInline[1] = {{"then", nLineGated, "trace-main"}};
     AssertChain(spGateCtx->capNoticeInline, vecExpectNoticeInline, 1);
 
     // 投递送达：通知不是层，没有自己的帧 → 不在任何层里。
@@ -591,7 +617,7 @@ TEST(Trace_CompleteChainInComplexFlow)
     ASSERT_TRUE(spGateCtx->capNoticePosted.vecChain.empty());
 
     //================ 协程：await 的是自己起的子链；恢复点两种都合法 ================
-    const CExpect vecExpectCoroStep[1] = {{"then", spCtx->nLineCoroStep}};
+    const CExpect vecExpectCoroStep[1] = {{"then", spCtx->nLineCoroStep, "trace-main"}};
     AssertChain(spCtx->capCoroStep, vecExpectCoroStep, 1);
 
     // 恢复点：就地续跑 → 落在「被 await 的那一层」的帧里；投递续跑（线程池有积压时）
@@ -600,7 +626,7 @@ TEST(Trace_CompleteChainInComplexFlow)
                 (spCtx->capCoroAfter.vecChain.size() == 1 && spCtx->capCoroAfter.vecChain[0].loc.nLine == spCtx->nLineCoroStep));
 
     //================ 异常路径：抛之前链是完整的，抛之后帧栈干净 ================
-    const CExpect vecExpectThrowing[1] = {{"then", lines.nThrow}};
+    const CExpect vecExpectThrowing[1] = {{"then", lines.nThrow, "trace-main"}};
     AssertChain(spCtx->capThrowing, vecExpectThrowing, 1);
 
     // 异常路径后当前线程的帧栈必须已弹空（否则后面的遍历会看到残留的层）。
@@ -637,7 +663,7 @@ TEST(Trace_NotInsideLayer)
         {
         }));
 
-    CAsyncExecutor exec(1);
+    CAsyncExecutor exec("trace-main", 1);
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CTraceCtx> spCtx = std::make_shared<CTraceCtx>();
@@ -645,7 +671,7 @@ TEST(Trace_NotInsideLayer)
     ASSERT_TRUE(exec.NewPromise(spCtx, &StepRoot, ASYNC_LOC).Await().IsFulfilled());
 
     // 层外起的链没有「父层」—— 链根就是链根（它的上游要等有人 adopt / 或它在层里起链时才挂上）。
-    const CExpect vecExpectAlone[1] = {{"then", spCtx->nLineStart}};
+    const CExpect vecExpectAlone[1] = {{"then", spCtx->nLineStart, "trace-main"}};
     AssertChain(spCtx->capRoot, vecExpectAlone, 1);
 
     // 层跑在 worker 线程上；主线程（调用方）始终不在层里。
@@ -744,7 +770,7 @@ bool AreLayerIdsUnique(const std::vector<unsigned>& vecIds)
 
 TEST(Trace_NestedSubChainsThreeLevels)
 {
-    CAsyncExecutor exec(2);
+    CAsyncExecutor exec("trace-main", 2);
     ASSERT_TRUE(exec.Start());
     const std::shared_ptr<CNestCtx> spCtx = std::make_shared<CNestCtx>();
 
@@ -781,13 +807,13 @@ TEST(Trace_NestedSubChainsThreeLevels)
     // 祖先路径（近 → 远）：sub2 深层(0) → sub2 链根(1) → sub1 上等 sub2 的那层(2) → sub1 链根(3)
     //                   → 主链上等 sub1 的那层(4) → 主链前缀(5) → 主链链根(6)
     const CExpect vecExpect[7] = {
-        {"then", spCtx->nLineSub2Deep},
-        {"then", spCtx->nLineSub2Root},
-        {"then", spCtx->nLineAwait2},
-        {"then", spCtx->nLineSub1Root},
-        {"then", spCtx->nLineAwait1},
-        {"then", spCtx->nLinePre},
-        {"then", spCtx->nLineRoot},
+        {"then", spCtx->nLineSub2Deep, "trace-main"},
+        {"then", spCtx->nLineSub2Root, "trace-main"},
+        {"then", spCtx->nLineAwait2, "-"},
+        {"then", spCtx->nLineSub1Root, "trace-main"},
+        {"then", spCtx->nLineAwait1, "-"},
+        {"then", spCtx->nLinePre, "trace-main"},
+        {"then", spCtx->nLineRoot, "trace-main"},
     };
     AssertChain(spCtx->capDeep, vecExpect, 7);
 
@@ -1064,8 +1090,8 @@ void PostResidueProbe(CAsyncExecutor& exec, const std::shared_ptr<CResidueCtx>& 
 
 TEST(Trace_DeepChainAndFrameStackResidue)
 {
-    const int kExtraLayers = 255;  // 深链：链根 + 255 层 = 256 层
-    CAsyncExecutor exec(1);        // **单线程**：探针必然复用同一条 worker（帧栈残留才查得出来）
+    const int kExtraLayers = 255;          // 深链：链根 + 255 层 = 256 层
+    CAsyncExecutor exec("trace-main", 1);  // **单线程**：探针必然复用同一条 worker（帧栈残留才查得出来）
     ASSERT_TRUE(exec.Start());
     const std::shared_ptr<CResidueCtx> spCtx = std::make_shared<CResidueCtx>();
 
@@ -1116,7 +1142,7 @@ TEST(Trace_DeepChainAndFrameStackResidue)
     spAlone->nLineRoot = __LINE__ + 1;
     CPromise<CResidueCtx> pAlone = exec.NewPromise(spAlone, &ResidueStepDeep, ASYNC_LOC);
     ASSERT_TRUE(pAlone.Await().IsFulfilled());
-    const CExpect vecExpectAlone[1] = {{"then", spAlone->nLineRoot}};
+    const CExpect vecExpectAlone[1] = {{"then", spAlone->nLineRoot, "trace-main"}};
     AssertChain(spAlone->capDeep, vecExpectAlone, 1);
 
     // ---- ⑤ 主线程（调用方）从头到尾都不在任何层里 ----
@@ -1197,7 +1223,7 @@ CPromiseResult InLayerStepStarter(CPromiseResult upResult, const std::shared_ptr
 
 TEST(Trace_StartedInsideLayerBindsToCurrentLayer)
 {
-    CAsyncExecutor exec(1);
+    CAsyncExecutor exec("trace-main", 1);
     ASSERT_TRUE(exec.Start());
     const std::shared_ptr<CInLayerCtx> spCtx = std::make_shared<CInLayerCtx>();
     spCtx->pExec = &exec;
@@ -1225,10 +1251,10 @@ TEST(Trace_StartedInsideLayerBindsToCurrentLayer)
     // 注意顺序：starter 的上游就是那次 `ThenPromise` 的 await 层（主链是一条直线），
     // 所以「等待子链的层」本来就应该在路径上；不该出现的是**那条子链自己的链根**。
     const CExpect vecExpect[4] = {
-        {"then", spCtx->nLineSide},     // 旁支链自己的链根
-        {"then", spCtx->nLineStarter},  // 父层 = 正在跑的那一层
-        {"then", spCtx->nLineAwait},    // 主链上等子链的那一层（starter 的上游）
-        {"then", spCtx->nLineRoot},     // 主链链根
+        {"then", spCtx->nLineSide, "trace-main"},     // 旁支链自己的链根
+        {"then", spCtx->nLineStarter, "trace-main"},  // 父层 = 正在跑的那一层
+        {"then", spCtx->nLineAwait, "-"},             // 主链上等子链的那一层（桥接层，自己不跑 handler）
+        {"then", spCtx->nLineRoot, "trace-main"},     // 主链链根
     };
     AssertChain(spCtx->capSide, vecExpect, 4);
 
@@ -1241,254 +1267,5 @@ TEST(Trace_StartedInsideLayerBindsToCurrentLayer)
     exec.Stop();
 }
 
-// ====================================================================
-// 更复杂的场景（五）：**多线程** + 多次换线程（换执行器）时 trace 仍然对
-//
-// 要回答的问题：「执行器线程多一点、层在几条线程之间来回跳，trace 还准不准？」
-//
-// 查三件事：
-//  ① 链的**形状与注册点**不因换线程而变（每层都在、行号对得上、深度 0…N-1、模式都对）；
-//  ② 每层的 `tid`（真正跑它的那条线程）**逐层对得上** —— 每层自己把
-//     `std::this_thread::get_id()` 记进上下文，采集到的链里那一层的 `tid` 必须等于它；
-//  ③ 跑完这条链确实跨了多条线程（否则这个用例根本没测到「多线程」）。
-//
-// 3 个执行器 × 4 线程 = 12 条 worker；4 条链各自从一个调用线程发起，同时在跑。
-// ====================================================================
-
-/// @brief 多线程跳层用例的上下文（一条链一个）。
-struct CThreadCtx
-{
-    static const int kLayers = 9;  ///< 本用例的链长（主链 7 层 + 子链 2 层）。
-
-    std::thread::id aTidSelf[kLayers];  ///< 每一层**自己**记下的「我跑在哪条线程上」。
-    std::string aExecSelf[kLayers];     ///< 每一层**自己**记下的「我跑在哪个执行器上」。
-    int aLine[kLayers];                 ///< 每一层的注册点行号（链形状的指纹）。
-    CCapture capDeep;                   ///< 子链最深一层（采集点）的快照。
-    std::atomic<bool> bOk;              ///< 链跑完了（断言只能在主测试线程做）。
-
-    CThreadCtx() : aTidSelf(), aExecSelf(), aLine(), capDeep(), bOk(false)
-    {
-        for (int i = 0; i < kLayers; ++i)
-        {
-            aLine[i] = 0;
-        }
-    }
-};
-
-/// @brief 当前线程所属线程池的名字（不在池线程上 → 空串）。
-///
-/// 层里取它 = 这一层**实际**跑在哪个执行器上（内联层是「接着上游那条线程跑」，
-/// 可能就落在别的执行器的线程上）。trace 记的必须是同一个答案。
-std::string PoolNameOfThisThread()
-{
-    const std::shared_ptr<const std::string> spName = common::thread::CThreadPool::CurrentPoolName();
-    return (spName != nullptr) ? *spName : std::string();
-}
-
-/// @brief 造一个「记录自己跑在哪条线程 / 哪个执行器上」的层处理器。
-///
-/// @param spCtx 上下文（写 aTidSelf[nIndex] / aExecSelf[nIndex]）。
-/// @param nIndex 这一层在链上的序号（0 = 链根）。
-/// @return 层处理器。
-CPromise<CThreadCtx>::ThenHandler MakeThreadStep(const std::shared_ptr<CThreadCtx>& spCtx, int nIndex)
-{
-    return [spCtx, nIndex](CPromiseResult upResult, const std::shared_ptr<CThreadCtx>& spSelf)
-    {
-        (void)upResult;
-        (void)spSelf;
-        spCtx->aTidSelf[nIndex] = std::this_thread::get_id();  // 「这一层真的跑在这条线程上」
-        spCtx->aExecSelf[nIndex] = PoolNameOfThisThread();     // 「这一层真的跑在这个执行器上」
-        return CPromiseResult::Resolve();
-    };
-}
-
-/// @brief 子链最深一层：记录线程 + 采集整条链。
-CPromiseResult ThreadStepDeep(CPromiseResult upResult, const std::shared_ptr<CThreadCtx>& spCtx)
-{
-    (void)upResult;
-    spCtx->aTidSelf[CThreadCtx::kLayers - 1] = std::this_thread::get_id();
-    spCtx->aExecSelf[CThreadCtx::kLayers - 1] = PoolNameOfThisThread();
-    CaptureNow(spCtx->capDeep);
-    return CPromiseResult::Resolve();
-}
-
-/// @brief 搭一条「在多条线程之间来回跳」的链，并在子链最深处采集。
-///
-/// ① A → ② 就地 → ③ B → ④ 就地 → ⑤ C → ⑥ A → ⑦ 等子链（子链跑在 B）→ ⑧/⑨ 子链两层层。
-///
-/// @param execA 执行器 A。
-/// @param execB 执行器 B。
-/// @param execC 执行器 C。
-/// @param spCtx 上下文。
-/// @return 链尾句柄（子链落定后才兑现）。
-CPromise<CThreadCtx> BuildThreadHopChain(
-    CAsyncExecutor& execA, CAsyncExecutor& execB, CAsyncExecutor& execC, const std::shared_ptr<CThreadCtx>& spCtx)
-{
-    // 子链（⑦ 层）的工厂：链根 + 最深一层（采集点）。
-    const CPromise<CThreadCtx>::PromiseFactory fnSub = [&execB, spCtx](const std::shared_ptr<CThreadCtx>& spSelf)
-    {
-        spCtx->aLine[7] = __LINE__ + 1;
-        CPromise<CThreadCtx> pSub = execB.NewPromise(spSelf, MakeThreadStep(spCtx, 7), ASYNC_LOC);
-        spCtx->aLine[8] = __LINE__ + 1;
-        return pSub.Then(&ThreadStepDeep, ASYNC_LOC);
-    };
-
-    spCtx->aLine[0] = __LINE__ + 1;
-    CPromise<CThreadCtx> p = execA.NewPromise(spCtx, MakeThreadStep(spCtx, 0), ASYNC_LOC);
-    spCtx->aLine[1] = __LINE__ + 1;
-    p = p.ThenInline(MakeThreadStep(spCtx, 1), ASYNC_LOC);
-    spCtx->aLine[2] = __LINE__ + 1;
-    p = p.ThenOn(execB, MakeThreadStep(spCtx, 2), ASYNC_LOC);
-    spCtx->aLine[3] = __LINE__ + 1;
-    p = p.ThenInline(MakeThreadStep(spCtx, 3), ASYNC_LOC);
-    spCtx->aLine[4] = __LINE__ + 1;
-    p = p.ThenOn(execC, MakeThreadStep(spCtx, 4), ASYNC_LOC);
-    spCtx->aLine[5] = __LINE__ + 1;
-    p = p.ThenOn(execA, MakeThreadStep(spCtx, 5), ASYNC_LOC);
-    spCtx->aLine[6] = __LINE__ + 1;
-    p = p.ThenPromise(fnSub, ASYNC_LOC);
-    return p;
-}
-
-/// @brief 链上不同线程的个数（`tid` 去重）。
-int CountDistinctThreads(const std::vector<CLayerInfo>& vecChain)
-{
-    std::vector<std::thread::id> vecIds;
-    for (size_t i = 0; i < vecChain.size(); ++i)
-    {
-        if (std::find(vecIds.begin(), vecIds.end(), vecChain[i].tid) == vecIds.end())
-        {
-            vecIds.push_back(vecChain[i].tid);
-        }
-    }
-    return static_cast<int>(vecIds.size());
-}
-
-TEST(Trace_ManyThreadsAndThreadHops)
-{
-    const int kChains = 4;
-    CAsyncExecutor execA("hop-a", 4);  // 3 个执行器 × 4 线程 = 12 条 worker（比别的用例都多）
-    CAsyncExecutor execB("hop-b", 4);
-    CAsyncExecutor execC("hop-c", 4);
-    ASSERT_TRUE(execA.Name() == "hop-a");  // 构造时指定的名字要原样留下来
-    ASSERT_TRUE(execB.Name() == "hop-b");
-    ASSERT_TRUE(execC.Name() == "hop-c");
-    ASSERT_TRUE(execA.Start());
-    ASSERT_TRUE(execB.Start());
-    ASSERT_TRUE(execC.Start());
-
-    std::vector<std::shared_ptr<CThreadCtx> > vecCtx;
-    for (int i = 0; i < kChains; ++i)
-    {
-        vecCtx.push_back(std::make_shared<CThreadCtx>());
-    }
-
-    // 4 条链各自从一个调用线程发起（同时在 12 条 worker 上跑）。
-    std::vector<std::thread> vecThreads;
-    for (int i = 0; i < kChains; ++i)
-    {
-        const std::shared_ptr<CThreadCtx> spCtx = vecCtx[static_cast<size_t>(i)];
-        vecThreads.push_back(std::thread(
-            [&execA, &execB, &execC, spCtx]()
-            {
-                CPromise<CThreadCtx> pTail = BuildThreadHopChain(execA, execB, execC, spCtx);
-                const bool bOk = pTail.Await().IsFulfilled();
-                spCtx->bOk.store(bOk);  // 工作线程只记结果（断言只能在主线程用）
-            }));
-    }
-    for (size_t i = 0; i < vecThreads.size(); ++i)
-    {
-        vecThreads[i].join();
-    }
-
-    std::vector<unsigned> vecAllIds;
-    for (int i = 0; i < kChains; ++i)
-    {
-        const std::shared_ptr<CThreadCtx> spCtx = vecCtx[static_cast<size_t>(i)];
-        ASSERT_TRUE(spCtx->bOk.load());
-        ASSERT_TRUE(spCtx->capDeep.bVisited);
-
-        const std::vector<CLayerInfo>& vec = spCtx->capDeep.vecChain;
-        ASSERT_EQ(vec.size(), static_cast<size_t>(CThreadCtx::kLayers));
-
-        // ---- ① 形状与注册点：换线程不影响链；② 线程归属：每层 tid 等于它自己记下的 ----
-        // 采集方向是「近 → 远」，所以链上第 (kLayers - 1 - k) 项就是序号 k 的那一层。
-        //
-        // 顺带把「这一层跑在哪个执行器上」也逐层钉住。两档语义：
-        //  - 投递层（链根 / `ThenOn` / 子链上的 then）：落在**指定的那个池**上 —— 确定；
-        //  - 就地层（`ThenInline`）：「接着结算它的那条线程跑」，落点看当时谁在结算：
-        //      · 常态：跟着上游跳过去的那条线程 → 落在上游那个池（②=A、④=B）；
-        //      · 另一种：注册本层时上游**已经落定**（链在别的线程上跑得比建链快）→
-        //        没有可搭的结算线程了，`AddHandler` 会把它投递到「本层解析出来的执行器」，
-        //        而就地层解析出来的就是**本链执行器** → 落在 A 上。
-        //    两种都合法（框架语义如此），所以就地层断言「两者之一」；真正钉住的是
-        //    「trace 记的 == 这一层自己看到的」（都在同一时刻取同一口井）。
-        static const char* const kExpectedExec[CThreadCtx::kLayers] = {
-            "hop-a",  // ① 链根：NewPromise(execA) → 投递到 A
-            "hop-a",  // ② 就地：接着 ① 的 A 线程跑
-            "hop-b",  // ③ ThenOn(execB) → 投递到 B
-            "hop-b",  // ④ 就地：接着 ③ 的 B 线程跑（注册晚于落定时 → 落回 A）
-            "hop-c",  // ⑤ ThenOn(execC) → 投递到 C
-            "hop-a",  // ⑥ ThenOn(execA) → 投递回 A
-            nullptr,  // ⑦ ThenPromise：桥接层，自己不做 handler（tid 也是空）
-            "hop-b",  // ⑧ 子链链根：投递到 B
-            "hop-b",  // ⑨ 子链上的 then：跟子链执行器 B
-        };
-        // 就地层的另一个合法落点（本链执行器 A）；非就地层只有唯一落点，这里填 "" = 无备选。
-        static const char* const kAltExec[CThreadCtx::kLayers] = {
-            "",       // ①
-            "",       // ②（就地，但上游就是本链执行器 A → 备选与主选同一个）
-            "",       // ③
-            "hop-a",  // ④
-            "",       // ⑤
-            "",       // ⑥
-            "",       // ⑦
-            "",       // ⑧
-            "",       // ⑨
-        };
-        for (int k = 0; k < CThreadCtx::kLayers; ++k)
-        {
-            const CLayerInfo& info = vec[static_cast<size_t>(CThreadCtx::kLayers - 1 - k)];
-            ASSERT_EQ(info.loc.nLine, spCtx->aLine[k]);
-            ASSERT_TRUE(std::string(ModeText(info.eMode)) == "then");
-            ASSERT_EQ(info.nDepth, CThreadCtx::kLayers - 1 - k);
-            ASSERT_TRUE(info.bCurrent == (k == CThreadCtx::kLayers - 1));
-            ASSERT_TRUE(info.tid == spCtx->aTidSelf[k]);  // 真正跑这一层的线程
-            vecAllIds.push_back(info.nLayerId);
-
-            // 执行器归属：trace 记的 = 这一层自己看到的（同一时刻、同一口井）＝
-            // 按链形状推出来的落点（就地层允许「跟着上游」或「落回本链执行器」两种）。
-            if (kExpectedExec[k] == nullptr)
-            {
-                ASSERT_TRUE(info.spExecName == nullptr);  // 没跑过 handler 的层没有执行器
-                ASSERT_TRUE(spCtx->aExecSelf[k].empty());
-            }
-            else
-            {
-                ASSERT_TRUE(info.spExecName != nullptr);
-                ASSERT_EQ(*info.spExecName, spCtx->aExecSelf[k]);  // trace 记的 == 层自己看到的
-                ASSERT_TRUE(
-                    spCtx->aExecSelf[k] == std::string(kExpectedExec[k]) || spCtx->aExecSelf[k] == std::string(kAltExec[k]));
-            }
-        }
-
-        // 子链（⑦ 挂 ⑧）与主链是两条链：段边界落在子链链根上。
-        ASSERT_EQ(CountChainSegments(vec), 2);
-        ASSERT_TRUE(vec[1].bChainRoot && vec[1].bSubChain);
-        ASSERT_TRUE(vec[vec.size() - 1].bChainRoot && !vec[vec.size() - 1].bSubChain);
-
-        // ---- ③ 这条链确实跨了多条线程（不然「多线程」这件事根本没被测到）----
-        ASSERT_TRUE(CountDistinctThreads(vec) >= 3);
-        ASSERT_TRUE(spCtx->capDeep.infoCurrent.tid == spCtx->aTidSelf[CThreadCtx::kLayers - 1]);
-    }
-
-    // 4 条链同时在跑，采到的层号两两不同 → 没有串链。
-    ASSERT_EQ(vecAllIds.size(), static_cast<size_t>(kChains * CThreadCtx::kLayers));
-    ASSERT_TRUE(AreLayerIdsUnique(vecAllIds));
-
-    execA.Stop();
-    execB.Stop();
-    execC.Stop();
-}
 
 #endif  // defined(ASYNC_DEBUG_TRACE)

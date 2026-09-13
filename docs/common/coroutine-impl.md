@@ -126,7 +126,7 @@ void AwaitWait(int nLine, const CPromise<TContext>& promise)
 
 ```cpp
 if (m_pExec->IsInExecutorThread()                            // ① 线程亲和：必须在本协程自己的执行器线程上
-    && detail::ShouldInline(kAffinityChain, m_pExec->Handle(), /* bRequireIdle = */ true)  // ② 无积压 + 深度未超限
+    && detail::ShouldInline(m_pExec->Handle(), /* bRequireIdle = */ true)  // ② 无积压 + 深度未超限
 {
     ++detail::InlineDepth();
     Resume();  // 在当前线程直接继续（省一次入队 + 唤醒）

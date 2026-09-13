@@ -115,7 +115,7 @@ else if (!PostToHandle(pCore->Handle(), std::move(fnRun)))
 }
 
 // Common/Coroutine/Coroutine.h：协程续跑（ResumeInline）用同一判定
-if (detail::ShouldInline(detail::kAffinityChain, m_pExec->Handle(), true))
+if (detail::ShouldInline(m_pExec->Handle(), true))
 {
     Resume();
 }
@@ -161,10 +161,15 @@ else
 
 ### 1.7 后续可做的改进
 
-- ~~**B（逐层指定执行器）**：`ThenOn(exec, handler)` / `ThenInline(handler)`~~ —— **已完成（2026-09-11）**：
-  亲和三档（`kAffinityChain` 默认 / `kAffinityInline` 就地 / `kAffinityExecutor` 指定）已实现，
+- **B（逐层指定执行器）**：`ThenOn(exec, handler)` / `ThenInline(handler)` ——
+  **2026-09-11 实现，2026-09-13 移除（用户要求）**：
+  曾实现亲和三档（`kAffinityChain` 默认 / `kAffinityInline` 就地 / `kAffinityExecutor` 指定），
   对外 API 为 `ThenInline` / `ThenOn`（只影响那一层，之后的层回本链执行器）；
-  验收：`Tests/test_async_affinity_override.cpp`（4 例）；文档：async-usage §9、async-impl §8.1；
+  验收曾是 `Tests/test_async_affinity_override.cpp`（4 例）。
+  **移除理由**：就地层的落点取决于「上游何时落定」（跟结算线程 / 改投递回本链执行器 / 超内联深度
+  又改一次），一层可能三种落点 → 看代码判不出线程；且两者都让层可能跑在别的模块的线程上，
+  `ThenOn` 还容易被误用成「把执行器跨模块传递」。现在只有一种调度语义（层恒在本链执行器线程上），
+  跨执行器 = 跨链（对方自持执行器 + 子链 / `ThenBridge`）。详见 async-impl §8.1「历史」。
 - **C（build-then-start）**：全链挂完再投递首层 —— **2026-09-11 实现，2026-09-12 移除**：
   曾新增 `CAsyncExecutor::BuildPromise(spCtx)` + `CPromise::Start()`；
   **移除理由**：线程亲和（问题①）之后「挂层早/晚」不再改变可见行为（都回本链执行器），
@@ -274,9 +279,10 @@ promiseStock.OnSettled([...](common::async::CPromiseResult result) { /* 桥接�
 | `EnterOrderStep` / `LeaveOrderStep` / `EnterStockStep` / `LeaveStockStep` / `SleepMs` | 探针包装与模拟耗时（传空探针即空操作） |
 | `CCalleeCtx` / `CCalleeModule` | 两步被调模块：自持 1 线程执行器、`QueryStockAsync()` / `Stop()`、可配 `nDelayMs` 与 `bReject` |
 
-测试文件只留「本用例自己的订单模块与断言」：`test_async_affinity_override.cpp` 保留自己的
-一步被调模块（轨迹约定与 `B1;B2;` 不同），不强行统一（`test_async_build_start.cpp` 已随
-「延迟启动移除」一起删除，2026-09-12）。
+测试文件只留「本用例自己的订单模块与断言」：少数用例自留一份「一步被调模块」
+（轨迹约定与 `B1;B2;` 不同），不强行统一（`test_async_build_start.cpp` 已随
+「延迟启动移除」一起删除，2026-09-12；`test_async_affinity_override.cpp` 已随
+「逐层覆盖移除」一起删除，2026-09-13）。
 
 ### 3.2 用例清单
 
@@ -320,5 +326,7 @@ g++ -std=c++11 -fsanitize=thread -g -O1 -pthread -ICommon -ITests \
 >   排查后发现**该用例的断言本身不可确定**：跨模块桥接的结算线程是二选一的（子 promise 若在 `Adopt`
 >   注册通知前就落定，通知会被投递回本链执行器）。已改为由用例**自己指定结算线程**（子 promise 建在
 >   旁路执行器上，挂完层后再投递结算），断言从「不是本链线程」升级为「等于结算线程」。
+>   （该文件连同 `ThenInline` / `ThenOn` 已于 2026-09-13 整体移除 —— 见 §1.7 B。剩下的
+>   「跨模块返回后恒回本模块线程」已由 `Tests/test_async_affinity.cpp` 覆盖。）
 >   跨模块的真实形状由 `RunDefaultAsync` / `RunOnSideAsync` 与 `test_async_affinity.cpp` 覆盖。
 >   验证：TSan 连跑 5 轮，0 竞争、异步 110 例全绿。

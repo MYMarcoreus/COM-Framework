@@ -141,14 +141,14 @@ return exec
 
 ```cpp
 void RunHandler(const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
-                const CPromiseResult& upResult, int nMode, int nAffinity = kAffinityChain,
+                const CPromiseResult& upResult, int nMode,
                 const std::shared_ptr<CExecutorHandle>& pTarget = nullptr) const
 ```
 
 ### 6.1 试过、但不可靠/不成立的变通（不要再试）
 
 - **`PenaltyIndentedWhitespace` 折中**（`Align` + 该罚分，让深对齐的实参自动换成换行缩进）：
-  看起来能「形参对齐 + lambda 缩进」，但阈值不稳定 —— 实测 `ResolveExecHandle`
+  看起来很能「形参对齐 + lambda 缩进」，但阈值不稳定 —— 实测 `ShouldInline`
   / `MakeHandlerRunner` 这类长形参的自由函数声明**也跟着**被改成缩进，同一文件里两种形状混杂。
 - **靠 penalty 强制调用在开括号后换行**（`PenaltyBreakBeforeFirstCallParameter`、
   `PenaltyBreakOpenParenthesis`）：实测无效，clang-format 仍然对齐。

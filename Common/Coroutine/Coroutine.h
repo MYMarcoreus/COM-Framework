@@ -380,7 +380,7 @@ private:
         }
         // 就地判定与 promise 层派发共用一处（多一条「线程池无积压」的负载感知条件）：
         // 有积压时投递回本执行器，保住并行度。
-        if (detail::ShouldInline(detail::kAffinityChain, m_pExec->Handle(), /* bRequireIdle = */ true))
+        if (detail::ShouldInline(m_pExec->Handle(), /* bRequireIdle = */ true))
         {
             detail::CInlineGuard guard;  // 深度 +1 / -1 成对。
             Resume();

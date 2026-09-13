@@ -26,14 +26,13 @@
 // 微任务队列接管，「谁跑回调」根本不是 API 的一部分。C++ 没有宿主循环，于是三件事必须
 // 由一个显式对象回答，它们就是本类的全部职责：
 //   - 任务投到哪条线程：`Post` / `NewPromise` / `CoStart`；
-//   - 一条链的层在哪条线程上跑：线程亲和（`ThenInline` / `ThenOn` / `kAffinity*`）；
+//   - 一条链的层在哪条线程上跑：**本链执行器**（同线程内联级联；跨执行器/跨模块返回则投递回本链）。
 //   - 执行器停了以后怎么办：`Stop` + 句柄加固（新投递以 `kStopped` 收口）。
 //
 // 调度对照（各自生态里的同类物）：
 //   CAsyncExecutor  ≈ Java `Executor` / C# `TaskScheduler` / Asio `io_context` / dispatch_queue
 //   exec.Post(fn)   ≈ Asio `io_context::post` / Java `Executor.execute`
 //   exec.CoStart<T> ≈ C# `Task.Run`（续跑线程由调度器决定）
-//   ThenInline/ThenOn ≈ Asio `dispatch` / C# `ConfigureAwait(false)`
 //   而 JS 这边：`setTimeout(fn, 0)` 是**宿主 API**（不在 Promise 里），`queueMicrotask(fn)`
 //   才是微任务投递 —— 两者都不可控线程，因此不能与 `Post` 画等号。
 //
@@ -105,16 +104,19 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
     return pHandle != nullptr && common::thread::CThreadPool::IsInPoolThread(pHandle->m_pPool.get());
 }
 
-/// @brief 层处理器的执行线程偏好（线程亲和，默认 `kAffinityChain`）。
+/// @brief 层处理器的执行线程偏好（线程亲和）。
 ///
 /// 属于**调度**（跑在哪条线程上），所以归执行器侧；`HandlerMode`（then / catch / finally）
 /// 描述的是「层语义」，归 promise 侧。
-enum HandlerAffinity
-{
-    kAffinityChain = 0,    ///< 默认：本链执行器线程（同执行器内联；跨执行器投递回本链执行器）。
-    kAffinityInline = 1,   ///< 就地：在「结算本层的那条线程」上执行（不投递，不要求线程亲和）。
-    kAffinityExecutor = 2  ///< 指定执行器：在给定执行器线程上执行（同线程内联，否则投递）。
-};
+///
+/// 只有**一档**（默认档）：每一层都在**本链执行器**的线程上跑 —— 已在链执行器线程上就地内联
+/// （省一次入队 + 保序），否则投递回链执行器（典型：被调模块 settle 本链的层 → 本层回到
+/// 本模块线程执行）。所以「一层跑在哪条线程上」看链的起链执行器就够了，不需要逐层去想。
+///
+/// 曾经有过「就地档 `kAffinityInline`（`ThenInline`）」与「指定执行器档 `kAffinityExecutor`
+/// （`ThenOn`）」两个逐层覆盖 —— 2026-09-13 按用户要求**整体移除**：就地层的落点取决于
+/// 「上游何时落定」（注册晚于落定就改投递回本链执行器），逐层线程归属因此不再静态可读。
+/// 要「换执行器」请用「模块自持执行器 + 子链 / `ThenBridge`」（见 docs/common/async-usage.md §9）。
 
 /// @brief 级联内联深度（线程局部）：链逐层级联时最多连续内联多少层。
 ///
@@ -148,54 +150,35 @@ struct CInlineGuard
     CInlineGuard& operator=(const CInlineGuard&) = delete;
 };
 
-/// @brief 解析本层实际使用的执行器句柄（亲和三档）。
-///
-/// @param eAffinity 亲和三档（`kAffinityChain` / `kAffinityInline` / `kAffinityExecutor`）。
-/// @param pTarget 调用方指定的执行器（仅 `kAffinityExecutor` 且非空时生效）。
-/// @param pChainHandle 本链执行器句柄（默认值）。
-/// @return 本层应使用的执行器句柄。
-inline const std::shared_ptr<CExecutorHandle>& ResolveExecHandle(HandlerAffinity eAffinity,
-    const std::shared_ptr<CExecutorHandle>& pTarget, const std::shared_ptr<CExecutorHandle>& pChainHandle)
-{
-    // 注意：pTarget 为空是**合法**的（= 没指定目标 → 退回本链执行器）：
-    // `kAffinityChain` / `kAffinityInline` 两档本来就不给 pTarget（调用方传默认实参 nullptr）。
-    return (eAffinity == kAffinityExecutor && pTarget != nullptr) ? pTarget : pChainHandle;
-}
-
 /// @brief 是否应当**就地内联**（不投递、在当前线程上接着跑）。
 ///
 /// 「就地还是投递」的唯一判定处（promise 的层派发与协程的续跑共用）：
-///  - `kAffinityInline`：无条件就地（在结算线程上跑）；
-///  - 其余档位：仅当已在目标执行器线程上时就地（省一次入队 + 保序）；
-///  - 连续内联超过 `kMaxInlineDepth`：内联（防超长链爆栈）；
+///  - 已在本链执行器线程上：就地（省一次入队 + 保序）；
+///  - 连续内联已达 `kMaxInlineDepth`：投递（防超长链爆栈）；
 ///  - `bRequireIdle`：还要求线程池无积压（协程续跑用 —— 有积压时投递，保住并行度）。
 ///
-/// @param eAffinity 亲和三档。
-/// @param pExec 目标执行器句柄（调用方已用 `ResolveExecHandle` 解析好）。
+/// @param pExec 本链执行器句柄。
 /// @param bRequireIdle 是否要求线程池无积压才内联。
 /// @return true = 调用方应当直接执行任务体；false = 应当投递。
-inline bool ShouldInline(HandlerAffinity eAffinity, const std::shared_ptr<CExecutorHandle>& pExec, bool bRequireIdle = false)
+inline bool ShouldInline(const std::shared_ptr<CExecutorHandle>& pExec, bool bRequireIdle = false)
 {
-    const bool bInline = (eAffinity == kAffinityInline) || IsInExecutorThread(pExec);
-    if (!bInline || InlineDepth() >= kMaxInlineDepth)
+    if (!IsInExecutorThread(pExec) || InlineDepth() >= kMaxInlineDepth)
     {
         return false;
     }
     return !bRequireIdle || (pExec != nullptr && pExec->m_pPool != nullptr && pExec->m_pPool->PendingCount() == 0);
 }
 
-/// @brief 按线程亲和派发一个任务体：就地内联 / 投递执行器。
+/// @brief 按线程亲和派发一个任务体：就地内联 / 投递回链执行器。
 ///
 /// 判定见 `ShouldInline`（就地）与 `PostToHandle`（投递）。
 ///
-/// @param eAffinity 亲和三档。
-/// @param pExec 目标执行器句柄（调用方已用 `ResolveExecHandle` 解析好）。
+/// @param pExec 本链执行器句柄。
 /// @param fnTask 任务体（按值接收：就地执行或移动投递）。
 /// @return true 已就地执行 / 已投递；false 执行器不可用（调用方以 `kStopped` 收口本层）。
-inline bool DispatchInlineOrPost(
-    HandlerAffinity eAffinity, const std::shared_ptr<CExecutorHandle>& pExec, std::function<void()> fnTask)
+inline bool DispatchInlineOrPost(const std::shared_ptr<CExecutorHandle>& pExec, std::function<void()> fnTask)
 {
-    if (ShouldInline(eAffinity, pExec))
+    if (ShouldInline(pExec))
     {
         CInlineGuard guard;  // 深度 +1 / -1 成对（异常 / 提前 return 也不漏减）。
         fnTask();
@@ -222,8 +205,8 @@ public:
     // 名字只用于调试，但两处都很实用：
     //  ① 线程池的 worker 线程被命名为「<名字>-<序号>」—— gdb 的 `info threads` / htop 里直接
     //     能看出这条线程属于哪个执行器；
-    //  ② 每层 trace 记下「这一层跑在哪个执行器上」，`DescribeLayer` 打印 `[名字]` —— 链在几个
-    //     执行器之间跳（`ThenOn`）时一眼能看出跑到谁家去了。
+    //     每层 trace 记下「这一层跑在哪个执行器上」，`DescribeLayer` 打印 `[名字]` —— 链跨模块接力
+    //     （子链在别的模块的执行器上跑）时一眼能看出跑到谁家去了。
     //
     // 名字末尾会被线程名长度（15 字节）截断，所以给短一点（如 `main` / `db`）。
     //

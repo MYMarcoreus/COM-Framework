@@ -60,8 +60,6 @@ JS 里**根本不存在「执行器」这个概念**，因为两件事由语言 
 | `exec.CoStart<T>(spCtx)` + `CO_AWAIT` | 无栈协程（顺序代码 await 多条链） | C# `Task.Run` + `async/await` |
 | `p.Await()` | **阻塞**等待结果（占住 worker，可能死锁） | C# `Task.Wait()` / Java `future.get()` |
 | `p.AwaitFor(ms)` | 阻塞等待 + 超时（超时返 `kStopped`，不落定本层） | 要手写 `Promise.race` |
-| `p.ThenInline()` | 在**结算线程**上就地跑本层（不要求亲和） | Asio `dispatch` / C# `ConfigureAwait(false)` |
-| `p.ThenOn(exec)` | 指定执行器的线程上跑本层 | `CompletableFuture.thenApplyAsync(fn, executor)` |
 | `p.OnSettledOn(exec, cb)` | 收尾通知投到指定执行器线程 | — |
 | `exec.Stop()` + `kStopped` | 优雅关闭；停止后新投递以 `kStopped` 收口 | —— （JS 没有「运行库被关掉」这一态） |
 

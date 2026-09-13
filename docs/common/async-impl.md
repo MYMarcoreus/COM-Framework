@@ -18,8 +18,8 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 
 - **起链**只在执行器上：`exec.NewPromise(spCtx, 首层)` / `exec.NewPromise(spCtx, fnStarter)` /
   `exec.NewPromise(spCtx, …)`（两个重载）/ `exec.CoStart<T>(spCtx)`；`CPromise` 只提供「句柄 + 加层」，没有任何起链入口。
-- **调度**（跑在哪条线程：亲和 / 就地内联 / 投递 / 深度限额）在执行器侧：
-  `detail::HandlerAffinity`、`detail::ResolveExecHandle`、`detail::ShouldInline`、`detail::DispatchInlineOrPost`。
+- **调度**（跑在哪条线程：就地内联 / 投递 / 深度限额）在执行器侧：
+  `detail::ShouldInline`、`detail::DispatchInlineOrPost`。
 - **编排**（层语义：then / catch / finally 三态、失败即停、桥接、通知）在 promise 侧，
   其中 `RunHandler` 只做「造任务体 + 失败收口」，**首层**的「建层 + 强制投递」收在 `CPromise::StartChain` 一处。
 
@@ -30,7 +30,7 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 | `PromiseResult.h` | `CPromiseResult`（兑现 / 拒绝 + 错误码）、`PromiseCode` 常量 |
 | `PromiseTypes.h` | `SettledHandler`、`detail::ThenHandler<TContext>`（处理器固定签名） |
 | `SourceLoc.h` | `CSourceLoc` + `ASYNC_LOC`（注册点调试信息，发布构建零开销） |
-| `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle`、`detail::IsInExecutorThread`、`detail::HandlerAffinity` / `ResolveExecHandle` / `ShouldInline` / `DispatchInlineOrPost`（**调度策略**：跑在哪条线程）、组合器 `detail::Gather*` |
+| `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle`、`detail::IsInExecutorThread`、`detail::ShouldInline` / `DispatchInlineOrPost`（**调度策略**：跑在哪条线程）、组合器 `detail::Gather*` |
 | `Promise.h` | `detail::CPromiseState`、`detail::CPromiseCore<TContext>`、`CPromise<TContext>`（**编排**：层语义 / 三态 / 桥接） |
 | `Common/Coroutine/Coroutine.h` | `CCoroutine<TContext>` + `CO_*` 宏（**独立目录**：顺序化是另一个关注点，只依赖 `Common/Async`） |
 | `Diagnostics.h/.cpp` | 诊断钩子 `DiagnosticHandler` / `SetDiagnosticHandler` / `ReportDiagnostic`（进程级单槽；promise / 协程 / 执行器共用；调试构建默认打印） |
@@ -324,15 +324,12 @@ ThenBridge(fnCreate, fnApply, loc)
 | 无悬垂 | 句柄 / 状态 / 上下文均为 `shared_ptr`，被续接与句柄共同持有 |
 | 深链不爆栈 | `kMaxInlineDepth` 上限 + 改投递（且只在同一执行器线程内累加） |
 
-### 8.1 线程亲和（改进 A，2026-09-11）+ 逐层覆盖（改进 B）
+### 8.1 线程亲和（改进 A，2026-09-11）—— 现在只有一种语义
 
-亲和三档（`detail::HandlerAffinity`）：
-
-| 取值 | 本层在哪跑 | 对外 API |
-| --- | --- | --- |
-| `kAffinityChain`（默认） | 本链执行器线程（已在该线程 → 就地内联；否则投递回本链执行器） | `Then` / `Catch` / `Finally` / `ThenPromise` |
-| `kAffinityInline` | **结算本层的那条线程**上就地执行（不投递） | `ThenInline` |
-| `kAffinityExecutor` | 指定执行器线程（已在该线程 → 就地；否则投递到它） | `ThenOn(exec, …)` |
+**每一层（与协程的每一次续跑）都在「它所属链的执行器线程」上跑**：已在该线程 → 就地内联
+（省一次入队 + 保序），否则（跨执行器 / 跨模块返回）投递回本链执行器。所以「一层跑在哪条
+线程上」看链的起链执行器就够了 —— 跨执行器就是**跨链**（别的模块自持执行器、自己起链，
+把结果交回来）。
 
 ```cpp
 // Common/Thread/ThreadPool：worker 线程打 thread_local 标记
@@ -346,30 +343,34 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
 }
 
 // Common/Async/AsyncExecutor.h（detail）：就地还是投递的**唯一**判定
-inline bool ShouldInline(HandlerAffinity eAffinity, const std::shared_ptr<CExecutorHandle>& pExec,
-                         bool bRequireIdle = false);  // 亲和档位 + 已在本线程？ + 深度未超限？(+ 线程池无积压？)
-inline bool DispatchInlineOrPost(HandlerAffinity eAffinity, const std::shared_ptr<CExecutorHandle>& pExec,
+inline bool ShouldInline(const std::shared_ptr<CExecutorHandle>& pExec,
+                         bool bRequireIdle = false);  // 已在本线程？ + 深度未超限？(+ 线程池无积压？)
+inline bool DispatchInlineOrPost(const std::shared_ptr<CExecutorHandle>& pExec,
                                  std::function<void()> fnTask);  // 就地内联或投递；执行器不可用 → false
 
 // Common/Async/Promise.h：层派发入口（只做「造任务体 + 失败收口」，策略全在执行器侧）
-const std::shared_ptr<CExecutorHandle> pExec = ResolveExecHandle(eAffinity, pTarget, Handle());  // 选执行器
-if (!DispatchInlineOrPost(eAffinity, pExec, std::move(fnRun)))
+if (!DispatchInlineOrPost(Handle(), std::move(fnRun)))
 {
     pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用 → 本层被拒绝
 }
 ```
 
-- `Append(fnHandler, loc, nMode, nAffinity, pTarget)`：亲和与目标句柄随注册的处理器一起捕获，
-  并在“已 settled → 投递”路径上也用同一个目标执行器（`AddHandler(pExec, …)`）；
-- **首层例外**：always 投递（起链线程不跑业务代码），`kAffinityExecutor` 时投递到目标执行器；
-- **保证**：默认配置下每一层与协程的每一次续跑都跑在「它所属链的执行器线程」上；
+- **首层例外**：always 投递（起链线程不跑业务代码）；
 - **代价**：每次跨执行器的续接多一次入队 + 唤醒（微秒级）；同执行器内仍完全内联；
   内联深度只在同一执行器线程内累加，跨模块不涨栈；
-- **边界**：亲和只作用于「层」——`OnSettled` 通知仍在**结算线程**上触发（不可用时就地送达）；
-  `New(...)` 的起链回调是「发起」语义，仍在调用线程上同步执行；`Await()` 仍占住调用线程；
-- **验收**：`Tests/test_async_affinity.cpp`（5 例，默认亲和）+ `Tests/test_async_affinity_override.cpp`
-  （4 例，`ThenInline` / `ThenOn` / 已停执行器 / 默认对照）+ `Tests/test_async_modules*.cpp`
-  （当初发现问题的极限用例，现断言 200 条并发链 100% 落回本模块线程）。
+- **边界**：只作用于「层」——`OnSettled` 通知按登记时的选择在**结算线程**或 `OnSettledOn`
+  指定的执行器上送达；`New(...)` 的起链回调是「发起」语义，仍在调用线程上同步执行；
+  `Await()` 仍占住调用线程；
+- **验收**：`Tests/test_async_affinity.cpp`（5 例，跨模块恒回本模块线程）+ `Tests/test_async_modules*.cpp`
+  （当初发现问题的极限用例，现断言 200 条并发链 100% 落回本模块线程）；
+- **历史（已移除，2026-09-13，用户要求）**：曾有过「逐层覆盖」（改进 B）—— `ThenInline`
+  （`kAffinityInline`，在结算线程上就地）+ `ThenOn(exec, …)`（`kAffinityExecutor`，指定执行器）。
+  移除理由：**就地层的落点不可静态判定** —— 注册早于上游落定 → 跟结算线程（跨模块时甚至是别
+  的模块的线程）；注册晚于落定 → `AddHandler` 的「已落定 → 投递到本层解析出的执行器」路径把它
+  投回**本链执行器**；内联深度超 `kMaxInlineDepth` 又改一次。同一个调用点三种落点，看代码判不出
+  线程；而且两个 API 都让层可能跑在**别人的线程**上（碰本模块状态就错），`ThenOn` 还容易被误用成
+  「把执行器跨模块传递」。删掉后 `detail::HandlerAffinity` / `ResolveExecHandle` 一并去掉，
+  `ShouldInline` / `DispatchInlineOrPost` 只剩一个输入：本链执行器句柄。
 
 分叉（同一状态注册多个 `Then`）时各支线是独立状态：由上游 `Settle` 依次触发，若走
 「已 settled 再注册」路径则各自投递 → 各支线依次在同一执行器线程上执行，
@@ -417,8 +418,9 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 结论（写业务与写测试都适用）：
 
-- **不要**把「本层跑在哪条线程」当契约；要确定的线程就显式指定：`ThenOn(exec, …)` / `ThenInline(…)` /
-  `exec.Post(...)`（协程同理）；
+- **不要**把「结算线程是谁」当契约（它取决于子 promise 何时落定）；能确定的只有一件事：
+  **本链的层恒在本链执行器线程上**（不论结算线程是谁）—— 要指定的线程请用 `exec.Post(...)`
+  （或让子 promise 建在你想要的执行器上）；
 - 默认亲和仍提供有用保证：**本链的层恒在本链执行器线程上**（不论结算线程是谁）；
 - 测试如果要断言线程：让**用例自己指定结算线程**（自己建子 promise + 在选定执行器上投递结算），
   不要靠固定延时抢时序 —— 踩坑记录见 [async-cross-module-findings.md](async-cross-module-findings.md) 末尾。
@@ -645,9 +647,8 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 来源是**线程自己的归属**（`CThreadPool` 的 worker 在自己线程的 TLS 里带着池名，
 `CCurrentLayerFrame` 压帧时顺手记下来），不是「注册时指定的执行器」：
 
-- `ThenOn` / 链根 / 子链上的默认层 → 显示目标执行器的名字；
-- `ThenInline`（接着结算线程跑）→ 显示**上游当时所在**的执行器；
-- `-`：本层没跑过 handler（桥接层、被跳过的层），或者跑在**非执行器线程**上
+- 链上的层 → **本链执行器**的名字（跨执行器就跨链：子链自己的执行器会让那两层的名字变掉）；
+- `-`：本层没跑过 handler（桥接层、被跳过的层）或者跑在**非执行器线程**上
   （调用者线程等）—— 配合 `tid` 一起看（`tid=-` 才是「真没跑过」）；
 - 名字只在执行器构造时给（`CAsyncExecutor("db", 4)`；空串 = 未命名 → `-`）。
 
@@ -694,15 +695,16 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 ### 测试
 
 `Tests/test_async_trace.cpp` 的主用例就是**一条复杂主链**：① 具名 then（链根）→ ② 具名 then
-→ ③ `ThenInline` → ④ `ThenOn` 别的执行器 → ⑤ 被跳过的 `Catch` → ⑥ `Finally`
-→ ⑦ `ThenPromise` 内层链 → ⑧ 分叉基座 → ⑨ 两支；然后在**最深处**把整条链逐层断言出来
-（层数 / 模式 / 注册点行号 / 深度 / 「当前层」标记 / 一行描述），并逐个钉住特殊位置：
+（本链线程上就地级联）→ ③ 具名 then → ④ 被跳过的 `Catch` → ⑤ `Finally`
+→ ⑥ `ThenPromise` 内层链 → ⑦ 分叉基座 → ⑧/⑨ 两支；然后在**最深处**把整条链逐层断言出来
+（层数 / 模式 / 注册点行号 / 深度 / 「当前层」标记 / **跑在哪台执行器上** / 一行描述），
+并逐个钉住特殊位置：
 
 | 位置 | 断言到的结论 |
 | --- | --- |
 | 主链最深（分叉分支 B） | 8 层、深度 0…7，其中包含**被跳过的 `Catch` 层** |
 | 分支 A | 同一条主链前缀，但**看不到兄弟分支** |
-| `ThenOn`（另一执行器） | 换了线程，链照样完整 |
+| 跨执行器（子链跑在另一个执行器上） | 链照样完整；链上的层都在本链执行器上（父链的层从 `[trace-side]` 回到 `[trace-main]`），内层两层在同一条 worker 上且与父链线程不同 |
 | 内层链（`ThenPromise`） | 链根挂在起它的那一层（`ThenPromise` 层）下面 → **一路追回主链**（8 层） |
 | `OnSettled`（落定前登记） | 在**触发它的那一层**的帧里就地执行 |
 | `OnSettled`（落定后登记） | 投递执行 → 不在任何层里（通知不是层） |
@@ -710,7 +712,7 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 | 层内抛异常 | 抛之前链是完整的；抛之后帧栈干净 |
 | 层外起的链 | 没有父层（链根就是链根，1 层） |
 
-另外五个用例专蹭「复杂形状」（`test_async_trace.cpp` 共 7 例）：
+另外五个用例专蹭「复杂形状」（`test_async_trace.cpp` 共 6 例）：
 
 | 用例 | 钉住的东西 |
 | --- | --- |
@@ -719,7 +721,6 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 | 并发 4 条链（前缀层数 0/1/2/3 当指纹） | 每条链采到的层数与行号都等于**它自己**那条；4 条链的层号两两不同（没串链、上游没成环） |
 | 深链（256 层）+ 帧栈残留 | 深度逐层对上、链号恒定、层号沿上游严格递减；跑完 / 抛异常两条路径都不在唯一 worker 上留帧（投个探针查）；上一条链的帧不影响下一条 |
 | 层里 fire-and-forget 起链 | 父层 = **正在跑的那一层**；同时验证`CChainAdopterScope`**弹回**了（前面那次 `ThenPromise` 留下的作用域不能劫持后面的起链） |
-| 12 条 worker（3 执行器 × 4 线程）+ 6 次换执行器 | 链形状与注册点不因换线程而变；**每层的 `tid` 等于它自己记下的那条线程**（逐层对得上）；4 条链并发跑时层号两两不同 |
 
 这套用例用「注入故障」验过**有牙**：① 帧不弹栈 → 段错误；② 子链不挂父链 → 3 例失败；
 ③ `FillView` 深度 +1 → 5 例失败；④ 采纳作用域不弹栈 → 崩溃。
