@@ -1241,4 +1241,190 @@ TEST(Trace_StartedInsideLayerBindsToCurrentLayer)
     exec.Stop();
 }
 
+// ====================================================================
+// 更复杂的场景（五）：**多线程** + 多次换线程（换执行器）时 trace 仍然对
+//
+// 要回答的问题：「执行器线程多一点、层在几条线程之间来回跳，trace 还准不准？」
+//
+// 查三件事：
+//  ① 链的**形状与注册点**不因换线程而变（每层都在、行号对得上、深度 0…N-1、模式都对）；
+//  ② 每层的 `tid`（真正跑它的那条线程）**逐层对得上** —— 每层自己把
+//     `std::this_thread::get_id()` 记进上下文，采集到的链里那一层的 `tid` 必须等于它；
+//  ③ 跑完这条链确实跨了多条线程（否则这个用例根本没测到「多线程」）。
+//
+// 3 个执行器 × 4 线程 = 12 条 worker；4 条链各自从一个调用线程发起，同时在跑。
+// ====================================================================
+
+/// @brief 多线程跳层用例的上下文（一条链一个）。
+struct CThreadCtx
+{
+    static const int kLayers = 9;  ///< 本用例的链长（主链 7 层 + 子链 2 层）。
+
+    std::thread::id aTidSelf[kLayers];  ///< 每一层**自己**记下的「我跑在哪条线程上」。
+    int aLine[kLayers];                 ///< 每一层的注册点行号（链形状的指纹）。
+    CCapture capDeep;                   ///< 子链最深一层（采集点）的快照。
+    std::atomic<bool> bOk;              ///< 链跑完了（断言只能在主测试线程做）。
+
+    CThreadCtx() : aTidSelf(), aLine(), capDeep(), bOk(false)
+    {
+        for (int i = 0; i < kLayers; ++i)
+        {
+            aLine[i] = 0;
+        }
+    }
+};
+
+/// @brief 造一个「记录自己跑在哪条线程上」的层处理器。
+///
+/// @param spCtx 上下文（写 aTidSelf[nIndex]）。
+/// @param nIndex 这一层在链上的序号（0 = 链根）。
+/// @return 层处理器。
+CPromise<CThreadCtx>::ThenHandler MakeThreadStep(const std::shared_ptr<CThreadCtx>& spCtx, int nIndex)
+{
+    return [spCtx, nIndex](CPromiseResult upResult, const std::shared_ptr<CThreadCtx>& spSelf)
+    {
+        (void)upResult;
+        (void)spSelf;
+        spCtx->aTidSelf[nIndex] = std::this_thread::get_id();  // 「这一层真的跑在这条线程上」
+        return CPromiseResult::Resolve();
+    };
+}
+
+/// @brief 子链最深一层：记录线程 + 采集整条链。
+CPromiseResult ThreadStepDeep(CPromiseResult upResult, const std::shared_ptr<CThreadCtx>& spCtx)
+{
+    (void)upResult;
+    spCtx->aTidSelf[CThreadCtx::kLayers - 1] = std::this_thread::get_id();
+    CaptureNow(spCtx->capDeep);
+    return CPromiseResult::Resolve();
+}
+
+/// @brief 搭一条「在多条线程之间来回跳」的链，并在子链最深处采集。
+///
+/// ① A → ② 就地 → ③ B → ④ 就地 → ⑤ C → ⑥ A → ⑦ 等子链（子链跑在 B）→ ⑧/⑨ 子链两层层。
+///
+/// @param execA 执行器 A。
+/// @param execB 执行器 B。
+/// @param execC 执行器 C。
+/// @param spCtx 上下文。
+/// @return 链尾句柄（子链落定后才兑现）。
+CPromise<CThreadCtx> BuildThreadHopChain(
+    CAsyncExecutor& execA, CAsyncExecutor& execB, CAsyncExecutor& execC, const std::shared_ptr<CThreadCtx>& spCtx)
+{
+    // 子链（⑦ 层）的工厂：链根 + 最深一层（采集点）。
+    const CPromise<CThreadCtx>::PromiseFactory fnSub = [&execB, spCtx](const std::shared_ptr<CThreadCtx>& spSelf)
+    {
+        spCtx->aLine[7] = __LINE__ + 1;
+        CPromise<CThreadCtx> pSub = execB.NewPromise(spSelf, MakeThreadStep(spCtx, 7), ASYNC_LOC);
+        spCtx->aLine[8] = __LINE__ + 1;
+        return pSub.Then(&ThreadStepDeep, ASYNC_LOC);
+    };
+
+    spCtx->aLine[0] = __LINE__ + 1;
+    CPromise<CThreadCtx> p = execA.NewPromise(spCtx, MakeThreadStep(spCtx, 0), ASYNC_LOC);
+    spCtx->aLine[1] = __LINE__ + 1;
+    p = p.ThenInline(MakeThreadStep(spCtx, 1), ASYNC_LOC);
+    spCtx->aLine[2] = __LINE__ + 1;
+    p = p.ThenOn(execB, MakeThreadStep(spCtx, 2), ASYNC_LOC);
+    spCtx->aLine[3] = __LINE__ + 1;
+    p = p.ThenInline(MakeThreadStep(spCtx, 3), ASYNC_LOC);
+    spCtx->aLine[4] = __LINE__ + 1;
+    p = p.ThenOn(execC, MakeThreadStep(spCtx, 4), ASYNC_LOC);
+    spCtx->aLine[5] = __LINE__ + 1;
+    p = p.ThenOn(execA, MakeThreadStep(spCtx, 5), ASYNC_LOC);
+    spCtx->aLine[6] = __LINE__ + 1;
+    p = p.ThenPromise(fnSub, ASYNC_LOC);
+    return p;
+}
+
+/// @brief 链上不同线程的个数（`tid` 去重）。
+int CountDistinctThreads(const std::vector<CLayerInfo>& vecChain)
+{
+    std::vector<std::thread::id> vecIds;
+    for (size_t i = 0; i < vecChain.size(); ++i)
+    {
+        if (std::find(vecIds.begin(), vecIds.end(), vecChain[i].tid) == vecIds.end())
+        {
+            vecIds.push_back(vecChain[i].tid);
+        }
+    }
+    return static_cast<int>(vecIds.size());
+}
+
+TEST(Trace_ManyThreadsAndThreadHops)
+{
+    const int kChains = 4;
+    CAsyncExecutor execA(4);  // 3 个执行器 × 4 线程 = 12 条 worker（比别的用例都多）
+    CAsyncExecutor execB(4);
+    CAsyncExecutor execC(4);
+    ASSERT_TRUE(execA.Start());
+    ASSERT_TRUE(execB.Start());
+    ASSERT_TRUE(execC.Start());
+
+    std::vector<std::shared_ptr<CThreadCtx> > vecCtx;
+    for (int i = 0; i < kChains; ++i)
+    {
+        vecCtx.push_back(std::make_shared<CThreadCtx>());
+    }
+
+    // 4 条链各自从一个调用线程发起（同时在 12 条 worker 上跑）。
+    std::vector<std::thread> vecThreads;
+    for (int i = 0; i < kChains; ++i)
+    {
+        const std::shared_ptr<CThreadCtx> spCtx = vecCtx[static_cast<size_t>(i)];
+        vecThreads.push_back(std::thread(
+            [&execA, &execB, &execC, spCtx]()
+            {
+                CPromise<CThreadCtx> pTail = BuildThreadHopChain(execA, execB, execC, spCtx);
+                const bool bOk = pTail.Await().IsFulfilled();
+                spCtx->bOk.store(bOk);  // 工作线程只记结果（断言只能在主线程用）
+            }));
+    }
+    for (size_t i = 0; i < vecThreads.size(); ++i)
+    {
+        vecThreads[i].join();
+    }
+
+    std::vector<unsigned> vecAllIds;
+    for (int i = 0; i < kChains; ++i)
+    {
+        const std::shared_ptr<CThreadCtx> spCtx = vecCtx[static_cast<size_t>(i)];
+        ASSERT_TRUE(spCtx->bOk.load());
+        ASSERT_TRUE(spCtx->capDeep.bVisited);
+
+        const std::vector<CLayerInfo>& vec = spCtx->capDeep.vecChain;
+        ASSERT_EQ(vec.size(), static_cast<size_t>(CThreadCtx::kLayers));
+
+        // ---- ① 形状与注册点：换线程不影响链；② 线程归属：每层 tid 等于它自己记下的 ----
+        // 采集方向是「近 → 远」，所以链上第 (kLayers - 1 - k) 项就是序号 k 的那一层。
+        for (int k = 0; k < CThreadCtx::kLayers; ++k)
+        {
+            const CLayerInfo& info = vec[static_cast<size_t>(CThreadCtx::kLayers - 1 - k)];
+            ASSERT_EQ(info.loc.nLine, spCtx->aLine[k]);
+            ASSERT_TRUE(std::string(ModeText(info.eMode)) == "then");
+            ASSERT_EQ(info.nDepth, CThreadCtx::kLayers - 1 - k);
+            ASSERT_TRUE(info.bCurrent == (k == CThreadCtx::kLayers - 1));
+            ASSERT_TRUE(info.tid == spCtx->aTidSelf[k]);  // 真正跑这一层的线程
+            vecAllIds.push_back(info.nLayerId);
+        }
+
+        // 子链（⑦ 挂 ⑧）与主链是两条链：段边界落在子链链根上。
+        ASSERT_EQ(CountChainSegments(vec), 2);
+        ASSERT_TRUE(vec[1].bChainRoot && vec[1].bSubChain);
+        ASSERT_TRUE(vec[vec.size() - 1].bChainRoot && !vec[vec.size() - 1].bSubChain);
+
+        // ---- ③ 这条链确实跨了多条线程（不然「多线程」这件事根本没被测到）----
+        ASSERT_TRUE(CountDistinctThreads(vec) >= 3);
+        ASSERT_TRUE(spCtx->capDeep.infoCurrent.tid == spCtx->aTidSelf[CThreadCtx::kLayers - 1]);
+    }
+
+    // 4 条链同时在跑，采到的层号两两不同 → 没有串链。
+    ASSERT_EQ(vecAllIds.size(), static_cast<size_t>(kChains * CThreadCtx::kLayers));
+    ASSERT_TRUE(AreLayerIdsUnique(vecAllIds));
+
+    execA.Stop();
+    execB.Stop();
+    execC.Stop();
+}
+
 #endif  // defined(ASYNC_DEBUG_TRACE)
