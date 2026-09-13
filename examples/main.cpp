@@ -86,6 +86,29 @@ void StartOrFail(CAsyncExecutor& exec)
     ASSERT(bStarted);
 }
 
+/// @brief 等一个原子计数到达期望值（有上限；超时返回 false）。
+///
+/// 用来等「层里 `exec.Post(...)` 出去的 fire-and-forget 任务」：框架保证它**最终**会跑完，
+/// 但不保证它跑在**主链结束之前** —— 线程数越多，主链往往越先结束（协程里那两条并行等待
+/// 会真的并行）。所以这类断言必须先等、再断言，不能靠时序侥幸。
+///
+/// @param nCounter 原子计数（旁支任务自己加）。
+/// @param nExpect 期望值。
+/// @param nMaxMs 最长等多久（毫秒）。
+/// @return true = 等到了。
+bool WaitCount(const std::atomic<int>& nCounter, int nExpect, int nMaxMs = 2000)
+{
+    for (int i = 0; i < nMaxMs / 5; ++i)
+    {
+        if (nCounter.load() >= nExpect)
+        {
+            return true;
+        }
+        SleepMs(5);
+    }
+    return nCounter.load() >= nExpect;
+}
+
 #if defined(ASYNC_DEBUG_TRACE)
 
 /// @brief 数一数当前层能看到的链有几层。
@@ -431,7 +454,7 @@ public:
         {}
     };
 
-    CBillingModule() : m_exec(1), m_nNextBillNo(1000)
+    CBillingModule() : m_exec(4), m_nNextBillNo(1000)
     {}
 
     /// @brief 起模块（执行器启动失败返回 false）。
@@ -566,7 +589,7 @@ struct CLines
 
 /// @brief 搭一条「下单」父链：所有常用用法都在这一条链上（每个位置都会打印调用链）。
 ///
-/// @param execMain 主链执行器（2 线程：分叉两支正好一支就地、一支投递）。
+/// @param execMain 主链执行器（多线程：分叉两支与协程并行 await 都会真的并发跑）。
 /// @param execDb 模拟「数据访问模块」的执行器（`ThenOn` 换线程用）。
 /// @param billing 记账模块（`ThenBridge` 跨模块 / 跨上下文用）。
 /// @param spCtx 共享上下文（各层读写它；层间只传成败）。
@@ -824,8 +847,8 @@ int main()
     std::printf("发布构建：trace 关闭（用 ./build.sh --debug examples 跑，才能看到每层的调用链）\n");
 #endif
 
-    CAsyncExecutor execMain(2);  // 主链：2 线程（分叉两支正好一支就地、一支投递）
-    CAsyncExecutor execDb(2);    // 模拟「数据访问模块」自己的执行器
+    CAsyncExecutor execMain(8);  // 主链：8 线程（分叉两支 / 协程并行 await 会**真的同时**跑）
+    CAsyncExecutor execDb(4);    // 模拟「数据访问模块」自己的执行器
     CBillingModule billing;      // 记账模块（自持执行器 + 自持上下文）
     StartOrFail(execMain);
     StartOrFail(execDb);
@@ -865,8 +888,10 @@ int main()
     ASSERT(spCtx->nGift == 1);                  // ⑩-2a
     ASSERT(spCtx->nPoints == 20);               // ⑩-2b
     ASSERT(spCtx->nLogistics == 1);             // ⑧
-    ASSERT(spCtx->nCoroDone.load() == 2);
-    ASSERT(spCtx->nSideDone.load() == 1);  // ⑧ 里 Post 出去的旁支也跑完了
+    ASSERT(spCtx->nCoroDone.load() == 2);       // ⑩-2 两条并行子链是被协程 CO_AWAIT_ALL 等过的 → 必然都完成
+    // 「⑧ 里 Post 出去的旁支也跑完了」这件事**不能直接断言**：那个任务是 fire-and-forget（主链不等它），
+    // 框架只保证它最终会跑，不保证跑在主链结束之前 —— 线程越多主链越可能先结束。先等再断言。
+    ASSERT(WaitCount(spCtx->nSideDone, 1));
     ASSERT(spCtx->strTrace == std::string("读订单;校验;查库存;读用户;算折扣;算总额;记账;分叉;优惠券;协程券;落库;审计;"));
 
     // 旁支（⑧）单独等一次，顺便看它那条链。

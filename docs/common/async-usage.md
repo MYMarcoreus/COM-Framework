@@ -240,6 +240,11 @@ exec.NewPromise(spCtx, [&exec, spSub](common::async::CPromiseResult up, const st
 }, ASYNC_LOC);
 ```
 
+> **「不等它」= 完成时机不由链保证**：上面的「起子 promise 不等」与层里 `exec.Post(...)`
+> 都属于 fire-and-forget —— 框架只保证它**最终会跑完**，不保证它跑在**主链结束之前**
+> （线程越多，主链越可能先结束：并行等待会真的并行）。所以要断言 / 依赖它的结果，得自己同步
+> （原子标志 + 有上限的等待，见 `examples/main.cpp` 的 `WaitCount`），别写成时序侥幸。
+
 ### 6.3 跨模块组合：`ThenBridge`（推荐）/ `ThenPromise` + `exec.NewPromise(spCtx, fnStarter)`
 
 场景：模块 A 的业务流程要调「**模块 B（另一套上下文类型）**」的异步函数，
