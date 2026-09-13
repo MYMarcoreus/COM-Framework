@@ -43,14 +43,14 @@
 | [async-mixed-then-example.md](common/async-mixed-then-example.md) | 单文件示例：一条链里混用多种 then（具名函数 / lambda / 跨模块异步 / 内层链 / 旁支 / catch / finally） |
 | [async-vs-js.md](common/async-vs-js.md) | 与 JavaScript Promise 的对照：**只对齐链语义**（调度在 JS 里无对应物，见该文 §0）、语义差异、从 JS 迁过来容易踩的坑 |
 
-### 风格模仿（`docs/common/`）
+### 写法对照（`docs/common/`）
 
-把其他异步框架 / 语言的写法，用本框架临摹一遍 —— **同一个业务流**（fetchUser → fetchOrders →
-checkRisk → fetchPayment → 总额）的几种串法摆在一篇里对照，抽出来就是一个可编译可运行的程序：
+**同一个业务流**的几种写法摆在一篇里对照 —— 用例是一次真实的跨模块下单（下单服务 → 库存模块预占 →
+支付模块扣款，失败要补偿）；抽出来就是一个可编译可运行的程序，文档里是实测输出：
 
 | 文档 | 内容 |
 |---|---|
-| [async-style.md](common/async-style.md) | then 链（JavaScript Promise）/ 协程（libgo）/ 手动 settle（async_promise）/ 拒绝后恢复（Async++）/ 跨模块·跨上下文（`ThenBridge`），含公共部分只写一次、一次跑完的真实输出、选型表 |
+| [async-style.md](common/async-style.md) | 五种写法：then 链 + `ThenBridge`（默认）/ 失败补偿（`Catch` 分流 + 反向桥接）/ 协程（`CO_AWAIT` 跨模块）/ 手写桥接（不用 `ThenBridge`）/ 并行调用（`WhenAll`）；含公共部分、选型对照表与判据 |
 
 ### 问题记录（`docs/common/`）
 
