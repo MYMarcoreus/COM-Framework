@@ -84,7 +84,7 @@ ASSERT(bMixOk);
 | --- | --- |
 | 内部不变量（状态指针非空、载荷存在） | `ASSERT` |
 | 调用前提（上下文必传、模块已启动、必须在 `CoStart` 之后 `await`） | `ASSERT` / `ASSERT_MSG` |
-| 明显写错的入参（`Reject(0)`：0 是兑现码） | `ASSERT_MSG` |
+| 明显写错的入参（空上下文 / 空指针 / 未启动就投递） | `ASSERT_MSG` |
 | 业务错误（参数非法、查不到、权限不足…） | **返回值 / 错误码 / 异常 / 日志**（异步里是 `CPromiseResult` 的拒绝码） |
 | 正常分支（投递失败、对象已停止、子流程被拒绝） | **普通分支**，不是断言 |
 
@@ -97,7 +97,7 @@ ASSERT(bMixOk);
 | `Common/Async/Promise.h`：`CPromiseCore` 构造 | 共享上下文非空 |
 | `Common/Async/Promise.h`：`CPromise` 私有构造 | 共享核心非空、所指层状态非空（句柄恒指向一个层） |
 | `Common/Async/Promise.h`：`MakeHandlerRunner` / `RunHandler` | 上下文 / 层状态非空 |
-| `Common/Async/PromiseResult.h`：`Reject` | 拒绝码不是 0（0 是兑现码） |
+| `Common/Async/PromiseResult.h`：`Reject` | **已无断言**：`Reject(0)` 现在是合法的业务拒绝（判兑现一律看 `IsFulfilled()`），框架码由 `Reject(码)` 自动补文案 |
 | `Common/Coroutine/Coroutine.h`：构造 / `Await` / `AsPromise` / `AwaitWait` / `AwaitEach` | 上下文非空；必须在 `CoStart` 之后 |
 | `ServerExample/Module/Example{Db,Async}Module.cpp` | 模块已启动、入参非空（业务侧示范） |
 | `examples/main.cpp` | 示例自校验：判断用 `ASSERT`，动作（`Start` / `Await` / `Post`）一律留在断言外（见 §3.1） |

@@ -100,6 +100,9 @@ enum
 };
 
 /// 拒绝码 → 文案。
+///
+/// 只在「只拿得到一个码」的通道里当兜底（起链回调 `fnReject(码)`、日志里回看历史码）；
+/// 层内拒绝请直接用 `CPromiseResult::Reject(码, 文案)` 把文案带上（不必再查表）。
 static const char* CodeText(int nCode)
 {
     switch (nCode)
@@ -633,7 +636,10 @@ static std::shared_ptr<COrderCtx> MakeOrderCtx(
 
 - 处理器签名固定 `CPromiseResult handler(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)`。
 - `then` 层不用判断 `upResult.IsRejected()`（上游被拒绝 → 框架直接跳过本层）；只有 `Catch` / `Finally` 要看它。
-- 拒绝只有 `int` 码（业务码从 `kBusinessBase` 起取），文案自己查表（`CodeText`）。
+- 拒绝是「码 + 可选文案」：层内用 `Reject(码, 文案)` 直接把文案带上（动态字符串，随结果沿链透传
+  到 catch / 日志 / `Await()`）；框架码（`kStopped` / `kException` / `kRejected`）经 `Reject(码)`
+  **自带框架文案**。只有「只拿得到一个 `int` 码」的通道（起链回调里的 `fnReject(码)`）才需要
+  自己查表 —— 下面 §0.2 的 `CodeText` 就是这种兜底用法。
 - 「层跑在哪条线程上」只需看**起链的执行器**：每层都在本链执行器线程上跑，跨模块返回后自动拉回。
 
 ## 1. 写法 1：then 链 + `ThenBridge` + `ThenPromise`（默认写法）

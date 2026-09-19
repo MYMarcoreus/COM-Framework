@@ -387,18 +387,42 @@ p.OnSettled([](common::async::CPromiseResult result)
 });
 ```
 
-错误码约定：
+错误码与文案：
 
 ```cpp
-common::async::kFulfilled = 0           // 已兑现
-    common::async::kRejected = 1        // 已拒绝（未指定码时的默认值）
-    common::async::kStopped = 2         // 执行器已停止 / 投递失败（框架）
-    common::async::kException = 3       // 处理器抛异常（框架捕获）
-    common::async::kBusinessBase = 100  // 业务错误码从 100 起取
+// 拒绝：码自定 + 可选文案（动态字符串，任意长度，随结果沿链透传到 catch / finally / Await）
+return CPromiseResult::Reject(kStockShortage, "库存不足：需 " + std::to_string(nQty) + " 件");
+
+result.Code();        // 错误码（兑现时返回 kFulfilled = 0）
+result.Message();     // 文案（没带文案 = 空串；catch / Await 侧直接可读）
+result.IsFulfilled(); // **判兑现的唯一依据** —— 别再拿 Code() == 0 判（业务码可以是 0）
 ```
 
-框架只解释 1..99，其余码**原样透传**（语义由业务定义）。处理器抛出的异常会被框架捕获，
-转为本层被拒绝（`kException`），不会向调用方抛出。
+框架只解释自己产生的三个码，其余码**原样透传**（语义由业务定义）：
+
+| 码 | 含义 | `Reject(码)` 自动附上的文案 |
+|---|---|---|
+| `kRejected = 1` | 已拒绝但未指定原因（组合器空集合的 race / any、起链回调缺失） | 「未指定原因」 |
+| `kStopped = 2` | 执行器已停 / 投递失败 / `AwaitFor` 超时 | 「执行器已停」「等待超时」 |
+| `kException = 3` | 处理器 / 起链回调 / 子链工厂 / 搬运抛异常 | 异常的 `what()` |
+
+**`Reject(码)` 自带框架文案**（进程级预建的共享串，零分配）—— 所以「只拿得到一个 int 码」的通道
+（起链回调里的 `fnReject(码)`、协程终止码、组合器首个拒绝码）也带得上文案，调用方不必自己写码表。
+业务码建议从 `kBusinessBase = 100` 起取（**只是编号习惯**，框架不校验），并**避开 1 / 2 / 3**
+（它们被框架占用：`Reject(1)` 就是 `kRejected`，只是自动带上了「未指定原因」）。
+处理器抛出的异常会被框架捕获转为本层被拒绝，**异常文本随文案保留**，不会向调用方抛出。
+
+开销：不带文案的拒绝（含框架侧全部）**零分配**；带文案的拒绝**两次分配**（文案对象 + 字符串缓冲，
+短文案走 SSO 只剩一次），之后沿链透传只加引用计数 —— 护栏见 `Tests/test_async_alloc.cpp` 的
+`AsyncAlloc_RefusalBudget`。
+
+两个已知边界（`RejectFn` 是 `void(int)`，**只传码**）：
+
+1. 在自己的 `ChainStarter` 里 `fnReject(业务码)`（典型：桥接回调式接口）**带不了业务文案**
+   ——框架码仍会自动带框架文案；需要业务文案就在那条链上改用显式 `Reject(码, 文案)`
+   （例如桥接后的那个层里）；
+2. 组合器（`WhenAll` 一族）的聚合拒绝只保留首个拒绝的**码**（框架码的文案仍由框架补上）；子链自己的
+   结果依然带完整文案，需要时从子句柄读。
 
 注意：`Await()` 返回与 `OnSettled` 回调的执行**没有先后保证**，测试里若依赖「回调已跑完」
 请另用标志 / 条件变量同步。

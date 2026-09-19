@@ -1237,3 +1237,99 @@ TEST(Promise_BridgeForeignRejected)
     ASSERT_EQ(spCtx->nCatchRuns, 1);
     exec.Stop();
 }
+
+/// 层（then）：用「业务码 0」拒绝（旧设计做不到 —— 0 被「兑现」占用）。
+static common::async::CPromiseResult StepRejectZeroCode(
+    common::async::CPromiseResult /*upStep*/, const std::shared_ptr<CTestContext>& spCtx)
+{
+    ++spCtx->nSteps;
+    spCtx->strTrace += "Z";
+    return common::async::CPromiseResult::Reject(0, "码就是 0：参数非法");
+}
+
+/// 层（then）：用带运行时数字的长文案拒绝（长度超过 SSO 上限）。
+static common::async::CPromiseResult StepRejectDynamicText(
+    common::async::CPromiseResult /*upStep*/, const std::shared_ptr<CTestContext>& spCtx)
+{
+    ++spCtx->nSteps;
+    spCtx->strTrace += "F";
+    return common::async::CPromiseResult::Reject(common::async::kBusinessBase + 42,
+        "库存不足：需 " + std::to_string(spCtx->nValue + 3) + " 件，只剩 1 件（订单 SO-20260919-000123）");
+}
+
+/// 层（then）：抛异常（异常文本应当随拒绝文案保留，而不是只剩一个 kException）。
+static common::async::CPromiseResult StepThrowRuntimeError(
+    common::async::CPromiseResult /*upStep*/, const std::shared_ptr<CTestContext>& spCtx)
+{
+    ++spCtx->nSteps;
+    throw std::runtime_error("磁盘写失败: /data/order.bin");
+}
+
+/// @brief 兑现与错误码分开：**业务码 0 也是拒绝**，判兑现只看 IsFulfilled()。
+TEST(Promise_CodeZeroIsBusinessRefusal)
+{
+    common::async::CAsyncExecutor exec(2);
+    ASSERT_TRUE(exec.Start());
+    const std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
+
+    std::string strCaughtMessage;
+    const common::async::CPromise<CTestContext>::ThenHandler fnCatch =
+        [&strCaughtMessage](common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& /*spCtx*/)
+    {
+        strCaughtMessage = upResult.Message();
+        return upResult;  // 透传拒绝（不改结果）
+    };
+
+    const common::async::CPromiseResult result = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC)
+                                                     .Then(&StepRejectZeroCode, ASYNC_LOC)
+                                                     .Then(&StepShouldNotRun, ASYNC_LOC)
+                                                     .Catch(fnCatch, ASYNC_LOC)
+                                                     .Await();
+
+    ASSERT_TRUE(result.IsRejected());
+    ASSERT_TRUE(!result.IsFulfilled());
+    ASSERT_EQ(result.Code(), 0);  // 码就是 0（不再是「兑现」的同义词）
+    ASSERT_EQ(result.Message(), std::string("码就是 0：参数非法"));
+    ASSERT_EQ(strCaughtMessage, std::string("码就是 0：参数非法"));  // catch 侧读到同一份
+    ASSERT_EQ(spCtx->nSteps, 2);                                     // 拒绝即停：后面的 then 未执行
+    exec.Stop();
+}
+
+/// @brief 拒绝文案：动态（带运行时数字）、任意长度都能沿链透传；框架侧拒绝同样带文案。
+TEST(Promise_RefusalMessageTravels)
+{
+    common::async::CAsyncExecutor exec(2);
+    ASSERT_TRUE(exec.Start());
+    const std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
+
+    std::string strCaughtMessage;
+    const common::async::CPromise<CTestContext>::ThenHandler fnCatch =
+        [&strCaughtMessage](common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& /*spCtx*/)
+    {
+        strCaughtMessage = upResult.Message();
+        return upResult;
+    };
+
+    // 业务拒绝：动态长文案（StepAdd1 把 nValue 变成 1 → 文案里是「需 4 件」）。
+    const common::async::CPromiseResult rBiz =
+        exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Then(&StepRejectDynamicText, ASYNC_LOC).Catch(fnCatch, ASYNC_LOC).Await();
+    ASSERT_TRUE(rBiz.IsRejected());
+    ASSERT_EQ(rBiz.Code(), common::async::kBusinessBase + 42);
+    ASSERT_EQ(rBiz.Message(), std::string("库存不足：需 4 件，只剩 1 件（订单 SO-20260919-000123）"));
+    ASSERT_TRUE(rBiz.Message().size() > 15);      // 超出 SSO 上限也完整保留
+    ASSERT_EQ(strCaughtMessage, rBiz.Message());  // catch 侧读到同一份
+
+    // 框架侧①：处理器抛异常 → kException + 异常原文。
+    const common::async::CPromiseResult rThrown =
+        exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Then(&StepThrowRuntimeError, ASYNC_LOC).Await();
+    ASSERT_TRUE(rThrown.IsRejected());
+    ASSERT_EQ(rThrown.Code(), static_cast<int>(common::async::kException));
+    ASSERT_TRUE(rThrown.Message().find("磁盘写失败") != std::string::npos);
+
+    // 框架侧②：停掉的执行器 → kStopped + 固定文案。
+    exec.Stop();
+    const common::async::CPromiseResult rStopped = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Await();
+    ASSERT_TRUE(rStopped.IsRejected());
+    ASSERT_EQ(rStopped.Code(), static_cast<int>(common::async::kStopped));
+    ASSERT_EQ(rStopped.Message(), std::string("执行器已停"));
+}

@@ -79,9 +79,12 @@ struct CAwaitAllGroup
 {
     std::atomic<int> nPending;   ///< 剩余未完成的 promise 数。
     std::atomic<int> bRejected;  ///< 是否已有 promise 被拒绝（0/1）。
-    std::atomic<int> nCode;      ///< 首个拒绝码（bRejected 为 1 时有效）。
 
-    CAwaitAllGroup() : nPending(0), bRejected(0), nCode(kRejected)
+    /// 首个拒绝的**整份结果**（含文案）：写入方由 bRejected 的 CAS 独占，
+    /// 读取方在 nPending 减到 0 之后（fetch_sub 的 acq_rel 保证可见）。
+    CPromiseResult resultFirst;
+
+    CAwaitAllGroup() : nPending(0), bRejected(0), resultFirst()
     {}
 };
 
@@ -245,13 +248,19 @@ protected:
     /// @brief 本协程是否已终止（await 到拒绝）。
     bool IsTerminated() const
     {
-        return m_hot.bTerminated.load();
+        return m_hot.bTerminated.load(std::memory_order_acquire);  // acquire：同下面的终止结果配对
     }
 
     /// @brief 终止拒绝码（IsTerminated() 为 true 时有效）。
     int TerminateCode() const
     {
-        return m_hot.nCode.load();
+        return m_hot.resultTerminate.Code();
+    }
+
+    /// @brief 终止结果（IsTerminated() 为 true 时有效）—— await 到的那份结果整份保留（含文案）。
+    const CPromiseResult& TerminateResult() const
+    {
+        return m_hot.resultTerminate;
     }
 
     /// @brief 协程以指定结果结束（CO_RETURN 用）。
@@ -268,10 +277,10 @@ protected:
         m_pSegment->Settle(CPromiseResult::Resolve());
     }
 
-    /// @brief 协程以终止拒绝码结束（await 到拒绝后的统一出口）。
+    /// @brief 协程以终止结果结束（await 到拒绝后的统一出口）。
     void CompleteTerminated()
     {
-        m_pSegment->Settle(CPromiseResult::Reject(TerminateCode()));
+        m_pSegment->Settle(m_hot.resultTerminate);
     }
 
 private:
@@ -306,14 +315,17 @@ private:
         m_wpSelf = sp;
     }
 
-    /// @brief 协程热状态：步号 / 终止标志 / 拒绝码（紧邻打包，减少跨线程迁移的 cache line 数）。
+    /// @brief 协程热状态：步号 / 终止标志 / 终止结果（紧邻打包，减少跨线程迁移的 cache line 数）。
     struct CHotState
     {
         std::atomic<int> nStep;         ///< 状态机步号（恢复点）。
         std::atomic<bool> bTerminated;  ///< await 到拒绝 → 终止。
-        std::atomic<int> nCode;         ///< 终止拒绝码。
 
-        CHotState() : nStep(0), bTerminated(false), nCode(kRejected)
+        /// 终止结果（await 到的那份整份保留，含文案）：写入方在结算线程，读取方在协程线程；
+        /// 用 bTerminated 的 release / acquire 发布与获取（同 nStep 的做法）。
+        CPromiseResult resultTerminate;
+
+        CHotState() : nStep(0), bTerminated(false), resultTerminate()
         {}
     };
 
@@ -335,7 +347,7 @@ private:
         m_pSegment = std::make_shared<detail::CPromiseState>();
         m_hot.nStep.store(0, std::memory_order_relaxed);
         m_hot.bTerminated.store(false, std::memory_order_relaxed);
-        m_hot.nCode.store(kRejected, std::memory_order_relaxed);
+        m_hot.resultTerminate = CPromiseResult();  // 复位成「已兑现」占位（仅 bTerminated 为真时读）。
     }
 
     /// @brief 把 Resume 投递到执行器（执行器不可用 → 以拒绝结束，不悬垂）。
@@ -400,10 +412,12 @@ private:
     }
 
     /// @brief 标记终止（不 settle；等待协程体走到统一出口）。
+    ///
+    /// 结果整份留下（含码与文案）—— 与 settle 的那份是同一个值（24 字节拷贝，无分配）。
     void MarkTerminated(const CPromiseResult& result)
     {
-        m_hot.bTerminated.store(true, std::memory_order_relaxed);
-        m_hot.nCode.store(result.Code(), std::memory_order_relaxed);
+        m_hot.resultTerminate = result;
+        m_hot.bTerminated.store(true, std::memory_order_release);  // release：发布上面的写入
     }
 
     /// @brief 标记终止并立即 settle（同步失败的出口：协程体不会再被恢复）。
@@ -437,7 +451,7 @@ private:
         AwaitEach(pGroup, std::forward<TRest>(rest)...);
     }
 
-    /// @brief 并行 await：一条 promise settled（记首个拒绝码；全部结束时恢复 / 终止）。
+    /// @brief 并行 await：一条 promise settled（记首个拒绝结果；全部结束时恢复 / 终止）。
     void OnAwaitDone(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup, const CPromiseResult& result)
     {
         if (result.IsRejected())
@@ -445,14 +459,14 @@ private:
             int nExpected = 0;
             if (pGroup->bRejected.compare_exchange_strong(nExpected, 1))
             {
-                pGroup->nCode.store(result.Code(), std::memory_order_relaxed);  // 首个拒绝码。
+                pGroup->resultFirst = result;  // 只有 CAS 赢家写（后续读取在 nPending 归零之后）。
             }
         }
         if (pGroup->nPending.fetch_sub(1, std::memory_order_acq_rel) == 1)
         {
             if (pGroup->bRejected.load(std::memory_order_relaxed))
             {
-                MarkTerminated(CPromiseResult::Reject(pGroup->nCode.load(std::memory_order_relaxed)));
+                MarkTerminated(pGroup->resultFirst);  // 以首个拒绝的整份结果终止（含文案）。
             }
             ResumeInline();  // 就地续跑或投递回本执行器（负载感知）。
         }

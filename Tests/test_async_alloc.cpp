@@ -99,6 +99,14 @@ void* operator new[](size_t nSize, const std::nothrow_t& /*tag*/) noexcept
     return MallocCounted(nSize);
 }
 
+/// 下面一组释放都走 `std::free`（与上面的 `MallocCounted` 里的 `std::malloc` 配对）。
+///
+/// GCC 的 `-Wmismatched-new-delete` 只看「`new` 表达式 ↔ `free` 调用」的名字，不看我们自己
+/// 替换的 `operator new` 是 malloc 实现的 —— 当分配点被内联进本 TU（release -O2 下实测）
+/// 就会误报。这里是定点屏蔽（只包住这几个释放函数），不是把警告关掉。
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
+
 /// @brief 对应 `operator new` 的释放。
 void operator delete(void* p) noexcept
 {
@@ -134,6 +142,8 @@ void operator delete[](void* p, const std::nothrow_t& /*tag*/) noexcept
 {
     std::free(p);
 }
+
+#pragma GCC diagnostic pop
 
 /// @brief 堆分配计数窗口（RAII）：进入窗口开始累加，`Stop()` 结算。
 ///
@@ -333,4 +343,65 @@ TEST(AsyncAlloc_RunBudget)
     ASSERT_EQ(spCtx->nValue, static_cast<long long>(kLayers) + 1);
     ASSERT_TRUE(counter.Counts() <= kLayers + kSlack);
     exec.Stop();
+}
+
+// ==================== 拒绝路径的分配预算 ====================
+
+/// @brief 拒绝路径的分配预算：无文案（含框架侧全部拒绝）= **0 次**；
+///        带文案 = 一次性分配，且**不随透传次数增长**（这是我选 shared_ptr 而非 std::string 的原因）。
+TEST(AsyncAlloc_RefusalBudget)
+{
+    // 预热：框架侧文案是「首次使用时构造」的进程级共享串（C++11 magic static），
+    // 先把这一次性分配挪到窗口外（否则要依赖用例执行顺序）。
+    for (int i = 0; i < 3; ++i)
+    {
+        (void)common::async::CPromiseResult::Reject(common::async::kStopped);
+        (void)common::async::CPromiseResult::Reject(common::async::kRejected);
+        (void)common::async::CPromiseResult::Reject(common::async::kException);
+    }
+
+    // ① 框架侧（码 + 预建固定文案）与「无文案的业务拒绝」：构造 + 拷贝都零分配。
+    {
+        CAllocCounter counter;
+        const common::async::CPromiseResult rStopped = common::async::CPromiseResult::Reject(common::async::kStopped);
+        const common::async::CPromiseResult rThrown = common::async::CPromiseResult::Reject(common::async::kException);
+        const common::async::CPromiseResult rBare = common::async::CPromiseResult::Reject(100);
+        const common::async::CPromiseResult rCopy = rStopped;
+        counter.Stop();
+
+        ASSERT_TRUE(rStopped.IsRejected() && !rStopped.Message().empty());  // 文案在，但零分配
+        ASSERT_TRUE(rThrown.IsRejected() && !rThrown.Message().empty());
+        ASSERT_TRUE(rBare.IsRejected() && rBare.Message().empty());
+        ASSERT_EQ(rCopy.Message(), rStopped.Message());
+        ASSERT_EQ(counter.Counts(), 0);
+    }
+
+    // ② 带动态长文案：只在这一处分配一次；之后 500 次透传（拷贝）不再分配。
+    long long nCreateCounts = 0;
+    common::async::CPromiseResult resultSeed;
+    {
+        const char* pszLong = "库存不足：需 3 件，只剩 1 件（订单 SO-20260919-000123）";
+        CAllocCounter counter;
+        resultSeed = common::async::CPromiseResult::Reject(100, pszLong);
+        counter.Stop();
+        nCreateCounts = counter.Counts();
+    }
+
+    long long nCopyCounts = 0;
+    {
+        CAllocCounter counter;
+        common::async::CPromiseResult copy = resultSeed;
+        for (int i = 0; i < 500; ++i)
+        {
+            copy = resultSeed;  // 层间透传：拷贝 + 释放旧值
+        }
+        counter.Stop();
+        nCopyCounts = counter.Counts();
+    }
+
+    std::printf("      带动态文案的拒绝：构造 %lld 次分配，透传 500 次共 %lld 次分配\n", nCreateCounts, nCopyCounts);
+    ASSERT_TRUE(resultSeed.IsRejected());
+    ASSERT_TRUE(resultSeed.Message().size() > 15);  // 超出 SSO：证明是「没有随透传分配」
+    ASSERT_TRUE(nCreateCounts <= 2);                // 文案对象 + 字符串缓冲
+    ASSERT_EQ(nCopyCounts, 0);                      // 透传零分配
 }

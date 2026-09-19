@@ -538,17 +538,13 @@ CPromise<TContext> Gather(
     if (vecBindings.empty())
     {
         // 一处子 promise 都没有：按策略直接收口（语义只有 `ResolveEmptyGather` 一处）。
-        const CPromiseResult emptyResult = ResolveEmptyGather(ePolicy);
+        // 用「一层 handler」而不是起链回调：handler 直接返回整份结果 → **码 + 文案都保留**
+        // （起链回调的 reject 通道只有 int）。
         return executor.NewPromise(
-            spContext, typename CPromise<TContext>::ChainStarter(
-                           [emptyResult](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
+            spContext, typename CPromise<TContext>::ThenHandler(
+                           [ePolicy](CPromiseResult /*upResult*/, const std::shared_ptr<TContext>& /*spContext*/)
                            {
-                               if (emptyResult.IsFulfilled())
-                               {
-                                   fnResolve();
-                                   return;
-                               }
-                               fnReject(emptyResult.Code());
+                               return ResolveEmptyGather(ePolicy);
                            }));
     }
 

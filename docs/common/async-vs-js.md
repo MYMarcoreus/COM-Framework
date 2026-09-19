@@ -136,19 +136,23 @@ p.Then([&exec](common::async::CPromiseResult, const std::shared_ptr<Ctx>& sp)  /
 普通 `Then` 的处理器只能返回 `CPromiseResult`，里面起的链只能是旁支；要参与当前链必须 `ThenPromise`
 （同上下文直接把子链返回即可；**跨上下文**先 `exec.NewPromise(spCtx, fnStarter)` 桥接）。
 
-### 2.4 错误是错误码，不是异常对象
+### 2.4 错误是错误码（可带文案），不是异常对象
 
-JS 用 `reject(Error)`，可以带 message / stack；本框架用 `int` 码（业务码从 `kBusinessBase` 起），
-框架只解释 4 个保留码：
+JS 用 `reject(Error)`，可以带 message / stack；本框架用 `int` 码（业务码从 `kBusinessBase` 起）
+**加一段可选文案**：`Reject(码, 文案)` 的文案是动态字符串，随结果沿链透传到 `catch` / `finally` /
+`Await()`。**兑现与码是分开的两件事**：判兑现一律看 `IsFulfilled()`，不再看「码是否非 0」。
+
+框架只解释三个保留码（经 `Reject(码)` 会自动带上固定文案，共享串、零分配）：
 
 | 码 | 含义 |
 |---|---|
-| `kFulfilled = 0` | 兑现 —— **注意 `Reject(0)` 等于兑现**，别拿 0 当错误码 |
-| `kRejected = 1` | 拒绝（未指定码时的默认值） |
-| `kStopped = 2` | 执行器已停止 / 投递失败 |
+| `kFulfilled = 0` | 兑现 —— `Code()` 在兑现时的返回值；**`Reject(0)` 是拒绝（码 0）**，业务码 0 合法 |
+| `kRejected = 1` | 拒绝（未指定原因：组合器空集合的 race / any、起链回调缺失） |
+| `kStopped = 2` | 执行器已停止 / 投递失败 / `AwaitFor` 超时 |
 | `kException = 3` | 处理器或起链回调（`ChainStarter`）抛了异常（框架捕获并转成拒绝，不会向调用方抛） |
 
-要带上下文就打日志 / 记到共享上下文里；跨模块时在桥接层把对方的码翻译成本模块的业务码。
+业务码避开 1 / 2 / 3（框架占用）。跨模块时在桥接层把对方的码翻译成本模块的业务码；
+需要给人看的原因就写进文案（比 JS 少的是 stack —— C++ 异常对象在层里只保留 `what()`）。
 
 ### 2.5 线程模型不同：没有事件循环，回调可能跑在别人的线程上
 
@@ -214,7 +218,7 @@ return m_exec
 | 你的直觉（JS） | 本框架实际 |
 |---|---|
 | `then` 里 `return` 一个 promise 就会等它 | 必须用 `ThenPromise`；普通 `Then` 里起的链是旁支 |
-| `reject(new Error('xx'))` | `Reject(码)`；`Reject(0)` 会被当成兑现 |
+| `reject(new Error('xx'))` | `Reject(码)` / `Reject(码, 文案)`（文案沿链透传）；`Reject(0)` 是**拒绝**，判兑现用 `IsFulfilled()`；没有 stack |
 | `try/catch` 包住 `await` | `Await()` 不抛异常，返回 `CPromiseResult`；处理器抛异常会被转成 `kException` 拒绝 |
 | 回调都在同一个线程，改共享变量不用锁 | 本链的层恒在本模块线程（线程亲和），但 `OnSettled` 回调跑在被调模块线程，共享数据要原子/锁 |
 | `await` 不阻塞线程 | `Await()` 阻塞一个 worker；线程池占满会死锁，纯异步场景请用 `ThenPromise` / `OnSettled` |
