@@ -151,7 +151,7 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::QueryUserAsync(const std
     return LoadRowAsync(spOp).Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
 }
 
-/// @brief 异步插入用户：**复用本模块内的读表异步函数**（查重）→ 写表 → 放连接。
+/// @brief 异步插入用户：「复用本模块内的读表异步函数」（查重）→ 写表 → 放连接。
 ///
 /// 读表未命中（CDbError(kRowNotFound)）由 catch 归一化为兑现，因此查重层 / 写表层照常执行；
 /// 其他拒绝（含框架侧失败）继续透传，写表层不执行。
@@ -170,7 +170,7 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::InsertUserAsync(const st
         .Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);  // 收尾：放连接
 }
 
-/// @brief 异步更新用户：**复用本模块内的读表异步函数** → 乐观锁写表 → 放连接。
+/// @brief 异步更新用户：「复用本模块内的读表异步函数」 → 乐观锁写表 → 放连接。
 ///
 /// @param spOp 操作上下文（recRequest 为期望版本 + 新字段）。
 ///
@@ -185,7 +185,7 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::UpdateUserAsync(const st
         .Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
 }
 
-/// @brief 异步删除用户：**复用本模块内的读表异步函数**（确认存在）→ 删行 → 放连接。
+/// @brief 异步删除用户：「复用本模块内的读表异步函数」（确认存在）→ 删行 → 放连接。
 ///
 /// @param spOp 操作上下文（nUserId 为目标用户）。
 ///
@@ -216,7 +216,7 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::LoadRowAsync(const std::
 
 /// @brief 处理器（then）：取连接 + 模拟数据库 IO 延迟。
 ///
-/// then 层：上游被拒绝时框架**不会调用本层**（失败即停），所以处理器只接上下文；
+/// then 层：上游被拒绝时框架「不会调用本层」（失败即停），所以处理器只接上下文；
 /// 只有 catch（StepAcceptNotFound）与 finally（StepReleaseConn）才拿得到上游结果。
 ///
 /// @param spOp 操作上下文（追加轨迹）。

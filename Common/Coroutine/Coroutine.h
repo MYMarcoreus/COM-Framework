@@ -15,7 +15,7 @@
 // CCoroutine —— 无栈协程（用顺序代码 await 多条 promise）
 //
 // 所在目录：Common/Coroutine/（顺序化是独立关注点，所以自己一个模块目录）；
-// 依赖方向：Coroutine → Async（本文件 include AsyncExecutor.h / Promise.h），**反向无依赖**；
+// 依赖方向：Coroutine → Async（本文件 include AsyncExecutor.h / Promise.h），「反向无依赖」；
 // 命名空间仍是 `common::async` —— 协程与 promise 共用同一套模型（同一个执行器句柄 +
 // 同一份共享上下文），拆命名空间只会让调用方多写限定名。
 //
@@ -80,7 +80,7 @@ struct CAwaitAllGroup
     std::atomic<int> nPending;   ///< 剩余未完成的 promise 数。
     std::atomic<int> bRejected;  ///< 是否已有 promise 被拒绝（0/1）。
 
-    /// 首个拒绝的**整份结果**（含文案）：写入方由 bRejected 的 CAS 独占，
+    /// 首个拒绝的「整份结果」（含文案）：写入方由 bRejected 的 CAS 独占，
     /// 读取方在 nPending 减到 0 之后（fetch_sub 的 acq_rel 保证可见）。
     CPromiseResult resultFirst;
 
@@ -113,7 +113,7 @@ public:
 
     /// @brief 创建协程（未绑定执行器；经 CAsyncExecutor::CoStart 启动）。
     ///
-    /// @param spContext 共享上下文（**必传**：与 promise 一致，框架不做懒创建）。
+    /// @param spContext 共享上下文（「必传」：与 promise 一致，框架不做懒创建）。
     explicit CCoroutine(const std::shared_ptr<TContext>& spContext)
         : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(std::shared_ptr<detail::CExecutorHandle>(), spContext)),
           m_pSegment(std::make_shared<detail::CPromiseState>()),
@@ -201,7 +201,7 @@ protected:
     /// 数据不经返回值传递：协程与被等待的 promise 共用共享上下文。
     ///
     /// @param nLine 恢复点标签（宏自动传 __LINE__）。
-    /// @tparam TOtherContext 被等待 promise 的上下文类型（**可与本协程不同** —— 支持把
+    /// @tparam TOtherContext 被等待 promise 的上下文类型（「可与本协程不同」 —— 支持把
     ///         别的子流程（另一套 TContext）当作一个异步步骤等进来）。
     /// @param promise 被等待的 promise（含子协程 AsPromise()）。
     template <typename TOtherContext>
@@ -229,7 +229,7 @@ protected:
     ///
     /// @param nLine 恢复点标签（宏自动传 __LINE__）。
     /// @param args 被等待的 promise 列表（可为 NewPromise(...) 表达式、AsPromise() 句柄，
-    ///             或**其它上下文类型**的子流程 promise）。
+    ///             或「其它上下文类型」的子流程 promise）。
     template <typename... TArgs>
     void AwaitAll(int nLine, TArgs&&... args)
     {

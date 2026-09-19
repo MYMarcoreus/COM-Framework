@@ -37,7 +37,7 @@ struct CUserOpContext
 /// @brief 用户业务的失败（业务自定义的异常类型）。
 ///
 /// 拒绝统一用标准异常表达（框架只搬运、不解释）；业务要按种类分流时，
-/// 就定义自己的异常类型并在里面带上**业务自己的**种类 —— 框架侧没有任何错误码。
+/// 就定义自己的异常类型并在里面带上「业务自己的」种类 —— 框架侧没有任何错误码。
 class CUserError : public std::runtime_error
 {
 public:
@@ -70,7 +70,7 @@ private:
     EKind m_eKind;  ///< 失败种类。
 };
 
-/// @brief 提取拒绝原因里的用户业务失败（**不是** `CUserError` → 返回 false）。
+/// @brief 提取拒绝原因里的用户业务失败（「不是」 `CUserError` → 返回 false）。
 ///
 /// @param result 待看的结果。
 /// @param eKindOut 输出：失败种类（返回 true 时有效）。
@@ -98,9 +98,9 @@ inline const sc::InterfaceId& IID_IUserService()
 
 /// @brief 用户业务服务（模拟真实业务：模块向外部提供多个异步函数）。
 ///
-/// 每个方法都是**异步函数**：立即返回 promise 句柄（首层已投递到业务模块执行器），
+/// 每个方法都是「异步函数」：立即返回 promise 句柄（首层已投递到业务模块执行器），
 /// 调用方（其他模块 / 应用层）用 `Then` / `Catch` / `Finally` / `OnSettled` 接管后续 ——
-/// **全程不需要阻塞等待**；操作数据从 `promise.GetContext()` 取。
+/// 「全程不需要阻塞等待」；操作数据从 `promise.GetContext()` 取。
 ///
 /// 拒绝：见 `CUserError`（业务异常）；跨模块的数据访问失败在这里被翻译成业务异常，
 /// 框架侧失败（执行器已停 / 处理器异常）原样透传。

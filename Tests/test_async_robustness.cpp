@@ -63,7 +63,7 @@ public:
         common::async::SetDiagnosticHandler(nullptr);  // 恢复默认（debug 打印 stderr，发布忽略）。
     }
 
-    /// @brief 是否捕获到**完全等于**某文案的诊断（精确断言：文案改了就红，而不是默默通过）。
+    /// @brief 是否捕获到「完全等于」某文案的诊断（精确断言：文案改了就红，而不是默默通过）。
     bool Has(const char* strWhat) const
     {
         std::lock_guard<std::mutex> lock(m_mutex);

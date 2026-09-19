@@ -19,7 +19,7 @@
 #include "Async/Trace.h"
 
 // ====================================================================
-// CPromise —— 异步 promise（**链语义**对齐 JS 的 Promise / async-await）
+// CPromise —— 异步 promise（「链语义」对齐 JS 的 Promise / async-await）
 //
 // 注意对齐的边界：只有「链语义」（then / catch / finally / flatten / all / race…）来自 JS；
 // 「链在哪条线程上跑、谁来投递」在 JS 里由宿主事件循环隐式承担，本框架则必须显式 —— 那就是
@@ -59,18 +59,18 @@
 //   Promise.race([a, b])           →  exec.WhenRace(spCtx, a, b);         // 首个落定者定结果
 //   Promise.any([a, b])            →  exec.WhenAny(spCtx, a, b);          // 首个兑现者定结果（全拒绝才失败）
 //
-// 对照的**边界**（重要）：上面每一行右边都比 JS 多了东西 —— `exec`（调度器）与 `spCtx`
+// 对照的「边界」（重要）：上面每一行右边都比 JS 多了东西 —— `exec`（调度器）与 `spCtx`
 // （共享上下文），而且 `exec.*` 所在的那几行左边根本没有对应的 JS 写法：
 //
 //   JS 把两件事藏在语言 / 宿主里：闭包捕获一切（≈ 共享上下文）、事件循环隐式调度（≈ 执行器）。
-//   C++ 两样都没有：上下文必须作为参数传进来，**调度必须由一个显式对象承担** —— 这就是
+//   C++ 两样都没有：上下文必须作为参数传进来，「调度必须由一个显式对象承担」 —— 这就是
 //   `CAsyncExecutor` 存在的全部理由（它接管了 JS 微任务队列的角色）。所以：
 //
-//   - `exec.NewPromise` / `exec.WhenAll` 是「**执行器上的**起链入口」，不是 Promise 的
+//   - `exec.NewPromise` / `exec.WhenAll` 是「执行器上的起链入口」，不是 Promise 的
 //     构造函数 / 静态方法（JS 是 `new Promise(...)` 与 `Promise.all(...)`）；
-//   - `p.Await()`（阻塞等待）在 JS 里**没有对应物**（`await` 不占线程），它的代价与替代
+//   - `p.Await()`（阻塞等待）在 JS 里「没有对应物」（`await` 不占线程），它的代价与替代
 //     写法见 async-usage.md；
-//   - `OnSettledOn` / `AwaitFor` 是**指定执行器 / 超时** API，JS 同样没有
+//   - `OnSettledOn` / `AwaitFor` 是「指定执行器 / 超时」 API，JS 同样没有
 //     （单线程事件循环不需要它们）。
 //
 // 调度侧的完整对照（Executor / io_context / TaskScheduler 等）见 AsyncExecutor.h。
@@ -79,24 +79,24 @@
 //  - then / catch / finally 都返回「指向新一层的 promise」（与 JS 一致，链式可读）；
 //  - 失败即停：then 层在上一层被拒绝时不执行，拒绝原因沿链透传；
 //  - catch 层可恢复：返回 Resolve() 即吞掉拒绝，链从本层之后继续；
-//  - finally 层只做收尾（回滚 / 清理 / 日志），**忽略返回值、原样透传上层结果**；
-//  - 层内异常 → 本层以**系统侧失败**收口（`Reject(std::runtime_error(e.what()))`），不向调用方抛出；
-//  - 首层投递一次；后续层都回**本链执行器**：已在该执行器线程上就地级联（超过 kMaxInlineDepth
-//    改投递防爆栈），否则（跨执行器 / 跨模块返回）投递回本链执行器 —— 所以**每层都在本链执行器线程上**，
+//  - finally 层只做收尾（回滚 / 清理 / 日志），「忽略返回值、原样透传上层结果」；
+//  - 层内异常 → 本层以「系统侧失败」收口（`Reject(std::runtime_error(e.what()))`），不向调用方抛出；
+//  - 首层投递一次；后续层都回「本链执行器」：已在该执行器线程上就地级联（超过 kMaxInlineDepth
+//    改投递防爆栈），否则（跨执行器 / 跨模块返回）投递回本链执行器 —— 所以「每层都在本链执行器线程上」，
 //    逐层线程归属不需要逐个去想（要「换执行器」请用「模块自持执行器 + 子链 / `ThenBridge`」）。
 //
 // 嵌套用法（异步里再起异步）：
 //   ① 协程内 await（推荐，非阻塞挂起）：
 //        CO_AWAIT(NewPromise(StepSub));          // 子 promise（同上下文）
 //        CO_AWAIT(pChild->AsPromise());          // 子协程
-//        协程还能 await **别的上下文类型**的 promise（跨流程嵌套）：
+//        协程还能 await 「别的上下文类型」的 promise（跨流程嵌套）：
 //        CO_AWAIT(exec.NewPromise(spDbCtx, StepQuery, ASYNC_LOC));
 //   ② 并行嵌套：CO_AWAIT_ALL(a, b, c)，其中 a/b/c 各自可以是多步子 promise（a.Then(...)）；
 //   ③ 层内嵌套（非阻塞）：层里起子 promise，由它的 OnSettled 回调接着写上下文 / 起后续；
-//   ④ 层内嵌套（阻塞）：层里 sub.Await() —— 会占住一个工作线程，**线程池必须还有空闲
-//      worker**，否则死锁（单线程执行器必死），只适合子流程很短且并发余量充足的场合。
+//   ④ 层内嵌套（阻塞）：层里 sub.Await() —— 会占住一个工作线程，「线程池必须还有空闲
+//      worker」，否则死锁（单线程执行器必死），只适合子流程很短且并发余量充足的场合。
 //
-// ⑤ 跨模块 / 跨上下文组合（**纯异步、零阻塞、不需要协程**）：把别的 promise 桥接进本流程 ——
+// ⑤ 跨模块 / 跨上下文组合（「纯异步、零阻塞、不需要协程」）：把别的 promise 桥接进本流程 ——
 //      ① 用 `exec.NewPromise(spCtx, fnStarter)` 造一条「由外部 settle」的 promise
 //         （起链回调里发起别的模块的调用，在其 OnSettled 回调里 resolve() / reject(码)）；
 //      ② 用 `p.ThenPromise([&]{ return bridgePromise; })` 把它接进本流程（then 的 promise 版）。
@@ -104,11 +104,11 @@
 //       fnCreate 在轮到本层时起子链，fnApply 在子链兑现时把它的上下文数据搬进本上下文。
 //    本流程的最终结果 = 含跨模块子流程的完整结果，全程不阻塞任何线程。
 //
-// ⑥ 汇聚多条并行分支（分叉 → 合流）：`exec.WhenAll(spCtx, pA, pB)` —— 组合器在**执行器**上
+// ⑥ 汇聚多条并行分支（分叉 → 合流）：`exec.WhenAll(spCtx, pA, pB)` —— 组合器在「执行器」上
 //    （与 `exec.NewPromise` 同族的起链入口），另有 `exec.WhenAllSettled` / `WhenRace` / `WhenAny`
 //    （对齐 JS 同名 API）；子 promise 可跨上下文类型，聚合结果落定后照常 Then / Catch / Finally 继续。
 //
-// 并发注意：并行/嵌套的子 promise 若共用同一份共享上下文，请让各分支只写**不同字段**
+// 并发注意：并行/嵌套的子 promise 若共用同一份共享上下文，请让各分支只写「不同字段」
 // （或自行加同步）—— 框架只保证「同一条链的层顺序执行」，跨链并发由调用方负责。
 //
 // 用法：
@@ -141,7 +141,7 @@
 // common::async::CPromiseResult r = p.Await();             // 阻塞等待结果
 // (void)r;
 //
-// 起链语义（与 JS 的 `new Promise(executor)` 一致）：**起链即投递首层**；追加层只登记
+// 起链语义（与 JS 的 `new Promise(executor)` 一致）：「起链即投递首层」；追加层只登记
 // （上游未 settle 时登记、已 settle 时投递），首层跑起来后按序推进。
 // 若确实需要「构链期间不跑业务代码」，用一次 `exec.Post(...)` 把整段构链放到执行器线程上
 // 执行即可 —— 框架不提供「延迟启动」这种双形态（一种链只有一种启动语义）。
@@ -160,7 +160,7 @@
 //       不变式：句柄恒指向一个已存在的层（无「未挂首层」态 → 无相关空判）
 //   三、模板方法定义（执行器入口）：NewPromise
 //
-// 注：组合器（`exec.WhenAll` / `WhenAllSettled` / `WhenRace` / `WhenAny`）属于**执行器**的能力，
+// 注：组合器（`exec.WhenAll` / `WhenAllSettled` / `WhenRace` / `WhenAny`）属于「执行器」的能力，
 // 其声明、实现与文档均在 "Async/AsyncExecutor.h"；`CPromise` 侧不提供成员形态。
 // ====================================================================
 
@@ -296,9 +296,9 @@ public:
     /// @brief 登记处理器（执行器不可用时按策略收口）。
     ///
     /// 两种送达策略：
-    ///  - **层处理器**（then / catch / finally / thenPromise，`bGuaranteedDelivery == false`）：
+    ///  - 「层处理器」（then / catch / finally / thenPromise，`bGuaranteedDelivery == false`）：
     ///    执行器不可用时返回 `false`，由调用方以 `Stopped()` 收口本层（“停了的执行器不再跑新层”）；
-    ///  - **通知**（`OnSettled`，`bGuaranteedDelivery == true`）：**保证送达** —— 执行器不可用时
+    ///  - 「通知」（`OnSettled`，`bGuaranteedDelivery == true`）：「保证送达」 —— 执行器不可用时
     ///    在调用线程上就地执行，绝不丢弃（否则手写桥接漏检返回值就会让本层永久 pending、
     ///    上层 `Await()` 死等）。就地执行不会递归加深：通知里通常只是 settle 本层，
     ///    而本层后续处理器走 `Dispatch`，执行器不可用时以 `Stopped()` 收口，链会立即结束。
@@ -403,7 +403,7 @@ public:
             return Await();
         }
 
-        // ② 未落定：只等 nTimeoutMs 毫秒。超时**不落定本层**，只是向调用方报「没等到」（链继续在后台跑）。
+        // ② 未落定：只等 nTimeoutMs 毫秒。超时「不落定本层」，只是向调用方报「没等到」（链继续在后台跑）。
         std::unique_lock<std::mutex> lock(m_mutex);
         if (!m_cv.wait_for(lock, std::chrono::milliseconds(nTimeoutMs),
                 [this]()
@@ -424,7 +424,7 @@ public:
 
 #if defined(ASYNC_DEBUG_TRACE)
 
-    //================ 调用链 trace（**只在调试构建存在**） ================
+    //================ 调用链 trace（「只在调试构建存在」） ================
     //
     // 发布构建下这段整段不参与编译（连同上面的 m_trace 成员）：trace 不是「空操作版本」，
     // 而是根本没有 —— 调用方要写 trace 相关代码，请自己用 #if defined(ASYNC_DEBUG_TRACE) 包住。
@@ -439,9 +439,9 @@ public:
 
     /// @brief 记下本层在调用链里的位置：上游层 + 模式 + 它在哪条链上。
     ///
-    /// 上游用**强引用**：层的状态是靠「上游的处理器闭包」保活的，闭包用完即毁 —— 用弱引用的话，
+    /// 上游用「强引用」：层的状态是靠「上游的处理器闭包」保活的，闭包用完即毁 —— 用弱引用的话，
     /// 中间层跑完就被释放，链会被截断，而那正是排障最需要它的时候。因此这些链接
-    /// **一次写入、之后只读**（注册时设一次，永不释放），代价就是「只要下游还活着，
+    /// 「一次写入、之后只读」（注册时设一次，永不释放），代价就是「只要下游还活着，
     /// 上游就不会被释放」—— 调试构建下整条链随尾层句柄存活。
     ///
     /// @param pUpstream 上游层（本层被挂到它上面；空 = 首层 / 层外起的链根）。
@@ -500,7 +500,7 @@ public:
         return m_trace.nChainId;
     }
 
-    /// @brief 本层的 trace 记录（**拷贝**）。
+    /// @brief 本层的 trace 记录（「拷贝」）。
     ///
     /// 遍历（`VisitLayerChain` / `CurrentLayer`）拿到它之后会在上面填「视图字段」
     /// （深度 / 当前层 / 年龄 / 结果），不会影响层状态里存的那份。
@@ -513,7 +513,7 @@ public:
 
     /// @brief 取本层落定结果（链上能直接看到上游是兑现还是拒绝）。
     ///
-    /// 带锁读：与 `Settle` 的写入同步（trace 会从**别的线程**看已经落定的上游层）。
+    /// 带锁读：与 `Settle` 的写入同步（trace 会从「别的线程」看已经落定的上游层）。
     ///
     /// @param out 落定结果（返回 true 时有效）。
     /// @return 已落定 → true。
@@ -546,24 +546,24 @@ private:
 
 // ================= 三态语义（JS 的 then / catch / finally）：三条规则，各写在各处 =================
 //
-// 规则只有三条，各写在它该在的地方 —— **没有公共的「按模式分派」函数**：模式在各自的调用点
+// 规则只有三条，各写在它该在的地方 —— 「没有公共的「按模式分派」函数」：模式在各自的调用点
 // 就是常量，多一层函数只是多一次跳转。
 //
 //   - then    ：上游兑现才执行；`AppendThenLayer` 判 `IsRejected()` 决定跳过；本层结果 = 处理器返回值
 //               （`MakeThenRunner`，它拿不到上游结果）。
 //   - catch   ：上游被拒绝才执行；`AppendResultLayer` 判 `kModeCatch && IsFulfilled()` 决定跳过；
 //               本层结果 = 处理器返回值（返回 `Resolve()` 即恢复链）。
-//   - finally ：兑现 / 拒绝都执行，**没有跳过分支**（所以那个判断里不该出现 finally）；本层结果 =
+//   - finally ：兑现 / 拒绝都执行，「没有跳过分支」（所以那个判断里不该出现 finally）；本层结果 =
 //               忽略处理器返回值、原样透传 upResult（`MakeResultRunner`）。
 //
-// 最后一条是最容易看漏的：finally **既不跳过、也不改结果**，所以它的 eMode 只用在「透传上一层
-// 结果」那一步，**不参与任何跳过判断** —— 硬写成通用条件的话（`(then && 被拒) || (catch && 已兑现)`），
+// 最后一条是最容易看漏的：finally 「既不跳过、也不改结果」，所以它的 eMode 只用在「透传上一层
+// 结果」那一步，「不参与任何跳过判断」 —— 硬写成通用条件的话（`(then && 被拒) || (catch && 已兑现)`），
 // 它在 finally 上恒为 false，等于每次白判一次。
 
-/// @brief 造「执行本层处理器」的任务体 —— **框架里唯一跑用户处理器的地方**。
+/// @brief 造「执行本层处理器」的任务体 —— 「框架里唯一跑用户处理器的地方」。
 ///
 /// then / catch / finally 与首层共用这一层外壳，差别只在 `fnBody` 怎么调用户处理器。
-/// 任务体只捕获**它真正需要的东西**（`fnBody` 自己带着上下文与处理器），
+/// 任务体只捕获「它真正需要的东西」（`fnBody` 自己带着上下文与处理器），
 /// 这样在途任务不需要靠核心存活（因此核心无需 `enable_shared_from_this`），
 /// 也让「保活链」短一截：任务跑完前，只有它自己用到的对象在。
 ///
@@ -606,7 +606,7 @@ std::function<void()> MakeLayerRunner(const std::shared_ptr<CPromiseState>& pSta
     };
 }
 
-/// @brief 造 then 层（含首层）的任务体：处理器**看不到上游结果**，直接返回本层结果。
+/// @brief 造 then 层（含首层）的任务体：处理器「看不到上游结果」，直接返回本层结果。
 ///
 /// @param spContext 共享上下文（调用方在构造任务时解析好，恒非空）。
 /// @param pState 本层状态（执行结果写入它）。
@@ -627,13 +627,13 @@ std::function<void()> MakeThenRunner(const std::shared_ptr<TContext>& spContext,
         });
 }
 
-/// @brief 造 catch / finally 层的任务体：把**上游结果**交给处理器，返回值按模式归一。
+/// @brief 造 catch / finally 层的任务体：把「上游结果」交给处理器，返回值按模式归一。
 ///
 /// @param spContext 共享上下文（调用方在构造任务时解析好，恒非空）。
 /// @param pState 本层状态（执行结果写入它）。
 /// @param fnHandler 处理器（catch / finally 签名）。
 /// @param upResult 上一层结果。
-/// @param eMode 处理器模式（catch / finally）—— 只用来决定**结果归一**：
+/// @param eMode 处理器模式（catch / finally）—— 只用来决定「结果归一」：
 ///              catch 取处理器返回值（返回 `Resolve()` 即恢复）；finally 忽略它、原样透传上一层结果。
 /// @return 任务体。
 template <typename TContext>
@@ -642,7 +642,7 @@ std::function<void()> MakeResultRunner(const std::shared_ptr<TContext>& spContex
 {
     ASSERT(spContext != nullptr);  // 任务体把上下文按值捕获交给处理器：必须已经备好。
 
-    // 执行体两步：① 把**上游结果 + 上下文**交给处理器；② 按模式归一结果
+    // 执行体两步：① 把「上游结果 + 上下文」交给处理器；② 按模式归一结果
     //（catch 取处理器返回值；finally 忽略它，原样透传上一层结果）。
     return MakeLayerRunner(pState,
         [spContext, fnHandler, upResult, eMode]()
@@ -657,10 +657,10 @@ std::function<void()> MakeResultRunner(const std::shared_ptr<TContext>& spContex
 /// 一条链的所有层共用同一个核心（同一上下文 + 同一执行器），句柄持有者彼此
 /// 保活（执行器析构后链仍安全跑完）。
 ///
-/// 「本层怎么跑」的**调度策略**（就地内联 / 投递、内联深度限额）归属执行器侧
+/// 「本层怎么跑」的「调度策略」（就地内联 / 投递、内联深度限额）归属执行器侧
 /// （`detail::ShouldInline` / `detail::DispatchInlineOrPost`，在 AsyncExecutor.h）；
-/// 这里只做两件事：**造任务体**（`MakeThenRunner` / `MakeResultRunner`，层语义）
-/// 与**失败收口**（框架侧拒绝「执行器已停」）。
+/// 这里只做两件事：「造任务体」（`MakeThenRunner` / `MakeResultRunner`，层语义）
+/// 与「失败收口」（框架侧拒绝「执行器已停」）。
 ///
 /// 注：首层不走这里 —— 「起链即强制投递」是 `CPromise::StartChain` 的一条直路
 /// （没有调度选择，也就没有分派器）。
@@ -671,7 +671,7 @@ public:
     /// @brief 创建核心。
     ///
     /// @param pHandle 执行器句柄（可为空：协程构造时尚未绑定执行器，`Start` 时注入）。
-    /// @param spContext 共享上下文（**必传**；调用方负责在建链前备好数据，框架不管它的生命周期）。
+    /// @param spContext 共享上下文（「必传」；调用方负责在建链前备好数据，框架不管它的生命周期）。
     CPromiseCore(const std::shared_ptr<CExecutorHandle>& pHandle, const std::shared_ptr<TContext>& spContext)
         : m_pHandle(pHandle), m_spContext(spContext)
     {
@@ -681,7 +681,7 @@ public:
 
     /// @brief 共享上下文（恒非空、构造后只读）。
     ///
-    /// 上下文是**强制传入**的（没有懒创建 —— 懒创建要让上下文可默认构造、要给一个 "可能还没准备好" 的
+    /// 上下文是「强制传入」的（没有懒创建 —— 懒创建要让上下文可默认构造、要给一个 "可能还没准备好" 的
     /// 时间窗加锁，而收益只是省掉调用方一行 `make_shared`）。因此热路径（每层都会取一次）
     /// 可以直接取用，既不加锁、也不拷贝 `shared_ptr`。
     ///
@@ -707,7 +707,7 @@ public:
 
     /// @brief 级联执行下一层（then 语义：处理器看不到上游结果）。
     ///
-    /// **只有当前线程已经是本链执行器的线程**时才就地内联（省一次入队 + 保序）；
+    /// 「只有当前线程已经是本链执行器的线程」时才就地内联（省一次入队 + 保序）；
     /// 否则一律投递回本链执行器（典型场景：被调模块 settle 本链的层，本层就回到本模块线程执行）。
     /// 内联深度也只在同一执行器线程内累加，跨模块不会涨栈。
     ///
@@ -764,11 +764,11 @@ private:
 ///
 /// 一条 promise 链 = 共享核心（上下文 + 执行器）+ 一串状态（每层一个）。
 /// 本类只是「指向某一层」的句柄：
-///  - 起链只有**执行器上的**公开入口：`exec.NewPromise(spCtx, 首层处理器)`（立即投递首层）、
+///  - 起链只有「执行器上的」公开入口：`exec.NewPromise(spCtx, 首层处理器)`（立即投递首层）、
 ///    `exec.NewPromise(spCtx, fnStarter)`（由外部回调 settle）、`exec.CoStart<T>(spCtx)`（协程）；
-///    本类**不提供**任何起链入口，只做「句柄 + 加层」；
-///  - **没有默认构造、也没有「无效句柄」这种对象**：句柄只能由起链入口或链上的层方法产出，
-///    而且**恒指向一个真实存在的层**（起链时首层就已建好并投递）—— 所以「忘起链就挂层」
+///    本类「不提供」任何起链入口，只做「句柄 + 加层」；
+///  - 「没有默认构造、也没有「无效句柄」这种对象」：句柄只能由起链入口或链上的层方法产出，
+///    而且「恒指向一个真实存在的层」（起链时首层就已建好并投递）—— 所以「忘起链就挂层」
 ///    「对空句柄 Await」在编译期就不成立，框架内部也没有「未挂层」这种中间态要判；
 ///  - `Then` / `Catch` / `Finally` 追加一层并返回指向新层的句柄（等价 JS 的
 ///    `then` / `catch` / `finally`）；
@@ -781,10 +781,10 @@ class CPromise
 public:
     //================ Types ================
 
-    /// then 处理器类型（**不看上游结果**：共享上下文 → 本层结果）。
+    /// then 处理器类型（「不看上游结果」：共享上下文 → 本层结果）。
     using ThenHandler = detail::ThenHandler<TContext>;
 
-    /// catch / finally 处理器类型（**要上游结果**：上一层结果 + 共享上下文 → 本层结果）。
+    /// catch / finally 处理器类型（「要上游结果」：上一层结果 + 共享上下文 → 本层结果）。
     using ResultHandler = detail::ResultHandler<TContext>;
 
     /// 兑现函数（对齐 JS `new Promise` 交给 executor 的 resolve）。
@@ -792,7 +792,7 @@ public:
 
     /// 拒绝函数（对齐 JS `new Promise` 交给 executor 的 reject）。
     ///
-    /// 入参是本层的**整份拒绝结果**：业务失败用 `Reject(异常对象)`（异常里带自己的种类），
+    /// 入参是本层的「整份拒绝结果」：业务失败用 `Reject(异常对象)`（异常里带自己的种类），
     /// 框架侧失败用 `执行器已停` / `等待超时` / `处理器异常` —— 文案与来源都不会在传递中丢掉。
     using RejectFn = std::function<void(CPromiseResult result)>;
 
@@ -804,19 +804,19 @@ public:
 
     /// promise 工厂（ThenPromise 用）：返回一条需要等待的子 promise。
     ///
-    /// 契约：工厂**必须**给出可等待的子 promise（没有「返回空表示没有子链」这条路 ——
+    /// 契约：工厂「必须」给出可等待的子 promise（没有「返回空表示没有子链」这条路 ——
     /// 真需要条件分支，就在工厂里返回不同形状的链）。
     using PromiseFactory = std::function<CPromise(const std::shared_ptr<TContext>& spContext)>;
 
     //================ Layer ================
 
-    /// @brief then：上一层**兑现**时执行 fnHandler，被拒绝时直接透传（失败即停）。
+    /// @brief then：上一层「兑现」时执行 fnHandler，被拒绝时直接透传（失败即停）。
     ///
-    /// 在句柄所指的层之后**追加一层**：上游未 settle 时登记（settle 时由 `RunThenHandler` 派发；
+    /// 在句柄所指的层之后「追加一层」：上游未 settle 时登记（settle 时由 `RunThenHandler` 派发；
     /// 执行：同执行器内联 / 跨执行器投递回本链执行器）；已 settle 时投递到执行器异步触发。
     /// 同一层多次 Then 即分叉，各自独立延续。
     ///
-    /// **处理器看不到上游结果**（上一层被拒绝时本层根本不执行），所以它只接上下文：
+    /// 「处理器看不到上游结果」（上一层被拒绝时本层根本不执行），所以它只接上下文：
     /// 要处理拒绝请用 `Catch`（那里才拿得到 `upResult`）。
     ///
     /// @param fnHandler 本层处理器（then 签名）。
@@ -827,7 +827,7 @@ public:
         return AppendThenLayer(fnHandler, loc);
     }
 
-    /// @brief catch：上一层**被拒绝**时执行 fnHandler（回滚 / 补偿 / 错误处理）。
+    /// @brief catch：上一层「被拒绝」时执行 fnHandler（回滚 / 补偿 / 错误处理）。
     ///
     /// 返回 `CPromiseResult::Resolve()` 即吞掉拒绝，链从本层之后继续；
     /// 返回 `upResult`（或任意 Reject）则继续以拒绝状态向下透传。
@@ -843,8 +843,8 @@ public:
 
     /// @brief finally：无论上一层兑现还是被拒绝都执行 fnHandler（收尾：清理 / 审计）。
     ///
-    /// 与 JS 的 `finally` 一致：**永不跳过**（与 `Catch` 的「已兑现就跳过」相对），
-    /// 且**忽略处理器返回的成败，原样透传上一层结果**
+    /// 与 JS 的 `finally` 一致：「永不跳过」（与 `Catch` 的「已兑现就跳过」相对），
+    /// 且「忽略处理器返回的成败，原样透传上一层结果」
     /// （只有抛异常才会改变结果 → 本层以 `处理器异常` / `e.what()` 收口）。
     /// 需要在失败时改变链的走向请用 Catch。
     ///
@@ -858,12 +858,12 @@ public:
 
     /// @brief then 的 promise 版本（对齐 JS：处理器返回 promise 时链会等它 —— flatten）。
     ///
-    /// 上一层**兑现**后执行 fnFactory 拿到一条子 promise，本层等它 settled：
+    /// 上一层「兑现」后执行 fnFactory 拿到一条子 promise，本层等它 settled：
     ///  - 子 promise 兑现 → 本层兑现；
     ///  - 子 promise 被拒绝 → 本层以同一拒绝码被拒绝（后续 Then 不执行，Catch / Finally 仍执行）；
     ///  - 上层被拒绝 → 本层不执行，拒绝原因原样透传（与 Then 一致）。
     ///
-    /// 全程只登记回调、不占工作线程，**不阻塞**（单线程执行器也安全）——
+    /// 全程只登记回调、不占工作线程，「不阻塞」（单线程执行器也安全）——
     /// 这是「纯异步下调用其他模块 / 另一套上下文的异步函数」的标准写法：
     /// 子 promise 由 `exec.NewPromise(spCtx, fnStarter)` 桥接而来（见文件头「嵌套用法⑤」）。
     ///
@@ -906,13 +906,13 @@ public:
     ///        再继续本链（= 手写 `New` + `OnSettled` 桥接的简写版，样板由框架收口）。
     ///
     /// 这是「跨模块 / 跨上下文调用」的推荐写法，等价 `ThenPromise` + 「子链落定后搬数据」两件事合一：
-    ///  - `fnCreate(spSelf)` 在**本链执行器线程**上执行（只做「起子链 + 登记回调」，不要做重活）；
-    ///  - 子链被拒绝 → 本层以**同一拒绝码**被拒绝（后续 Then 不执行，Catch / Finally 仍执行）；
+    ///  - `fnCreate(spSelf)` 在「本链执行器线程」上执行（只做「起子链 + 登记回调」，不要做重活）；
+    ///  - 子链被拒绝 → 本层以「同一拒绝码」被拒绝（后续 Then 不执行，Catch / Finally 仍执行）；
     ///  - 子链兑现 → 先 `fnApply(spSelf, spChildCtx)` 把数据搬进本上下文，再兑现本层；
     ///  - 上层被拒绝 → 本层不执行，拒绝原因原样透传（与 Then / ThenPromise 一致）；
     ///  - 全程只登记回调、不占工作线程（单线程执行器也安全）。
     ///
-    /// @warning `fnApply` 在**子链的结算线程**（典型：被调模块的线程）上执行 —— 通知不迁移。
+    /// @warning `fnApply` 在「子链的结算线程」（典型：被调模块的线程）上执行 —— 通知不迁移。
     ///          它只应做「把子上下文的数据搬进本上下文」，不要碰本模块的其他状态；
     ///          要回到本模块线程干活，请放到桥接之后的层里（那些层会回本链执行器）。
     ///
@@ -946,8 +946,8 @@ public:
     ///
     /// 不产生新层、不改变结果；等价「观察最终结果」。
     ///
-    /// **恒送达**：即使本层的执行器已停止 / 拒绝投递（典型：被调模块已 Stop），
-    /// 通知也会执行（改在调用线程上就地执行）—— 所以**没有返回值可检查**：登记即生效，
+    /// 「恒送达」：即使本层的执行器已停止 / 拒绝投递（典型：被调模块已 Stop），
+    /// 通知也会执行（改在调用线程上就地执行）—— 所以「没有返回值可检查」：登记即生效，
     /// 不会丢、也不会让本层永久 pending。
     ///
     /// @param fnSettled 收尾通知（入参为本层最终结果）。
@@ -962,16 +962,16 @@ public:
             /* bGuaranteedDelivery = */ true);
     }
 
-    /// @brief onSettled（**指定执行器**版）：通知在给定执行器线程上触发（不在结算线程）。
+    /// @brief onSettled（「指定执行器」版）：通知在给定执行器线程上触发（不在结算线程）。
     ///
-    /// 与 `OnSettled` 的唯一差别：通知会**投递到目标执行器**（已在该线程则就地），
+    /// 与 `OnSettled` 的唯一差别：通知会「投递到目标执行器」（已在该线程则就地），
     /// 用于「收尾 / 审计 / 指标上报要碰本模块状态」的场合（模块状态只在模块线程上改）。
     ///
-    /// 送达保证与 `OnSettled` 一致：执行器不可用（已停止 / 拒绝投递）时在**结算线程**上就地执行，
+    /// 送达保证与 `OnSettled` 一致：执行器不可用（已停止 / 拒绝投递）时在「结算线程」上就地执行，
     /// 绝不丢弃。异常同样只报告、不外抛。
     ///
     /// @warning 目标执行器须存活到通知送达（句柄保活，但被持对象不得提前析构）；
-    ///          与其他「指定执行器」API 同理，**不要用它把执行器跨模块传递**。
+    ///          与其他「指定执行器」API 同理，「不要用它把执行器跨模块传递」。
     ///
     /// @param executor 目标执行器（典型：本模块的执行器）。
     /// @param fnSettled 收尾通知（入参为本层最终结果）。
@@ -990,9 +990,9 @@ public:
 
     /// @brief await：阻塞等待本层结果（JS await 的阻塞版，不抛异常）。
     ///
-    /// @warning 这是**阻塞**等待，会占住当前工作线程：在层内 / 协程内直接调用
+    /// @warning 这是「阻塞」等待，会占住当前工作线程：在层内 / 协程内直接调用
     ///          Await() 会占住一个 worker，若线程池已无空闲 worker，被等待的 promise
-    ///          就无人执行 → **死锁**（单线程执行器必然死锁）。
+    ///          就无人执行 → 「死锁」（单线程执行器必然死锁）。
     ///          要在异步流程里等异步，请优先用：
     ///           - `ThenPromise` / `exec.NewPromise(spCtx, fnStarter)`（纯异步、非阻塞，推荐，不需要协程）；
     ///           - 协程的 CO_AWAIT / CO_AWAIT_ALL（非阻塞挂起）；
@@ -1005,10 +1005,10 @@ public:
         return WaitInternal(-1);  // < 0 = 无限等待。
     }
 
-    /// @brief await（**带超时**）：最多等 nTimeoutMs 毫秒，超时不再阻塞。
+    /// @brief await（「带超时」）：最多等 nTimeoutMs 毫秒，超时不再阻塞。
     ///
-    /// 用于**不允许永久挂住**的场合：测试、优雅关闭、启动自检。
-    /// 超时只是向调用方报「没等到」（返回系统侧失败 `kTimeout`），**不会取消或落定本层**——
+    /// 用于「不允许永久挂住」的场合：测试、优雅关闭、启动自检。
+    /// 超时只是向调用方报「没等到」（返回系统侧失败 `kTimeout`），「不会取消或落定本层」——
     /// 链会继续在后台跑（要停链请用执行器 `Stop()` 或业务标记）。
     ///
     /// @warning 与 `Await()` 一样是阻塞等待；在层内 / 协程内调用同样会占住 worker
@@ -1030,14 +1030,14 @@ public:
 
     /// @brief 共享上下文（恒非空：上下文由调用方强制传入）。
     ///
-    /// 外部应先**备好数据再起链**（写法：先 `make_shared` 填初始数据，再 `exec.NewPromise(spCtx, …)`）；
+    /// 外部应先「备好数据再起链」（写法：先 `make_shared` 填初始数据，再 `exec.NewPromise(spCtx, …)`）；
     /// 也可在任意层读写。
     std::shared_ptr<TContext> GetContext() const
     {
         return m_pCore->Context();
     }
 
-    /// @brief 本层的注册点源码位置（**只在调试构建存在**：发布构建没有 trace）。
+    /// @brief 本层的注册点源码位置（「只在调试构建存在」：发布构建没有 trace）。
     ///
     /// @return 注册点（`ASYNC_LOC` 传入的位置）。
 #if defined(ASYNC_DEBUG_TRACE)
@@ -1052,7 +1052,7 @@ private:
 
     /// @brief 创建指向「某一层」的句柄（起链 / 层方法 / 协程 AsPromise 共用）。
     ///
-    /// 私有不对外：句柄只能由「起链」或「链上的层方法」产出 —— 因此**句柄恒指向一个真实存在的层**，
+    /// 私有不对外：句柄只能由「起链」或「链上的层方法」产出 —— 因此「句柄恒指向一个真实存在的层」，
     /// 框架内部不存在「句柄已建好但还没挂层」这种中间态（那是已删除的「延迟启动」唯一的产物）。
     ///
     /// @param pCore 共享核心（上下文 + 执行器句柄；恒非空）。
@@ -1064,13 +1064,13 @@ private:
         ASSERT(pState != nullptr);  // 句柄恒指向一个层（起链时首层就已建好）。
     }
 
-    /// @brief 内部：**起链** —— 建首层状态并投递首层（`exec.NewPromise(spCtx, handler)` 与协程
+    /// @brief 内部：「起链」 —— 建首层状态并投递首层（`exec.NewPromise(spCtx, handler)` 与协程
     ///        `NewPromise()` 共用的唯一入口）。
     ///
-    /// 「建链 + 首层」是一个**原子动作**：这里建好首层状态后立刻投递，所以调用方拿到的句柄必然
+    /// 「建链 + 首层」是一个「原子动作」：这里建好首层状态后立刻投递，所以调用方拿到的句柄必然
     /// 指向一个已经在推进（或已落定）的层，不会出现「句柄在手但一层都没跑」的形态。
     ///
-    /// 首层固定**强制投递**（不内联）：起链线程不执行任何业务代码。
+    /// 首层固定「强制投递」（不内联）：起链线程不执行任何业务代码。
     /// 注意这与 JS 的 `new Promise(executor)` 不同 —— 那边的 executor 只做「发起 + 登记回调」，
     /// 本来就是轻活；本框架的首层处理器是业务代码。
     ///
@@ -1086,12 +1086,12 @@ private:
 
 #if defined(ASYNC_DEBUG_TRACE)
         // ② trace：新链的链根挂在「起链时正在跑的层」下面 —— 这就是「子链 → 父链」那条边。
-        // 必须在**投递之前**写好：链根一旦跑起来就可能被读，之后就只读了。
+        // 必须在「投递之前」写好：链根一旦跑起来就可能被读，之后就只读了。
         pState->SetTraceLink(detail::CurrentLayerState(), detail::kModeThen, /* bChainRoot = */ true, detail::NextChainId());
 #endif
 
         // 起点结果视为「已兑现」；首层恒以 then 语义执行（catch / finally 是追加层的写法）。
-        // ③ 造首层任务体并**强制投递**（不内联：起链线程不跑业务代码）。
+        // ③ 造首层任务体并「强制投递」（不内联：起链线程不跑业务代码）。
         std::function<void()> fnRun = detail::MakeThenRunner(pCore->Context(), pState, fnHandler);
         if (!detail::PostToHandle(pCore->Handle(), std::move(fnRun)))
         {
@@ -1100,12 +1100,12 @@ private:
         return CPromise(pCore, pState);
     }
 
-    /// @brief 阻塞等待前的「死锁预警」（**不改变行为**，只报告，便于开发期定位）。
+    /// @brief 阻塞等待前的「死锁预警」（「不改变行为」，只报告，便于开发期定位）。
     ///
     /// 两种形态都报：
-    ///  - **层内 / 通知内阻塞**（`InlineDepth() > 0`）：正卡在某个处理器里等异步 → 占住一个 worker，
+    ///  - 「层内 / 通知内阻塞」（`InlineDepth() > 0`）：正卡在某个处理器里等异步 → 占住一个 worker，
     ///    没有空闲 worker 时被等待的层无人推进 → 死锁（单线程执行器必然）；
-    ///  - **在本链执行器线程上等本链**：本链的后续层需要这条线程，而它正卡在这里 → 必然死锁
+    ///  - 「在本链执行器线程上等本链」：本链的后续层需要这条线程，而它正卡在这里 → 必然死锁
     ///    （典型误用：在工作线程上 `p.Await()` 等自己这条链）。
     ///
     /// 不做硬失败的原因：「本链执行器线程上等一个由别的线程 settle 的层」（例如桥接层）是能正常
@@ -1126,7 +1126,7 @@ private:
         }
     }
 
-    /// @brief 内部：建一层新状态（**层状态的唯一创建点**：起链的首层与追加的每一层都经此）。
+    /// @brief 内部：建一层新状态（「层状态的唯一创建点」：起链的首层与追加的每一层都经此）。
     ///
     /// @param loc 注册点源码位置。
     /// @return 新层状态（pending）。
@@ -1143,7 +1143,7 @@ private:
         return pState;
     }
 
-    /// @brief 内部：把「本层跑不了」收口为**框架侧拒绝「执行器已停」** ——「层」唯一的失败收口点。
+    /// @brief 内部：把「本层跑不了」收口为「框架侧拒绝『执行器已停』」 ——「层」唯一的失败收口点。
     ///
     /// 触发：上一层已 settled 但目标执行器不可用（被停 / 拒绝投递）。
     /// 文案固定（「执行器已停」）；业务想区分自己的拒绝与框架失败时，比对 `Message()`。
@@ -1187,14 +1187,14 @@ private:
         promiseChild.OnSettled(
             [spChildCtx, fnApply, spSelf, fnResolve, fnReject](CPromiseResult childResult)
             {
-                // ③ 子链失败：**整份结果**原样透传（异常类型 / 文案都不丢），本流程随即也失败。
+                // ③ 子链失败：「整份结果」原样透传（异常类型 / 文案都不丢），本流程随即也失败。
                 if (childResult.IsRejected())
                 {
                     fnReject(childResult);
                     return;
                 }
 
-                // ④ 子链兑现：搬数据（这一步跑在**子链的结算线程**上，只应做搬运）。
+                // ④ 子链兑现：搬数据（这一步跑在「子链的结算线程」上，只应做搬运）。
                 try
                 {
                     fnApply(spSelf, spChildCtx);  // 搬数据（跑在子链结算线程上，见 ThenBridge 的 @warning）。
@@ -1215,7 +1215,7 @@ private:
             });
     }
 
-    /// @brief 内部：用执行器**句柄**创建「由外部兑现 / 拒绝」的 promise
+    /// @brief 内部：用执行器「句柄」创建「由外部兑现 / 拒绝」的 promise
     ///        （`NewPromise` 的 ChainStarter 版与 `ThenBridge` 共用）。
     ///
     /// 拿的是句柄而不是执行器引用 —— 桥接层（`ThenBridge`）在工厂里要用「本链执行器」的句柄，
@@ -1267,7 +1267,7 @@ private:
         {
 #if defined(ASYNC_DEBUG_TRACE)
             // trace：作用域内的起链都把新链根挂在「正在等子链的本层」下面
-            // （工厂是在**上游层**的 settle 路径里跑的，不指定的话会落回上游层）。
+            // （工厂是在「上游层」的 settle 路径里跑的，不指定的话会落回上游层）。
             const detail::CChainAdopterScope scope(pState);
 #endif
             // ② 执行工厂拿子链（作用域让「工厂里起的链」把链根挂到本层下面，trace 才追得回来）。
@@ -1353,12 +1353,12 @@ private:
         return pNextState;
     }
 
-    /// @brief 内部：在当前层之后**追加一层 then**（处理器看不到上游结果）。
+    /// @brief 内部：在当前层之后「追加一层 then」（处理器看不到上游结果）。
     ///
     /// 追加 = 两件事：建新层状态 + 在当前层上登记「本层跑完后启动新层」的处理器。
     /// 当前层还没 settle 就只是登记（settle 时触发）；已 settle 则立即触发（`AddHandler` 内部投递）。
     ///
-    /// 三态语义：**上游被拒绝 → 本层跳过**（结果原样交给下一层，处理器根本不会被调用）。
+    /// 三态语义：「上游被拒绝 → 本层跳过」（结果原样交给下一层，处理器根本不会被调用）。
     /// 所以本层跑起来的前提已定，处理器交 `RunThenHandler` 即可 —— 它只接共享上下文。
     ///
     /// @param fnHandler 本层处理器（then 签名）。
@@ -1395,14 +1395,14 @@ private:
         return CPromise(pCore, pNextState);
     }
 
-    /// @brief 内部：在当前层之后**追加一层 catch / finally**（处理器拿到上游结果）。
+    /// @brief 内部：在当前层之后「追加一层 catch / finally」（处理器拿到上游结果）。
     ///
-    /// 与 `AppendThenLayer` 同骨架，只差两处：处理器要**上游结果**（交 `RunResultHandler`），
+    /// 与 `AppendThenLayer` 同骨架，只差两处：处理器要「上游结果」（交 `RunResultHandler`），
     /// 以及模式要带到处理器里（finally 靠它「忽略返回值、原样透传」）。
     ///
     /// 三态语义：
-    ///  - catch：**上游已兑现 → 本层跳过**（拒绝才有得处理）；返回 `Resolve()` 即恢复链；
-    ///  - finally：**永不跳过**（成败都执行），所以下面没有它的跳过分支 —— 它的 eMode 只在
+    ///  - catch：「上游已兑现 → 本层跳过」（拒绝才有得处理）；返回 `Resolve()` 即恢复链；
+    ///  - finally：「永不跳过」（成败都执行），所以下面没有它的跳过分支 —— 它的 eMode 只在
     ///    `MakeResultRunner` 里用来忽略处理器返回值、原样透传上一层结果。
     ///
     /// @param fnHandler 本层处理器（catch / finally 签名）。
@@ -1426,7 +1426,7 @@ private:
                     return;
                 }
 
-                // 该跑的层才走到这里：任务体带着**上游结果 + 模式**，交给派发器。
+                // 该跑的层才走到这里：任务体带着「上游结果 + 模式」，交给派发器。
                 pCore->RunResultHandler(pNextState, fnHandler, upResult, eMode);
             });
 
@@ -1459,10 +1459,10 @@ private:
 
 //================ 三、模板方法定义（执行器入口） ================
 //
-// 这里放 `CAsyncExecutor` 模板成员的**定义**（声明与完整文档在 AsyncExecutor.h）：
+// 这里放 `CAsyncExecutor` 模板成员的「定义」（声明与完整文档在 AsyncExecutor.h）：
 //  - 起链：`NewPromise`（两个重载）。
 //
-// 为什么定义留在这里，而不是 AsyncExecutor.h：这两者都要**造 `CPromise` 实例**
+// 为什么定义留在这里，而不是 AsyncExecutor.h：这两者都要「造 `CPromise` 实例」
 // （用到注入点 `exec.NewPromise(spCtx, fnStarter)` 等内部构造路径），与 promise 机制放在一起读才完整。
 // `CoStart`（定义在 Coroutine/Coroutine.h）同样遵循「声明在执行器头、实现跟着机制走」。
 //
@@ -1486,9 +1486,9 @@ CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& s
 
 /// @brief 起链实现（对齐 JS `new Promise(executor)`）：由 `fnStarter` 里的 resolve / reject 兑现。
 ///
-/// 用途：把**其他模块 / 回调式**的异步接进本流程 —— 起链回调里发起调用并登记回调，
+/// 用途：把「其他模块 / 回调式」的异步接进本流程 —— 起链回调里发起调用并登记回调，
 /// 由对方的完成回调调 `fnResolve()` 兑现或 `fnReject(std::runtime_error("原因"))` 收口（非阻塞，不占 worker）。
-/// 与 JS 一致：起链回调 **立即（同步）执行**，因此只应做「发起 + 登记回调」，不要做重活。
+/// 与 JS 一致：起链回调「立即（同步）执行」，因此只应做「发起 + 登记回调」，不要做重活。
 ///
 /// @tparam TContext 上下文类型（由 spContext 推导）。
 /// @param spContext 共享上下文（本 promise 所有层共用该实例）。

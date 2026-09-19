@@ -1,18 +1,18 @@
 /// @file test_async_trace.cpp
-/// 异步调用链（trace）：验证「在异步层里能不能看到**完整**的调用链」。
+/// 异步调用链（trace）：验证「在异步层里能不能看到「完整」的调用链」。
 ///
 /// 主用例 `Trace_CompleteChainInComplexFlow` 是一条把各种层形态混在一起的主链：
 /// ① 具名 then（链根）→ ② 具名 then（本链线程上就地级联）→ ③ 具名 then
 /// → ④ 被跳过的 `Catch` → ⑤ `Finally` → ⑥ `ThenPromise` 内层链
-/// → ⑦ 分叉基座 → ⑧/⑨ 两支；然后在**最深的地方**把整条链逐层断言出来
-/// （层数、模式、注册点行号、深度、当前层标记、**跑在哪台执行器上**、一行描述），
+/// → ⑦ 分叉基座 → ⑧/⑨ 两支；然后在「最深的地方」把整条链逐层断言出来
+/// （层数、模式、注册点行号、深度、当前层标记、「跑在哪台执行器上」、一行描述），
 /// 另外把特殊位置逐个钉住：
-///   - 子链 → 父链：内层链（`ThenPromise`）的链根挂在**起它的那一层**下面 → 从内层里能一路
+///   - 子链 → 父链：内层链（`ThenPromise`）的链根挂在「起它的那一层」下面 → 从内层里能一路
 ///     追回主链；反过来主链看不到子链（只往上游走）；层外起的链没有父层；
-///   - 跨执行器：内层链跑在**另一个执行器**上（自己的 worker），链本身不受影响 ——
+///   - 跨执行器：内层链跑在「另一个执行器」上（自己的 worker），链本身不受影响 ——
 ///     链上的层都在本链执行器线程上，跨执行器就跨链（也直接看执行器名那一列）；
 ///   - 分叉：每条分支只看得到「自己 + 共同上游」，看不到兄弟分支；
-///   - 通知（`OnSettled`）：落定前登记 → 在**触发它的那一层**的帧里就地执行；
+///   - 通知（`OnSettled`）：落定前登记 → 在「触发它的那一层」的帧里就地执行；
 ///     落定后才登记 → 投递执行，此时不在任何层里（通知不是层）；
 ///   - 协程：`CO_AWAIT` 等的是自己起的子链（独立一条）；恢复点是否在层里取决于
 ///     就地 / 投递续跑（两种都合法，用例断言这个上界）；
@@ -22,7 +22,7 @@
 /// 发布构建下所有接口一律是空操作（本文件的用例在两种构建下都跑）。
 ///
 /// 注：`CLayerInfo.loc` 指向编译期静态串，可以拷出来断言；但 `CurrentLayer()`
-///     返回的是 thread_local 存储，必须**立刻拷贝**。
+///     返回的是 thread_local 存储，必须「立刻拷贝」。
 
 #include <algorithm>
 #include <atomic>
@@ -201,7 +201,7 @@ const char* ModeText(common::async::detail::HandlerMode eMode)
     return "then";
 }
 
-/// @brief 断言采集到的链与期望**逐项**一致（近 → 远）。
+/// @brief 断言采集到的链与期望「逐项」一致（近 → 远）。
 ///
 /// 逐项检查模式 / 注册点行号 / 深度（第 i 项的深度必须是 i）/ 当前层标记
 /// （只有第 0 项为真）/ 跑在哪台执行器上（`pszExec` 非空才查）；
@@ -320,7 +320,7 @@ CPromiseResult StepRoot(const std::shared_ptr<CTraceCtx>& spCtx)
     return CPromiseResult::Resolve();
 }
 
-/// 层：第二个 then（默认亲和 —— 已在本链执行器线程上，所以**就地**级联）。
+/// 层：第二个 then（默认亲和 —— 已在本链执行器线程上，所以「就地」级联）。
 CPromiseResult StepSecond(const std::shared_ptr<CTraceCtx>& spCtx)
 {
     TRACE_CAPTURE(capSecond);
@@ -387,7 +387,7 @@ CPromiseResult StepBranchB(const std::shared_ptr<CTraceCtx>& spCtx)
 
 /// 层：被门挡住（等主线程放行才落定）—— 让「登记通知」稳稳地发生在 settle 之前。
 ///
-/// 用例要验证的是「落定前登记的通知在**触发层**的帧里就地执行」：若不等门，
+/// 用例要验证的是「落定前登记的通知在「触发层」的帧里就地执行」：若不等门，
 /// 层可能在主线程登记通知之前就落定了，那条路径会变成「落定后登记 → 投递」。
 CPromiseResult StepGated(const std::shared_ptr<CTraceCtx>& spCtx)
 {
@@ -441,7 +441,7 @@ public:
 
 }  // namespace
 
-/// @brief 复杂主链：所有层形态串成一条链，在最深处断言**完整**调用链 + 各种特殊位置。
+/// @brief 复杂主链：所有层形态串成一条链，在最深处断言「完整」调用链 + 各种特殊位置。
 TEST(Trace_CompleteChainInComplexFlow)
 {
     CAsyncExecutor execMain("trace-main", 2);  // 主链：2 线程，分叉两支正好一支就地、一支投递
@@ -559,7 +559,7 @@ TEST(Trace_CompleteChainInComplexFlow)
     ASSERT_TRUE(strDump.find("省略中间") == std::string::npos);
     ASSERT_TRUE(strDump.find("[trace-main]") != std::string::npos);  // 带执行器列
 
-    // 分支 A：同样是「自己 + 整条主链」，但**看不到兄弟分支**（只往上游走）。
+    // 分支 A：同样是「自己 + 整条主链」，但「看不到兄弟分支」（只往上游走）。
     const CExpect vecExpectBranchA[8] = {
         {"then", lines.nBranchA, "trace-main"},
         {"then", lines.nBase, "trace-main"},
@@ -612,11 +612,11 @@ TEST(Trace_CompleteChainInComplexFlow)
     };
     AssertChain(spCtx->capInnerFirst, vecExpectInnerFirst, 7);
 
-    // 反过来：子链在父链的**下游**，所以主链上任何一层都看不到它（只往上游走）。
+    // 反过来：子链在父链的「下游」，所以主链上任何一层都看不到它（只往上游走）。
     ASSERT_TRUE(!HasLine(spCtx->capDeepest, spCtx->nLineInnerFirst));
 
     //================ 跨执行器：内层链在 execSide 的线程上，链本身不受影响 ================
-    // （「层都在本链执行器线程上」—— 跨执行器的是**另一条链**：内层链有自己的执行器。）
+    // （「层都在本链执行器线程上」—— 跨执行器的是「另一条链」：内层链有自己的执行器。）
     ASSERT_TRUE(spCtx->capInnerSecond.vecChain[0].tid == spCtx->capInnerSecond.vecChain[1].tid);  // 内层两层同一条 worker
     ASSERT_TRUE(spCtx->capInnerSecond.vecChain[0].tid != spCtx->capInnerSecond.vecChain[3].tid);  // 与父链线程不同
 
@@ -705,7 +705,7 @@ TEST(Trace_NotInsideLayer)
 //                        └─ sub1：root → await2(ThenPromise)   链#B（挂在 await1 下面）
 //                                                └─ sub2：root → deep   链#C（挂在 await2 下面）
 //
-// 在 sub2 最深一层采集：应当看到**跨 3 条链**的完整祖先路径，且链号分成 3 段、
+// 在 sub2 最深一层采集：应当看到「跨 3 条链」的完整祖先路径，且链号分成 3 段、
 // 段边界正好落在两条子链的链根上。
 // ====================================================================
 
@@ -848,7 +848,7 @@ TEST(Trace_NestedSubChainsThreeLevels)
     ASSERT_TRUE(vec[0].nChainId > vec[2].nChainId);
     ASSERT_TRUE(vec[2].nChainId > vec[4].nChainId);
 
-    // ---- 当前层按定义还没落定；**已经跑过**的那些层都已落定并兑现 ----
+    // ---- 当前层按定义还没落定；「已经跑过」的那些层都已落定并兑现 ----
     //
     // 要特别注意的是子链那两个「等子链」的层（vec[2] 在 sub1 上、vec[4] 在主链上）：
     // 子链（sub2 / sub1）还没落定，它们自然也还没落定 —— 这正是 `ThenPromise` 的语义，
@@ -892,7 +892,7 @@ TEST(Trace_NestedSubChainsThreeLevels)
 // ====================================================================
 // 更复杂的场景（二）：并发多链互不串
 //
-// 同时跑 4 条链，每条链的**前缀层数不同**（0/1/2/3）—— 这就是指纹：
+// 同时跑 4 条链，每条链的「前缀层数不同」（0/1/2/3）—— 这就是指纹：
 // 采集到的层数必须等于「本层 1 + 子链根 1 + 等子链层 1 + nExtra + 链根 1」。
 // 串链了、或者上游指针串了，层数/行号立刻就对不上。
 // ====================================================================
@@ -906,7 +906,7 @@ struct CMixCtx
     int nLineSubRoot;  ///< 子链链根。
     int nLineSubDeep;  ///< 子链最深（采集点）。
 
-    std::atomic<bool> bOk;  ///< 链跑完了（**断言只能在主测试线程做**，工作线程只记结果）。
+    std::atomic<bool> bOk;  ///< 链跑完了（「断言只能在主测试线程做」，工作线程只记结果）。
     CCapture capDeep;       ///< 子链最深一层的采集。
 
     CMixCtx() : nExtra(0), nLineRoot(0), nLineAwait(0), nLineSubRoot(0), nLineSubDeep(0), bOk(false), capDeep()
@@ -961,7 +961,7 @@ TEST(Trace_ConcurrentChainsDoNotMix)
                 CPromise<CMixCtx> p = exec.NewPromise(spCtx, &MixStepNoop, ASYNC_LOC);
                 for (int k = 0; k < spCtx->nExtra; ++k)
                 {
-                    p = p.Then(&MixStepNoop, ASYNC_LOC);  // 前缀层：都注册在**同一行**
+                    p = p.Then(&MixStepNoop, ASYNC_LOC);  // 前缀层：都注册在「同一行」
                 }
                 spCtx->nLineAwait = __LINE__ + 1;
                 p = p.ThenPromise(fnSub, ASYNC_LOC);
@@ -990,7 +990,7 @@ TEST(Trace_ConcurrentChainsDoNotMix)
         ASSERT_EQ(vec[2].loc.nLine, spCtx->nLineAwait);
         ASSERT_EQ(vec[vec.size() - 1].loc.nLine, spCtx->nLineRoot);
 
-        // 中间那些前缀层都注册在**同一行**：行号必须全相同，且不等于固定那几层。
+        // 中间那些前缀层都注册在「同一行」：行号必须全相同，且不等于固定那几层。
         // （不写 `__LINE__ + N` 去硬碰：Allman 的 `{` 单独一行，偏移量一改格式就错。）
         for (size_t k = 3; k + 1 < vec.size(); ++k)
         {
@@ -1014,7 +1014,7 @@ TEST(Trace_ConcurrentChainsDoNotMix)
         ASSERT_TRUE(vec[0].nChainId != vec[2].nChainId);
     }
 
-    // 4 条链采到的层号两两不同：说明每条链看到的都是**自己**那条（没串链），
+    // 4 条链采到的层号两两不同：说明每条链看到的都是「自己」那条（没串链），
     // 也说明上游指针没成环（成环会让同一层在链上出现两次）。
     ASSERT_EQ(vecAllIds.size(), static_cast<size_t>(kChains * 4 + kChains * (kChains - 1) / 2));
     ASSERT_TRUE(AreLayerIdsUnique(vecAllIds));
@@ -1027,7 +1027,7 @@ TEST(Trace_ConcurrentChainsDoNotMix)
 //
 // 两个要害：
 //  ① 长链（256 层）的深度/层号/链号必须逐项对得上（跨了多次「内联深度超限→投递」的边界）；
-//  ② 帧栈是 thread_local 的，所以层跑完之后必须干净：在同一**唯一** worker 上再投一个探针，
+//  ② 帧栈是 thread_local 的，所以层跑完之后必须干净：在同一「唯一」 worker 上再投一个探针，
 //     它必须「不在任何层里」—— 否则就是帧没弹（正常返回、抛异常两条路径都要查）。
 // ====================================================================
 
@@ -1078,7 +1078,7 @@ CPromiseResult ResidueStepPassThrough(CPromiseResult upResult, const std::shared
     return upResult;
 }
 
-/// @brief 在一个**唯一 worker** 上投一个探针：它必须不在任何层里（帧没残留）。
+/// @brief 在一个「唯一 worker」 上投一个探针：它必须不在任何层里（帧没残留）。
 ///
 /// @param exec 单线程执行器（探针必然跑在刚刚跑过链的那条 worker 上）。
 /// @param spCtx 上下文（探针结果写回它）。
@@ -1104,7 +1104,7 @@ void PostResidueProbe(CAsyncExecutor& exec, const std::shared_ptr<CResidueCtx>& 
 TEST(Trace_DeepChainAndFrameStackResidue)
 {
     const int kExtraLayers = 255;          // 深链：链根 + 255 层 = 256 层
-    CAsyncExecutor exec("trace-main", 1);  // **单线程**：探针必然复用同一条 worker（帧栈残留才查得出来）
+    CAsyncExecutor exec("trace-main", 1);  // 「单线程」：探针必然复用同一条 worker（帧栈残留才查得出来）
     ASSERT_TRUE(exec.Start());
     const std::shared_ptr<CResidueCtx> spCtx = std::make_shared<CResidueCtx>();
 
@@ -1177,15 +1177,15 @@ TEST(Trace_DeepChainAndFrameStackResidue)
 }
 
 // ====================================================================
-// 更复杂的场景（四）：层里 fire-and-forget 起的链，父层必须是**正在跑的那一层**
+// 更复杂的场景（四）：层里 fire-and-forget 起的链，父层必须是「正在跑的那一层」
 //
 // 这条同时在查两件事：
 //  ① 文档承诺的行为：层里起的链挂在「起它的那一层」下面；
-//  ② 采纳作用域（`CChainAdopterScope`）必须**弹回**：前面那次 `ThenPromise` 留下的作用域
-//     不能影响后面在层里起的链 —— 否则这里看到的父层就是**过期的那一层**（`CurrentLayerState()`
+//  ② 采纳作用域（`CChainAdopterScope`）必须「弹回」：前面那次 `ThenPromise` 留下的作用域
+//     不能影响后面在层里起的链 —— 否则这里看到的父层就是「过期的那一层」（`CurrentLayerState()`
 //     把显式作用域排在帧栈顶前面，作用域没弹回去就会一直劫持后续的起链）。
 //
-// 为什么要单线程执行器：让它俩（那次 adopt 与这次起链）落在**同一条线程**上，残留才暴露得出来。
+// 为什么要单线程执行器：让它俩（那次 adopt 与这次起链）落在「同一条线程」上，残留才暴露得出来。
 // ====================================================================
 
 /// @brief 「层里起链」用例的上下文。
@@ -1200,7 +1200,7 @@ struct CInLayerCtx
 
     /// 旁支链跑完了吗。
     ///
-    /// **故意不在这里存旁支链的句柄**：上下文会被每一层的处理器捕获（`spContext`），而层状态里的
+    /// 「故意不在这里存旁支链的句柄」：上下文会被每一层的处理器捕获（`spContext`），而层状态里的
     /// runner 又持着上下文 —— 上下文再存一个 promise 句柄，就「上下文 → 层状态 → runner → 上下文」
     /// 成环，整条链到进程退出都释放不掉（ASan 直接报出来；与 trace 无关，是「上下文里放句柄」
     /// 这个写法本身的问题）。所以这里只用个原子标志等它，不碰引用计数。
@@ -1228,10 +1228,10 @@ CPromiseResult InLayerStepSideRoot(const std::shared_ptr<CInLayerCtx>& spCtx)
     return CPromiseResult::Resolve();
 }
 
-/// @brief 在层里起一条**不等它**的链（fire-and-forget）。
+/// @brief 在层里起一条「不等它」的链（fire-and-forget）。
 CPromiseResult InLayerStepStarter(const std::shared_ptr<CInLayerCtx>& spCtx)
 {
-    // 句柄**故意丢掉**：投递出去的任务自己持着层状态，链会照跑；
+    // 句柄「故意丢掉」：投递出去的任务自己持着层状态，链会照跑；
     // 存进上下文反而会成环（见 `CInLayerCtx::bSideDone` 的说明）。
     // 注意下面两行必须紧挨着（`__LINE__ + 1` 就是给紧接着的挂层语句用的）。
     spCtx->nLineSide = __LINE__ + 1;
@@ -1265,9 +1265,9 @@ TEST(Trace_StartedInsideLayerBindsToCurrentLayer)
     // 旁支链已被投递（层里起链总是投递）：等它自己跑完，再看它采到的东西。
     ASSERT_TRUE(WaitFlag(spCtx->bSideDone));
 
-    // 旁支链的祖先路径 = 自己 + 起它的那一层（starter）+ 主链剩余前缀 —— **不是**别的分支。
+    // 旁支链的祖先路径 = 自己 + 起它的那一层（starter）+ 主链剩余前缀 —— 「不是」别的分支。
     // 注意顺序：starter 的上游就是那次 `ThenPromise` 的 await 层（主链是一条直线），
-    // 所以「等待子链的层」本来就应该在路径上；不该出现的是**那条子链自己的链根**。
+    // 所以「等待子链的层」本来就应该在路径上；不该出现的是「那条子链自己的链根」。
     const CExpect vecExpect[4] = {
         {"then", spCtx->nLineSide, "trace-main"},     // 旁支链自己的链根
         {"then", spCtx->nLineStarter, "trace-main"},  // 父层 = 正在跑的那一层

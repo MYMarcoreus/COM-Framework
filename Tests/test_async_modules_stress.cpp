@@ -483,7 +483,7 @@ TEST(ModuleStress_ManyConcurrentChains)
         ASSERT_TRUE(vecCtx[i]->idFirst == vecCtx[i]->idBackHome);
         ASSERT_TRUE(vecCtx[i]->idFirst != idMain);
 
-        // 跨模块返回后那一层：线程亲和保证它恒在**本模块执行器线程**上
+        // 跨模块返回后那一层：线程亲和保证它恒在「本模块执行器线程」上
         ASSERT_TRUE(vecCtx[i]->idAfterBridge == vecCtx[i]->idFirst);
         ASSERT_TRUE(vecCtx[i]->idAfterBridge != idMain);
         ASSERT_EQ(vecCtx[i]->nResumeOnStockThread, 0);

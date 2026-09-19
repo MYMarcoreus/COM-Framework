@@ -1,11 +1,11 @@
 /// @file test_async_layer_rules.cpp
-/// then / catch / finally 的**三态语义**单测（黑盒：只看公开行为 —— 处理器有没有被调用、
+/// then / catch / finally 的「三态语义」单测（黑盒：只看公开行为 —— 处理器有没有被调用、
 /// 最终结果是什么）。
 ///
 /// 判据（对齐 JS 的 Promise）：
-///  - then：上游**兑现**才执行；上游被拒绝 → 本层跳过，拒绝原样交给下一层（失败即停）；
-///  - catch：上游**被拒绝**才执行；已兑现 → 跳过；返回 `Resolve()` 即**恢复**（吞掉拒绝）；
-///  - finally：无论兑现或拒绝**都执行**；**忽略处理器返回值**，原样透传上一层结果。
+///  - then：上游「兑现」才执行；上游被拒绝 → 本层跳过，拒绝原样交给下一层（失败即停）；
+///  - catch：上游「被拒绝」才执行；已兑现 → 跳过；返回 `Resolve()` 即「恢复」（吞掉拒绝）；
+///  - finally：无论兑现或拒绝「都执行」；「忽略处理器返回值」，原样透传上一层结果。
 ///
 /// 为什么不用白盒：这三条规则直接写在各自的调用点（`AppendThenLayer` 判 `IsRejected()`、
 /// `AppendResultLayer` 判 catch + `IsFulfilled()`、`MakeResultRunner` 决定 finally 的透传），
@@ -57,7 +57,7 @@ common::async::CPromiseResult StepThen(const std::shared_ptr<CLayerRuleCtx>& spC
     return common::async::CPromiseResult::Resolve();
 }
 
-/// @brief catch 层：记下「拿到的是拒绝」并**恢复**（返回 Resolve() 吞掉拒绝）。
+/// @brief catch 层：记下「拿到的是拒绝」并「恢复」（返回 Resolve() 吞掉拒绝）。
 common::async::CPromiseResult StepCatchRecover(
     common::async::CPromiseResult upResult, const std::shared_ptr<CLayerRuleCtx>& spCtx)
 {
@@ -67,7 +67,7 @@ common::async::CPromiseResult StepCatchRecover(
     return common::async::CPromiseResult::Resolve();  // 恢复：链从本层之后继续。
 }
 
-/// @brief catch 层：**不恢复**（返回 upResult，拒绝继续往下透传）。
+/// @brief catch 层：「不恢复」（返回 upResult，拒绝继续往下透传）。
 common::async::CPromiseResult StepCatchPassThrough(
     common::async::CPromiseResult upResult, const std::shared_ptr<CLayerRuleCtx>& spCtx)
 {
@@ -76,7 +76,7 @@ common::async::CPromiseResult StepCatchPassThrough(
     return upResult;
 }
 
-/// @brief finally 层：成败都执行，并**故意返回与上一层相反的结果**（验证返回值被忽略）。
+/// @brief finally 层：成败都执行，并「故意返回与上一层相反的结果」（验证返回值被忽略）。
 common::async::CPromiseResult StepFinallyFlip(common::async::CPromiseResult upResult, const std::shared_ptr<CLayerRuleCtx>& spCtx)
 {
     ++spCtx->nFinallyRuns;
@@ -96,7 +96,7 @@ std::shared_ptr<CLayerRuleCtx> MakeCtx()
 
 }  // namespace
 
-/// @brief 兑现路径：then 执行、catch **跳过**、finally 执行；finally 想「造拒绝」也不生效。
+/// @brief 兑现路径：then 执行、catch 「跳过」、finally 执行；finally 想「造拒绝」也不生效。
 TEST(LayerRules_FulfilledPath)
 {
     common::async::CAsyncExecutor exec("layer-rules", 1);
@@ -121,7 +121,7 @@ TEST(LayerRules_FulfilledPath)
     exec.Stop();
 }
 
-/// @brief 拒绝路径 ①：then **跳过**、catch 执行并**恢复** → 链从 catch 之后继续。
+/// @brief 拒绝路径 ①：then 「跳过」、catch 执行并「恢复」 → 链从 catch 之后继续。
 TEST(LayerRules_RejectedPathCatchRecovers)
 {
     common::async::CAsyncExecutor exec("layer-rules", 1);
@@ -150,7 +150,7 @@ TEST(LayerRules_RejectedPathCatchRecovers)
     exec.Stop();
 }
 
-/// @brief 拒绝路径 ②：catch **不恢复** → 拒绝原样透传；finally 照跑也改不了结果。
+/// @brief 拒绝路径 ②：catch 「不恢复」 → 拒绝原样透传；finally 照跑也改不了结果。
 TEST(LayerRules_RejectedPathPassThrough)
 {
     common::async::CAsyncExecutor exec("layer-rules", 1);
@@ -169,7 +169,7 @@ TEST(LayerRules_RejectedPathPassThrough)
 
     // ② 断言：谁跑了 / 谁被跳过，以及最终结果是什么。
     ASSERT_TRUE(r.IsRejected());                              // catch 没恢复 → 仍是拒绝
-    ASSERT_EQ(r.Message(), std::string("上游拒绝（用例）"));  // 且是**最原始**的拒绝（透传）
+    ASSERT_EQ(r.Message(), std::string("上游拒绝（用例）"));  // 且是「最原始」的拒绝（透传）
     ASSERT_EQ(spCtx->nThenRuns, 0);                           // 两个 then 都没跑
     ASSERT_EQ(spCtx->nCatchRuns, 1);
     ASSERT_EQ(spCtx->nFinallyRuns, 1);

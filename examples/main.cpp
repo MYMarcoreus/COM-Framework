@@ -1,12 +1,12 @@
 // ====================================================================
-// 异步链完整示例：**一条父链**把所有常用用法串起来，并且每个位置都能看到自己的调用链
+// 异步链完整示例：「一条父链」把所有常用用法串起来，并且每个位置都能看到自己的调用链
 //
 // 父链本体在 BuildOrderChain() 里，一行一层、一眼看完：
 //
 //   ① 起链（具名 handler）   exec.NewPromise(spCtx, &StepReadOrder, ASYNC_LOC)
 //   ② then = lambda          只此一处用的小逻辑就写成 lambda
 //   ③ then                   本链执行器线程上就地级联（已在本链线程 → 不投递）
-//   ④ 子链跑在别的执行器上    ThenPromise：数据访问模块**自持** execDb，它的链在 execDb 上跑
+//   ④ 子链跑在别的执行器上    ThenPromise：数据访问模块「自持」 execDb，它的链在 execDb 上跑
 //   ⑤ 内层链（同上下文）     ThenPromise：等一条自己搭的子链（2 层）
 //   ⑥ 跨模块 / 跨上下文      ThenBridge：等别的模块（另一套 TContext），数据搬回来
 //   ⑦ 分叉                   同一层挂两支：一支继续主线（⑨），一支旁支（⑧）
@@ -16,16 +16,16 @@
 //   ⑪ then 收尾 / ⑫ catch 补偿 / ⑬ finally 审计
 //
 // 其余常用用法在 main() 里补齐：
-//   - 组合器一族：WhenAll / WhenAllSettled / WhenRace / WhenAny（都在**执行器**上）；
+//   - 组合器一族：WhenAll / WhenAllSettled / WhenRace / WhenAny（都在「执行器」上）；
 //   - Await（阻塞取结果）/ AwaitFor(ms)（超时兜底）；
-//   - OnSettled / OnSettledOn（settled 通知 —— **不是层**，不产生新层帧）；
+//   - OnSettled / OnSettledOn（settled 通知 —— 「不是层」，不产生新层帧）；
 //   - 回调式起链 exec.NewPromise(spCtx, fnStarter)（见记账模块 WriteBillAsync）；
 //   - 拒绝路径：同一条父链再跑一遍（库存不足）→ 失败即停 + catch 补偿 + finally 审计。
 //
 // --------------------------------------------------------------------
 // 追踪（本示例的重点）：每个位置都调 TraceHere(...)，打印「正在跑的层 + 一路往上的完整链」
 //
-//   [!] 想看追踪必须用**调试构建**（trace 与注册点 ASYNC_LOC 是同一个开关）：
+//   [!] 想看追踪必须用「调试构建」（trace 与注册点 ASYNC_LOC 是同一个开关）：
 //         ./build.sh --debug examples && ./build/debug/examples
 //       发布构建下这些打印只剩一行「trace 关闭」的提示（接口是空操作，零开销）。
 //
@@ -34,7 +34,7 @@
 //       同时 worker 线程也按「名字-序号」命名（`main-0`），gdb 的 `info threads` / htop
 //       里可直接对应上。
 //
-//   [i] 子链 → 父链（已打通）：**起链时正在跑的那一层**会被记成新链「链根」的父层 ——
+//   [i] 子链 → 父链（已打通）：「起链时正在跑的那一层」会被记成新链「链根」的父层 ——
 //       内层链（⑤）/ 跨模块子链（⑥）/ 协程起的子链（⑩）都能从子链里一路追回父链（连成一棵树）。
 //       - 组合器（WhenAll 一族）：聚合层与各分支都挂在「发起它们的那一层」下面（多父一子）；
 //       - 分叉：每条分支只看到「自己 + 共同上游」，看不到兄弟分支（下游不往上游走）。
@@ -91,8 +91,8 @@ void StartOrFail(CAsyncExecutor& exec)
 
 /// @brief 等一个原子计数到达期望值（有上限；超时返回 false）。
 ///
-/// 用来等「层里 `exec.Post(...)` 出去的 fire-and-forget 任务」：框架保证它**最终**会跑完，
-/// 但不保证它跑在**主链结束之前** —— 线程数越多，主链往往越先结束（协程里那两条并行等待
+/// 用来等「层里 `exec.Post(...)` 出去的 fire-and-forget 任务」：框架保证它「最终」会跑完，
+/// 但不保证它跑在「主链结束之前」 —— 线程数越多，主链往往越先结束（协程里那两条并行等待
 /// 会真的并行）。所以这类断言必须先等、再断言，不能靠时序侥幸。
 ///
 /// @param nCounter 原子计数（旁支任务自己加）。
@@ -204,9 +204,9 @@ bool HasChainLine(const std::vector<CLayerInfo>& vecChain, int nLine)
 // 二、父链的共享上下文与各层
 // ====================================================================
 
-/// @brief 父链共享上下文：**层间只传兑现 / 拒绝，数据一律放这里**。
+/// @brief 父链共享上下文：「层间只传兑现 / 拒绝，数据一律放这里」。
 ///
-/// 并行分支（⑧ 物流 / ⑨ 优惠券、协程并行 await 的两条子链）只能各写**不同字段** ——
+/// 并行分支（⑧ 物流 / ⑨ 优惠券、协程并行 await 的两条子链）只能各写「不同字段」 ——
 /// 框架只保证同一条链上的层顺序执行，跨链并发由调用方负责。
 struct COrderCtx
 {
@@ -274,7 +274,7 @@ struct COrderCtx
 #if defined(ASYNC_DEBUG_TRACE)
 /// @brief 把「当前层 + 一路往上的完整链」抄进上下文（⑬ 审计层用它做全链自校验）。
 ///
-/// 抄下来是为了**离开层之后**再断言：层里只能看，主线程要等两条链都跑完才核对。
+/// 抄下来是为了「离开层之后」再断言：层里只能看，主线程要等两条链都跑完才核对。
 ///
 /// @param spCtx 父链上下文（快照写进 vecAuditChain / nAuditChain）。
 void CaptureAuditChain(const std::shared_ptr<COrderCtx>& spCtx)
@@ -298,7 +298,7 @@ CPromiseResult StepReadOrder(const std::shared_ptr<COrderCtx>& spCtx)
     return CPromiseResult::Resolve();
 }
 
-/// 层 ③：查库存。已在本链执行器线程上 → **就地级联**（不投递，省一次入队）。
+/// 层 ③：查库存。已在本链执行器线程上 → 「就地级联」（不投递，省一次入队）。
 CPromiseResult StepCheckStock(const std::shared_ptr<COrderCtx>& spCtx)
 {
     TraceHere("③ 查库存（本链线程上就地）");
@@ -311,7 +311,7 @@ CPromiseResult StepCheckStock(const std::shared_ptr<COrderCtx>& spCtx)
     return CPromiseResult::Resolve();
 }
 
-/// 层 ④：读用户。由数据访问模块**自己的执行器**（execDb）跑 —— 跨模块只交换 promise + 上下文，
+/// 层 ④：读用户。由数据访问模块「自己的执行器」（execDb）跑 —— 跨模块只交换 promise + 上下文，
 /// 调用方不需要（也拿不到）对方的执行器；跑完把结果交回主链（之后的层回主链执行器）。
 CPromiseResult StepLoadUser(const std::shared_ptr<COrderCtx>& spCtx)
 {
@@ -395,9 +395,9 @@ CPromiseResult StepSettle(const std::shared_ptr<COrderCtx>& spCtx)
     return CPromiseResult::Resolve();
 }
 
-/// 层 ⑫：`Catch` 补偿 —— 只在**被拒绝**时执行（成功路径上它在链里，但不执行）。
+/// 层 ⑫：`Catch` 补偿 —— 只在「被拒绝」时执行（成功路径上它在链里，但不执行）。
 ///
-/// 这里**原样透传**上一层结果：补偿完仍然让链保持拒绝（调用方看得到失败）。
+/// 这里「原样透传」上一层结果：补偿完仍然让链保持拒绝（调用方看得到失败）。
 /// 若返回 `Resolve()` 就是「吞掉拒绝、恢复链」，后面还能继续挂 then。
 CPromiseResult StepCompensate(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
 {
@@ -427,9 +427,9 @@ CPromiseResult StepAudit(CPromiseResult upResult, const std::shared_ptr<COrderCt
 /// @brief 记账模块：示例里的「另一个模块」。
 ///
 /// 要点（真实项目照这个来）：
-///  - **自持执行器**：跨模块只交换 promise，不传递执行器；
+///  - 「自持执行器」：跨模块只交换 promise，不传递执行器；
 ///  - 自持上下文类型（`CBillCtx`），与父链的 `COrderCtx` 不同 → 演示跨上下文桥接；
-///  - **回调式起链**：`exec.NewPromise(spCtx, fnStarter)`，由外部完成回调 settle 本链。
+///  - 「回调式起链」：`exec.NewPromise(spCtx, fnStarter)`，由外部完成回调 settle 本链。
 class CBillingModule
 {
 public:
@@ -488,7 +488,7 @@ public:
                 });
             if (!bPosted)
             {
-                // 模块已停：子链首层收不了任务 ⟵ 这是**业务**决定（不是框架内部失败），
+                // 模块已停：子链首层收不了任务 ⟵ 这是「业务」决定（不是框架内部失败），
                 // 所以用业务码 + 文案拒绝，别让子链永远挂着。
                 fnReject(CPromiseResult::Reject(std::runtime_error(kErrExecUnavailableText)));
             }
@@ -518,7 +518,7 @@ private:
 
 /// @brief 协程：顺序 await 一条子链 + 并行 await 两条子链。
 ///
-/// await 不传数据（数据走共享上下文 `GetContext()`）；`NewPromise` 起的是**子链**，
+/// await 不传数据（数据走共享上下文 `GetContext()`）；`NewPromise` 起的是「子链」，
 /// 所以子链里的层看到的是子链自己那条（看示例输出的 ⑩-1 / ⑩-2）。
 class CStepCoroutine : public CCoroutine<COrderCtx>
 {
@@ -544,7 +544,7 @@ public:
 
 /// @brief 父链各层的注册点（`__LINE__ + 1` 逐个采集，用于「行号对得上」的自校验）。
 ///
-/// 采集条件：挂层语句必须**整行**（`ASYNC_LOC` 与调用在同一行上）—— 多行实参会把
+/// 采集条件：挂层语句必须「整行」（`ASYNC_LOC` 与调用在同一行上）—— 多行实参会把
 /// `ASYNC_LOC` 挤到第二行，记下的是那一行。所以 lambda / 工厂都先变成具名变量再挂。
 struct CLines
 {
@@ -604,14 +604,14 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
         return CPromiseResult::Resolve();
     };
 
-    /// ④ 「调数据访问模块」＝在**对方自己的执行器**上起一条子链（跑完把结果交回主链）。
+    /// ④ 「调数据访问模块」＝在「对方自己的执行器」上起一条子链（跑完把结果交回主链）。
     /// 这就是「想把某件事放到别的执行器上做」的标准写法：执行器是模块私有资源，不传给别人。
     const CPromise<COrderCtx>::PromiseFactory fnLoadUser = [&execDb](const std::shared_ptr<COrderCtx>& spSelf)
     {
         return execDb.NewPromise(spSelf, &StepLoadUser, ASYNC_LOC);
     };
 
-    /// ⑤ 内层链工厂：返回一条**自己搭的子链**（同上下文 → 直接 adopt 进当前链）。
+    /// ⑤ 内层链工厂：返回一条「自己搭的子链」（同上下文 → 直接 adopt 进当前链）。
     const CPromise<COrderCtx>::PromiseFactory fnPricingChain = [&execMain](const std::shared_ptr<COrderCtx>& spSelf)
     {
         return execMain
@@ -626,7 +626,7 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
         return billing.WriteBillAsync(spSelf->nOrderId, spSelf->nTotal);
     };
 
-    /// ⑥ 跨模块「搬数据」：跑在**子链的结算线程**上，只搬数据、别碰本模块状态。
+    /// ⑥ 跨模块「搬数据」：跑在「子链的结算线程」上，只搬数据、别碰本模块状态。
     const std::function<void(const std::shared_ptr<COrderCtx>&, const std::shared_ptr<CBillingModule::CBillCtx>&)> fnApplyBill =
         [](const std::shared_ptr<COrderCtx>& spSelf, const std::shared_ptr<CBillingModule::CBillCtx>& spChild)
     {
@@ -635,7 +635,7 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
         spSelf->strTrace += "记账;";
     };
 
-    /// ⑧ 分叉旁支：物流。层里再 Post 一个**不等它**的旁支任务（fire-and-forget）。
+    /// ⑧ 分叉旁支：物流。层里再 Post 一个「不等它」的旁支任务（fire-and-forget）。
     const CPromise<COrderCtx>::ThenHandler fnLogistics = [&execMain](const std::shared_ptr<COrderCtx>& spSelf)
     {
         TraceHere("⑧ 物流支（分叉的一支）");
@@ -695,7 +695,7 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
 }
 
 // ====================================================================
-// 六、组合器一族（都在**执行器**上）
+// 六、组合器一族（都在「执行器」上）
 // ====================================================================
 
 /// @brief 起一条「一步就完」的小链（组合器演示用）。
@@ -750,7 +750,7 @@ void DemoCombinators(CAsyncExecutor& execMain)
         std::printf("  WhenAllSettled （1 兑现 + 1 拒绝）→ 兑现（不看成败）\n");
     }
 
-    // WhenRace：第一个**落定**的结果就是聚合结果（先到先得）。
+    // WhenRace：第一个「落定」的结果就是聚合结果（先到先得）。
     {
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
         const CPromiseResult r =  //
@@ -764,7 +764,7 @@ void DemoCombinators(CAsyncExecutor& execMain)
         std::printf("  WhenRace       （快=拒绝 0ms / 慢=兑现 60ms）→ 拒绝「%s」：先到先得\n", r.Message().c_str());
     }
 
-    // WhenAny：第一个**兑现**的才是聚合结果（全被拒才拒绝）。
+    // WhenAny：第一个「兑现」的才是聚合结果（全被拒才拒绝）。
     {
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
         const CPromiseResult r = execMain
@@ -842,7 +842,7 @@ int main()
     std::printf("发布构建：trace 关闭（用 ./build.sh --debug examples 跑，才能看到每层的调用链）\n");
 #endif
 
-    CAsyncExecutor execMain("main", 8);  // 主链：8 线程（分叉两支 / 协程并行 await 会**真的同时**跑）
+    CAsyncExecutor execMain("main", 8);  // 主链：8 线程（分叉两支 / 协程并行 await 会「真的同时」跑）
     CAsyncExecutor execDb("db", 4);      // 模拟「数据访问模块」自己的执行器
     CBillingModule billing;              // 记账模块（自持执行器 + 自持上下文，名字 billing）
     StartOrFail(execMain);
@@ -857,7 +857,7 @@ int main()
     spCtx->nQty = 3;
     const CPromise<COrderCtx> pTail = BuildOrderChain(execMain, execDb, billing, spCtx, lines);
 
-    // settled 通知（OnSettled）**不是层**：登记时若还没落定 → 在触发它的那一层的帧里就地执行
+    // settled 通知（OnSettled）「不是层」：登记时若还没落定 → 在触发它的那一层的帧里就地执行
     // （此时看得到那一层）；若已落定 → 投递执行（看不到任何层）。两种都合法。
     pTail.OnSettled(
         [](CPromiseResult r)
@@ -884,7 +884,7 @@ int main()
     ASSERT(spCtx->nPoints == 20);               // ⑩-2b
     ASSERT(spCtx->nLogistics == 1);             // ⑧
     ASSERT(spCtx->nCoroDone.load() == 2);       // ⑩-2 两条并行子链是被协程 CO_AWAIT_ALL 等过的 → 必然都完成
-    // 「⑧ 里 Post 出去的旁支也跑完了」这件事**不能直接断言**：那个任务是 fire-and-forget（主链不等它），
+    // 「⑧ 里 Post 出去的旁支也跑完了」这件事「不能直接断言」：那个任务是 fire-and-forget（主链不等它），
     // 框架只保证它最终会跑，不保证跑在主链结束之前 —— 线程越多主链越可能先结束。先等再断言。
     ASSERT(WaitCount(spCtx->nSideDone, 1));
     ASSERT(spCtx->strTrace == std::string("读订单;校验;查库存;读用户;算折扣;算总额;记账;分叉;优惠券;协程券;落库;审计;"));

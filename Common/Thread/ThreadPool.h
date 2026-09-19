@@ -25,7 +25,7 @@ public:
 
     // 创建线程池（指定工作线程数与池名）。
     //
-    // 池名只用于**调试**：启动时把每条 worker 线程命名为「<池名>-<序号>」（Linux 线程名上限
+    // 池名只用于「调试」：启动时把每条 worker 线程命名为「<池名>-<序号>」（Linux 线程名上限
     // 15 字符，超长截断），于是 gdb 的 `info threads` / htop / top -H 里一眼能看出这条线程
     // 属于哪个池。传空串 = 不起名（保持系统默认）。
     explicit CThreadPool(size_t threadCount = 1, const std::string& strName = std::string());
@@ -67,7 +67,7 @@ public:
     // 已经在本池线程上就地执行（省一次入队），否则投递回本池执行。
     static bool IsInPoolThread(const CThreadPool* pPool);
 
-    // 当前线程所属线程池的名字（**不是**池工作线程 → 空）。
+    // 当前线程所属线程池的名字（「不是」池工作线程 → 空）。
     //
     // 调试用：异步层可能「就地」跑在别的池的线程上，此时「正跑在哪个执行器上」只有线程自己
     // 知道 —— trace 就用它记下每层的执行器（拿它自己的 `shared_ptr`，零分配、不悬垂）。

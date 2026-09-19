@@ -2,14 +2,14 @@
 /// 组合器（`WhenAll` / `WhenAllSettled` / `WhenRace` / `WhenAny`）的专项测试。
 ///
 /// 承诺（本文件即验收标准）：
-///  - `WhenAll`：全部兑现才兑现；**任一拒绝立即以该拒绝结果收口**（不等其余分支）；
-///  - `WhenAllSettled`：全部落定即兑现，**不因任何分支拒绝而失败**（成败由调用方从子句柄读）；
-///  - `WhenRace`：首个落定者定结果（**拒绝也算结论**）；
+///  - `WhenAll`：全部兑现才兑现；「任一拒绝立即以该拒绝结果收口」（不等其余分支）；
+///  - `WhenAllSettled`：全部落定即兑现，「不因任何分支拒绝而失败」（成败由调用方从子句柄读）；
+///  - `WhenRace`：首个落定者定结果（「拒绝也算结论」）；
 ///  - `WhenAny`：首个兑现者定结果（先失败的分支不算结论）；全部拒绝才以首个拒绝结果收口；
-///  - 子 promise 可**跨上下文类型 / 跨模块**汇聚（聚合 promise 只关心分支成败）；
+///  - 子 promise 可「跨上下文类型 / 跨模块」汇聚（聚合 promise 只关心分支成败）；
 ///  - 已落定的子 promise 直接计入（绝不永久 pending）；
 ///  - 空集合：`all` / `allSettled` 立即兑现；`race` / `any` 立即以系统侧失败 `Refused()` 拒绝（不死等）；
-///  - 聚合 promise 的后续层跑在**传入的执行器**上；框架不取消落败分支（它们照旧跑完）。
+///  - 聚合 promise 的后续层跑在「传入的执行器」上；框架不取消落败分支（它们照旧跑完）。
 
 #include <atomic>
 #include <chrono>
@@ -39,7 +39,7 @@ struct CCombineCtx
 {
     std::shared_ptr<asynctest::CTraceSink> spTrace;  ///< 步骤轨迹（跨线程写入，内部加锁）。
     std::atomic<int> nDone;                          ///< 已完成的分支步骤数。
-    std::atomic<int> nDoneAtGather;                  ///< 汇聚层执行**那一刻**看到的已完成分支数。
+    std::atomic<int> nDoneAtGather;                  ///< 汇聚层执行「那一刻」看到的已完成分支数。
     std::atomic<int> nGate;                          ///< 手动放行门（0 = 未放行）。
     int nGatherRuns;                                 ///< 汇聚层执行次数（汇聚层自己写）。
     std::thread::id idGather;                        ///< 汇聚层所在线程（只由汇聚层写）。

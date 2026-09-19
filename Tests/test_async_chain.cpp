@@ -42,7 +42,7 @@ struct CTestContext
     std::atomic<int> nForkA;  ///< 分叉分支 A 的执行次数。
     std::atomic<int> nForkB;  ///< 分叉分支 B 的执行次数。
 
-    // 并行 await 用例专用：同上契约（两条子链在同一上下文上**并发**执行）。
+    // 并行 await 用例专用：同上契约（两条子链在同一上下文上「并发」执行）。
     std::atomic<int> nParA;  ///< 并行分支 A 的执行次数。
     std::atomic<int> nParB;  ///< 并行分支 B 的执行次数。
 
@@ -211,13 +211,13 @@ private:
     EKind m_eKind;  ///< 种类。
 };
 
-/// 层：**构造**一个自定义异常类拒绝（保型路径）。
+/// 层：「构造」一个自定义异常类拒绝（保型路径）。
 static common::async::CPromiseResult StepRejectCustomBuilt(const std::shared_ptr<CTestContext>& /*spCtx*/)
 {
     return common::async::CPromiseResult::Reject(CTestBizError(CTestBizError::kShortage, "自定义异常的文案"));
 }
 
-/// 层：**throw** 同一个自定义异常（文本保留、类型降级路径）。
+/// 层：「throw」 同一个自定义异常（文本保留、类型降级路径）。
 static common::async::CPromiseResult StepThrowCustom(const std::shared_ptr<CTestContext>& /*spCtx*/)
 {
     throw CTestBizError(CTestBizError::kShortage, "自定义异常的文案");
@@ -225,9 +225,9 @@ static common::async::CPromiseResult StepThrowCustom(const std::shared_ptr<CTest
 
 /// @brief 类型分流与「构造保型 / throw 降级」的边界（`shared_ptr` 存储的直接后果）。
 ///
-/// 结果里存的是**自有的**共享异常对象，所以：
-///  - `Reject(CMyError(...))` **构造**出来的拒绝 → 类型完整保留，`dynamic_cast` 能命中；
-///  - 层里 `throw CMyError(...)` 出去的异常 → 框架在 `catch` 里只能按**静态类型**重建
+/// 结果里存的是「自有的」共享异常对象，所以：
+///  - `Reject(CMyError(...))` 「构造」出来的拒绝 → 类型完整保留，`dynamic_cast` 能命中；
+///  - 层里 `throw CMyError(...)` 出去的异常 → 框架在 `catch` 里只能按「静态类型」重建
 ///    （`Reject(std::runtime_error(e.what()))`），
 ///    文本完整保留，但动态类型降级为 `std::runtime_error`。
 /// 要保证类型可分流，请在层里 `return CPromiseResult::Reject(CMyError(...))`。
@@ -874,7 +874,7 @@ TEST(Coro_Sequential)
 
 /// @brief 协程并行 await（CO_AWAIT_ALL）。
 ///
-/// 两条子链在同一上下文上并发跑，所以**各写自己的字段**（框架只保证同一条链的层顺序执行，
+/// 两条子链在同一上下文上并发跑，所以「各写自己的字段」（框架只保证同一条链的层顺序执行，
 /// 跨链并发由调用方负责 —— 都写 `nValue` 就是数据竞争，TSan 会报）。
 TEST(Coro_Parallel)
 {
@@ -1067,7 +1067,7 @@ TEST(Promise_NewPromiseStarts)
 
 // ==================== 嵌套：跨上下文 await ====================
 
-/// @brief 子流程上下文（与 CTestContext **不同** —— 验证跨上下文 await）。
+/// @brief 子流程上下文（与 CTestContext 「不同」 —— 验证跨上下文 await）。
 struct COtherContext
 {
     int nRows;  ///< 子流程查询到的行数。

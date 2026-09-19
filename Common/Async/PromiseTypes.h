@@ -22,7 +22,7 @@ namespace async {
 /// @brief settled 通知：promise / 协程跑完（兑现或被拒绝）时触发一次。
 ///
 /// 只携带最终结果；需要数据时通过 promise / 协程的 GetContext() 取共享上下文。
-/// **通知不是层处理器**：它只看结果、不改结果（返回 void），名字里因此不叫 Handler。
+/// 「通知不是层处理器」：它只看结果、不改结果（返回 void），名字里因此不叫 Handler。
 using SettledNotice = std::function<void(CPromiseResult result)>;
 
 namespace detail {
@@ -38,7 +38,7 @@ enum HandlerMode
     kModeFinally = 2  ///< finally(onFinally)：无论兑现或拒绝都执行；忽略返回值，透传上层结果。
 };
 
-/// @brief then 层处理器（**看不到上游结果**）。
+/// @brief then 层处理器（「看不到上游结果」）。
 ///
 /// 上一层的拒绝永远进不了 then 层 —— 框架直接跳过本层、把拒绝交给下一层（失败即停），
 /// 所以形参里没有结果：既省一次多余的传参，也从签名上堵掉「在 then 里 `return upResult`」
@@ -49,12 +49,12 @@ enum HandlerMode
 template <typename TContext>
 using ThenHandler = std::function<CPromiseResult(const std::shared_ptr<TContext>& spContext)>;
 
-/// @brief 拿到上游结果的层处理器（**catch / finally 专用**）。
+/// @brief 拿到上游结果的层处理器（「catch / finally 专用」）。
 ///
 /// 这两个模式本来就要看结果：
-///  - catch（`kModeCatch`）：只在上一层**被拒绝**时执行 —— 返回 `Resolve()` 即吞掉拒绝、
+///  - catch（`kModeCatch`）：只在上一层「被拒绝」时执行 —— 返回 `Resolve()` 即吞掉拒绝、
 ///    返回 `upResult`（或任意 Reject）则继续以拒绝往下透传；
-///  - finally（`kModeFinally`）：成败都执行，**忽略返回值、原样透传上游结果**。
+///  - finally（`kModeFinally`）：成败都执行，「忽略返回值、原样透传上游结果」。
 ///
 /// @param upResult 上一层的结果（catch 恒为拒绝；finally 为兑现或拒绝）；
 /// @param spContext 整条 promise 链共享的数据载体（恒非空）；

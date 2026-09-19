@@ -207,7 +207,7 @@ CCurrentLayerFrame::CCurrentLayerFrame(const std::shared_ptr<CPromiseState>& spL
     if (m_spLayer != nullptr)
     {
         m_spLayer->SetRunningThread(std::this_thread::get_id());  // 「这层跑在哪条线程上」：开跑时写一次。
-        // 「这层跑在哪个执行器上」：同一个时机写一次。**只信线程自己的归属** ——
+        // 「这层跑在哪个执行器上」：同一个时机写一次。「只信线程自己的归属」 ——
         // 链跨模块时会在几条链之间接力（子链跑在对方模块的执行器上），方括号换个名字就是换了个池。
         // 当前线程不属于任何线程池（调用者线程等）→ 记空（打印成 `-`，与 `tid` 一起看）。
         m_spLayer->SetTraceExec(thread::CThreadPool::CurrentPoolName());
@@ -277,7 +277,7 @@ bool VisitLayerChain(const std::function<void(const CLayerInfo&)>& fnVisit)
         return false;
     }
 
-    // 当前层由帧自己保证存活（它正在跑）；往上的每一跳先把上游**升成强引用**再访问
+    // 当前层由帧自己保证存活（它正在跑）；往上的每一跳先把上游「升成强引用」再访问
     // （当前层的记录里本来就存着上游的强引用，取出来拿着它去 fetch 下一层即可）。
     const detail::CPromiseState* pLayer = pFrame->Layer();
     CLayerInfo info = pLayer->LayerInfo();

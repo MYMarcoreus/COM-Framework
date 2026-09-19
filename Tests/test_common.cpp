@@ -132,7 +132,7 @@ TEST(Config_LoadAndGet)
 
 /// @brief 线程池给 worker 线程起名（调试用：gdb 的 `info threads` / htop 里可辨认）。
 ///
-/// 在任务里读**自己**的线程名（Linux 的 `pthread_getname_np`），断言它形如 `<池名>-<序号>`。
+/// 在任务里读「自己」的线程名（Linux 的 `pthread_getname_np`），断言它形如 `<池名>-<序号>`。
 /// 非 Linux 平台不设线程名，这个用例只验证「不起名不影响功能」。
 TEST(ThreadPool_WorkerThreadName)
 {

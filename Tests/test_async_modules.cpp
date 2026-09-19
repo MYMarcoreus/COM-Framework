@@ -4,7 +4,7 @@
 /// 关注点（对应用户约定「执行器是模块私有资源，不跨模块传递」）：
 ///  - 顺序：跨模块链的先后由依赖边保证（A1 → B1 → B2 → A2 → A3），与线程数无关；
 ///  - 线程：每个模块的步骤跑在自己的执行器线程上，模块之间线程不同、且都不是调用线程；
-///  - 续跑归属：跨模块返回后的那一层由「线程亲和」拉回**本模块执行器线程**（改革前是二选一）；
+///  - 续跑归属：跨模块返回后的那一层由「线程亲和」拉回「本模块执行器线程」（改革前是二选一）；
 ///    `OnSettled` 通知仍在结算线程（= 被调模块线程）上触发；
 ///    要回到本模块线程需显式 `exec.Post(...)`（示例见 `PostBackToOwnThread`）；
 ///  - 单线程模块：模块内步骤串行、不重叠（并发调用也只是排队）。
@@ -90,7 +90,7 @@ public:
             .Then(&StepFinish, ASYNC_LOC);                 // ⑥ 本模块执行器
     }
 
-    /// @brief 下单流程（**ThenBridge 版**）：与 PlaceOrderAsync 逐项等价，只是跨模块那一层改用简写。
+    /// @brief 下单流程（「ThenBridge 版」）：与 PlaceOrderAsync 逐项等价，只是跨模块那一层改用简写。
     ///
     /// 对比手写桥接（`BridgeQueryStock`）：省掉 `New` + `OnSettled` + resolve/reject 样板，
     /// 只留「怎么起子链」与「搬哪些数据回来」两件事。
@@ -253,7 +253,7 @@ TEST(Module_OrderAndThreadOwnership)
     ASSERT_TRUE(spCtx->idAfterBridge != idMain);
     ASSERT_TRUE(spCtx->idBackHome != idMain);
 
-    // 跨模块返回后那一层：线程亲和保证它恒在**本模块执行器线程**上
+    // 跨模块返回后那一层：线程亲和保证它恒在「本模块执行器线程」上
     ASSERT_TRUE(spCtx->idAfterBridge == spCtx->idFirst);
     ASSERT_TRUE(spCtx->idAfterBridge != spTrace->ThreadOf("B2"));
 

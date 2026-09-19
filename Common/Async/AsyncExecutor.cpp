@@ -36,7 +36,7 @@ CAsyncExecutor::~CAsyncExecutor()
 
 /// @brief 新建句柄（连同线程池对象：都带上本执行器的名字）。
 ///
-/// 前提：`m_strName` 已经初始化（它在 `m_pHandle` **之前**声明，所以构造时轮得到）。
+/// 前提：`m_strName` 已经初始化（它在 `m_pHandle` 「之前」声明，所以构造时轮得到）。
 ///
 /// @return 新句柄（线程池对象已创建但未启动）。
 std::shared_ptr<detail::CExecutorHandle> CAsyncExecutor::MakeHandle() const
@@ -88,7 +88,7 @@ bool CAsyncExecutor::Post(std::function<void()> fnTask)
     }
 
     // 包一层异常兜底：线程池 worker 不捕获异常（异常逃出线程函数即 std::terminate），
-    // 而 Post 投递的是**用户任务**，所以在框架边界上收口。
+    // 而 Post 投递的是「用户任务」，所以在框架边界上收口。
     std::function<void()> fnTaskGuarded = [fnTask]()
     {
         try

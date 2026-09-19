@@ -55,7 +55,7 @@ inline const sc::InterfaceId& IID_IUserTable()
 /// @brief 数据访问层的业务失败（业务自定义的异常类型）。
 ///
 /// 拒绝统一用标准异常表达（框架只搬运、不解释）；业务要按种类分流时，
-/// 就定义自己的异常类型并在里面带上**业务自己的**种类 —— 框架侧没有任何错误码。
+/// 就定义自己的异常类型并在里面带上「业务自己的」种类 —— 框架侧没有任何错误码。
 class CDbError : public std::runtime_error
 {
 public:
@@ -86,7 +86,7 @@ private:
     EKind m_eKind;  ///< 失败种类。
 };
 
-/// @brief 提取拒绝原因里的数据访问层失败（**不是** `CDbError` → 返回 false）。
+/// @brief 提取拒绝原因里的数据访问层失败（「不是」 `CDbError` → 返回 false）。
 ///
 /// 这是「按异常类型分流」的标准写法：对结果里的异常对象做 `dynamic_cast`（不走 `catch`、不抛不捕）；
 /// 其余（兑现 / 框架侧失败 / 其他业务异常）原封不动地继续透传。
@@ -110,9 +110,9 @@ inline bool TryGetDbError(const common::async::CPromiseResult& result, CDbError:
 
 /// @brief 用户信息表（模拟数据库的数据访问模块接口）。
 ///
-/// 四个方法都是**异步函数**：立即返回 promise 句柄（命名对齐 JS Promise），
+/// 四个方法都是「异步函数」：立即返回 promise 句柄（命名对齐 JS Promise），
 /// 调用方用 `Then` / `Catch` / `Finally` / `OnSettled` 接管后续 —— 调用方
-/// **不需要阻塞等待**，本模块的层跑在自己的执行器上，操作上下文由调用方提供，
+/// 「不需要阻塞等待」，本模块的层跑在自己的执行器上，操作上下文由调用方提供，
 /// 结果写回同一实例。
 ///
 /// 拒绝（沿 promise 链透传到调用方的 catch / OnSettled，全部是标准异常）：

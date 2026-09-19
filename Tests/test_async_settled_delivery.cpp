@@ -2,13 +2,13 @@
 /// 改进：`OnSettled` 送达保证（问题 ② 的框架层修复）——调用方不再需要检查返回值。
 ///
 /// 背景：`OnSettled` 以前在「本层已 settled 且它的执行器不可用」（被调模块已停止 / 拒绝投递）
-/// 时返回 `false` 且**丢弃回调**。手写桥接若不检查返回值，桥接层就永久 pending，
+/// 时返回 `false` 且「丢弃回调」。手写桥接若不检查返回值，桥接层就永久 pending，
 /// 上层 `Await()` 死等（实测：`ModuleStress_StopMidFlight` 修复前 45s 超时挂住）。
 ///
-/// 现在：`OnSettled` **保证送达** —— 执行器可用时投递（不阻塞调用方），不可用时在调用线程上
+/// 现在：`OnSettled` 「保证送达」 —— 执行器可用时投递（不阻塞调用方），不可用时在调用线程上
 /// 就地执行；返回值只在「promise 无效」时才为 `false`。
 ///
-/// 边界（本文件同时验收）：层处理器（then / catch / finally）**不变**——执行器不可用时
+/// 边界（本文件同时验收）：层处理器（then / catch / finally）「不变」——执行器不可用时
 /// 仍以「执行器已停」收口，「停了的执行器不再跑新层」。
 
 #include <atomic>
@@ -92,7 +92,7 @@ struct CCallerCtx
     {}
 };
 
-/// @brief 调用方模块：桥接里**故意不检查** `OnSettled` 返回值（模拟用户代码）。
+/// @brief 调用方模块：桥接里「故意不检查」 `OnSettled` 返回值（模拟用户代码）。
 class CCallerModule
 {
 public:
@@ -145,7 +145,7 @@ private:
         return upResult;
     }
 
-    /// ② 桥接层：**故意不检查** `promiseCallee.OnSettled(...)` 的返回值。
+    /// ② 桥接层：「故意不检查」 `promiseCallee.OnSettled(...)` 的返回值。
     ///
     /// 框架已保证送达（执行器不可用时就地执行），因此这里漏检也不会永久 pending。
     common::async::CPromise<CCallerCtx> BridgeCallCallee(
@@ -251,7 +251,7 @@ TEST(SettledNotice_ManyRegistrationsAllDelivered)
     ASSERT_EQ(strOrder, strExpected);  // 注册顺序 = 送达顺序
 }
 
-/// @brief 关键回归：桥接里**漏检**返回值（问题 ② 的原形状）→ 链以系统侧失败收口，不死等。
+/// @brief 关键回归：桥接里「漏检」返回值（问题 ② 的原形状）→ 链以系统侧失败收口，不死等。
 TEST(SettledNotice_BridgeWithoutReturnCheckNoDeadlock)
 {
     auto spCallee = std::make_shared<CDeliveryModule>();

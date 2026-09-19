@@ -70,7 +70,7 @@ struct COrderContext
     {}
 };
 
-/// @brief 库存模块的上下文（**另一套类型**：库存服务只认自己的数据）。
+/// @brief 库存模块的上下文（「另一套类型」：库存服务只认自己的数据）。
 struct CStockContext
 {
     int nSku;              ///< 商品编码。
@@ -81,7 +81,7 @@ struct CStockContext
     {}
 };
 
-/// @brief 记账模块的上下文（旁支用，**独立实例** →
+/// @brief 记账模块的上下文（旁支用，「独立实例」 →
 /// 与主链不共享字段、无并发写竞争）。
 struct CBillingContext
 {
