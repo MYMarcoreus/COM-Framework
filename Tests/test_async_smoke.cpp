@@ -44,7 +44,7 @@ struct CSmokeCtx
 };
 
 /// 层：值 +1。
-static common::async::CPromiseResult StepAdd1(common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spCtx)
+static common::async::CPromiseResult StepAdd1(const std::shared_ptr<CSmokeCtx>& spCtx)
 {
     ++spCtx->nValue;
     ++spCtx->nSteps;
@@ -54,8 +54,7 @@ static common::async::CPromiseResult StepAdd1(common::async::CPromiseResult /*up
 }
 
 /// 层：值 +10。
-static common::async::CPromiseResult StepAdd10(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spCtx)
+static common::async::CPromiseResult StepAdd10(const std::shared_ptr<CSmokeCtx>& spCtx)
 {
     spCtx->nValue += 10;
     ++spCtx->nSteps;
@@ -64,7 +63,7 @@ static common::async::CPromiseResult StepAdd10(
 }
 
 /// 层：按上下文里的文案制造拒绝。
-static common::async::CPromiseResult StepFail(common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spCtx)
+static common::async::CPromiseResult StepFail(const std::shared_ptr<CSmokeCtx>& spCtx)
 {
     ++spCtx->nSteps;
     spCtx->strTrace += "F";
@@ -72,7 +71,16 @@ static common::async::CPromiseResult StepFail(common::async::CPromiseResult /*up
 }
 
 /// 层：记录轨迹（用来验证「失败后不再执行」）。
-static common::async::CPromiseResult StepMark(common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spCtx)
+static common::async::CPromiseResult StepMark(const std::shared_ptr<CSmokeCtx>& spCtx)
+{
+    ++spCtx->nSteps;
+    spCtx->strTrace += "X";
+    return common::async::CPromiseResult::Resolve();
+}
+
+/// finally 层：只记录轨迹（不看上游结果 —— finally 本来就不需要它）。
+static common::async::CPromiseResult StepFinallyMark(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spCtx)
 {
     ++spCtx->nSteps;
     spCtx->strTrace += "X";
@@ -80,8 +88,7 @@ static common::async::CPromiseResult StepMark(common::async::CPromiseResult /*up
 }
 
 /// 层：抛异常（验证框架捕获 → 异常原样成为本层拒绝，不向调用方抛出）。
-static common::async::CPromiseResult StepThrow(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& /*spCtx*/)
+static common::async::CPromiseResult StepThrow(const std::shared_ptr<CSmokeCtx>& /*spCtx*/)
 {
     throw std::runtime_error("smoke step boom");
 }
@@ -137,8 +144,7 @@ TEST(Smoke_MixedUsagesTrace)
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
 
     // ② lambda：只此一处用的小逻辑
-    common::async::CPromise<CSmokeCtx>::ThenHandler fnLambda =
-        [](common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spSelf)
+    common::async::CPromise<CSmokeCtx>::ThenHandler fnLambda = [](const std::shared_ptr<CSmokeCtx>& spSelf)
     {
         ++spSelf->nSteps;
         spSelf->strTrace += "L";
@@ -152,8 +158,7 @@ TEST(Smoke_MixedUsagesTrace)
     };
 
     // ⑤ 旁支：普通 Then 里起链但不返回 → 主链不等它
-    common::async::CPromise<CSmokeCtx>::ThenHandler fnSide =
-        [&exec](common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spSelf)
+    common::async::CPromise<CSmokeCtx>::ThenHandler fnSide = [&exec](const std::shared_ptr<CSmokeCtx>& spSelf)
     {
         // 旁支用独立上下文，避免与主链并发写同一个 ctx
         std::shared_ptr<CSmokeCtx> spSide = std::make_shared<CSmokeCtx>();
@@ -225,10 +230,10 @@ TEST(Smoke_ThenPromiseInnerReject)
     };
 
     const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepMark, ASYNC_LOC)
-                                                .ThenPromise(fnInner, ASYNC_LOC)   // 内层拒绝 → 本层拒绝
-                                                .Then(&StepMark, ASYNC_LOC)        // 被跳过
-                                                .Catch(&StepCatchPass, ASYNC_LOC)  // 仍执行
-                                                .Finally(&StepMark, ASYNC_LOC)     // 仍执行
+                                                .ThenPromise(fnInner, ASYNC_LOC)       // 内层拒绝 → 本层拒绝
+                                                .Then(&StepMark, ASYNC_LOC)            // 被跳过
+                                                .Catch(&StepCatchPass, ASYNC_LOC)      // 仍执行
+                                                .Finally(&StepFinallyMark, ASYNC_LOC)  // 仍执行
                                                 .Await();
 
     ASSERT_TRUE(r.IsRejected());
@@ -447,7 +452,7 @@ TEST(Smoke_HandlerThrowIsException)
     const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepThrow, ASYNC_LOC)
                                                 .Then(&StepMark, ASYNC_LOC)  // 跳过
                                                 .Catch(&StepCatchPass, ASYNC_LOC)
-                                                .Finally(&StepMark, ASYNC_LOC)
+                                                .Finally(&StepFinallyMark, ASYNC_LOC)
                                                 .Await();
 
     ASSERT_TRUE(r.IsRejected());
@@ -597,29 +602,28 @@ TEST(Smoke_SingleWorkerNoBlocking)
         return exec.NewPromise(spSelf, &StepAdd10, ASYNC_LOC);
     };
 
-    const common::async::CPromiseResult r =
-        exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC)
-            .ThenPromise(fnInner, ASYNC_LOC)
-            .Then(
-                [&exec](common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spSelf)
-                {
-                    // 旁支用独立上下文，避免与主链并发写同一个 ctx
-                    std::shared_ptr<CSmokeCtx> spSide = std::make_shared<CSmokeCtx>();
-                    exec.NewPromise(spSide, &StepMark, ASYNC_LOC)
-                        .OnSettled(
-                            [spSelf](common::async::CPromiseResult result)
-                            {
-                                if (result.IsFulfilled())
-                                {
-                                    spSelf->nSide.fetch_add(1, std::memory_order_relaxed);
-                                }
-                            });
-                    spSelf->strTrace += "s";
-                    return common::async::CPromiseResult::Resolve();
-                },
-                ASYNC_LOC)
-            .Finally(&StepFinallyIgnoreReturn, ASYNC_LOC)
-            .Await();
+    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC)
+                                                .ThenPromise(fnInner, ASYNC_LOC)
+                                                .Then(
+                                                    [&exec](const std::shared_ptr<CSmokeCtx>& spSelf)
+                                                    {
+                                                        // 旁支用独立上下文，避免与主链并发写同一个 ctx
+                                                        std::shared_ptr<CSmokeCtx> spSide = std::make_shared<CSmokeCtx>();
+                                                        exec.NewPromise(spSide, &StepMark, ASYNC_LOC)
+                                                            .OnSettled(
+                                                                [spSelf](common::async::CPromiseResult result)
+                                                                {
+                                                                    if (result.IsFulfilled())
+                                                                    {
+                                                                        spSelf->nSide.fetch_add(1, std::memory_order_relaxed);
+                                                                    }
+                                                                });
+                                                        spSelf->strTrace += "s";
+                                                        return common::async::CPromiseResult::Resolve();
+                                                    },
+                                                    ASYNC_LOC)
+                                                .Finally(&StepFinallyIgnoreReturn, ASYNC_LOC)
+                                                .Await();
     WaitSide(spCtx, 500);
 
     ASSERT_TRUE(r.IsFulfilled());

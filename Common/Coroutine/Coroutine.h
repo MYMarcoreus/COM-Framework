@@ -106,7 +106,7 @@ class CCoroutine
 public:
     //================ Types ================
 
-    /// 处理器类型（与 promise 一致：固定签名）。
+    /// 处理器类型（与 promise 的 then 层一致：看不到上游结果）。
     using ThenHandler = detail::ThenHandler<TContext>;
 
     //================ Lifecycle ================

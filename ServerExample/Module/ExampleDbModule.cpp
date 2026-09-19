@@ -148,7 +148,7 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::QueryUserAsync(const std
     // 契约：执行器在 Start() 中创建（失败即模块不可用），操作上下文由调用方提供且非空。
     ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
-    return LoadRowAsync(spOp).Finally(BindHandler(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
+    return LoadRowAsync(spOp).Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
 }
 
 /// @brief 异步插入用户：**复用本模块内的读表异步函数**（查重）→ 写表 → 放连接。
@@ -163,11 +163,11 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::InsertUserAsync(const st
 {
     ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
-    return LoadRowAsync(spOp)                                                  // 本模块内的异步函数（读表）
-        .Catch(BindHandler(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)  // 「不存在」归一化为兑现
-        .Then(BindHandler(&CExampleDbModule::StepRejectIfExists), ASYNC_LOC)   // 查重
-        .Then(BindHandler(&CExampleDbModule::StepInsertRow), ASYNC_LOC)        // 写表
-        .Finally(BindHandler(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);  // 收尾：放连接
+    return LoadRowAsync(spOp)                                                 // 本模块内的异步函数（读表）
+        .Catch(BindResult(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)  // 「不存在」归一化为兑现
+        .Then(BindThen(&CExampleDbModule::StepRejectIfExists), ASYNC_LOC)     // 查重
+        .Then(BindThen(&CExampleDbModule::StepInsertRow), ASYNC_LOC)          // 写表
+        .Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);  // 收尾：放连接
 }
 
 /// @brief 异步更新用户：**复用本模块内的读表异步函数** → 乐观锁写表 → 放连接。
@@ -180,9 +180,9 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::UpdateUserAsync(const st
     ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
     return LoadRowAsync(spOp)
-        .Catch(BindHandler(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)
-        .Then(BindHandler(&CExampleDbModule::StepApplyUpdate), ASYNC_LOC)
-        .Finally(BindHandler(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
+        .Catch(BindResult(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)
+        .Then(BindThen(&CExampleDbModule::StepApplyUpdate), ASYNC_LOC)
+        .Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
 }
 
 /// @brief 异步删除用户：**复用本模块内的读表异步函数**（确认存在）→ 删行 → 放连接。
@@ -195,9 +195,9 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::DeleteUserAsync(const st
     ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
     return LoadRowAsync(spOp)
-        .Catch(BindHandler(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)
-        .Then(BindHandler(&CExampleDbModule::StepEraseRow), ASYNC_LOC)
-        .Finally(BindHandler(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
+        .Catch(BindResult(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)
+        .Then(BindThen(&CExampleDbModule::StepEraseRow), ASYNC_LOC)
+        .Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
 }
 
 /// @brief 本模块内的异步函数：读表（取连接 → 读行）。
@@ -210,34 +210,31 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::DeleteUserAsync(const st
 /// @return promise 句柄（未命中时最终以 CDbError(kRowNotFound) 被拒绝）。
 common::async::CPromise<CUserTableOp> CExampleDbModule::LoadRowAsync(const std::shared_ptr<CUserTableOp>& spOp)
 {
-    return m_pExecutor->NewPromise(spOp, BindHandler(&CExampleDbModule::StepAcquireConn), ASYNC_LOC)
-        .Then(BindHandler(&CExampleDbModule::StepLoadRow), ASYNC_LOC);
+    return m_pExecutor->NewPromise(spOp, BindThen(&CExampleDbModule::StepAcquireConn), ASYNC_LOC)
+        .Then(BindThen(&CExampleDbModule::StepLoadRow), ASYNC_LOC);
 }
 
-/// @brief 处理器：取连接 + 模拟数据库 IO 延迟。
+/// @brief 处理器（then）：取连接 + 模拟数据库 IO 延迟。
 ///
-/// then 层：上游被拒绝时框架**不会调用本层**（失败即停），因此无需判断 upResult；
-/// 只有 catch（StepAcceptNotFound）与 finally（StepReleaseConn）才需要看它。
+/// then 层：上游被拒绝时框架**不会调用本层**（失败即停），所以处理器只接上下文；
+/// 只有 catch（StepAcceptNotFound）与 finally（StepReleaseConn）才拿得到上游结果。
 ///
 /// @param spOp 操作上下文（追加轨迹）。
 ///
 /// @return 兑现。
-common::async::CPromiseResult CExampleDbModule::StepAcquireConn(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepAcquireConn(const std::shared_ptr<CUserTableOp>& spOp)
 {
     spOp->strTrace += "取连接;";
     SimulateDbIo(m_nLatencyMs);
     return common::async::CPromiseResult::Resolve();
 }
 
-/// @brief 处理器：读表。
+/// @brief 处理器（then）：读表。
 ///
-/// @param upResult 上一层结果。
 /// @param spOp 操作上下文（命中写 recResult / bFound；演示开关触发驱动异常）。
 ///
 /// @return 命中兑现；未命中返回 CDbError(kRowNotFound)；驱动异常抛出（框架原样收口为拒绝）。
-common::async::CPromiseResult CExampleDbModule::StepLoadRow(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepLoadRow(const std::shared_ptr<CUserTableOp>& spOp)
 {
     SimulateDbIo(m_nLatencyMs);
 
@@ -292,14 +289,12 @@ common::async::CPromiseResult CExampleDbModule::StepAcceptNotFound(
     return upResult;  // 其他拒绝（业务 / 框架侧失败）继续透传：后续 Then 层不执行。
 }
 
-/// @brief 处理器：查重（已存在则本层拒绝）。
+/// @brief 处理器（then）：查重（已存在则本层拒绝）。
 ///
-/// @param upResult 上一层结果。
 /// @param spOp 操作上下文（读 bFound）。
 ///
 /// @return 不存在兑现；存在返回 `CDbError(kDuplicateKey)`。
-common::async::CPromiseResult CExampleDbModule::StepRejectIfExists(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepRejectIfExists(const std::shared_ptr<CUserTableOp>& spOp)
 {
     if (spOp->bFound)
     {
@@ -309,14 +304,12 @@ common::async::CPromiseResult CExampleDbModule::StepRejectIfExists(
     return common::async::CPromiseResult::Resolve();
 }
 
-/// @brief 处理器：写表（插入行，必要时分配自增主键）。
+/// @brief 处理器（then）：写表（插入行，必要时分配自增主键）。
 ///
-/// @param upResult 上一层结果。
 /// @param spOp 操作上下文（写入 recResult / nUserId）。
 ///
 /// @return 兑现；主键冲突返回 CDbError(kDuplicateKey)。
-common::async::CPromiseResult CExampleDbModule::StepInsertRow(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepInsertRow(const std::shared_ptr<CUserTableOp>& spOp)
 {
     SimulateDbIo(m_nLatencyMs);
 
@@ -344,15 +337,13 @@ common::async::CPromiseResult CExampleDbModule::StepInsertRow(
     return common::async::CPromiseResult::Resolve();
 }
 
-/// @brief 处理器：写表（乐观锁更新）。
+/// @brief 处理器（then）：写表（乐观锁更新）。
 ///
-/// @param upResult 上一层结果。
 /// @param spOp 操作上下文（recRequest.nVersion 为期望版本）。
 ///
 /// @return 兑现（版本 +1）；不存在返回 CDbError(kRowNotFound)；版本不匹配返回
 ///         CDbError(kVersionConflict)，并把库中最新行写入 recResult 供上层重试。
-common::async::CPromiseResult CExampleDbModule::StepApplyUpdate(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepApplyUpdate(const std::shared_ptr<CUserTableOp>& spOp)
 {
     SimulateDbIo(m_nLatencyMs);
 
@@ -380,14 +371,12 @@ common::async::CPromiseResult CExampleDbModule::StepApplyUpdate(
     return common::async::CPromiseResult::Resolve();
 }
 
-/// @brief 处理器：写表（删除行）。
+/// @brief 处理器（then）：写表（删除行）。
 ///
-/// @param upResult 上一层结果。
 /// @param spOp 操作上下文（nUserId 为目标用户）。
 ///
 /// @return 兑现；不存在返回 CDbError(kRowNotFound)。
-common::async::CPromiseResult CExampleDbModule::StepEraseRow(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromiseResult CExampleDbModule::StepEraseRow(const std::shared_ptr<CUserTableOp>& spOp)
 {
     SimulateDbIo(m_nLatencyMs);
 
@@ -417,15 +406,28 @@ common::async::CPromiseResult CExampleDbModule::StepReleaseConn(
     return upResult;
 }
 
-/// @brief 绑定成员函数为处理器。
+/// @brief 绑定成员函数为 then 处理器。
 ///
 /// 处理器在数据访问模块的执行器线程上运行，模块生命周期由 Stop 保证（Stop 等待任务完成），
 /// 因此处理器内使用 this 访问表数据是安全的。
 ///
-/// @param pfnHandler 成员函数指针（签名与处理器一致）。
+/// @param pfnHandler 成员函数指针（then 签名）。
 ///
-/// @return 可直接传给 NewPromise / Then / Catch / Finally 的处理器。
-CExampleDbModule::Handler CExampleDbModule::BindHandler(HandlerMemberFn pfnHandler)
+/// @return 可直接传给 NewPromise / Then 的处理器。
+CExampleDbModule::ThenHandler CExampleDbModule::BindThen(ThenMemberFn pfnHandler)
+{
+    return [this, pfnHandler](const std::shared_ptr<CUserTableOp>& spOp)
+    {
+        return (this->*pfnHandler)(spOp);
+    };
+}
+
+/// @brief 绑定成员函数为 catch / finally 处理器。
+///
+/// @param pfnHandler 成员函数指针（catch / finally 签名：多一个上游结果）。
+///
+/// @return 可直接传给 Catch / Finally 的处理器。
+CExampleDbModule::ResultHandler CExampleDbModule::BindResult(ResultMemberFn pfnHandler)
 {
     return [this, pfnHandler](common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp)
     {

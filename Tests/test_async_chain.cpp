@@ -51,13 +51,9 @@ struct CTestContext
     {}
 };
 
-/// 层：值 +1（上一层失败则透传，属防御性写法）。
-static common::async::CPromiseResult StepAdd1(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+/// 层：值 +1。
+static common::async::CPromiseResult StepAdd1(const std::shared_ptr<CTestContext>& spCtx)
 {
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
     ++spCtx->nValue;
     ++spCtx->nSteps;
     spCtx->workerId = std::this_thread::get_id();
@@ -66,12 +62,8 @@ static common::async::CPromiseResult StepAdd1(common::async::CPromiseResult upRe
 }
 
 /// 层：值 +10。
-static common::async::CPromiseResult StepAdd10(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepAdd10(const std::shared_ptr<CTestContext>& spCtx)
 {
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
     spCtx->nValue += 10;
     ++spCtx->nSteps;
     spCtx->workerId = std::this_thread::get_id();
@@ -80,75 +72,52 @@ static common::async::CPromiseResult StepAdd10(common::async::CPromiseResult upR
 }
 
 /// 分叉用例专用层：分支 A 只写自己的字段（不碰分支 B 也会写的字段）。
-static common::async::CPromiseResult StepForkA(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepForkA(const std::shared_ptr<CTestContext>& spCtx)
 {
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
     spCtx->nForkA.fetch_add(1);
     return common::async::CPromiseResult::Resolve();
 }
 
 /// 分叉用例专用层：分支 B 只写自己的字段。
-static common::async::CPromiseResult StepForkB(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepForkB(const std::shared_ptr<CTestContext>& spCtx)
 {
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
     spCtx->nForkB.fetch_add(1);
     return common::async::CPromiseResult::Resolve();
 }
 
 /// 并行 await 用例专用层：分支 A 只写自己的字段（两条子链在同一上下文上并发执行，
 /// 若都去写 `nValue` / `strTrace` 就是真实数据竞争 —— 见 Promise.h 文件头「并发注意」）。
-static common::async::CPromiseResult StepParA(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepParA(const std::shared_ptr<CTestContext>& spCtx)
 {
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
     spCtx->nParA.fetch_add(1);
     return common::async::CPromiseResult::Resolve();
 }
 
 /// 并行 await 用例专用层：分支 B 只写自己的字段。
-static common::async::CPromiseResult StepParB(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepParB(const std::shared_ptr<CTestContext>& spCtx)
 {
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
     spCtx->nParB.fetch_add(1);
     return common::async::CPromiseResult::Resolve();
 }
 
 /// 层：按上下文里的文案制造失败。
-static common::async::CPromiseResult StepFail(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepFail(const std::shared_ptr<CTestContext>& spCtx)
 {
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
     ++spCtx->nSteps;
     spCtx->strTrace += "F";
     return common::async::CPromiseResult::Reject(std::runtime_error(spCtx->strFailText));
 }
 
 /// 层：被调用即留下痕迹（用于验证失败后不再执行）。
-static common::async::CPromiseResult StepShouldNotRun(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepShouldNotRun(const std::shared_ptr<CTestContext>& spCtx)
 {
-    (void)upResult;
     ++spCtx->nSteps;
     spCtx->strTrace += "X";
     return common::async::CPromiseResult::Resolve();
 }
 
 /// 层：抛异常（验证框架捕获 → 异常原样成为本层拒绝，不向调用方抛出）。
-static common::async::CPromiseResult StepThrow(
-    common::async::CPromiseResult /*upStep*/, const std::shared_ptr<CTestContext>& /*spCtx*/)
+static common::async::CPromiseResult StepThrow(const std::shared_ptr<CTestContext>& /*spCtx*/)
 {
     throw std::runtime_error("chain step boom");
 }
@@ -181,15 +150,19 @@ static common::async::CPromiseResult StepCatchRecover(
 
 // ==================== 契约与基本链路 ====================
 
-/// @brief 固定签名契约：层函数 / 完成回调必须能赋给框架声明的函数类型。
+/// @brief 处理器签名契约：then 层带不到上游结果，catch / finally 层才看得到。
 TEST(Promise_ThenHandlerContract)
 {
-    // 处理器：CPromiseResult(CPromiseResult, const std::shared_ptr<TContext>&)。
+    // then 处理器：CPromiseResult(const std::shared_ptr<TContext>&) —— 拒绝不会进 then 层。
     common::async::CPromise<CTestContext>::ThenHandler fnStep = &StepAdd1;
     ASSERT_TRUE(static_cast<bool>(fnStep));
 
-    // settled 通知：void(CPromiseResult)。
-    common::async::SettledHandler fnSettled = [](common::async::CPromiseResult)
+    // catch / finally 处理器：CPromiseResult(CPromiseResult, const std::shared_ptr<TContext>&)。
+    common::async::CPromise<CTestContext>::ResultHandler fnResult = &StepCatchObserve;
+    ASSERT_TRUE(static_cast<bool>(fnResult));
+
+    // settled 通知：void(CPromiseResult)（只读结果，不改结果）。
+    common::async::SettledNotice fnSettled = [](common::async::CPromiseResult)
     {
     };
     ASSERT_TRUE(static_cast<bool>(fnSettled));
@@ -239,15 +212,13 @@ private:
 };
 
 /// 层：**构造**一个自定义异常类拒绝（保型路径）。
-static common::async::CPromiseResult StepRejectCustomBuilt(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CTestContext>& /*spCtx*/)
+static common::async::CPromiseResult StepRejectCustomBuilt(const std::shared_ptr<CTestContext>& /*spCtx*/)
 {
     return common::async::CPromiseResult::Reject(CTestBizError(CTestBizError::kShortage, "自定义异常的文案"));
 }
 
 /// 层：**throw** 同一个自定义异常（文本保留、类型降级路径）。
-static common::async::CPromiseResult StepThrowCustom(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CTestContext>& /*spCtx*/)
+static common::async::CPromiseResult StepThrowCustom(const std::shared_ptr<CTestContext>& /*spCtx*/)
 {
     throw CTestBizError(CTestBizError::kShortage, "自定义异常的文案");
 }
@@ -671,7 +642,7 @@ TEST(Promise_ParallelPromises)
         std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
         common::async::CPromise<CTestContext> chain = exec.NewPromise(
             spCtx,
-            [&nActive, &nPeak](common::async::CPromiseResult /*upStep*/, const std::shared_ptr<CTestContext>& /*spCtx*/)
+            [&nActive, &nPeak](const std::shared_ptr<CTestContext>& /*spCtx*/)
             {
                 const int nNow = nActive.fetch_add(1) + 1;
                 int nCur = nPeak.load();
@@ -728,12 +699,8 @@ TEST(Promise_Stress)
     for (int i = 0; i < kChains; ++i)
     {
         std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
-        auto step = [&nSteps](common::async::CPromiseResult upStep, const std::shared_ptr<CTestContext>& sp)
+        auto step = [&nSteps](const std::shared_ptr<CTestContext>& sp)
         {
-            if (upStep.IsRejected())
-            {
-                return upStep;
-            }
             ++sp->nSteps;
             nSteps.fetch_add(1);
             return common::async::CPromiseResult::Resolve();
@@ -1110,13 +1077,8 @@ struct COtherContext
 };
 
 /// 处理器（子流程）：置 nRows = 3。
-static common::async::CPromiseResult StepQueryRows(
-    common::async::CPromiseResult upResult, const std::shared_ptr<COtherContext>& spCtx)
+static common::async::CPromiseResult StepQueryRows(const std::shared_ptr<COtherContext>& spCtx)
 {
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
     spCtx->nRows = 3;
     return common::async::CPromiseResult::Resolve();
 }
@@ -1207,13 +1169,8 @@ TEST(Coro_ParallelAwaitMixedContext)
 static const char* const kOtherModuleFailedText = "别的模块（子流程）失败";
 
 /// 处理器（子流程）：模拟别的模块失败。
-static common::async::CPromiseResult StepQueryRowsFail(
-    common::async::CPromiseResult upResult, const std::shared_ptr<COtherContext>& spCtx)
+static common::async::CPromiseResult StepQueryRowsFail(const std::shared_ptr<COtherContext>& spCtx)
 {
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
     spCtx->nRows = -1;
     return common::async::CPromiseResult::Reject(std::runtime_error(kOtherModuleFailedText));
 }
@@ -1321,8 +1278,7 @@ TEST(Promise_BridgeForeignRejected)
 }
 
 /// 层（then）：用异常拒绝（拒绝与「兑现」完全分开，只看 `IsRejected()`）。
-static common::async::CPromiseResult StepRejectZeroCode(
-    common::async::CPromiseResult /*upStep*/, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepRejectZeroCode(const std::shared_ptr<CTestContext>& spCtx)
 {
     ++spCtx->nSteps;
     spCtx->strTrace += "Z";
@@ -1330,8 +1286,7 @@ static common::async::CPromiseResult StepRejectZeroCode(
 }
 
 /// 层（then）：用带运行时数字的长文案拒绝（长度超过 SSO 上限）。
-static common::async::CPromiseResult StepRejectDynamicText(
-    common::async::CPromiseResult /*upStep*/, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepRejectDynamicText(const std::shared_ptr<CTestContext>& spCtx)
 {
     ++spCtx->nSteps;
     spCtx->strTrace += "F";
@@ -1340,8 +1295,7 @@ static common::async::CPromiseResult StepRejectDynamicText(
 }
 
 /// 层（then）：抛异常（异常对象原样成为本层拒绝，`what()` 不丢）。
-static common::async::CPromiseResult StepThrowRuntimeError(
-    common::async::CPromiseResult /*upStep*/, const std::shared_ptr<CTestContext>& spCtx)
+static common::async::CPromiseResult StepThrowRuntimeError(const std::shared_ptr<CTestContext>& spCtx)
 {
     ++spCtx->nSteps;
     throw std::runtime_error("磁盘写失败: /data/order.bin");
@@ -1355,7 +1309,7 @@ TEST(Promise_RejectionIsJustAnException)
     const std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
 
     std::string strCaughtMessage;
-    const common::async::CPromise<CTestContext>::ThenHandler fnCatch =
+    const common::async::CPromise<CTestContext>::ResultHandler fnCatch =
         [&strCaughtMessage](common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& /*spCtx*/)
     {
         strCaughtMessage = upResult.Message();
@@ -1384,7 +1338,7 @@ TEST(Promise_RefusalMessageTravels)
     const std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
 
     std::string strCaughtMessage;
-    const common::async::CPromise<CTestContext>::ThenHandler fnCatch =
+    const common::async::CPromise<CTestContext>::ResultHandler fnCatch =
         [&strCaughtMessage](common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& /*spCtx*/)
     {
         strCaughtMessage = upResult.Message();

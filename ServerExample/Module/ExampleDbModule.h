@@ -55,10 +55,12 @@ protected:
     SC_DECLARE_INTERFACE_MAP();
 
 private:
-    // 处理器类型（then / catch / finally 的回调，固定签名）。
-    using Handler = common::async::CPromise<CUserTableOp>::ThenHandler;
-    // 成员函数形式的处理器（可访问表数据与互斥锁）。
-    using HandlerMemberFn = common::async::CPromiseResult (CExampleDbModule::*)(
+    // 处理器类型：then 只接上下文；catch / finally 还要上游结果。
+    using ThenHandler = common::async::CPromise<CUserTableOp>::ThenHandler;
+    using ResultHandler = common::async::CPromise<CUserTableOp>::ResultHandler;
+    // 成员函数形式的处理器（可访问表数据与互斥锁）：then 与 catch / finally 各一种形状。
+    using ThenMemberFn = common::async::CPromiseResult (CExampleDbModule::*)(const std::shared_ptr<CUserTableOp>& spOp);
+    using ResultMemberFn = common::async::CPromiseResult (CExampleDbModule::*)(
         common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
 
     // ---------------- 对外异步函数（IUserTable 实现） ----------------
@@ -72,31 +74,28 @@ private:
     common::async::CPromise<CUserTableOp> LoadRowAsync(const std::shared_ptr<CUserTableOp>& spOp);
 
     // ---------------- 处理器（本模块内的步骤） ----------------
-    // 取连接 + 模拟 IO 延迟。
-    common::async::CPromiseResult StepAcquireConn(
-        common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
+    // 取连接 + 模拟 IO 延迟（then 层：只接上下文）。
+    common::async::CPromiseResult StepAcquireConn(const std::shared_ptr<CUserTableOp>& spOp);
     // 读表（未命中 → CDbError(kRowNotFound)；演示开关打开时抛异常模拟驱动故障）。
-    common::async::CPromiseResult StepLoadRow(common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
-    // catch：把「记录不存在」归一化为兑现，供写入流程继续。
+    common::async::CPromiseResult StepLoadRow(const std::shared_ptr<CUserTableOp>& spOp);
+    // catch：把「记录不存在」归一化为兑现，供写入流程继续（拿得到上游结果）。
     common::async::CPromiseResult StepAcceptNotFound(
         common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
     // 查重（已存在 → CDbError(kDuplicateKey)）。
-    common::async::CPromiseResult StepRejectIfExists(
-        common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
+    common::async::CPromiseResult StepRejectIfExists(const std::shared_ptr<CUserTableOp>& spOp);
     // 写表：插入行（必要时分配自增 id）。
-    common::async::CPromiseResult StepInsertRow(
-        common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
+    common::async::CPromiseResult StepInsertRow(const std::shared_ptr<CUserTableOp>& spOp);
     // 写表：乐观锁更新（版本不匹配 → CDbError(kVersionConflict)，并把库中最新行写入 recResult）。
-    common::async::CPromiseResult StepApplyUpdate(
-        common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
+    common::async::CPromiseResult StepApplyUpdate(const std::shared_ptr<CUserTableOp>& spOp);
     // 写表：删除行。
-    common::async::CPromiseResult StepEraseRow(common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
+    common::async::CPromiseResult StepEraseRow(const std::shared_ptr<CUserTableOp>& spOp);
     // finally：模拟释放连接（无论成败都执行；返回值被 finally 忽略，结果原样透传）。
     common::async::CPromiseResult StepReleaseConn(
         common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
 
     // 绑定成员函数为处理器（处理器内可直接访问表数据）。
-    Handler BindHandler(HandlerMemberFn pfnHandler);
+    ThenHandler BindThen(ThenMemberFn pfnHandler);
+    ResultHandler BindResult(ResultMemberFn pfnHandler);
 
     std::unique_ptr<common::async::CAsyncExecutor> m_pExecutor;  ///< 自建执行器（promise 调度）。
     std::map<std::uint64_t, CUserRecord> m_mapRows;              ///< 表数据（m_mutex 保护）。

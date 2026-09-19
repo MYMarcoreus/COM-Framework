@@ -263,8 +263,7 @@ public:
 
 private:
     /// 第一步：模拟连库。
-    static common::async::CPromiseResult StepConnect(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CCalleeCtx>& spCtx)
+    static common::async::CPromiseResult StepConnect(const std::shared_ptr<CCalleeCtx>& spCtx)
     {
         EnterStockStep(spCtx->pProbe);
         spCtx->idConnect = std::this_thread::get_id();
@@ -278,8 +277,7 @@ private:
     }
 
     /// 第二步：读库存（与第一步串行、同线程）；`bReject` 时以 `strRejectText` 拒绝。
-    static common::async::CPromiseResult StepRead(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CCalleeCtx>& spCtx)
+    static common::async::CPromiseResult StepRead(const std::shared_ptr<CCalleeCtx>& spCtx)
     {
         EnterStockStep(spCtx->pProbe);
         spCtx->idRead = std::this_thread::get_id();

@@ -41,23 +41,16 @@ struct CMyContext
     int nCount;
 };
 
-/// 处理器：签名固定（上一层结果 + 共享上下文）。
-common::async::CPromiseResult StepLoad(common::async::CPromiseResult upResult, const std::shared_ptr<CMyContext>& spCtx)
+/// 处理器（then）：只接共享上下文（上游结果进不了 then 层）。
+common::async::CPromiseResult StepLoad(const std::shared_ptr<CMyContext>& spCtx)
 {
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
     spCtx->strData = LoadFromDisk();
     return common::async::CPromiseResult::Resolve();
 }
 
-common::async::CPromiseResult StepSave(common::async::CPromiseResult upResult, const std::shared_ptr<CMyContext>& spCtx)
+/// 处理器（then）：同样只接共享上下文。
+common::async::CPromiseResult StepSave(const std::shared_ptr<CMyContext>& spCtx)
 {
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
     spCtx->nCount += 1;
     return common::async::CPromiseResult::Resolve();
 }

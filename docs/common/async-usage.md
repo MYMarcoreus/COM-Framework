@@ -50,18 +50,22 @@
 | --- | --- | --- |
 | 层间传什么 | 上一层返回的任意值（类型可变） | 只有兑现 / 拒绝（`CPromiseResult`） |
 | 数据怎么传 | 返回值逐层往下递 | 共享上下文 `std::shared_ptr<TContext>` |
-| 处理器签名 | 每层不同 | 全部固定 |
+| 处理器签名 | 每层不同 | 两种固定形状（then / catch、finally） |
 | promise 类型 | 随层变化（`CTask<A>` → `CTask<B>`） | 恒为 `CPromise<TContext>` |
 
-固定签名（`then` / `catch` / `finally` 共用）：
+两种固定签名（then 一种，catch / finally 一种）：
 
 ```cpp
+// then（含首层）：**拿不到上游结果** —— 上游被拒绝时框架直接跳过本层。
+CPromiseResult handler(const std::shared_ptr<TContext>& spCtx);  // 共享上下文
+
+// catch / finally：要上游结果（catch 据此分支，finally 原样透传）。
 CPromiseResult handler(CPromiseResult upResult,                  // 上一层的结果
                        const std::shared_ptr<TContext>& spCtx);  // 共享上下文
 ```
 
-- `upResult`：上一层的结果（起链时恒为「已兑现」）。下一层据此判断上一层；
 - `spCtx`：整条 promise 链**共用同一个实例**的数据载体（恒非空）；
+- `upResult`：上一层的结果（catch 恒为拒绝；finally 兑现或拒绝都可能）；
 - 返回：本层结果。`then` / `catch` 用返回值决定后续走向；`finally` 忽略返回值。
 
 ## 3. 最小示例
@@ -75,18 +79,15 @@ struct CLoginContext  // 一次流程的共享数据（TContext）
     std::string strToken;
 };
 
-common::async::CPromiseResult StepReadParam(common::async::CPromiseResult upResult,
-                                            const std::shared_ptr<CLoginContext>& spCtx)
+// then 层：形参里没有上游结果（上游被拒绝时框架直接跳过本层）
+common::async::CPromiseResult StepReadParam(const std::shared_ptr<CLoginContext>& spCtx)
 {
-    if (upResult.IsRejected())
-    {
-        return upResult;  // 上一层被拒绝：原样透传
-    }
     spCtx->strAccount = ReadAccount();
     return spCtx->strAccount.empty() ? common::async::CPromiseResult::Reject(std::runtime_error("账号为空"))
                                      : common::async::CPromiseResult::Resolve();
 }
 
+// catch 层：要上游结果（只在被拒绝时执行）
 common::async::CPromiseResult StepRollback(common::async::CPromiseResult upResult,
                                            const std::shared_ptr<CLoginContext>& spCtx)
 {
@@ -123,17 +124,15 @@ if (r.IsFulfilled())
 
 | 接口 | 何时执行 | 返回值的作用 |
 | --- | --- | --- |
-| `Then(handler)` | 上一层**兑现**时；被拒绝则跳过（失败即停） | 决定本层结果（`Resolve()` / `Reject()` / 原样 `upResult`） |
+| `Then(handler)` | 上一层**兑现**时；被拒绝则跳过（失败即停） | 决定本层结果（`Resolve()` / `Reject(异常)`） |
 | `Catch(handler)` | 上一层**被拒绝**时；已兑现则跳过 | 同上：返回 `Resolve()` 即**吞掉拒绝**，promise 从本层之后继续 |
 | `Finally(handler)` | **无论兑现或拒绝都执行** | **被忽略**，原样透传上一层结果（与 JS `finally` 一致） |
 
-> **then 处理器不需要判断 `upResult`**：失败即停由框架保证 —— 上游被拒绝时本层**根本不会被调用**
-> （框架把拒绝结果直接交给下一层）。所以 then 处理器里写
-> `if (upResult.IsRejected()) { return upResult; }` 是**永不触发的防御写法**（写了无害，但容易让人
-> 误以为「失败也会进来」）；要在拒绝时做事请用 `Catch`，要成败都收尾请用 `Finally`
-> —— 这两个处理器的 `upResult` 才有可能是拒绝。
->
-> 需要「handler 能被 then / catch / finally 复用」或「独立成可测单元」时，再保留那句判断。
+> **then 处理器根本拿不到 `upResult`**：失败即停由框架保证 —— 上游被拒绝时本层**根本不会被调用**
+> （框架把拒绝结果直接交给下一层），所以 then 的签名里就没有这个形参，也就写不出
+> `if (upResult.IsRejected()) { return upResult; }` 这种**永不触发**的防御写法；
+> 要在拒绝时做事请用 `Catch`，要成败都收尾请用 `Finally`
+> —— 只有这两个处理器的 `upResult` 才有可能是拒绝。
 
 ```cpp
 // 失败即停：StepStore 被拒绝 → 后续 then 不执行，拒绝（异常）透传
@@ -508,8 +507,7 @@ common::async::SetDiagnosticHandler([](const char*)
 ```cpp
 #include "Async/Trace.h"
 
-static common::async::CPromiseResult StepVerify(common::async::CPromiseResult upResult,
-                                                const std::shared_ptr<CMyContext>& spCtx)
+static common::async::CPromiseResult StepVerify(const std::shared_ptr<CMyContext>& spCtx)
 {
 #if defined(ASYNC_DEBUG_TRACE)   // 整套设施只在调试构建存在（见下）
     common::async::DumpLayerChain();   // 排障一键：一层一行的多行块（深链自动省略中间）

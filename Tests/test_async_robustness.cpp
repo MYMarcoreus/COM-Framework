@@ -120,8 +120,7 @@ struct CRobustCtx
 };
 
 /// @brief 首层：+1。
-static common::async::CPromiseResult StepBump(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CRobustCtx>& spCtx)
+static common::async::CPromiseResult StepBump(const std::shared_ptr<CRobustCtx>& spCtx)
 {
     ++spCtx->nValue;
     return common::async::CPromiseResult::Resolve();
@@ -282,8 +281,7 @@ TEST(Robust_AwaitInsideLayerReportsRisk)
     ASSERT_TRUE(exec.Start());
 
     auto spCtx = std::make_shared<CRobustCtx>();
-    common::async::CPromise<CRobustCtx>::ThenHandler fnWaitInsideLayer =
-        [promiseCallee](common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CRobustCtx>& spCtx)
+    common::async::CPromise<CRobustCtx>::ThenHandler fnWaitInsideLayer = [promiseCallee](const std::shared_ptr<CRobustCtx>& spCtx)
     {
         // 危险写法（但此处能返回：子链在对方模块线程上落定）：框架应给出预警。
         const common::async::CPromiseResult childResult = promiseCallee.Await();

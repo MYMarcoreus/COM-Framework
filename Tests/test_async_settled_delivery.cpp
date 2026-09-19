@@ -62,8 +62,7 @@ public:
 
 private:
     /// 层处理器：记录执行次数。
-    static common::async::CPromiseResult StepQuery(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CDeliveryCtx>& spCtx)
+    static common::async::CPromiseResult StepQuery(const std::shared_ptr<CDeliveryCtx>& spCtx)
     {
         ++spCtx->nStepRuns;
         return common::async::CPromiseResult::Resolve();
@@ -73,8 +72,7 @@ private:
 };
 
 /// @brief 测试用追加层（记录执行次数）。
-static common::async::CPromiseResult StepMark(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CDeliveryCtx>& spCtx)
+static common::async::CPromiseResult StepMark(const std::shared_ptr<CDeliveryCtx>& spCtx)
 {
     ++spCtx->nMarkRuns;
     return common::async::CPromiseResult::Resolve();
@@ -125,16 +123,14 @@ public:
 
 private:
     /// ① 本模块自有层。
-    static common::async::CPromiseResult StepOrderA(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CCallerCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderA(const std::shared_ptr<CCallerCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         return common::async::CPromiseResult::Resolve();
     }
 
     /// ③ 跨模块返回后的层（只有被调模块兑现才会执行）。
-    static common::async::CPromiseResult StepOrderB(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CCallerCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderB(const std::shared_ptr<CCallerCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         return common::async::CPromiseResult::Resolve();

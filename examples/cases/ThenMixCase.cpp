@@ -140,18 +140,16 @@ public:
     }
 
 private:
-    /// 层 1：建连（模拟握手）。
-    static common::async::CPromiseResult StepConnect(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStockContext>& spCtx)
+    /// 层 1（then）：建连（模拟握手）。
+    static common::async::CPromiseResult StepConnect(const std::shared_ptr<CStockContext>& spCtx)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         spCtx->strTrace += "连库存;";
         return common::async::CPromiseResult::Resolve();
     }
 
-    /// 层 2：读可售量。
-    static common::async::CPromiseResult StepRead(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStockContext>& spCtx)
+    /// 层 2（then）：读可售量。
+    static common::async::CPromiseResult StepRead(const std::shared_ptr<CStockContext>& spCtx)
     {
         spCtx->nAvail = 5;  // 演示数据：只有 5 件可售
         spCtx->strTrace += "读库存;";
@@ -189,9 +187,8 @@ public:
     }
 
 private:
-    /// 唯一一步：写流水（模拟 IO）。
-    static common::async::CPromiseResult StepWrite(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CBillingContext>& spCtx)
+    /// 唯一一步（then）：写流水（模拟 IO）。
+    static common::async::CPromiseResult StepWrite(const std::shared_ptr<CBillingContext>& spCtx)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(4));
         spCtx->strTrace += "写流水;";
@@ -240,7 +237,7 @@ public:
 
         // ⑤ 旁支：then 内部执行其他异步函数，但不等它（fire-and-forget）。
         common::async::CPromise<COrderContext>::ThenHandler fnBillingSideBranch =
-            [spBillingModule](common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtxSelf)
+            [spBillingModule](const std::shared_ptr<COrderContext>& spCtxSelf)
         {
             const int nOrderId = spCtxSelf->nSku * 1000 + spCtxSelf->nQty;
             common::async::CPromise<CBillingContext> promiseBill =
@@ -271,9 +268,8 @@ public:
     }
 
 private:
-    /// ① 读订单：取单价（模拟一次 IO）。
-    static common::async::CPromiseResult StepLoad(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
+    /// ① 读订单（then）：取单价（模拟一次 IO）。
+    static common::async::CPromiseResult StepLoad(const std::shared_ptr<COrderContext>& spCtx)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         spCtx->nUnitPrice = 1250;  // 12.50 元
@@ -281,9 +277,8 @@ private:
         return common::async::CPromiseResult::Resolve();
     }
 
-    /// ② 校验（不需要捕获，写成静态成员函数）。
-    static common::async::CPromiseResult StepValidate(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
+    /// ② 校验（then；不需要捕获，写成静态成员函数）。
+    static common::async::CPromiseResult StepValidate(const std::shared_ptr<COrderContext>& spCtx)
     {
         if (spCtx->nSku <= 0 || spCtx->nQty <= 0)
         {
@@ -342,9 +337,8 @@ private:
         return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
     }
 
-    /// ④ 算折扣：满 3 件 9 折（模拟业务规则）。
-    static common::async::CPromiseResult StepApplyDiscount(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
+    /// ④ 算折扣（then）：满 3 件 9 折（模拟业务规则）。
+    static common::async::CPromiseResult StepApplyDiscount(const std::shared_ptr<COrderContext>& spCtx)
     {
         spCtx->nTotal = spCtx->nUnitPrice * spCtx->nQty;
         if (spCtx->nQty >= 3)
@@ -359,17 +353,15 @@ private:
         return common::async::CPromiseResult::Resolve();
     }
 
-    /// ④+ 内层链第 1 步：预占库存。
-    static common::async::CPromiseResult StepReserveStock(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
+    /// ④+ 内层链第 1 步（then）：预占库存。
+    static common::async::CPromiseResult StepReserveStock(const std::shared_ptr<COrderContext>& spCtx)
     {
         spCtx->strTrace += "预占;";
         return common::async::CPromiseResult::Resolve();
     }
 
-    /// ④+ 内层链第 2 步：确认预占（bFailReserve 时拒绝，用来看拒绝如何透传）。
-    static common::async::CPromiseResult StepReserveConfirm(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
+    /// ④+ 内层链第 2 步（then）：确认预占（bFailReserve 时拒绝，用来看拒绝如何透传）。
+    static common::async::CPromiseResult StepReserveConfirm(const std::shared_ptr<COrderContext>& spCtx)
     {
         if (spCtx->bFailReserve)
         {
@@ -379,9 +371,8 @@ private:
         return common::async::CPromiseResult::Resolve();
     }
 
-    /// ⑥ 落库：保存订单（模拟一次写库）。
-    static common::async::CPromiseResult StepSaveOrder(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderContext>& spCtx)
+    /// ⑥ 落库（then）：保存订单（模拟一次写库）。
+    static common::async::CPromiseResult StepSaveOrder(const std::shared_ptr<COrderContext>& spCtx)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         spCtx->strTrace += "落库;";

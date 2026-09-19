@@ -47,13 +47,9 @@ lambda 体再缩进一级，结尾 `});` 与 lambda 起始列对齐，不需要�
 
 ```cpp
 // 推荐：lambda 需要在多处复用时才先赋给具名变量（类型用 ThenHandler / PromiseFactory / ChainStarter）
-COrderPromise::ThenHandler fnValidate =
-    [](common::async::CPromiseResult upResult, const std::shared_ptr<COrderContext>& spCtx)
+COrderPromise::ThenHandler fnValidate = [](const std::shared_ptr<COrderContext>& spCtx)
 {
-    if (upResult.IsRejected())
-    {
-        return upResult;
-    }
+    TraceHere("② 校验参数");
     return common::async::CPromiseResult::Resolve();
 };
 
@@ -140,16 +136,15 @@ return exec
 函数形参随之也缩进一级 —— 这是刻意的取舍，不是遗漏：
 
 ```cpp
-void RunHandler(const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
-                const CPromiseResult& upResult, int nMode,
-                const std::shared_ptr<CExecutorHandle>& pTarget = nullptr) const
+void RunResultHandler(const std::shared_ptr<CPromiseState>& pState, const ResultHandler<TContext>& fnHandler,
+                      const CPromiseResult& upResult, HandlerMode eMode) const
 ```
 
 ### 6.1 试过、但不可靠/不成立的变通（不要再试）
 
 - **`PenaltyIndentedWhitespace` 折中**（`Align` + 该罚分，让深对齐的实参自动换成换行缩进）：
   看起来很能「形参对齐 + lambda 缩进」，但阈值不稳定 —— 实测 `ShouldInline`
-  / `MakeHandlerRunner` 这类长形参的自由函数声明**也跟着**被改成缩进，同一文件里两种形状混杂。
+  / `AppendThenLayer` 这类长形参的自由函数声明**也跟着**被改成缩进，同一文件里两种形状混杂。
 - **靠 penalty 强制调用在开括号后换行**（`PenaltyBreakBeforeFirstCallParameter`、
   `PenaltyBreakOpenParenthesis`）：实测无效，clang-format 仍然对齐。
 - **`AllowAllParametersOfDeclarationOnNextLine: false`**：想让声明拒绝「整体换行」而保持对齐，实测无效。

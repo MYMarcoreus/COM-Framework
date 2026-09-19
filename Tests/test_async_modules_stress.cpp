@@ -196,7 +196,7 @@ public:
         const std::shared_ptr<CStressOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule)
     {
         common::async::CPromise<CStressOrderCtx>::ThenHandler fnStopStockModule =
-            [spStockModule](common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStressOrderCtx>& spSelf)
+            [spStockModule](const std::shared_ptr<CStressOrderCtx>& spSelf)
         {
             spStockModule->Stop();  // 被调模块执行器先停：后续投递都会被拒绝。
             if (spSelf->spTrace != nullptr)
@@ -244,8 +244,7 @@ private:
     }
 
     /// ① 本模块自有步骤：本模块执行器线程。
-    static common::async::CPromiseResult StepOrderLoad(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStressOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderLoad(const std::shared_ptr<CStressOrderCtx>& spCtx)
     {
         EnterOrderStep(spCtx->pProbe);
         spCtx->idFirst = std::this_thread::get_id();
@@ -260,8 +259,7 @@ private:
     }
 
     /// ④ 跨模块返回后的层：线程亲和把它拉回本模块执行器线程（本测试记录实际落点做校验）。
-    static common::async::CPromiseResult StepOrderAfterBridge(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStressOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderAfterBridge(const std::shared_ptr<CStressOrderCtx>& spCtx)
     {
         spCtx->idAfterBridge = std::this_thread::get_id();
         if (spCtx->idAfterBridge == spCtx->idFirst)
@@ -280,8 +278,7 @@ private:
     }
 
     /// ⑥ 回到本模块线程后的层：应为本模块执行器线程。
-    static common::async::CPromiseResult StepOrderBackHome(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStressOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderBackHome(const std::shared_ptr<CStressOrderCtx>& spCtx)
     {
         EnterOrderStep(spCtx->pProbe);
         spCtx->idBackHome = std::this_thread::get_id();
@@ -296,8 +293,7 @@ private:
     }
 
     /// 多轮用例的轮次层：本模块执行器线程。
-    static common::async::CPromiseResult StepOrderRound(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStressOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderRound(const std::shared_ptr<CStressOrderCtx>& spCtx)
     {
         EnterOrderStep(spCtx->pProbe);
         ++spCtx->nRounds;
@@ -312,8 +308,7 @@ private:
     }
 
     /// 深链用例的叶子层：只计数（不记轨迹，避免上万次字符串追加拖慢测试）。
-    static common::async::CPromiseResult StepOrderLeaf(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CStressOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderLeaf(const std::shared_ptr<CStressOrderCtx>& spCtx)
     {
         EnterOrderStep(spCtx->pProbe);
         ++spCtx->nOwnSteps;

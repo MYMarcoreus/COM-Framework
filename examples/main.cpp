@@ -290,9 +290,8 @@ void CaptureAuditChain(const std::shared_ptr<COrderCtx>& spCtx)
 #endif  // defined(ASYNC_DEBUG_TRACE)
 
 /// 层 ①：读订单（具名 handler；本层就是链根 —— 它没有上游）。
-CPromiseResult StepReadOrder(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+CPromiseResult StepReadOrder(const std::shared_ptr<COrderCtx>& spCtx)
 {
-    (void)upResult;
     TraceHere("① 读订单（具名 handler，链根）");
     spCtx->nOrderId = 1001;
     spCtx->strTrace += "读订单;";
@@ -300,9 +299,8 @@ CPromiseResult StepReadOrder(CPromiseResult upResult, const std::shared_ptr<COrd
 }
 
 /// 层 ③：查库存。已在本链执行器线程上 → **就地级联**（不投递，省一次入队）。
-CPromiseResult StepCheckStock(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+CPromiseResult StepCheckStock(const std::shared_ptr<COrderCtx>& spCtx)
 {
-    (void)upResult;
     TraceHere("③ 查库存（本链线程上就地）");
     spCtx->strTrace += "查库存;";
     if (spCtx->bFailStock)
@@ -315,9 +313,8 @@ CPromiseResult StepCheckStock(CPromiseResult upResult, const std::shared_ptr<COr
 
 /// 层 ④：读用户。由数据访问模块**自己的执行器**（execDb）跑 —— 跨模块只交换 promise + 上下文，
 /// 调用方不需要（也拿不到）对方的执行器；跑完把结果交回主链（之后的层回主链执行器）。
-CPromiseResult StepLoadUser(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+CPromiseResult StepLoadUser(const std::shared_ptr<COrderCtx>& spCtx)
 {
-    (void)upResult;
     TraceHere("④ 读用户（数据访问模块的 execDb 上跑）");
     SleepMs(2);  // 模拟一次数据访问
     spCtx->strTrace += "读用户;";
@@ -325,9 +322,8 @@ CPromiseResult StepLoadUser(CPromiseResult upResult, const std::shared_ptr<COrde
 }
 
 /// 层 ⑤-1：算折扣（内层链第 1 层）。
-CPromiseResult StepCalcDiscount(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+CPromiseResult StepCalcDiscount(const std::shared_ptr<COrderCtx>& spCtx)
 {
-    (void)upResult;
     TraceHere("⑤-1 算折扣（内层链第 1 层）");
     spCtx->nDiscount = 30;
     spCtx->strTrace += "算折扣;";
@@ -335,9 +331,8 @@ CPromiseResult StepCalcDiscount(CPromiseResult upResult, const std::shared_ptr<C
 }
 
 /// 层 ⑤-2：算总额（内层链最深一层 —— 它只看得到内层链自己）。
-CPromiseResult StepApplyDiscount(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+CPromiseResult StepApplyDiscount(const std::shared_ptr<COrderCtx>& spCtx)
 {
-    (void)upResult;
     TraceHere("⑤-2 算总额（内层链最深）");
     spCtx->nTotal = spCtx->nQty * 100 - spCtx->nDiscount;
     TRACE_ONLY(spCtx->nInnerChainSeen = CountChain());  // 内层链能追回主链（父层 = ⑤ 那一层）
@@ -346,18 +341,16 @@ CPromiseResult StepApplyDiscount(CPromiseResult upResult, const std::shared_ptr<
 }
 
 /// 层 ⑦：分叉基座（什么都不做，只为了让两支有共同的上游）。
-CPromiseResult StepForkBase(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+CPromiseResult StepForkBase(const std::shared_ptr<COrderCtx>& spCtx)
 {
-    (void)upResult;
     TraceHere("⑦ 分叉基座（下面两支：⑧ 旁支 / ⑨ 主线）");
     spCtx->strTrace += "分叉;";
     return CPromiseResult::Resolve();
 }
 
 /// 层 ⑨：优惠券（分叉的另一支，主线从这里继续）。
-CPromiseResult StepCoupon(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+CPromiseResult StepCoupon(const std::shared_ptr<COrderCtx>& spCtx)
 {
-    (void)upResult;
     TraceHere("⑨ 优惠券（分叉的一支：主线继续走这支）");
     spCtx->nCoupon = 5;
     spCtx->strTrace += "优惠券;";
@@ -365,9 +358,8 @@ CPromiseResult StepCoupon(CPromiseResult upResult, const std::shared_ptr<COrderC
 }
 
 /// 层 ⑩-1：协程顺序 await 的那条子链。
-CPromiseResult StepCheckCoupon(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+CPromiseResult StepCheckCoupon(const std::shared_ptr<COrderCtx>& spCtx)
 {
-    (void)upResult;
     TraceHere("⑩-1 协程 CO_AWAIT 的子链（挂在启动协程的那一层下面）");
     TRACE_ONLY(spCtx->nCoroChainSeen = CountChain());
     spCtx->strTrace += "协程券;";
@@ -375,9 +367,8 @@ CPromiseResult StepCheckCoupon(CPromiseResult upResult, const std::shared_ptr<CO
 }
 
 /// 层 ⑩-2a：协程并行 await 的两条子链之一（各写各的字段 —— 并行不碰 strTrace）。
-CPromiseResult StepCheckGift(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+CPromiseResult StepCheckGift(const std::shared_ptr<COrderCtx>& spCtx)
 {
-    (void)upResult;
     TraceHere("⑩-2a 协程 CO_AWAIT_ALL 的子链之一");
     SleepMs(3);
     spCtx->nGift = 1;
@@ -386,9 +377,8 @@ CPromiseResult StepCheckGift(CPromiseResult upResult, const std::shared_ptr<COrd
 }
 
 /// 层 ⑩-2b：协程并行 await 的另一条子链。
-CPromiseResult StepCheckPoints(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+CPromiseResult StepCheckPoints(const std::shared_ptr<COrderCtx>& spCtx)
 {
-    (void)upResult;
     TraceHere("⑩-2b 协程 CO_AWAIT_ALL 的子链之二");
     SleepMs(3);
     spCtx->nPoints = 20;
@@ -397,9 +387,8 @@ CPromiseResult StepCheckPoints(CPromiseResult upResult, const std::shared_ptr<CO
 }
 
 /// 层 ⑪：落库收尾（把优惠券算进总额）。
-CPromiseResult StepSettle(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+CPromiseResult StepSettle(const std::shared_ptr<COrderCtx>& spCtx)
 {
-    (void)upResult;
     TraceHere("⑪ 落库（then 收尾）");
     spCtx->nTotal -= spCtx->nCoupon;
     spCtx->strTrace += "落库;";
@@ -506,9 +495,8 @@ public:
         };
 
         // 模块自己的链：第 1 层（由外部回调 settle）+ 第 2 层（留痕）。
-        const CPromise<CBillCtx>::ThenHandler fnBillAudit = [](CPromiseResult upResult, const std::shared_ptr<CBillCtx>& spSelf)
+        const CPromise<CBillCtx>::ThenHandler fnBillAudit = [](const std::shared_ptr<CBillCtx>& spSelf)
         {
-            (void)upResult;
             TRACE_USE(spSelf);  // 发布构建下 spSelf 只被 trace 代码用到
             TraceHere("⑥-2 记账模块自己的链（跨模块子链：能追回父链）");
             TRACE_ONLY(spSelf->nChainSeen = CountChain());
@@ -605,9 +593,8 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
     //---------------- 先把「写成 lambda 的层」与「工厂」变成具名变量 ----------------
 
     /// ② 校验参数：只此一处用的小逻辑 → 写成 lambda。
-    const CPromise<COrderCtx>::ThenHandler fnValidate = [](CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spSelf)
+    const CPromise<COrderCtx>::ThenHandler fnValidate = [](const std::shared_ptr<COrderCtx>& spSelf)
     {
-        (void)upResult;
         TraceHere("② 校验参数（then = lambda）");
         if (spSelf->nQty <= 0)
         {
@@ -649,10 +636,8 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
     };
 
     /// ⑧ 分叉旁支：物流。层里再 Post 一个**不等它**的旁支任务（fire-and-forget）。
-    const CPromise<COrderCtx>::ThenHandler fnLogistics = [&execMain](
-                                                             CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spSelf)
+    const CPromise<COrderCtx>::ThenHandler fnLogistics = [&execMain](const std::shared_ptr<COrderCtx>& spSelf)
     {
-        (void)upResult;
         TraceHere("⑧ 物流支（分叉的一支）");
         const bool bPosted = execMain.Post(
             [spSelf]()
@@ -723,10 +708,8 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
 CPromise<COrderCtx> MakeQuickChain(
     CAsyncExecutor& exec, const std::shared_ptr<COrderCtx>& spCtx, bool bReject, const char* pszRejectText, int nSleepMs)
 {
-    const CPromise<COrderCtx>::ThenHandler fnStep = [bReject, pszRejectText, nSleepMs](
-                                                        CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spSelf)
+    const CPromise<COrderCtx>::ThenHandler fnStep = [bReject, pszRejectText, nSleepMs](const std::shared_ptr<COrderCtx>& spSelf)
     {
-        (void)upResult;
         (void)spSelf;
         SleepMs(nSleepMs);
         if (bReject)

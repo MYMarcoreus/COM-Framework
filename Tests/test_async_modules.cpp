@@ -134,8 +134,7 @@ public:
 
 private:
     /// ① 读订单：本模块执行器线程。
-    static common::async::CPromiseResult StepLoadOrder(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderCtx>& spCtx)
+    static common::async::CPromiseResult StepLoadOrder(const std::shared_ptr<COrderCtx>& spCtx)
     {
         spCtx->idFirst = std::this_thread::get_id();
         spCtx->spTrace->Append("A1");
@@ -143,8 +142,7 @@ private:
     }
 
     /// ④ 跨模块返回后的层：记录本层线程（应为库存模块线程）。
-    static common::async::CPromiseResult StepTakeStock(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderCtx>& spCtx)
+    static common::async::CPromiseResult StepTakeStock(const std::shared_ptr<COrderCtx>& spCtx)
     {
         spCtx->idAfterBridge = std::this_thread::get_id();
         spCtx->spTrace->Append("A2");
@@ -152,8 +150,7 @@ private:
     }
 
     /// ⑥ 回到本模块线程后的层：记录本层线程（应为本模块执行器线程）。
-    static common::async::CPromiseResult StepFinish(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderCtx>& spCtx)
+    static common::async::CPromiseResult StepFinish(const std::shared_ptr<COrderCtx>& spCtx)
     {
         spCtx->idBackHome = std::this_thread::get_id();
         spCtx->spTrace->Append("A3");
@@ -347,8 +344,7 @@ TEST(Module_ConcurrentChainsKeepOwnOrder)
 // ==================== 用例：ThenBridge（跨模块桥接简写） ====================
 
 /// @brief 测试用首层：记录本层线程 + 轨迹 "A1"（与订单模块的 ① 同形）。
-static common::async::CPromiseResult StepLoadOrderForTest(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderCtx>& spCtx)
+static common::async::CPromiseResult StepLoadOrderForTest(const std::shared_ptr<COrderCtx>& spCtx)
 {
     spCtx->idFirst = std::this_thread::get_id();
     spCtx->spTrace->Append("A1");
@@ -417,7 +413,7 @@ TEST(Module_BridgeHelperPropagatesRejection)
     {
         spSelf->nStock = spStock->nAvail;  // 子链被拒绝时不会被调用（nAvail 不应被搬走）。
     };
-    auto fnAfterBridge = [](common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderCtx>& spCtx)
+    auto fnAfterBridge = [](const std::shared_ptr<COrderCtx>& spCtx)
     {
         spCtx->idAfterBridge = std::this_thread::get_id();
         spCtx->spTrace->Append("A2");
@@ -430,7 +426,7 @@ TEST(Module_BridgeHelperPropagatesRejection)
         spCtx->spTrace->Append("C1");
         return common::async::CPromiseResult::Resolve();  // 吞掉拒绝：链从此处继续。
     };
-    auto fnAfterCatch = [](common::async::CPromiseResult /*upResult*/, const std::shared_ptr<COrderCtx>& spCtx)
+    auto fnAfterCatch = [](const std::shared_ptr<COrderCtx>& spCtx)
     {
         spCtx->spTrace->Append("A3");
         return common::async::CPromiseResult::Resolve();

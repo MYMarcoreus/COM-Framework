@@ -46,16 +46,14 @@ class CStockModule
 
    private:
     /// ③-1 建连（模拟握手）
-    static common::async::CPromiseResult StepConnect(common::async::CPromiseResult /*up*/,
-                                                     const std::shared_ptr<CStockCtx>& /*sp*/)
+    static common::async::CPromiseResult StepConnect(const std::shared_ptr<CStockCtx>& /*sp*/)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         return common::async::CPromiseResult::Resolve();
     }
 
     /// ③-2 读可售量
-    static common::async::CPromiseResult StepRead(common::async::CPromiseResult /*up*/,
-                                                  const std::shared_ptr<CStockCtx>& sp)
+    static common::async::CPromiseResult StepRead(const std::shared_ptr<CStockCtx>& sp)
     {
         sp->nAvail = 5;  // 演示数据：可售 5 件
         return common::async::CPromiseResult::Resolve();
@@ -120,8 +118,7 @@ class COrderModule
 
    private:
     /// ① 读订单（模拟 IO）
-    static common::async::CPromiseResult StepLoad(common::async::CPromiseResult /*up*/,
-                                                  const std::shared_ptr<COrderCtx>& sp)
+    static common::async::CPromiseResult StepLoad(const std::shared_ptr<COrderCtx>& sp)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         sp->nTotal = 12 * sp->nQty;
@@ -130,8 +127,7 @@ class COrderModule
     }
 
     /// ② 校验
-    static common::async::CPromiseResult StepValidate(common::async::CPromiseResult /*up*/,
-                                                      const std::shared_ptr<COrderCtx>& sp)
+    static common::async::CPromiseResult StepValidate(const std::shared_ptr<COrderCtx>& sp)
     {
         if (sp->nQty <= 0 || sp->nQty > 10)
         {
@@ -174,16 +170,14 @@ class COrderModule
     }
 
     /// ④ 预占（内层链的一步）
-    static common::async::CPromiseResult StepReserve(common::async::CPromiseResult /*up*/,
-                                                     const std::shared_ptr<COrderCtx>& sp)
+    static common::async::CPromiseResult StepReserve(const std::shared_ptr<COrderCtx>& sp)
     {
         sp->strLog += "预占;";
         return common::async::CPromiseResult::Resolve();
     }
 
     /// ⑤ 记账旁支：这里起链但不返回，主链就不等它
-    static common::async::CPromiseResult StepBilling(common::async::CPromiseResult /*up*/,
-                                                     const std::shared_ptr<COrderCtx>& sp)
+    static common::async::CPromiseResult StepBilling(const std::shared_ptr<COrderCtx>& sp)
     {
         sp->strLog += "记账已发起(不等);";
         return common::async::CPromiseResult::Resolve();

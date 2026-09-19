@@ -96,19 +96,18 @@ struct CFlowDeps
 // ====================================================================
 // 本模块内的处理器（纯业务逻辑，不接触模块实例）
 //
-// then 层**不用判断 upResult**：上游被拒绝时，框架直接跳过本层（失败即停）；
+// then 层**拿不到上游结果**：上游被拒绝时，框架直接跳过本层（失败即停）；
 // 只有 finally（下面 StepAudit）才需要看它。需要处理拒绝请另挂 .Catch。
 // ====================================================================
 
 /// @brief 处理器：校验用户 id。
 ///
-/// then 层：上游被拒绝时框架不会调用本层，无需判断 upResult。
+/// then 层：上游被拒绝时框架不会调用本层，处理器只接上下文。
 ///
 /// @param spCtx 业务上下文。
 ///
 /// @return 兑现；id 非法返回 `CUserError(kInvalidParam)`。
-common::async::CPromiseResult StepValidateUserId(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
+common::async::CPromiseResult StepValidateUserId(const std::shared_ptr<CUserOpContext>& spCtx)
 {
     spCtx->strTrace += "校验参数;";
     if (spCtx->nUserId == 0)
@@ -121,13 +120,12 @@ common::async::CPromiseResult StepValidateUserId(
 
 /// @brief 处理器：校验注册入参（用户名 / 邮箱 / 等级）。
 ///
-/// then 层：无需判断 upResult（上游被拒绝时本层不会被调用）。
+/// then 层：处理器只接上下文（上游被拒绝时本层不会被调用）。
 ///
 /// @param spCtx 业务上下文（recRequest 为入参）。
 ///
 /// @return 兑现；入参非法返回 `CUserError(kInvalidParam)`（失败即停，后续层不再执行）。
-common::async::CPromiseResult StepValidateRecord(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
+common::async::CPromiseResult StepValidateRecord(const std::shared_ptr<CUserOpContext>& spCtx)
 {
     spCtx->strTrace += "校验参数;";
     if (!IsValidUserName(spCtx->recRequest.strName))
@@ -150,13 +148,12 @@ common::async::CPromiseResult StepValidateRecord(
 
 /// @brief 处理器：用户不存在则本层拒绝。
 ///
-/// then 层：无需判断 upResult（上游被拒绝时本层不会被调用）。
+/// then 层：处理器只接上下文（上游被拒绝时本层不会被调用）。
 ///
 /// @param spCtx 业务上下文（读 bExists）。
 ///
 /// @return 存在兑现；不存在返回 `CUserError(kNotFound)`（失败即停，后续层不执行）。
-common::async::CPromiseResult StepRejectIfAbsent(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
+common::async::CPromiseResult StepRejectIfAbsent(const std::shared_ptr<CUserOpContext>& spCtx)
 {
     if (!spCtx->bExists)
     {
@@ -169,13 +166,12 @@ common::async::CPromiseResult StepRejectIfAbsent(
 
 /// @brief 处理器：用户已存在则本层拒绝（注册流程的查重分支）。
 ///
-/// then 层：无需判断 upResult（上游被拒绝时本层不会被调用）。
+/// then 层：处理器只接上下文（上游被拒绝时本层不会被调用）。
 ///
 /// @param spCtx 业务上下文（读 bExists）。
 ///
 /// @return 不存在兑现；已存在返回 `CUserError(kDuplicate)`。
-common::async::CPromiseResult StepRejectIfExists(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
+common::async::CPromiseResult StepRejectIfExists(const std::shared_ptr<CUserOpContext>& spCtx)
 {
     if (spCtx->bExists)
     {
@@ -188,13 +184,12 @@ common::async::CPromiseResult StepRejectIfExists(
 
 /// @brief 处理器：组装更新请求（用库中当前版本 + 本次要改的名字）。
 ///
-/// then 层：无需判断 upResult（上游被拒绝时本层不会被调用）。
+/// then 层：处理器只接上下文（上游被拒绝时本层不会被调用）。
 ///
 /// @param spCtx 业务上下文（recResult 为库中当前行）。
 ///
 /// @return 兑现（此时 recRequest 已带合法期望版本）。
-common::async::CPromiseResult StepPrepareRename(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
+common::async::CPromiseResult StepPrepareRename(const std::shared_ptr<CUserOpContext>& spCtx)
 {
     if (!spCtx->bExists)
     {

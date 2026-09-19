@@ -222,7 +222,7 @@ struct CAllocCtx
 };
 
 /// 层：上下文计数 +1。
-static common::async::CPromiseResult StepBump(common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CAllocCtx>& spCtx)
+static common::async::CPromiseResult StepBump(const std::shared_ptr<CAllocCtx>& spCtx)
 {
     ++spCtx->nValue;
     return common::async::CPromiseResult::Resolve();
@@ -232,8 +232,7 @@ static common::async::CPromiseResult StepBump(common::async::CPromiseResult /*up
 ///
 /// 此刻执行器线程正被本层占用（单线程执行器）→ 新建链的首层不会立即执行，
 /// 窗口里只有建链分配，结果确定。
-static common::async::CPromiseResult StepMeasureBuild(
-    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CAllocCtx>& spCtx)
+static common::async::CPromiseResult StepMeasureBuild(const std::shared_ptr<CAllocCtx>& spCtx)
 {
     CAllocCounter counter;
     common::async::CPromise<CAllocCtx> tail = spCtx->pExec->NewPromise(spCtx->spOther, &StepBump, ASYNC_LOC);
@@ -292,7 +291,7 @@ TEST(AsyncAlloc_BuildBudget)
 
 // ==================== 跑链分配预算 ====================
 
-/// @brief 跑链每层堆分配 ≤ 1 次 —— 每个层任务体（`CPromiseCore::MakeRunner`）。
+/// @brief 跑链每层堆分配 ≤ 1 次 —— 每个层任务体（`detail::MakeLayerRunner`）。
 ///
 /// 把「建链」与「跑链」分开的诀窍：先用一个**占位任务把唯一的 worker 占住**，
 /// 于是窗口外建好的链只登记、不执行（首层在队列里等着）。窗口内放行并等待，

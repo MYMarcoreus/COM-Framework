@@ -180,8 +180,7 @@ private:
     }
 
     /// ① 本模块自有步骤。
-    static common::async::CPromiseResult StepOrderLoad(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CAffinityOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderLoad(const std::shared_ptr<CAffinityOrderCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->idFirst = std::this_thread::get_id();
@@ -190,8 +189,7 @@ private:
     }
 
     /// ④ 跨模块返回后的层：线程亲和应把它拉回本模块执行器线程。
-    static common::async::CPromiseResult StepOrderAfterBridge(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CAffinityOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderAfterBridge(const std::shared_ptr<CAffinityOrderCtx>& spCtx)
     {
         spCtx->idAfterBridge = std::this_thread::get_id();
         if (spCtx->idAfterBridge == spCtx->idFirst)
@@ -206,8 +204,7 @@ private:
     }
 
     /// 多轮用例的轮次层。
-    static common::async::CPromiseResult StepOrderRound(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CAffinityOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderRound(const std::shared_ptr<CAffinityOrderCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         ++spCtx->nRounds;
@@ -216,8 +213,7 @@ private:
     }
 
     /// ⑥ 显式 Post 回本模块后的层。
-    static common::async::CPromiseResult StepOrderBackHome(
-        common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CAffinityOrderCtx>& spCtx)
+    static common::async::CPromiseResult StepOrderBackHome(const std::shared_ptr<CAffinityOrderCtx>& spCtx)
     {
         ++spCtx->nOwnSteps;
         spCtx->idBackHome = std::this_thread::get_id();

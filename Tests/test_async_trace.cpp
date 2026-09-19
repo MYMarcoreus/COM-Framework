@@ -312,27 +312,24 @@ bool WaitFlag(const std::atomic<bool>& bFlag, int nMaxMs = 3000)
 
 //================ 主链上的层（每个层采集自己的位置） ================
 
-/// 层：主链链根（顺带累加，确认链真的跑过）。顺带当异常路径那条链的 Catch 用。
-CPromiseResult StepRoot(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
+/// 层：主链链根（顺带累加，确认链真的跑过）。
+CPromiseResult StepRoot(const std::shared_ptr<CTraceCtx>& spCtx)
 {
-    (void)upResult;
     TRACE_CAPTURE(capRoot);
     ++spCtx->nValue;
     return CPromiseResult::Resolve();
 }
 
 /// 层：第二个 then（默认亲和 —— 已在本链执行器线程上，所以**就地**级联）。
-CPromiseResult StepSecond(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
+CPromiseResult StepSecond(const std::shared_ptr<CTraceCtx>& spCtx)
 {
-    (void)upResult;
     TRACE_CAPTURE(capSecond);
     return CPromiseResult::Resolve();
 }
 
 /// 层：第三个 then（默认亲和 —— 跨执行器回来也照样落在本链执行器线程上）。
-CPromiseResult StepThird(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
+CPromiseResult StepThird(const std::shared_ptr<CTraceCtx>& spCtx)
 {
-    (void)upResult;
     TRACE_CAPTURE(capThird);
     return CPromiseResult::Resolve();
 }
@@ -354,41 +351,36 @@ CPromiseResult StepFinally(CPromiseResult upResult, const std::shared_ptr<CTrace
 }
 
 /// 层：内层链第 1 层。
-CPromiseResult StepInnerFirst(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
+CPromiseResult StepInnerFirst(const std::shared_ptr<CTraceCtx>& spCtx)
 {
-    (void)upResult;
     TRACE_CAPTURE(capInnerFirst);
     return CPromiseResult::Resolve();
 }
 
 /// 层：内层链第 2 层（内层最深 —— 这里只看得到内层链自己）。
-CPromiseResult StepInnerSecond(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
+CPromiseResult StepInnerSecond(const std::shared_ptr<CTraceCtx>& spCtx)
 {
-    (void)upResult;
     TRACE_CAPTURE(capInnerSecond);
     return CPromiseResult::Resolve();
 }
 
 /// 层：分叉基座（什么也不做，只为了让两支有共同的上游）。
-CPromiseResult StepForkBase(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
+CPromiseResult StepForkBase(const std::shared_ptr<CTraceCtx>& spCtx)
 {
-    (void)upResult;
     (void)spCtx;
     return CPromiseResult::Resolve();
 }
 
 /// 层：分叉分支 A。
-CPromiseResult StepBranchA(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
+CPromiseResult StepBranchA(const std::shared_ptr<CTraceCtx>& spCtx)
 {
-    (void)upResult;
     TRACE_CAPTURE(capBranchA);
     return CPromiseResult::Resolve();
 }
 
 /// 层：分叉分支 B（主链最深 —— 在这里看整条链）。
-CPromiseResult StepBranchB(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
+CPromiseResult StepBranchB(const std::shared_ptr<CTraceCtx>& spCtx)
 {
-    (void)upResult;
     TRACE_CAPTURE(capDeepest);
     return CPromiseResult::Resolve();
 }
@@ -397,9 +389,8 @@ CPromiseResult StepBranchB(CPromiseResult upResult, const std::shared_ptr<CTrace
 ///
 /// 用例要验证的是「落定前登记的通知在**触发层**的帧里就地执行」：若不等门，
 /// 层可能在主线程登记通知之前就落定了，那条路径会变成「落定后登记 → 投递」。
-CPromiseResult StepGated(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
+CPromiseResult StepGated(const std::shared_ptr<CTraceCtx>& spCtx)
 {
-    (void)upResult;
     for (int i = 0; i < 4000 && !spCtx->bGateOpened.load(); ++i)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -408,17 +399,15 @@ CPromiseResult StepGated(CPromiseResult upResult, const std::shared_ptr<CTraceCt
 }
 
 /// 层：协程里 `CO_AWAIT` 等的那条子链的层。
-CPromiseResult StepCoroutineStep(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
+CPromiseResult StepCoroutineStep(const std::shared_ptr<CTraceCtx>& spCtx)
 {
-    (void)upResult;
     TRACE_CAPTURE(capCoroStep);
     return CPromiseResult::Resolve();
 }
 
 /// 层：采集后故意抛异常（验证异常路径下帧栈照样弹回）。
-CPromiseResult StepCaptureThenThrow(CPromiseResult upResult, const std::shared_ptr<CTraceCtx>& spCtx)
+CPromiseResult StepCaptureThenThrow(const std::shared_ptr<CTraceCtx>& spCtx)
 {
-    (void)upResult;
     TRACE_CAPTURE(capThrowing);
     throw std::runtime_error("trace 用例：层内故意抛异常");
 }
@@ -748,25 +737,22 @@ struct CNestCtx
 };
 
 /// @brief 主链链根（累加一下，确认链真跑过）。
-CPromiseResult NestStepRoot(CPromiseResult upResult, const std::shared_ptr<CNestCtx>& spCtx)
+CPromiseResult NestStepRoot(const std::shared_ptr<CNestCtx>& spCtx)
 {
-    (void)upResult;
     ++spCtx->nValue;
     return CPromiseResult::Resolve();
 }
 
 /// @brief 什么都不做的层（只为了让链成形）。
-CPromiseResult NestStepNoop(CPromiseResult upResult, const std::shared_ptr<CNestCtx>& spCtx)
+CPromiseResult NestStepNoop(const std::shared_ptr<CNestCtx>& spCtx)
 {
-    (void)upResult;
     (void)spCtx;
     return CPromiseResult::Resolve();
 }
 
 /// @brief sub2 最深一层：采集「跨 3 条链」的祖先路径。
-CPromiseResult NestStepSub2Deep(CPromiseResult upResult, const std::shared_ptr<CNestCtx>& spCtx)
+CPromiseResult NestStepSub2Deep(const std::shared_ptr<CNestCtx>& spCtx)
 {
-    (void)upResult;
     CaptureNow(spCtx->capDeep);
     return CPromiseResult::Resolve();
 }
@@ -927,18 +913,16 @@ struct CMixCtx
     {}
 };
 
-/// @brief 子链最深一层：采集。
-CPromiseResult MixStepSubDeep(CPromiseResult upResult, const std::shared_ptr<CMixCtx>& spCtx)
+/// @brief 子链最深一层（then）：采集。
+CPromiseResult MixStepSubDeep(const std::shared_ptr<CMixCtx>& spCtx)
 {
-    (void)upResult;
     CaptureNow(spCtx->capDeep);
     return CPromiseResult::Resolve();
 }
 
 /// @brief 什么都不做的层。
-CPromiseResult MixStepNoop(CPromiseResult upResult, const std::shared_ptr<CMixCtx>& spCtx)
+CPromiseResult MixStepNoop(const std::shared_ptr<CMixCtx>& spCtx)
 {
-    (void)upResult;
     (void)spCtx;
     return CPromiseResult::Resolve();
 }
@@ -1064,18 +1048,16 @@ struct CResidueCtx
     {}
 };
 
-/// @brief 什么都不做的层。
-CPromiseResult ResidueStepNoop(CPromiseResult upResult, const std::shared_ptr<CResidueCtx>& spCtx)
+/// @brief 什么都不做的层（then：只接上下文）。
+CPromiseResult ResidueStepNoop(const std::shared_ptr<CResidueCtx>& spCtx)
 {
-    (void)upResult;
     (void)spCtx;
     return CPromiseResult::Resolve();
 }
 
 /// @brief 最深一层：采集整条深链。
-CPromiseResult ResidueStepDeep(CPromiseResult upResult, const std::shared_ptr<CResidueCtx>& spCtx)
+CPromiseResult ResidueStepDeep(const std::shared_ptr<CResidueCtx>& spCtx)
 {
-    (void)upResult;
     CaptureNow(spCtx->capDeep);
     spCtx->strDumpDefault = common::async::DescribeLayerChainBlock();  // 默认上限
     spCtx->strDumpAll = common::async::DescribeLayerChainBlock(0);     // 不限层数
@@ -1083,9 +1065,8 @@ CPromiseResult ResidueStepDeep(CPromiseResult upResult, const std::shared_ptr<CR
 }
 
 /// @brief 层内抛异常（查「异常路径也把帧弹出去了」）。
-CPromiseResult ResidueStepThrow(CPromiseResult upResult, const std::shared_ptr<CResidueCtx>& spCtx)
+CPromiseResult ResidueStepThrow(const std::shared_ptr<CResidueCtx>& spCtx)
 {
-    (void)upResult;
     (void)spCtx;
     throw std::runtime_error("trace：层内抛异常");
 }
@@ -1233,26 +1214,23 @@ struct CInLayerCtx
 };
 
 /// @brief 什么都不做的层。
-CPromiseResult InLayerStepNoop(CPromiseResult upResult, const std::shared_ptr<CInLayerCtx>& spCtx)
+CPromiseResult InLayerStepNoop(const std::shared_ptr<CInLayerCtx>& spCtx)
 {
-    (void)upResult;
     (void)spCtx;
     return CPromiseResult::Resolve();
 }
 
 /// @brief 旁支链的链根：采集「自己 + 上游」——应该正好是「主链上起它的那一层」。
-CPromiseResult InLayerStepSideRoot(CPromiseResult upResult, const std::shared_ptr<CInLayerCtx>& spCtx)
+CPromiseResult InLayerStepSideRoot(const std::shared_ptr<CInLayerCtx>& spCtx)
 {
-    (void)upResult;
     CaptureNow(spCtx->capSide);
     spCtx->bSideDone.store(true);  // 采集完了（原子标志，不碰引用计数）
     return CPromiseResult::Resolve();
 }
 
 /// @brief 在层里起一条**不等它**的链（fire-and-forget）。
-CPromiseResult InLayerStepStarter(CPromiseResult upResult, const std::shared_ptr<CInLayerCtx>& spCtx)
+CPromiseResult InLayerStepStarter(const std::shared_ptr<CInLayerCtx>& spCtx)
 {
-    (void)upResult;
     // 句柄**故意丢掉**：投递出去的任务自己持着层状态，链会照跑；
     // 存进上下文反而会成环（见 `CInLayerCtx::bSideDone` 的说明）。
     // 注意下面两行必须紧挨着（`__LINE__ + 1` 就是给紧接着的挂层语句用的）。

@@ -81,15 +81,14 @@ return applyDiscount(order);   // 值沿链流动
 
 ```cpp
 // 本框架：数据写进 spCtx，层间只传 CPromiseResult
-static common::async::CPromiseResult StepLoad(common::async::CPromiseResult /*up*/,
-                                              const std::shared_ptr<COrderCtx>& spCtx)
+static common::async::CPromiseResult StepLoad(const std::shared_ptr<COrderCtx>& spCtx)
 {
     spCtx->nTotal = 12 * spCtx->nQty;
     return common::async::CPromiseResult::Resolve();
 }
 ```
 
-好处是处理器签名固定、可复用可单测；代价是「把数据当返回值传给下一层」这种写法要改成写上下文。
+好处是处理器只有两种固定形状的签名、能独立成可测单元；代价是「把数据当返回值传给下一层」这种写法要改成写上下文。
 
 ### 2.2 then 的失败即停、catch / finally：与 JS 一致
 
@@ -318,8 +317,7 @@ class CTradeModule
 
    private:
     /// ① fetchUser(id)：结果写进上下文
-    static common::async::CPromiseResult StepFetchUser(common::async::CPromiseResult /*upResult*/,
-                                                       const std::shared_ptr<CTradeCtx>& spCtx)
+    static common::async::CPromiseResult StepFetchUser(const std::shared_ptr<CTradeCtx>& spCtx)
     {
         spCtx->strUserName = "Alice";
         std::printf("用户: %d %s\n", spCtx->nUserId, spCtx->strUserName.c_str());
@@ -327,8 +325,7 @@ class CTradeModule
     }
 
     /// ② fetchOrders(user)：等价 `.then(orders => …)`
-    static common::async::CPromiseResult StepFetchOrders(common::async::CPromiseResult /*upResult*/,
-                                                         const std::shared_ptr<CTradeCtx>& spCtx)
+    static common::async::CPromiseResult StepFetchOrders(const std::shared_ptr<CTradeCtx>& spCtx)
     {
         spCtx->vecOrders.push_back("order1");
         spCtx->vecOrders.push_back("order2");
@@ -342,8 +339,7 @@ class CTradeModule
     }
 
     /// ③ fetchPayment(orders[0])：等价 `.then(payment => …)`
-    static common::async::CPromiseResult StepFetchPayment(common::async::CPromiseResult /*upResult*/,
-                                                          const std::shared_ptr<CTradeCtx>& spCtx)
+    static common::async::CPromiseResult StepFetchPayment(const std::shared_ptr<CTradeCtx>& spCtx)
     {
         spCtx->nTotal = 99;
         std::printf("支付: %d\n", spCtx->nTotal);
@@ -351,8 +347,7 @@ class CTradeModule
     }
 
     /// ④ .then(total => …)：内层链全部完成后才执行
-    static common::async::CPromiseResult StepPrintTotal(common::async::CPromiseResult /*upResult*/,
-                                                        const std::shared_ptr<CTradeCtx>& spCtx)
+    static common::async::CPromiseResult StepPrintTotal(const std::shared_ptr<CTradeCtx>& spCtx)
     {
         std::printf("最终总额: %d\n", spCtx->nTotal);
         return common::async::CPromiseResult::Resolve();

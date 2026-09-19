@@ -21,14 +21,14 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 - **调度**（跑在哪条线程：就地内联 / 投递 / 深度限额）在执行器侧：
   `detail::ShouldInline`、`detail::DispatchInlineOrPost`。
 - **编排**（层语义：then / catch / finally 三态、失败即停、桥接、通知）在 promise 侧，
-  其中 `RunHandler` 只做「造任务体 + 失败收口」，**首层**的「建层 + 强制投递」收在 `CPromise::StartChain` 一处。
+  其中 `RunThenHandler` / `RunResultHandler` 只做「造任务体 + 失败收口」，**首层**的「建层 + 强制投递」收在 `CPromise::StartChain` 一处。
 
 文件划分（`Common/Async/`）：
 
 | 文件 | 内容 |
 | --- | --- |
 | `PromiseResult.h` | `CPromiseResult`（兑现 / 拒绝 + 标准异常，拒绝统一用 `std::exception` 派生对象） |
-| `PromiseTypes.h` | `SettledHandler`、`detail::ThenHandler<TContext>`（处理器固定签名） |
+| `PromiseTypes.h` | `SettledNotice`、`detail::HandlerMode`、`detail::ThenHandler<TContext>`（then：只接上下文）、`detail::ResultHandler<TContext>`（catch / finally：多一个上游结果） |
 | `SourceLoc.h` | `CSourceLoc` + `ASYNC_LOC`（注册点调试信息，发布构建零开销） |
 | `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle`、`detail::IsInExecutorThread`、`detail::ShouldInline` / `DispatchInlineOrPost`（**调度策略**：跑在哪条线程）、组合器 `detail::Gather*` |
 | `Promise.h` | `detail::CPromiseState`、`detail::CPromiseCore<TContext>`、`CPromise<TContext>`（**编排**：层语义 / 三态 / 桥接） |
@@ -52,7 +52,8 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 收益：
 
 - promise 只有一种类型 `CPromise<TContext>`，`Then` / `Catch` / `Finally` 返回同类型 → 无需类型萃取；
-- 处理器签名统一 → 自由函数 / 静态成员 / `bind` / lambda 都能直接注册；
+- 处理器签名统一到**两种固定形状** → 自由函数 / 静态成员 / `bind` / lambda 都能直接注册
+  （`then` 一种：只接共享上下文；`catch` / `finally` 一种：多一个上游结果）；
 - 跨层数据是引用语义，大对象（报文、连接、DB 句柄）不再层层拷贝；
 - 兑现与拒绝是同一枚 `CPromiseResult`，配合 JS 命名的 then / catch / finally，语义直白。
 
@@ -127,7 +128,7 @@ class CPromiseState
 
 - **首层必须投递**（`CPromise::StartChain`：直走 `PostToHandle`，不走亲和分派、不内联）：
   起 promise 的线程不执行任何业务代码；
-- **后续层级联**（`RunHandler` → `detail::DispatchInlineOrPost`）：若当前线程已是本链执行器的线程 → 就地内联
+- **后续层级联**（`RunThenHandler` / `RunResultHandler` → `detail::DispatchInlineOrPost`）：若当前线程已是本链执行器的线程 → 就地内联
   （省一次入队）；否则投递回本链执行器（判定集中在执行器侧的 `detail::ShouldInline`）；
   **否则（跨执行器，比如被调模块 settle 本链）投递回本链执行器** —— 见「线程亲和」；
 - **then 失败即停不调用处理器**：续接里 `upResult.IsRejected()` 直接 `Settle(upResult)`；
@@ -136,7 +137,7 @@ class CPromiseState
 ### 级联内联与深度限制（含线程亲和）
 
 ```cpp
-auto fnRun = MakeHandlerRunner(...);     // 执行处理器 + settle 本层
+auto fnRun = MakeThenRunner(...) / MakeResultRunner(...);  // 执行处理器 + settle 本层
 if (IsInExecutorThread(pCore->Handle())  // ① 线程亲和：必须在本链执行器线程上
     && InlineDepth() < kMaxInlineDepth)  // ② 深度未超限（线程局部计数 64）
 {
@@ -192,34 +193,59 @@ else
 
 ## 6. 处理器模式分派（then / catch / finally）
 
-三态语义只有两个集中点（纯函数，`Tests/test_async_layer_rules.cpp` 直测它们）：
+三态语义（JS 的 then / catch / finally）**没有公共的「按模式分派」函数** —— 模式在各自的
+调用点就是常量，跳过与结果归一各写一行在那里（`Tests/test_async_layer_rules.cpp` 从行为上盯住这三条）：
 
 ```cpp
-// Common/Async/Promise.h（detail）
-bool ShouldPassThrough(int nMode, const CPromiseResult& up);  // 本层跳过？→ 把 up 原样交给下一层
-CPromiseResult ResolveLayerResult(int nMode, const CPromiseResult& up, const CPromiseResult& own);
+// AppendThenLayer：上游被拒绝 → 本层跳过，结果原样交给下一层（then 失败即停）
+if (upResult.IsRejected()) { pNextState->Settle(upResult); return; }
+
+// AppendResultLayer：catch 遇到已兑现才跳过（finally 从不跳过 —— 成败都执行）
+if (eMode == detail::kModeCatch && upResult.IsFulfilled()) { pNextState->Settle(upResult); return; }
+
+// MakeResultRunner：finally 忽略处理器返回值，原样透传上一层结果
+return (eMode == detail::kModeFinally) ? upResult : ownResult;
 ```
 
-`Append(handler, loc, nMode)` 是 `Then` / `Catch` / `Finally` 的共同实现，续接处不再写三态判断：
+`AppendThenLayer` / `AppendResultLayer` 是 `Then` / `Catch` / `Finally` 各自的实现（两种 handler 形状各一个），
+续接处不再写三态判断：
 
 ```cpp
-[pCore, pNextState, fnHandler, nMode](const CPromiseResult& upResult)
+// AppendThenLayer：上游被拒绝 → 直接透传（本层不执行，处理器也就看不到上游结果）
+[pCore, pNextState, fnHandler](const CPromiseResult& upResult)
 {
-    // 该跳过的层直接透传（then 被拒 / catch 已兑现）——规则见 ShouldPassThrough
-    if (detail::ShouldPassThrough(nMode, upResult))
+    if (upResult.IsRejected())
     {
         pNextState->Settle(upResult);
         return;
     }
-    pCore->RunHandler(pNextState, fnHandler, upResult, nMode);
+    pCore->RunThenHandler(pNextState, fnHandler);   // fnHandler(spCtx)
+}
+
+// AppendResultLayer（catch / finally）：多把上游结果一路带到处理器里
+[pCore, pNextState, fnHandler, eMode](const CPromiseResult& upResult)
+{
+    if (eMode == detail::kModeCatch && upResult.IsFulfilled())  // finally 从不跳过
+    {
+        pNextState->Settle(upResult);
+        return;
+    }
+    pCore->RunResultHandler(pNextState, fnHandler, upResult, eMode);   // fnHandler(upResult, spCtx)
 }
 ```
 
-处理器执行体（`MakeHandlerRunner`）里本层结果也只委托一句：
+两种处理器各自的任务体也只差一句（`MakeLayerRunner` 是共同外壳：trace 帧 + 异常收口 + settle）：
 
 ```cpp
-const CPromiseResult ownResult = fnHandler(upResult, spContext);
-result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownResult，原样透传
+// MakeThenRunner：
+return MakeLayerRunner(pState, [spContext, fnHandler]() { return fnHandler(spContext); });
+
+// MakeResultRunner（catch / finally）：
+return MakeLayerRunner(pState, [spContext, fnHandler, upResult, eMode]()
+    {
+        const CPromiseResult ownResult = fnHandler(upResult, spContext);
+        return (eMode == kModeFinally) ? upResult : ownResult;  // finally 忽略 ownResult，原样透传
+    });
 ```
 
 - `then` / `catch`：返回值即本层结果 → 决定后续走向（catch 返回 `Resolve()` 即恢复）；
@@ -321,7 +347,7 @@ ThenBridge(fnCreate, fnApply, loc)
 | 一条链的层不并发 | 状态只在 `Settle` 时按序触发一次处理器，级联在同一线程推进 |
 | 同一状态只 settle 一次 | `Settle` 锁内 `m_bSettled` 判定，后续调用直接返回 |
 | 处理器不在起链线程执行 | 首层固定走 `CPromise::StartChain`（强制投递） |
-| **每层都在本链执行器线程上** | 线程亲和：`RunHandler` 先判 `IsInExecutorThread`，不满足就投递回本链执行器 || **跨模块返回的层回本模块** | 同上（被调模块 settle 本链时，本链层不在被调模块线程跑） |
+| **每层都在本链执行器线程上** | 线程亲和：层派发先判 `IsInExecutorThread`，不满足就投递回本链执行器 || **跨模块返回的层回本模块** | 同上（被调模块 settle 本链时，本链层不在被调模块线程跑） |
 | 回调不持锁 | `Settle` 先换出处理器列表，再锁外调用 |
 | 无悬垂 | 句柄 / 状态 / 上下文均为 `shared_ptr`，被续接与句柄共同持有 |
 | 深链不爆栈 | `kMaxInlineDepth` 上限 + 改投递（且只在同一执行器线程内累加） |
@@ -384,7 +410,7 @@ if (!DispatchInlineOrPost(Handle(), std::move(fnRun)))
 
 | 场景 | 以前 | 现在 |
 | --- | --- | --- |
-| 层处理器抛异常 | `detail::MakeHandlerRunner` 的 try/catch → 异常原样成为本层拒绝 | 不变（本来就安全） |
+| 层处理器抛异常 | `MakeLayerRunner` 的 try/catch → 异常原样成为本层拒绝 | 不变（本来就安全） |
 | **通知**（`OnSettled` / `OnSettledOn`）抛异常 | 异常从 `CPromiseState::Settle` 逃出 → worker 无 catch → **`std::terminate`（进程挂掉）** | `detail::RunNotice` 兜住 + 报告诊断 |
 | `exec.Post(fn)` 的任务抛异常 | 同上（同样能弄死进程） | `CAsyncExecutor::Post` 包一层 guard 兜住 + 报告 |
 | `exec.NewPromise(spCtx, starter)` 的起链回调抛异常 | `RunChainStarter` 兜住 → 异常原样成为拒绝 | 不变 |
@@ -504,7 +530,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 | 阶段 | 次数/层 | 内容 |
 | --- | --- | --- |
 | 建链（`NewPromise` + `Then` × N） | **2** | `make_shared<CPromiseState>`（层状态 176B，含控制块 **192B**）+ 处理器 `std::function`（**72B**） |
-| 跑链（`Start` + `Await`） | **1** | 投递给执行器的任务体（`MakeHandlerRunner`，**96B**） |
+| 跑链（`Start` + `Await`） | **1** | 投递给执行器的任务体（`MakeLayerRunner`，**96B**） |
 
 字节数建链 ≈ **264 字节/层**（release；debug 多一份 `CSourceLoc`），跑链的任务体 96 字节。
 另加每链常数 ≤ 8 次分配（核心、延迟载荷、首层 runner 等）。
@@ -588,7 +614,7 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 | --- | --- | --- |
 | `CPromiseCore` 构造 | `spContext != nullptr` | 上下文强制传入（§10 第 9 条） |
 | `CPromise` 私有构造 | `pCore != nullptr` / `pState != nullptr` | 句柄恒有核心、**恒指向一个层**（无「未挂首层」态） |
-| `MakeHandlerRunner` / `RunHandler` | `spContext` / `pState` 非空 | 内部调用不变量 |
+| `MakeLayerRunner` / `MakeThenRunner` / `MakeResultRunner` / `NewNextLayer` | `spContext` / `pState` 非空 | 内部调用不变量 |
 | ~~`CPromise::Start` / `IsStarted` / `RegisterFirstLayer` / `Append`（延迟分支）~~ | ~~延迟链的载荷非空~~ | 延迟启动已移除（§5.1），相应断言一并删除 |
 | `CPromiseResult::Reject` | **已无断言** | 失败 = 携带一个标准异常对象，不再有「码 0 = 兑现」的约束；判兑现一律看 `IsFulfilled()` |
 | `CCoroutine` 构造 | `spContext != nullptr` | 与 promise 一致 |
@@ -613,8 +639,8 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 | `VisitLayerChain` / `CurrentLayer` / `DescribeLayer` / `DescribeLayerChain` / `DescribeLayerChainBlock` / `DumpLayerChain` | 业务侧只读接口（`DescribeLayerChain` = 一行压缩链；`*Block` / `Dump` = 逐层富信息的多行排障块，深链自动头尾 + 省略） |
 
 ```cpp
-// MakeHandlerRunner 的任务体（唯一跑用户处理器的地方）—— 接入点就这一行
-return [spContext, pState, fnHandler, upResult, eMode]()
+// MakeLayerRunner 的任务体（唯一跑用户处理器的地方）—— 接入点就这一行（fnBody 由 MakeThenRunner / MakeResultRunner 给出）
+return [pState, fnBody]()
 {
 #if defined(ASYNC_DEBUG_TRACE)
     const CCurrentLayerFrame frame(pState.get());
@@ -664,8 +690,8 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 
 ### 四个设计决定（都是为了「不改签名、不增加分配」）
 
-1. **用 thread_local 而不是改处理器签名**：`ThenHandler(upResult, spCtx)` 一个字节都不动，
-   否则全框架的处理器都要改。内联级联会**嵌套**跑层，所以帧是**栈语义**（RAII 保存 / 恢复），
+1. **用 thread_local 而不是把「当前层」塞进处理器签名**：处理器的两种形状只为 then / catch 的需要而定，
+   trace 不占形参（否则全框架的处理器都要为调试设施多带一个参数）。内联级联会**嵌套**跑层，所以帧是**栈语义**（RAII 保存 / 恢复），
    异常路径也不会漏弹（`Trace_FramePoppedAfterThrow` 守着）。
 2. **上游直接存指针（仅调试构建），不用快照链表**：快照链要每层一次 `new`，而分配护栏（§12）
    在 debug 下跑 —— 会直接变成 3.03 次/层；直接存一个上游指针只有 16 B、**零分配**。
@@ -734,8 +760,8 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 另一个用例只钉「层外是空操作」这条契约。发布构建下反过来断言「按契约全是空操作」。
 
 > 写用例时的三个坑：
-> 1. 采集层如果带 `if (upResult.IsRejected()) return upResult;` 这种 **then 式防御**，
->    放到 catch 位置就什么也采不到（catch 层**一定**会看到拒绝）—— 防御写得“安全”反而让用例失效；
+> 1. 采集层如果写成 then 式（只接上下文、一味返 `Resolve()`），
+>    放到 catch 位置就什么也采不到（catch 层**一定**会看到拒绝）—— 采集层得用 catch / finally 签名；
 > 2. 采集层应该**原样透传**上一层结果：在 catch 位置返回 `Resolve()` 会把拒绝吞掉（链被“恢复”），
 >    用例对链走向的预期会跟着变；
 > 3. **注册点行号要单行采集**：`nLine = __LINE__ + 1;` 之后挂层语句必须落在同一行 —— 多行实参
@@ -750,10 +776,10 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 
 ```text
 1. Common/Async/PromiseResult.h     层结果（层间唯一信息）
-2. Common/Async/PromiseTypes.h      固定签名（ThenHandler / SettledHandler）
+2. Common/Async/PromiseTypes.h      两种处理器形状（ThenHandler / ResultHandler / SettledNotice）
 3. Common/Async/AsyncExecutor.h     调度层与执行器句柄（含 detail::ShouldInline / DispatchInlineOrPost）
    Common/Async/Diagnostics.{h,cpp} 诊断钩子（与执行器无关的进程级出口）
-4. Common/Async/Promise.h           状态 + 核心 + promise（重点看 Append / Settle / RunHandler）
+4. Common/Async/Promise.h           状态 + 核心 + promise（重点看 AppendThenLayer / AppendResultLayer / Settle / RunThenHandler）
    （层派发策略细节在 Common/Async/AsyncExecutor.h：detail::DispatchInlineOrPost / ShouldInline）
 5. Common/Coroutine/Coroutine.h    顺序化（Duff's device 状态机）—— 另一个模块，只依赖 Async
 6. Tests/test_async_chain.cpp       行为契约

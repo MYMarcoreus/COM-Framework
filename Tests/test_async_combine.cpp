@@ -69,8 +69,7 @@ void WaitGate(const std::shared_ptr<CCombineCtx>& spCtx)
 common::async::CPromise<CCombineCtx>::ThenHandler MakeBranchStep(
     const char* strTag, int nDelayMs = 0, bool bWaitGate = false, const char* pszRejectText = nullptr)
 {
-    return [strTag, nDelayMs, bWaitGate, pszRejectText](
-               common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CCombineCtx>& spCtx)
+    return [strTag, nDelayMs, bWaitGate, pszRejectText](const std::shared_ptr<CCombineCtx>& spCtx)
     {
         if (spCtx->spTrace != nullptr)
         {
@@ -91,7 +90,7 @@ common::async::CPromise<CCombineCtx>::ThenHandler MakeBranchStep(
 }
 
 /// @brief 汇聚层处理器：记录「此刻已完成的分支数」与所在线程（证明等待语义）。
-common::async::CPromiseResult StepGather(common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CCombineCtx>& spCtx)
+common::async::CPromiseResult StepGather(const std::shared_ptr<CCombineCtx>& spCtx)
 {
     ++spCtx->nGatherRuns;
     spCtx->idGather = std::this_thread::get_id();

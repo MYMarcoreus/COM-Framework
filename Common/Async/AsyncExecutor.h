@@ -540,12 +540,11 @@ CPromise<TContext> Gather(
     {
         // 一处子 promise 都没有：按策略直接收口（语义只有 `ResolveEmptyGather` 一处）。
         // 用「一层 handler」而不是起链回调：handler 直接返回整份结果，语义最直白。
-        return executor.NewPromise(
-            spContext, typename CPromise<TContext>::ThenHandler(
-                           [ePolicy](CPromiseResult /*upResult*/, const std::shared_ptr<TContext>& /*spContext*/)
-                           {
-                               return ResolveEmptyGather(ePolicy);
-                           }));
+        return executor.NewPromise(spContext, typename CPromise<TContext>::ThenHandler(
+                                                  [ePolicy](const std::shared_ptr<TContext>& /*spContext*/)
+                                                  {
+                                                      return ResolveEmptyGather(ePolicy);
+                                                  }));
     }
 
     const int nTotal = static_cast<int>(vecBindings.size());

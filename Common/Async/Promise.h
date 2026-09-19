@@ -28,10 +28,15 @@
 // 本框架不支持在层与层之间传递任意值：每层只产出「已兑现 / 已拒绝」
 // （CPromiseResult），数据统一放在共享上下文（std::shared_ptr<TContext>）。
 //
-// 因此处理器（handler）签名固定：
+// 因此处理器（handler）只有两种固定签名（then 一种，catch / finally 一种）：
 //
-//     CPromiseResult handler(CPromiseResult upResult,              // 上一层结果
-//                            const std::shared_ptr<TContext>& spCtx); // 共享上下文
+//     CPromiseResult handler(const std::shared_ptr<TContext>& spCtx);              // then（含首层）
+//     CPromiseResult handler(CPromiseResult upResult,                              // catch / finally
+//                            const std::shared_ptr<TContext>& spCtx);
+//
+// 为什么要分两种：then 层能跑起来的前提就是「上游已兑现」（上游被拒绝时框架直接跳过本层），
+// 所以上游结果对 then 层没有任何信息量（它拿不到也无需判断）；而 catch 要据此分支、
+// finally 要原样透传，它们才需要那个形参。
 //
 // 语义对照（JS 的 Promise；链语义与之一致，可直接套用直觉）：
 //
@@ -114,11 +119,10 @@
 //     std::string strToken;
 // };
 //
-// CPromiseResult StepReadParam(CPromiseResult upResult, const std::shared_ptr<CLoginContext>& spCtx)
+// CPromiseResult StepReadParam(const std::shared_ptr<CLoginContext>& spCtx)
 // {
-//     (void)upResult;                                  // then 层不看上游结果：
-//                                                      // 上一层被拒绝时框架直接跳过本层（失败即停），
-//                                                      // 要处理拒绝请用 Catch（async-usage.md §4）
+//     spCtx->strAccount = ReadAccountFromRequest();  // then 层拿不到（也无需看）上游结果；
+//                                                    // 要处理拒绝请用 Catch（async-usage.md §4）
 //     spCtx->strAccount = ReadAccountFromRequest();
 //     return spCtx->strAccount.empty() ? CPromiseResult::Reject(std::runtime_error("账号为空"))
 //                                      : CPromiseResult::Resolve();
@@ -145,8 +149,9 @@
 //
 // 文件结构（便于定位）：
 //   一、detail 基础设施：CPromiseState（层状态机，含处理器登记策略；trace 记录只在调试构建）
-//       ShouldPassThrough・ResolveLayerResult（三态语义）/ CPromiseCore（共享核心：上下文 + 执行器句柄，
-//       含任务体构造 MakeHandlerRunner 与层调度入口）
+//       NewNextLayer（追加层骨架）/ AppendThenLayer・AppendResultLayer（三态语义 + 两种签名）
+//       / CPromiseCore（共享核心：上下文 + 执行器句柄，
+//       含任务体构造 MakeLayerRunner / MakeThenRunner / MakeResultRunner 与层调度入口）
 //       注：`HandlerMode`（then / catch / finally）在 "Async/PromiseTypes.h"；
 //       执行器侧设施（CExecutorHandle、ShouldInline / DispatchInlineOrPost、内联深度）
 //       在 "Async/AsyncExecutor.h"；
@@ -185,7 +190,7 @@ constexpr const char* kDiagAwaitRisk =
 ///
 /// @param fnSettled 通知处理器（可为空）。
 /// @param result 本层最终结果。
-inline void RunNotice(const SettledHandler& fnSettled, const CPromiseResult& result)
+inline void RunNotice(const SettledNotice& fnSettled, const CPromiseResult& result)
 {
     if (!fnSettled)
     {
@@ -210,7 +215,7 @@ inline void RunNotice(const SettledHandler& fnSettled, const CPromiseResult& res
 /// @param fnSettled 通知处理器（可为空）。
 /// @param result 本层最终结果。
 inline void RunNoticeOn(
-    const std::shared_ptr<CExecutorHandle>& pTarget, const SettledHandler& fnSettled, const CPromiseResult& result)
+    const std::shared_ptr<CExecutorHandle>& pTarget, const SettledNotice& fnSettled, const CPromiseResult& result)
 {
     if (!fnSettled)
     {
@@ -247,7 +252,7 @@ public:
     /// @brief settle 本状态并触发处理器（锁外调用处理器，防重入死锁）。
     ///
     /// 仅首次生效；先唤醒等待者，再按注册顺序在锁外调用所有处理器。
-    /// 处理器在调用方（结算）线程上被触发；若它是「层处理器」，再由 `RunHandler` 派发：
+    /// 处理器在调用方（结算）线程上被触发；若它是「层处理器」，再由 `Dispatch` 派发：
     /// 已在本链执行器线程 → 就地执行；否则投递回本链执行器。
     ///
     /// @param result 本层最终结果（已兑现 / 已拒绝）。
@@ -291,7 +296,7 @@ public:
     ///  - **通知**（`OnSettled`，`bGuaranteedDelivery == true`）：**保证送达** —— 执行器不可用时
     ///    在调用线程上就地执行，绝不丢弃（否则手写桥接漏检返回值就会让本层永久 pending、
     ///    上层 `Await()` 死等）。就地执行不会递归加深：通知里通常只是 settle 本层，
-    ///    而本层后续处理器走 `RunHandler`，执行器不可用时以 `Stopped()` 收口，链会立即结束。
+    ///    而本层后续处理器走 `Dispatch`，执行器不可用时以 `Stopped()` 收口，链会立即结束。
     ///
     /// @param pHandle 执行器句柄（已 settled 时投递用）。
     /// @param fnHandler 处理器（按值接收，登记时移动存储避免拷贝）。
@@ -524,48 +529,24 @@ private:
 #endif
 };
 
-// 处理器模式 `HandlerMode`（then / catch / finally）已挪到 "Async/PromiseTypes.h"：
-// 它是「层语义」的公共词汇，`Async/Trace.h` 也要用（放叶子头文件里避免循环依赖）。
+// 三态语义（JS 的 then / catch / finally）**没有公共的「按模式分派」函数**：模式在各自的调用点
+// （`AppendThenLayer` / `AppendResultLayer` / `MakeResultRunner`）就是常量，跳过与结果归一
+// 各写一行在那里即可 —— 多一层函数只是多一次跳转，读的人还得再翻过来。
 
-/// @brief 本层处理器是否跳过（JS 三态语义：then 被拒 / catch 已兑现 → 直接透传上一层结果）。
+/// @brief 造「执行本层处理器」的任务体 —— **框架里唯一跑用户处理器的地方**。
 ///
-/// @param eMode 处理器模式（then / catch / finally）。
-/// @param upResult 上一层结果。
-/// @return true = 本层跳过（把 upResult 原样交给下一层）。
-inline bool ShouldPassThrough(HandlerMode eMode, const CPromiseResult& upResult)
-{
-    return (eMode == kModeThen && upResult.IsRejected()) || (eMode == kModeCatch && upResult.IsFulfilled());
-}
-
-/// @brief 本层对外的最终结果（JS 三态语义：finally 忽略处理器返回值，原样透传上一层结果）。
-///
-/// @param eMode 处理器模式。
-/// @param upResult 上一层结果。
-/// @param ownResult 本层处理器返回的结果。
-/// @return then / catch 取 ownResult；finally 取 upResult。
-inline CPromiseResult ResolveLayerResult(HandlerMode eMode, const CPromiseResult& upResult, const CPromiseResult& ownResult)
-{
-    return (eMode == kModeFinally) ? upResult : ownResult;
-}
-
-/// @brief 构造「执行本层处理器」的任务体。
-///
-/// 任务体只捕获**它真正需要的东西**：共享上下文（handler 的第二参数）与本层状态（写回结果）。
+/// then / catch / finally 与首层共用这一层外壳，差别只在 `fnBody` 怎么调用户处理器。
+/// 任务体只捕获**它真正需要的东西**（`fnBody` 自己带着上下文与处理器），
 /// 这样在途任务不需要靠核心存活（因此核心无需 `enable_shared_from_this`），
 /// 也让「保活链」短一截：任务跑完前，只有它自己用到的对象在。
 ///
-/// @param spContext 共享上下文（调用方在构造任务时解析好，恒非空）。
 /// @param pState 本层状态（执行结果写入它）。
-/// @param fnHandler 处理器（固定签名）。
-/// @param upResult 上一层结果。
-/// @param eMode 处理器模式（then / catch / finally）。
+/// @param fnBody 执行体（返回本层结果）。
 /// @return 任务体（在工作线程上执行处理器并 settle 本层状态）。
-template <typename TContext>
-std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spContext, const std::shared_ptr<CPromiseState>& pState,
-    const ThenHandler<TContext>& fnHandler, const CPromiseResult& upResult, HandlerMode eMode)
+template <typename TBody>
+std::function<void()> MakeLayerRunner(const std::shared_ptr<CPromiseState>& pState, TBody fnBody)
 {
-    ASSERT(spContext != nullptr);  // 任务体把上下文按值捕获交给处理器：必须已经备好。
-    return [spContext, pState, fnHandler, upResult, eMode]()
+    return [pState, fnBody]()
     {
 #if defined(ASYNC_DEBUG_TRACE)
         // 记录「当前层」：处理器内部就能通过 Trace.h 看到自己处在哪条链上。
@@ -575,8 +556,7 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spConte
         CPromiseResult result;
         try
         {
-            const CPromiseResult ownResult = fnHandler(upResult, spContext);
-            result = ResolveLayerResult(eMode, upResult, ownResult);  // finally 忽略 ownResult，原样透传。
+            result = fnBody();
         }
         catch (const std::exception& e)
         {
@@ -595,6 +575,46 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spConte
     };
 }
 
+/// @brief 造 then 层（含首层）的任务体：处理器**看不到上游结果**，直接返回本层结果。
+///
+/// @param spContext 共享上下文（调用方在构造任务时解析好，恒非空）。
+/// @param pState 本层状态（执行结果写入它）。
+/// @param fnHandler 处理器（then 签名）。
+/// @return 任务体。
+template <typename TContext>
+std::function<void()> MakeThenRunner(const std::shared_ptr<TContext>& spContext, const std::shared_ptr<CPromiseState>& pState,
+    const ThenHandler<TContext>& fnHandler)
+{
+    ASSERT(spContext != nullptr);  // 任务体把上下文按值捕获交给处理器：必须已经备好。
+    return MakeLayerRunner(pState,
+        [spContext, fnHandler]()
+        {
+            return fnHandler(spContext);
+        });
+}
+
+/// @brief 造 catch / finally 层的任务体：把**上游结果**交给处理器，返回值按模式归一。
+///
+/// @param spContext 共享上下文（调用方在构造任务时解析好，恒非空）。
+/// @param pState 本层状态（执行结果写入它）。
+/// @param fnHandler 处理器（catch / finally 签名）。
+/// @param upResult 上一层结果。
+/// @param eMode 处理器模式（catch / finally）。
+/// @return 任务体。
+template <typename TContext>
+std::function<void()> MakeResultRunner(const std::shared_ptr<TContext>& spContext, const std::shared_ptr<CPromiseState>& pState,
+    const ResultHandler<TContext>& fnHandler, const CPromiseResult& upResult, HandlerMode eMode)
+{
+    ASSERT(spContext != nullptr);  // 任务体把上下文按值捕获交给处理器：必须已经备好。
+    return MakeLayerRunner(pState,
+        [spContext, fnHandler, upResult, eMode]()
+        {
+            const CPromiseResult ownResult = fnHandler(upResult, spContext);
+            // finally 忽略处理器返回值，原样透传上一层结果（与 JS `finally` 一致）。
+            return (eMode == kModeFinally) ? upResult : ownResult;
+        });
+}
+
 /// @brief promise 共享核心：共享上下文 + 执行器句柄。
 ///
 /// 一条链的所有层共用同一个核心（同一上下文 + 同一执行器），句柄持有者彼此
@@ -602,7 +622,7 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spConte
 ///
 /// 「本层怎么跑」的**调度策略**（就地内联 / 投递、内联深度限额）归属执行器侧
 /// （`detail::ShouldInline` / `detail::DispatchInlineOrPost`，在 AsyncExecutor.h）；
-/// 这里只做两件事：**造任务体**（`MakeHandlerRunner`，层语义）与**失败收口**（框架侧拒绝「执行器已停」）。
+/// 这里只做两件事：**造任务体**（`MakeThenRunner` / `MakeResultRunner`，层语义）与**失败收口**（框架侧拒绝「执行器已停」）。
 ///
 /// 注：首层不走这里 —— 「起链即强制投递」是 `CPromise::StartChain` 的一条直路
 /// （没有调度选择，也就没有分派器）。
@@ -647,27 +667,44 @@ public:
         m_pHandle = pHandle;
     }
 
-    /// @brief 级联执行下一层（上一层刚 settle，当前在主调方线程上）。
+    /// @brief 级联执行下一层（then 语义：处理器看不到上游结果）。
     ///
     /// **只有当前线程已经是本链执行器的线程**时才就地内联（省一次入队 + 保序）；
     /// 否则一律投递回本链执行器（典型场景：被调模块 settle 本链的层，本层就回到本模块线程执行）。
     /// 内联深度也只在同一执行器线程内累加，跨模块不会涨栈。
     ///
     /// @param pState 本层状态。
-    /// @param fnHandler 处理器。
+    /// @param fnHandler 处理器（then 签名）。
+    void RunThenHandler(const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler) const
+    {
+        Dispatch(pState, MakeThenRunner(Context(), pState, fnHandler));
+    }
+
+    /// @brief 级联执行下一层（catch / finally 语义：处理器拿到上游结果）。
+    ///
+    /// @param pState 本层状态。
+    /// @param fnHandler 处理器（catch / finally 签名）。
     /// @param upResult 上一层结果。
-    /// @param eMode 处理器模式。
-    void RunHandler(const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler,
+    /// @param eMode 处理器模式（catch / finally）。
+    void RunResultHandler(const std::shared_ptr<CPromiseState>& pState, const ResultHandler<TContext>& fnHandler,
         const CPromiseResult& upResult, HandlerMode eMode) const
+    {
+        Dispatch(pState, MakeResultRunner(Context(), pState, fnHandler, upResult, eMode));
+    }
+
+private:
+    /// @brief 派发已造好的任务体：就地内联 / 投递回本链执行器；执行器不可用 → 本层以框架侧失败收口。
+    ///
+    /// @param pState 本层状态。
+    /// @param fnRun 任务体。
+    void Dispatch(const std::shared_ptr<CPromiseState>& pState, std::function<void()> fnRun) const
     {
         ASSERT(pState != nullptr);  // 内部调用：本层状态恒存在。
 
-        std::function<void()> fnRun = MakeHandlerRunner(Context(), pState, fnHandler, upResult, eMode);
-
-        // 派发策略（就地 / 投递 / 深度限额）在执行器侧；这里只管「造任务体 + 失败收口」。
+        // 派发策略（就地 / 投递 / 深度限额）在执行器侧；这里只管「失败收口」。
         if (!DispatchInlineOrPost(Handle(), std::move(fnRun)))
         {
-            pState->Settle(CPromiseResult::Reject(std::runtime_error("执行器已停")));  // 执行器不可用 → 本层以框架侧拒绝收口。
+            pState->Settle(CPromiseResult::Reject(std::runtime_error("执行器已停")));
         }
     }
 
@@ -701,16 +738,19 @@ class CPromise
 public:
     //================ Types ================
 
-    /// 处理器类型（固定签名：上一层结果 + 共享上下文 → 本层结果）。
+    /// then 处理器类型（**不看上游结果**：共享上下文 → 本层结果）。
     using ThenHandler = detail::ThenHandler<TContext>;
+
+    /// catch / finally 处理器类型（**要上游结果**：上一层结果 + 共享上下文 → 本层结果）。
+    using ResultHandler = detail::ResultHandler<TContext>;
 
     /// 兑现函数（对齐 JS `new Promise` 交给 executor 的 resolve）。
     using ResolveFn = std::function<void()>;
 
     /// 拒绝函数（对齐 JS `new Promise` 交给 executor 的 reject）。
     ///
-    /// 入参是本层的**整份拒绝结果**：业务拒绝用 `Reject(码, 文案)`，系统侧失败用
-    /// `执行器已停` / `等待超时` / `处理器异常` —— 文案与来源都不会在传递中丢掉。
+    /// 入参是本层的**整份拒绝结果**：业务失败用 `Reject(异常对象)`（异常里带自己的种类），
+    /// 框架侧失败用 `执行器已停` / `等待超时` / `处理器异常` —— 文案与来源都不会在传递中丢掉。
     using RejectFn = std::function<void(CPromiseResult result)>;
 
     /// executor：对齐 JS `new Promise((resolve, reject) => { ... })` 的入参。
@@ -729,16 +769,19 @@ public:
 
     /// @brief then：上一层**兑现**时执行 fnHandler，被拒绝时直接透传（失败即停）。
     ///
-    /// 在句柄所指的层之后**追加一层**：上游未 settle 时登记（settle 时由 `RunHandler` 派发；
+    /// 在句柄所指的层之后**追加一层**：上游未 settle 时登记（settle 时由 `RunThenHandler` 派发；
     /// 执行：同执行器内联 / 跨执行器投递回本链执行器）；已 settle 时投递到执行器异步触发。
     /// 同一层多次 Then 即分叉，各自独立延续。
     ///
-    /// @param fnHandler 本层处理器（固定签名）。
+    /// **处理器看不到上游结果**（上一层被拒绝时本层根本不执行），所以它只接上下文：
+    /// 要处理拒绝请用 `Catch`（那里才拿得到 `upResult`）。
+    ///
+    /// @param fnHandler 本层处理器（then 签名）。
     /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
     /// @return 指向本层的 promise 句柄（后续 Await / Then / Catch / Finally 作用于本层）。
     CPromise Then(const ThenHandler& fnHandler, const CSourceLoc& loc = CSourceLoc())
     {
-        return Append(fnHandler, loc, detail::kModeThen);
+        return AppendThenLayer(fnHandler, loc);
     }
 
     /// @brief catch：上一层**被拒绝**时执行 fnHandler（回滚 / 补偿 / 错误处理）。
@@ -747,12 +790,12 @@ public:
     /// 返回 `upResult`（或任意 Reject）则继续以拒绝状态向下透传。
     /// 上一层已兑现时本层不执行，结果原样透传。
     ///
-    /// @param fnHandler 本层处理器（固定签名，upResult 为上一层的拒绝结果）。
+    /// @param fnHandler 本层处理器（catch 签名：入参是本层要处理的失败结果）。
     /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
     /// @return 指向本层的 promise 句柄。
-    CPromise Catch(const ThenHandler& fnHandler, const CSourceLoc& loc = CSourceLoc())
+    CPromise Catch(const ResultHandler& fnHandler, const CSourceLoc& loc = CSourceLoc())
     {
-        return Append(fnHandler, loc, detail::kModeCatch);
+        return AppendResultLayer(fnHandler, detail::kModeCatch, loc);
     }
 
     /// @brief finally：无论上一层兑现还是被拒绝都执行 fnHandler（收尾：清理 / 审计）。
@@ -761,12 +804,12 @@ public:
     /// （只有抛异常才会改变结果 → 本层以 `处理器异常` / `e.what()` 收口）。
     /// 需要在失败时改变链的走向请用 Catch。
     ///
-    /// @param fnHandler 本层处理器（固定签名，upResult 为上一层结果）。
+    /// @param fnHandler 本层处理器（finally 签名，`upResult` 为上一层结果）。
     /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
     /// @return 指向本层的 promise 句柄。
-    CPromise Finally(const ThenHandler& fnHandler, const CSourceLoc& loc = CSourceLoc())
+    CPromise Finally(const ResultHandler& fnHandler, const CSourceLoc& loc = CSourceLoc())
     {
-        return Append(fnHandler, loc, detail::kModeFinally);
+        return AppendResultLayer(fnHandler, detail::kModeFinally, loc);
     }
 
     /// @brief then 的 promise 版本（对齐 JS：处理器返回 promise 时链会等它 —— flatten）。
@@ -860,7 +903,7 @@ public:
     /// 不会丢、也不会让本层永久 pending。
     ///
     /// @param fnSettled 收尾通知（入参为本层最终结果）。
-    void OnSettled(const SettledHandler& fnSettled) const
+    void OnSettled(const SettledNotice& fnSettled) const
     {
         m_pState->AddHandler(
             m_pCore->Handle(),
@@ -884,7 +927,7 @@ public:
     ///
     /// @param executor 目标执行器（典型：本模块的执行器）。
     /// @param fnSettled 收尾通知（入参为本层最终结果）。
-    void OnSettledOn(CAsyncExecutor& executor, const SettledHandler& fnSettled) const
+    void OnSettledOn(CAsyncExecutor& executor, const SettledNotice& fnSettled) const
     {
         const std::shared_ptr<detail::CExecutorHandle> pTarget = executor.Handle();
         m_pState->AddHandler(
@@ -999,8 +1042,7 @@ private:
 #endif
 
         // 起点结果视为「已兑现」；首层恒以 then 语义执行（catch / finally 是追加层的写法）。
-        std::function<void()> fnRun =
-            detail::MakeHandlerRunner(pCore->Context(), pState, fnHandler, CPromiseResult::Resolve(), detail::kModeThen);
+        std::function<void()> fnRun = detail::MakeThenRunner(pCore->Context(), pState, fnHandler);
         if (!detail::PostToHandle(pCore->Handle(), std::move(fnRun)))
         {
             SettleStopped(pState);  // 执行器不可用 → 首层被拒绝（链绝不永久 pending）。
@@ -1091,6 +1133,7 @@ private:
                     fnReject(childResult);  // 子链拒绝：**整份结果**原样透传（异常类型 / 文案都不丢）。
                     return;
                 }
+
                 try
                 {
                     fnApply(spSelf, spChildCtx);  // 搬数据（跑在子链结算线程上，见 ThenBridge 的 @warning）。
@@ -1105,6 +1148,7 @@ private:
                     fnReject(CPromiseResult::Reject(std::runtime_error("处理器异常")));  // 非 std 异常
                     return;
                 }
+
                 fnResolve();
             });
     }
@@ -1218,39 +1262,90 @@ private:
         }
     }
 
-    /// @brief 内部：在当前层之后**追加一层**（Then / Catch / Finally / ThenPromise / ThenBridge 共用）。
+    /// @brief 内部：建「下一层」状态并记好 trace 链接（追加层的第一步，两种追加共用）。
+    ///
+    /// @param pUpState 上游层状态（本层挂在它后面）。
+    /// @param loc 注册点源码位置。
+    /// @param eMode 处理器模式（detail::kModeThen / kModeCatch / kModeFinally；只服务 trace）。
+    /// @return 新层状态（pending）。
+    static std::shared_ptr<detail::CPromiseState> NewNextLayer(
+        const std::shared_ptr<detail::CPromiseState>& pUpState, const CSourceLoc& loc, detail::HandlerMode eMode)
+    {
+        const std::shared_ptr<detail::CPromiseState> pNextState = NewLayerState(loc);
+#if defined(ASYNC_DEBUG_TRACE)
+        pNextState->SetTraceLink(pUpState, eMode, /* bChainRoot = */ false, pUpState->ChainId());
+#else
+        (void)pUpState;  // 上游与模式都只服务 trace：发布构建没有 trace。
+        (void)eMode;
+#endif
+        return pNextState;
+    }
+
+    /// @brief 内部：在当前层之后**追加一层 then**（处理器看不到上游结果）。
     ///
     /// 追加 = 两件事：建新层状态 + 在当前层上登记「本层跑完后启动新层」的处理器。
     /// 当前层还没 settle 就只是登记（settle 时触发）；已 settle 则立即触发（`AddHandler` 内部投递）。
     ///
-    /// @param fnHandler 本层处理器。
+    /// 本层跑起来的前提已由三态语义给定（上游被拒 → 上游层直接透传结果，本层根本不执行），
+    /// 所以这里把处理器交给 `RunThenHandler` 即可 —— 它只接共享上下文。
+    ///
+    /// @param fnHandler 本层处理器（then 签名）。
     /// @param loc 注册点源码位置。
-    /// @param eMode 处理器模式（detail::kModeThen / kModeCatch / kModeFinally）。
     /// @return 指向新层的 promise 句柄。
-    CPromise Append(const ThenHandler& fnHandler, const CSourceLoc& loc, detail::HandlerMode eMode)
+    CPromise AppendThenLayer(const ThenHandler& fnHandler, const CSourceLoc& loc = CSourceLoc())
     {
         const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = m_pCore;
-        const std::shared_ptr<detail::CPromiseState> pUpState = m_pState;
-        const std::shared_ptr<detail::CPromiseState> pNextState = NewLayerState(loc);
-#if defined(ASYNC_DEBUG_TRACE)
-        pNextState->SetTraceLink(pUpState, eMode, /* bChainRoot = */ false, pUpState->ChainId());
-#endif
+        const std::shared_ptr<detail::CPromiseState> pNextState = NewNextLayer(m_pState, loc, detail::kModeThen);
 
-        const bool bOk = pUpState->AddHandler(pCore->Handle(),
-            [pCore, pNextState, fnHandler, eMode](const CPromiseResult& upResult)
+        const bool bOk = m_pState->AddHandler(pCore->Handle(),
+            [pCore, pNextState, fnHandler](const CPromiseResult& upResult)
             {
-                // 三态语义：该跳过的层直接透传上一层结果（then 被拒 / catch 已兑现）。
-                if (detail::ShouldPassThrough(eMode, upResult))
+                // 三态语义（then）：上游被拒绝 → 本层跳过，结果原样交给下一层（失败即停）。
+                if (upResult.IsRejected())
                 {
                     pNextState->Settle(upResult);
                     return;
                 }
-                pCore->RunHandler(pNextState, fnHandler, upResult, eMode);
+                pCore->RunThenHandler(pNextState, fnHandler);
             });
 
         if (!bOk)
         {
-            // 上一层已 settled 但目标执行器不可用：本层无法执行，以拒绝结束（下游继续透传）。
+            // 上一层层已 settled 但目标执行器不可用：本层无法执行，以拒绝结束（下游继续透传）。
+            SettleStopped(pNextState);
+        }
+        return CPromise(pCore, pNextState);
+    }
+
+    /// @brief 内部：在当前层之后**追加一层 catch / finally**（处理器拿到上游结果）。
+    ///
+    /// 与 `AppendThenLayer` 同骨架，只差两处：处理器要**上游结果**（交 `RunResultHandler`），
+    /// 以及模式要一路带到处理器里（finally 靠它「忽略返回值、原样透传」）。
+    ///
+    /// @param fnHandler 本层处理器（catch / finally 签名）。
+    /// @param eMode 处理器模式（detail::kModeCatch / kModeFinally）。
+    /// @param loc 注册点源码位置。
+    /// @return 指向新层的 promise 句柄。
+    CPromise AppendResultLayer(const ResultHandler& fnHandler, detail::HandlerMode eMode, const CSourceLoc& loc = CSourceLoc())
+    {
+        const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = m_pCore;
+        const std::shared_ptr<detail::CPromiseState> pNextState = NewNextLayer(m_pState, loc, eMode);
+
+        const bool bOk = m_pState->AddHandler(pCore->Handle(),
+            [pCore, pNextState, fnHandler, eMode](const CPromiseResult& upResult)
+            {
+                // 三态语义（catch）：上游已兑现 → 本层跳过（finally 从不跳过：成败都执行）。
+                if (eMode == detail::kModeCatch && upResult.IsFulfilled())
+                {
+                    pNextState->Settle(upResult);
+                    return;
+                }
+                pCore->RunResultHandler(pNextState, fnHandler, upResult, eMode);
+            });
+
+        if (!bOk)
+        {
+            // 上一层层已 settled 但目标执行器不可用：本层无法执行，以拒绝结束（下游继续透传）。
             SettleStopped(pNextState);
         }
         return CPromise(pCore, pNextState);

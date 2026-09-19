@@ -102,7 +102,7 @@ inline bool IsInExecutorThread(const std::shared_ptr<CExecutorHandle>& pHandle)
     return pHandle != nullptr && CThreadPool::IsInPoolThread(pHandle->m_pPool.get());
 }
 
-// Common/Async/Promise.h：层处理器（CPromiseCore::RunHandler）
+// Common/Async/Promise.h：层处理器（CPromiseCore::RunThenHandler / RunResultHandler）
 if (IsInExecutorThread(pCore->Handle()) && InlineDepth() < kMaxInlineDepth)
 {
     ++InlineDepth();
@@ -232,7 +232,7 @@ bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandl
 
 - `OnSettled` **只在 promise 无效时**返回 `false`；桥接代码**不需要再检查返回值**；
 - 送达位置：执行器可用 → 执行器线程（不阻塞调用方）；不可用 → **调用线程**（就地，微秒级）；
-- 不会因此递归加深：通知里通常只 settle 本层，而本层后续的层处理器走 `RunHandler`，
+- 不会因此递归加深：通知里通常只 settle 本层，而本层后续的层处理器走 `RunThenHandler` / `RunResultHandler`，
   执行器不可用时以「执行器已停」收口 → 链立即结束（有 `InlineDepth` 计数兼底）；
 - **层的语义不变**：`Then` / `Catch` / `Finally` 在“已 settled + 执行器不可用”时依旧以「执行器已停」结算，
   不会“就地执行一层”（验收：`SettledNotice_LayerStillRejectedWhenExecutorUnavailable`）。
