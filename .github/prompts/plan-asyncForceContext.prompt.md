@@ -189,7 +189,7 @@ refactor(async): 共享上下文改为强制传入（删懒创建 + 去掉核心
 | 合并 `OnSettled` / `OnSettledOn`、`RunNotice` / `RunNoticeOn` | 用户明确要求对称保留（一条链两处对称远比"少一个方法"重要） |
 | 删组合器（`WhenAny` / `WhenRace`…） | 对齐 JS 的能力集，用户明确要求 |
 | 取消机制（`kCancelled`）/ 诊断带 `CSourceLoc` / 层状态瘦身（P3）/ 任务体去分配（P4） | 属于**新功能 / 新优化**，不是"强制化精简"，另立计划 |
-| 批次 7（Common/Async 与 ServerCore/Exec 的边界） | 用户明确不做 |
+| 批次 7（Common/Async 与 ServerCore/Exec 的边界） | 已解决（2026-09-19）：`ServerCore/Exec` 整体移除，读写调度归位到异步框架（`CReadWriteGate`，由 `CAsyncExecutor` 组合） |
 
 ---
 

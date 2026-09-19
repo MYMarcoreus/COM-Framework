@@ -22,7 +22,6 @@
 | 消息流水线 | [messaging-usage.md](servercore/messaging-usage.md) | [messaging-impl.md](servercore/messaging-impl.md) |
 | 网络层 | [network-usage.md](servercore/network-usage.md) | [network-impl.md](servercore/network-impl.md) |
 | 可观测性 | [observability-usage.md](servercore/observability-usage.md) | [observability-impl.md](servercore/observability-impl.md) |
-| 并发调度（Exec） | [exec-usage.md](servercore/exec-usage.md) | [exec-impl.md](servercore/exec-impl.md) |
 | 扩展指南 | [extensibility-usage.md](servercore/extensibility-usage.md) | [extensibility-impl.md](servercore/extensibility-impl.md) |
 | 测试方法 | [testing-usage.md](servercore/testing-usage.md) | [testing-impl.md](servercore/testing-impl.md) |
 
@@ -72,7 +71,7 @@
 
 - **新成员上手**：`architecture.md` → 模块系统 → 依赖注入 → 网络 / 消息 / 事件 → 用 ServerExample 跑通
 - **写业务模块**：`extensibility-usage.md`（新增模块/协议/服务器）+ `dependency-injection-usage.md`
-- **并发控制**：`servercore/exec-usage.md`（模块读写调度 + 业务流程回调栈）
+- **并发控制 / 读写调度**：`common/async-usage.md`（`CAsyncExecutor` + 读写门：模块内读并发 / 写独占）
 - **异步/协程**：`common/async-usage.md`、`common/coroutine-usage.md`
 - **深入实现**：任一组件的 `*-impl.md`（数据结构、算法、线程模型）
 

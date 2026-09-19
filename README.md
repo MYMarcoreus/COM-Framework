@@ -9,8 +9,8 @@
 
 - **COM 风格模块模型**：`IUnknown` / `InterfaceId` / 引用计数 + `CModuleManager`（依赖拓扑排序 / 失败回滚）+ 依赖注入
 - **统一生命周期**：`MyApplication` 提供 `Initialize → Start → Run → Stop → Shutdown` 标准流程
-- **可复用 ServerCore**：模块 / 事件 / 消息流水线 / 网络 / 指标 / 并发调度等基础设施，业务服务器只写协议与业务
-- **并发调度（Exec）**：模块级读写并发控制 + 业务流程回调栈
+- **可复用 ServerCore**：模块 / 事件 / 消息流水线 / 网络 / 指标等基础设施，业务服务器只写协议与业务
+- **模块内并发控制**：`CAsyncExecutor` 组合读写门 —— 读任务并发、写任务独占（见 `docs/common/async-usage.md`）
 - **公共基础库（Common）**：日志 / 配置 / 网络 / 定时器 / 线程池 / 异步 / 序列化
 - **C++11 统一约束**，Make 构建，第三方库以 git 子模块管理（`ThirdParty/`）
 
@@ -54,7 +54,6 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 │   ├── Infra/                   # ILogger/IConfig/ITimer/IThreadPool/IAsyncExecutor + *Module（模块化适配层）
 │   ├── Observability/           # IMetrics / MetricsModule（统一指标：计数器/仪表 + 状态报告聚合）
 │   ├── Process/                 # Process 工具 / PidFile（守护进程 + pid 文件）
-│   ├── Exec/                    # 并发调度：全局调度器 + 模块级读写调度 + 业务流程回调栈
 │   └── Linux/
 │       └── Makefile             # 生成 build/libServerCore.a
 │
@@ -79,7 +78,7 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 │
 ├── Tests/                       # 单元测试（轻量框架，链接 Common + ServerCore）
 │   ├── TestFramework.h/.cpp     # TEST / ASSERT_TRUE / ASSERT_EQ 宏
-│   ├── test_common.cpp / test_exec.cpp / test_servercore.cpp
+│   ├── test_common.cpp / test_servercore.cpp
 │   ├── test_async_chain.cpp / test_infra.cpp / test_serialization.cpp
 │   ├── main.cpp
 │   └── Linux/Makefile           # 生成 build/tests（make run 运行全部用例）
@@ -116,7 +115,7 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 
 - **Application**：`MyApplication` 统一生命周期（Initialize → Start → Run → Stop → Shutdown）
 - **Module**：模块模型（IUnknown / 引用计数 / 接口查询）+ `CModuleManager`（拓扑排序 / 失败回滚）+ 依赖注入
-- **Event / Message / Network / Infra / Observability / Process / Exec**：事件分发、消息流水线、网络层、适配层、指标、进程工具、并发调度
+- **Event / Message / Network / Infra / Observability / Process**：事件分发、消息流水线、网络层、适配层、指标、进程工具
 
 依赖方向：`ServerExample / ServerTemplate → ServerCore → Common → 第三方库 / POSIX`。
 
@@ -127,7 +126,7 @@ COM-Framework/                  # 工作区根目录（可存放多个项目）
 
 ### Tests / examples
 
-- **Tests**：单元测试（轻量框架 `TEST` + `ASSERT_TRUE`/`ASSERT_EQ`，覆盖 Common / ServerCore / Exec / 异步链与协程）
+- **Tests**：单元测试（轻量框架 `TEST` + `ASSERT_TRUE`/`ASSERT_EQ`，覆盖 Common / ServerCore / 异步链与协程）
 - **examples**：示例项目（异步链 / 协程 19 个演示）
 
 ## 文档
