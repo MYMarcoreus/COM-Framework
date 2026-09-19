@@ -313,7 +313,7 @@ TEST(AsyncAlloc_RunBudget)
     // 占位任务：占住唯一 worker，直到本测试放行。
     std::atomic<bool> bOccupied(false);
     std::atomic<bool> bRelease(false);
-    ASSERT_TRUE(exec.Post(
+    ASSERT_TRUE(exec.Post(common::async::TaskKind::kWrite,
         [&bOccupied, &bRelease]()
         {
             bOccupied.store(true);

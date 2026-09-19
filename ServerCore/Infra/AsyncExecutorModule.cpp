@@ -12,8 +12,7 @@ SC_DEFINE_INTERFACE_MAP(CAsyncExecutorModule, CModule, IAsyncExecutor)
 /// @brief 创建异步执行器模块。
 ///
 /// @param nThreadCount 工作线程数量。
-CAsyncExecutorModule::CAsyncExecutorModule(size_t nThreadCount)
-    : CModule("async-executor"), m_nThreadCount(nThreadCount)
+CAsyncExecutorModule::CAsyncExecutorModule(size_t nThreadCount) : CModule("async-executor"), m_nThreadCount(nThreadCount)
 {}
 
 /// @brief 销毁异步执行器模块。
@@ -45,14 +44,18 @@ bool CAsyncExecutorModule::Start()
 
 /// @brief 提交无返回值任务。
 ///
+/// 类别原样透传给执行器的读写门（读可并发 / 写独占）。
+///
+/// @param eKind 任务类别。
+/// @param task 任务函数。
 /// @return 已启动时返回 true。
-bool CAsyncExecutorModule::Post(const std::function<void()>& task)
+bool CAsyncExecutorModule::Post(common::async::TaskKind eKind, const std::function<void()>& task)
 {
     if (!m_pExecutor)
     {
         return false;
     }
-    return m_pExecutor->Post(task);
+    return m_pExecutor->Post(eKind, task);
 }
 
 /// @brief 停止并等待任务完成。

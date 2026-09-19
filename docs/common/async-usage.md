@@ -36,8 +36,8 @@
 
 | 本框架 | 作用 |
 | --- | --- |
-| `exec.Start()` / `Stop()` / `Post(fn)` | 执行器生命周期与 fire-and-forget 投递（≈ Asio `io_context::post`） |
-| `exec.PostRead(fn)` / `NewPromise(..., TaskKind)` | 模块内读写控制：读任务并发、写任务独占（≈ 读写锁，但**不阻塞任何线程**、可跨挂起点） |
+| `exec.Start()` / `Stop()` / `Post(TaskKind, fn)` | 执行器生命周期与 fire-and-forget 投递（类别必填：读可并发 / 写独占；≈ Asio `io_context::post`） |
+| `exec.NewPromise(..., TaskKind)` / `Post(TaskKind, fn)` | 模块内读写控制：读任务并发、写任务独占（≈ 读写锁，但**不阻塞任何线程**、可跨挂起点） |
 | `p.Await()` | **阻塞**等待结果（占住 worker，可死锁；≈ C# `Task.Wait()`） |
 | `p.AwaitFor(ms)` | 阻塞等待 + 超时（≈ 手写 `Promise.race`） |
 | `p.OnSettledOn(exec, cb)` | 收尾通知投到指定执行器线程（**不是层**；≈ `CompletableFuture.whenCompleteAsync(fn, executor)`） |
@@ -184,7 +184,7 @@ common::async::CPromise<CMyContext> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC)
 | 协程内并行 await | `CO_AWAIT_ALL(a, b, c)` | 否 | 多段异步并行 + 汇聚 |
 | **跨模块组合**（不用协程） | `p.ThenPromise(工厂)` + `exec.NewPromise(spCtx, fnStarter)` | 否 | 调用**其他模块 / 另一套上下文**的异步函数，且要拿到完整结果 |
 | 层内非阻塞嵌套 | 层里起子 promise，由它的 `OnSettled` 回调接着写上下文 / 起后续 | 否 | 层里「顺手起一段异步」，不关心何时回来 |
-| 层内 Post | `exec.Post(重活)` | 否 | fire-and-forget 重活下沉 |
+| 层内 Post | `exec.Post(TaskKind::kWrite, 重活)` | 否 | fire-and-forget 重活下沉 |
 | 层内阻塞等待 | 层里 `sub.Await()` | **是**（占住一个 worker） | 仅当线程池还有空闲 worker（**单线程执行器必死锁**） |
 
 ### 6.1 协程内 await（推荐）
@@ -496,8 +496,8 @@ common::async::SetDiagnosticHandler([](const char*)
 | 形态 | 为什么要报 |
 | --- | --- |
 | 通知里抛异常（`OnSettled` / `OnSettledOn`） | 以前会让异常逃出 worker → 整个进程 `std::terminate`；现在兜住并报告 |
-| `exec.Post()` 投递的任务抛异常 | 同上（线程池 worker 本身不捕获异常） |
-| `exec.Post(nullptr)` | 空任务：不提交 + 报告（不再「返回 true 却什么也不做」） |
+| `exec.Post(类别, fn)` 投递的任务抛异常 | 同上（线程池 worker 本身不捕获异常） |
+| `exec.Post(类别, nullptr)` | 空任务：不提交 + 报告（不再「返回 true 却什么也不做」） |
 | 层内 / 本链执行器线程上 `Await()` 未落定的层 | 极可能死锁（占住 worker / 卡住本链）—— 改用 `ThenPromise` / 协程 / `AwaitFor(ms)` |
 
 ### 7.4 在层里看「我处在哪条链上」（`async/Trace.h`）
@@ -574,7 +574,7 @@ static common::async::CPromiseResult StepVerify(const std::shared_ptr<CMyContext
 common::async::CAsyncExecutor exec(4);              // 4 个工作线程（未命名）
 common::async::CAsyncExecutor execDb("db", 4);      // 具名：调试用（见下）
 exec.Start();                            // 启动（未启动时起 promise 立即被拒绝「执行器已停」）
-exec.Post([]() { /* 无返回值任务 */ });  // fire-and-forget（返回是否提交成功）
+exec.Post(common::async::TaskKind::kWrite, []() { /* 无返回值任务 */ });  // fire-and-forget（类别必填；返回是否提交成功）
 exec.Stop();                             // 停止并等待已投递任务完成
 ```
 
@@ -600,13 +600,15 @@ exec.Stop();                             // 停止并等待已投递任务完成
 
 | 类别 | 语义 | 怎么声明 |
 | --- | --- | --- |
-| `kWrite`（**默认**） | 独占：排斥本执行器内所有读写任务（写者之间也串行） | `exec.Post(fn)` / `exec.NewPromise(spCtx, 首层)` |
-| `kRead` | 并发：多个读任务可同时进入（上限 = 执行器线程数） | `exec.PostRead(fn)` / `exec.NewPromise(spCtx, 首层, ASYNC_LOC, common::async::TaskKind::kRead)` |
+| `kWrite` | 独占：排斥本执行器内所有读写任务（写者之间也串行） | `exec.Post(TaskKind::kWrite, fn)` / `exec.NewPromise(spCtx, 首层)`（默认写） |
+| `kRead` | 并发：多个读任务可同时进入（上限 = 执行器线程数） | `exec.Post(TaskKind::kRead, fn)` / `exec.NewPromise(spCtx, 首层, ASYNC_LOC, common::async::TaskKind::kRead)` |
 
 ```cpp
 // 模块的对外异步函数：查询 = 读链（可并发），写入 = 写链（独占）
 exec.NewPromise(spCtx, StepQueryStock, ASYNC_LOC, common::async::TaskKind::kRead);
 exec.NewPromise(spCtx, StepApplyChange, ASYNC_LOC);   // 默认写
+exec.Post(common::async::TaskKind::kRead, fnSnapshot);   // 读任务：可并发（类别必填）
+exec.Post(common::async::TaskKind::kWrite, fnRecalc);    // 写任务：独占（类别必填）
 ```
 
 业务侧完整落地（模块里不再需要自己的锁）：`ServerExample/Module/ExampleDbModule.cpp`（表不加锁：
@@ -616,7 +618,7 @@ exec.NewPromise(spCtx, StepApplyChange, ASYNC_LOC);   // 默认写
 
 规则与后果（**都是行为契约，不只是性能开关**）：
 
-- **默认是写**：与旧行为（任务在池里排着队跑）最接近、也最安全 —— 要并发必须**显式**声明读；
+- **类别必须说清楚**：`Post` 的类别必填（没有默认值 —— 默认写会让「忘记声明的读」变成静默并发问题）；`NewPromise` 的类别默认是写，要并发必须**显式**声明读；
 - **读并发 / 写独占 / 公平 FIFO**：读任务之间可同时进入；写任务排斥一切（含其它写）；
   门按提交顺序放行 —— 读不会越过先前排队的写，写也不会被后来的读插队；
   （实测：4 线程执行器上、每个任务约 40 µs 业务时，读批 ≈ 写批的 1/4，见
@@ -671,10 +673,10 @@ exec.NewPromise(spCtx, StepLoad, ASYNC_LOC)
 `BuildPromise` + `Start()` 已移除，理由见 [async-impl.md](async-impl.md) §5.1）。
 
 若确实需要「构链期间不跑业务代码」（例如先把所有层与依赖准备好再开跑），
-用一次 `exec.Post(...)` 把整段构链放到执行器线程上完成即可 —— 这比框架内置一种第二形态更划算：
+用一次 `exec.Post(TaskKind::kWrite, ...)` 把整段构链放到执行器线程上完成即可 —— 这比框架内置一种第二形态更划算：
 
 ```cpp
-exec.Post([&exec, spCtx]()
+exec.Post(common::async::TaskKind::kWrite, [&exec, spCtx]()
 {
     // 这一段整体跑在执行器线程上；首层投递出去时，链已经挂完
     common::async::CPromise<COrderCtx> p = exec.NewPromise(spCtx, StepLoad, ASYNC_LOC)

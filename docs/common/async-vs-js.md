@@ -56,7 +56,7 @@ JS 里**根本不存在「执行器」这个概念**，因为两件事由语言 
 | 本框架 | 作用 | 该对照谁 |
 |---|---|---|
 | `CAsyncExecutor`（及 `exec.*` 起链入口） | 线程池 + 句柄 + 停启；回答「投到哪、层跑在哪」 | Java `Executor` / C# `TaskScheduler` / Asio `io_context` |
-| `exec.Post(fn)` | 投递无返回值任务（fire-and-forget） | Asio `io_context::post` / Java `Executor.execute` |
+| `exec.Post(kind, fn)` | 投递无返回值任务（fire-and-forget；类别必填：读并发 / 写独占） | Asio `io_context::post` / Java `Executor.execute` |
 | `exec.CoStart<T>(spCtx)` + `CO_AWAIT` | 无栈协程（顺序代码 await 多条链） | C# `Task.Run` + `async/await` |
 | `p.Await()` | **阻塞**等待结果（占住 worker，可能死锁） | C# `Task.Wait()` / Java `future.get()` |
 | `p.AwaitFor(ms)` | 阻塞等待 + 超时（超时返「等待超时」，不落定本层） | 要手写 `Promise.race` |

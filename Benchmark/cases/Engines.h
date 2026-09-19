@@ -60,7 +60,7 @@ struct AsyncEngine
 
     void Submit(const std::function<void()>& f)
     {
-        exec->Post(f);
+        exec->Post(common::async::TaskKind::kWrite, f);
     }
 
     void Stop()

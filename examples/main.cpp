@@ -480,7 +480,7 @@ public:
             [this, spCtx, nBillNo](const CPromise<CBillCtx>::ResolveFn& fnResolve, const CPromise<CBillCtx>::RejectFn& fnReject)
         {
             // 真实场景：这里发起异步 IO（只登记回调）；示例用「投递 + 延时」模拟对方的完成通知。
-            const bool bPosted = m_exec.Post(
+            const bool bPosted = m_exec.Post(TaskKind::kWrite,
                 [spCtx, nBillNo, fnResolve]()
                 {
                     SleepMs(2);
@@ -640,7 +640,7 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
     const CPromise<COrderCtx>::ThenHandler fnLogistics = [&execMain](const std::shared_ptr<COrderCtx>& spSelf)
     {
         TraceHere("⑧ 物流支（分叉的一支）");
-        const bool bPosted = execMain.Post(
+        const bool bPosted = execMain.Post(TaskKind::kWrite,
             [spSelf]()
             {
                 SleepMs(5);  // 旁支里的重活

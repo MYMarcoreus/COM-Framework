@@ -38,7 +38,7 @@ return vecTargets.size();
 1. 锁内快照订阅者数 `nCount`；
 2. `m_pExecutor == nullptr` → **退化同步** `return Publish(...)`；
 3. 锁外**拷贝负载**到 `std::vector<char>`（借用指针异步后失效）；
-4. `m_pExecutor->Post([...])`：lambda 捕获 `Self<CEventDispatcher>()` **自持引用**保证模块存活，
+4. `m_pExecutor->Post(TaskKind::kWrite, [...])`：lambda 捕获 `Self<CEventDispatcher>()` **自持引用**保证模块存活，
    入队后调用同步 `Publish`；
 5. 返回 `bPosted ? nCount : 0`（投递成功返回快照参考值，失败 0）。
 
@@ -50,7 +50,7 @@ return vecTargets.size();
 ## 6. 与异步执行器的关系
 
 `Initialize(ctx)` 用 `ctx.Resolve<IAsyncExecutor>()` 解析可选执行器（缺失不算失败），存
-`ScopedInterfacePtr<IAsyncExecutor> m_pExecutor`；`PublishAsync` 调其 `Post(fn)` 提交无返回值任务
+`ScopedInterfacePtr<IAsyncExecutor> m_pExecutor`；`PublishAsync` 调其 `Post(TaskKind::kWrite, fn)` 提交无返回值任务
 （该接口适配 `common::async::CAsyncExecutor`）。
 
 **核心手法**：订阅表与处理器执行分离 + 「快照 + 锁外调用」防重入死锁；

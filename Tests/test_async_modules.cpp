@@ -208,7 +208,7 @@ private:
                 const common::async::CPromise<COrderCtx>::RejectFn& fnReject)
         {
             // executor 在本层所在线程（亲和后 = 本模块执行器线程）上同步执行，这里只投递、不干活。
-            if (!m_exec.Post(
+            if (!m_exec.Post(common::async::TaskKind::kWrite,
                     [fnResolve]()
                     {
                         fnResolve();

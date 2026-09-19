@@ -1107,7 +1107,7 @@ void CExampleAsyncModule::ScheduleExample()
     }
     // 驱动持有接口自持引用（Self<IUserService>()）：回调期间模块存活。
     std::shared_ptr<CDemoDriver> spDriver(new CDemoDriver(Self<IUserService>(), m_pUserTable));
-    if (!m_spExecutor->Post(
+    if (!m_spExecutor->Post(common::async::TaskKind::kWrite,
             [spDriver]()
             {
                 spDriver->Run();

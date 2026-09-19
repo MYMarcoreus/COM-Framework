@@ -144,7 +144,7 @@ void CExampleService::HandlePing(sc::ConnectionId id)
     if (m_pExecutor != nullptr)
     {
         auto spSelf = Self<CExampleService>();
-        m_pExecutor->Post(
+        m_pExecutor->Post(common::async::TaskKind::kWrite,
             [spSelf, id]()
             {
                 if (!spSelf)
@@ -177,7 +177,7 @@ void CExampleService::HandleEcho(sc::ConnectionId id, const char* payload, size_
     if (m_pExecutor != nullptr)
     {
         auto spSelf = Self<CExampleService>();
-        m_pExecutor->Post(
+        m_pExecutor->Post(common::async::TaskKind::kWrite,
             [spSelf, id, strPayload]()
             {
                 if (!spSelf)

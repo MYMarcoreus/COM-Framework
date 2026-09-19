@@ -2,8 +2,8 @@
 /// 执行器 × 读写门（模块内「读并发 / 写独占」）的集成测试。
 ///
 /// 正确性验证点：
-///  - `Post`（默认写）与默认写链：与模块内其它任务互斥，写者唯一，读写不重叠；
-///  - `PostRead` 与读链（`NewPromise(..., TaskKind::kRead)`）：读之间可并发进入；
+///  - `Post(kWrite)`（写）与默认写链：与模块内其它任务互斥，写者唯一，读写不重叠；
+///  - `Post(kRead)` 与读链（`NewPromise(..., TaskKind::kRead)`）：读之间可并发进入；
 ///  - 混合读写：读不越过写、写等到读者排空（无违例）；
 ///  - 就地级联仍然保留：单线程执行器上一条链的各层跑在同一线程（无其它排队任务时）；
 ///  - 停止语义：`Stop()` 先关门的投递、再等已接受的任务跑完（不丢任务、不悬挂），
@@ -141,8 +141,8 @@ TEST(AsyncRw_DefaultChainsExclusive)
     ASSERT_TRUE(state.nViolations.load() == 0);
 }
 
-/// @brief `PostRead`：读任务之间可并发（峰值 > 1）。
-TEST(AsyncRw_PostReadConcurrent)
+/// @brief `Post(kRead)`：读任务之间可并发（峰值 > 1）。
+TEST(AsyncRw_PostReadKindConcurrent)
 {
     const int kThreads = 4;
     const int kTasks = 8;
@@ -154,7 +154,7 @@ TEST(AsyncRw_PostReadConcurrent)
     std::atomic<int> nDone(0);
     for (int i = 0; i < kTasks; ++i)
     {
-        ASSERT_TRUE(exec.PostRead(
+        ASSERT_TRUE(exec.Post(TaskKind::kRead,
             [&state, &nDone]()
             {
                 RunReadWork(&state);
@@ -188,7 +188,7 @@ TEST(AsyncRw_PostWriteExclusive)
     std::atomic<int> nDone(0);
     for (int i = 0; i < kTasks; ++i)
     {
-        ASSERT_TRUE(exec.Post(
+        ASSERT_TRUE(exec.Post(TaskKind::kWrite,
             [&state, &nDone]()
             {
                 RunWriteWork(&state);
@@ -224,7 +224,7 @@ TEST(AsyncRw_MixedPostsNoOverlap)
     {
         if ((i & 1) == 0)
         {
-            ASSERT_TRUE(exec.PostRead(
+            ASSERT_TRUE(exec.Post(TaskKind::kRead,
                 [&state, &nDone]()
                 {
                     RunReadWork(&state);
@@ -233,7 +233,7 @@ TEST(AsyncRw_MixedPostsNoOverlap)
         }
         else
         {
-            ASSERT_TRUE(exec.Post(
+            ASSERT_TRUE(exec.Post(TaskKind::kWrite,
                 [&state, &nDone]()
                 {
                     RunWriteWork(&state);
@@ -344,7 +344,7 @@ TEST(AsyncRw_StopDrainsAcceptedTasks)
     std::atomic<int> nDone(0);
     std::atomic<bool> bOccupied(false);
     std::atomic<bool> bRelease(false);
-    ASSERT_TRUE(exec.Post(
+    ASSERT_TRUE(exec.Post(TaskKind::kWrite,
         [&bOccupied, &bRelease]()
         {
             bOccupied.store(true);
@@ -361,7 +361,7 @@ TEST(AsyncRw_StopDrainsAcceptedTasks)
     // 门口排队的任务（写，互斥 → 全部乖乖排队）
     for (int i = 0; i < kQueued; ++i)
     {
-        ASSERT_TRUE(exec.Post(
+        ASSERT_TRUE(exec.Post(TaskKind::kWrite,
             [&nDone]()
             {
                 nDone.fetch_add(1);
@@ -373,7 +373,7 @@ TEST(AsyncRw_StopDrainsAcceptedTasks)
 
     ASSERT_EQ(nDone.load(), kQueued);  // 已接受的任务一个不少
     ASSERT_TRUE(exec.IsStopped());
-    ASSERT_TRUE(!exec.Post(
+    ASSERT_TRUE(!exec.Post(TaskKind::kWrite,
         []()
         {
         }));  // 停止后拒新投递
@@ -409,7 +409,7 @@ TEST(AsyncRw_StopMidChainSettlesStopped)
 
     // 排一个任务在门口（首层占着写槽位 → 它进不来）→ 后续层的就地判定不成立。
     std::atomic<int> nQueued(0);
-    ASSERT_TRUE(exec.Post(
+    ASSERT_TRUE(exec.Post(TaskKind::kWrite,
         [&nQueued]()
         {
             nQueued.fetch_add(1);

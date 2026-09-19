@@ -42,24 +42,12 @@ void RunBatch(CAsyncExecutor& exec, TaskKind eKind)
     std::atomic<uint64_t> nDone(0);
     for (int i = 0; i < kTasksPerBatch; ++i)
     {
-        if (eKind == TaskKind::kRead)
-        {
-            exec.PostRead(
-                [&nDone]()
-                {
-                    SpinWork();
-                    nDone.fetch_add(1, std::memory_order_release);
-                });
-        }
-        else
-        {
-            exec.Post(
-                [&nDone]()
-                {
-                    SpinWork();
-                    nDone.fetch_add(1, std::memory_order_release);
-                });
-        }
+        exec.Post(eKind,
+            [&nDone]()
+            {
+                SpinWork();
+                nDone.fetch_add(1, std::memory_order_release);
+            });
     }
     benchmark::WaitDone(nDone, static_cast<uint64_t>(kTasksPerBatch));
 }
@@ -88,16 +76,16 @@ void RunReadWriteCases()
 
     // 读：任务之间可并发进入模块（上限 = 执行器线程数）。
     benchmark::BenchOp(
-        group, "PostRead × 256（读：并发）",
+        group, "Post(kRead) × 256（读：并发）",
         [&exec]()
         {
             RunBatch(exec, TaskKind::kRead);
         },
         7, "读任务可同时进入（上限 = 执行器线程数）");
 
-    // 写：默认类别，独占 —— 同一执行器内串行。
+    // 写：独占 —— 同一执行器内串行。
     benchmark::BenchOp(
-        group, "Post × 256（写：独占）",
+        group, "Post(kWrite) × 256（写：独占）",
         [&exec]()
         {
             RunBatch(exec, TaskKind::kWrite);

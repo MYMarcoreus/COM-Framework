@@ -371,7 +371,7 @@ private:
             [this](const common::async::CPromise<CStressOrderCtx>::ResolveFn& fnResolve,
                 const common::async::CPromise<CStressOrderCtx>::RejectFn& fnReject)
         {
-            if (!m_exec.Post(
+            if (!m_exec.Post(common::async::TaskKind::kWrite,
                     [fnResolve]()
                     {
                         fnResolve();

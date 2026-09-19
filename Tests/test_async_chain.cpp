@@ -727,7 +727,7 @@ TEST(Promise_PostBehavior)
 {
     common::async::CAsyncExecutor exec(2);
     std::atomic<int> nDone(0);
-    ASSERT_TRUE(!exec.Post(
+    ASSERT_TRUE(!exec.Post(common::async::TaskKind::kWrite,
         [&nDone]()
         {
             nDone.fetch_add(1);
@@ -736,7 +736,7 @@ TEST(Promise_PostBehavior)
     ASSERT_TRUE(exec.Start());
     const std::thread::id mainId = std::this_thread::get_id();
     std::thread::id workerId;
-    ASSERT_TRUE(exec.Post(
+    ASSERT_TRUE(exec.Post(common::async::TaskKind::kWrite,
         [&nDone, &workerId, mainId]()
         {
             workerId = std::this_thread::get_id();
@@ -747,7 +747,7 @@ TEST(Promise_PostBehavior)
     ASSERT_EQ(nDone.load(), 1);
     ASSERT_TRUE(workerId != mainId);
 
-    ASSERT_TRUE(!exec.Post(
+    ASSERT_TRUE(!exec.Post(common::async::TaskKind::kWrite,
         [&nDone]()
         {
             nDone.fetch_add(1);

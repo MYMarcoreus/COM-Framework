@@ -205,12 +205,12 @@ TEST(Robust_PostedTaskThrowIsContained)
     ASSERT_TRUE(exec.Start());
 
     std::atomic<bool> bSecondRan(false);
-    ASSERT_TRUE(exec.Post(
+    ASSERT_TRUE(exec.Post(common::async::TaskKind::kWrite,
         []()
         {
             throw std::runtime_error("投递的任务抛异常");
         }));
-    ASSERT_TRUE(exec.Post(
+    ASSERT_TRUE(exec.Post(common::async::TaskKind::kWrite,
         [&bSecondRan]()
         {
             bSecondRan.store(true);
@@ -224,7 +224,7 @@ TEST(Robust_PostedTaskThrowIsContained)
     ASSERT_TRUE(capture.Has(common::async::detail::kDiagPostThrow));
 
     // 空任务：不提交 + 报告（不再返回 true 却什么也不做）。
-    ASSERT_TRUE(!exec.Post(nullptr));
+    ASSERT_TRUE(!exec.Post(common::async::TaskKind::kWrite, nullptr));
     ASSERT_TRUE(capture.Has(common::async::detail::kDiagPostEmpty));
     exec.Stop();
 }
@@ -313,7 +313,7 @@ TEST(Robust_OnSettledOnRunsOnTargetExecutor)
     // 先取本执行器的线程 id（用同样走 Post 的方式）。
     std::atomic<bool> bGotOwnThread(false);
     std::thread::id idOwnThread;
-    ASSERT_TRUE(ownExec.Post(
+    ASSERT_TRUE(ownExec.Post(common::async::TaskKind::kWrite,
         [&bGotOwnThread, &idOwnThread]()
         {
             idOwnThread = std::this_thread::get_id();

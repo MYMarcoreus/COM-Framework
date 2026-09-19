@@ -69,29 +69,19 @@ bool CAsyncExecutor::Start()
     return m_pHandle->m_pPool->Start();
 }
 
-/// @brief 投递无返回值任务（fire-and-forget；类别 = 写）。
+/// @brief 投递无返回值任务（fire-and-forget）。
 ///
-/// 「写」= 与模块内其它任务互斥（默认与旧行为一致）；只读任务请用 `PostRead`。
+/// 类别必填（没有默认写）： `kWrite` = 与模块内其它任务互斥，`kRead` = 可与其它读任务并发。
 ///
+/// @param eKind 任务类别（读可并发 / 写独占）。
 /// @param fnTask 任务函数。
 /// @return true 已接受（已投递或在门口排队）；false 执行器已停止 / 未启动。
-bool CAsyncExecutor::Post(std::function<void()> fnTask)
+bool CAsyncExecutor::Post(TaskKind eKind, std::function<void()> fnTask)
 {
-    return PostImpl(TaskKind::kWrite, std::move(fnTask));
+    return PostImpl(eKind, std::move(fnTask));
 }
 
-/// @brief 投递无返回值任务（显式声明只读：可与其它读任务并发）。
-///
-/// 规约：读任务不得修改模块状态（并发读之间没有互斥）。
-///
-/// @param fnTask 任务函数。
-/// @return true 已接受（已投递或在门口排队）；false 执行器已停止 / 未启动。
-bool CAsyncExecutor::PostRead(std::function<void()> fnTask)
-{
-    return PostImpl(TaskKind::kRead, std::move(fnTask));
-}
-
-/// @brief 投递实现（`Post` / `PostRead` 共用）：包异常兜底后按类别过读写门。
+/// @brief 投递实现：包异常兜底后按类别过读写门。
 ///
 /// 包一层异常兜底的原因：线程池 worker 不捕获异常（异常逃出线程函数即 `std::terminate`），
 /// 而这里投递的是「用户任务」，所以在框架边界上收口。

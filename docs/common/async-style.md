@@ -158,7 +158,7 @@ public:
                 const CPromise<CStockCtx>::ResolveFn& fnResolve, const CPromise<CStockCtx>::RejectFn& fnReject)
         {
             // 只发起动作 + 登记回调（不阻塞调用方线程）。
-            const bool bPosted = m_exec.Post(
+            const bool bPosted = m_exec.Post(common::async::TaskKind::kWrite,
                 [spCtx, nReserveNo, bShortage, fnResolve, fnReject]()
                 {
                     if (bShortage)
@@ -189,7 +189,7 @@ public:
         const CPromise<CStockCtx>::ChainStarter fnStarter =
             [this, spCtx](const CPromise<CStockCtx>::ResolveFn& fnResolve, const CPromise<CStockCtx>::RejectFn& fnReject)
         {
-            const bool bPosted = m_exec.Post(
+            const bool bPosted = m_exec.Post(common::async::TaskKind::kWrite,
                 [spCtx, fnResolve]()
                 {
                     if (spCtx->nReserveNo != 0)
@@ -269,7 +269,7 @@ public:
             [this, spCtx, nPayNo, bDecline](
                 const CPromise<CPayCtx>::ResolveFn& fnResolve, const CPromise<CPayCtx>::RejectFn& fnReject)
         {
-            const bool bPosted = m_exec.Post(
+            const bool bPosted = m_exec.Post(common::async::TaskKind::kWrite,
                 [spCtx, nPayNo, bDecline, fnResolve, fnReject]()
                 {
                     if (bDecline)
@@ -330,7 +330,7 @@ public:
     /// 预约取件：立即返回，完成后在 **SDK 自己的线程**上回调。
     bool SchedulePickup(const std::string& strOrderId, const PickupCallback& fnCallback)
     {
-        return m_exec.Post(
+        return m_exec.Post(common::async::TaskKind::kWrite,
             [this, strOrderId, fnCallback]()
             {
                 if (m_bUnavailable)
@@ -347,7 +347,7 @@ public:
     /// 取消取件（补偿用）：也是回调式。
     bool CancelPickup(int nPickupNo, const std::function<void()>& fnDone)
     {
-        return m_exec.Post(
+        return m_exec.Post(common::async::TaskKind::kWrite,
             [nPickupNo, fnDone]()
             {
                 std::printf("      快递模块: 取消取件单 %d\n", nPickupNo);

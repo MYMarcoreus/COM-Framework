@@ -258,7 +258,7 @@ private:
             [this](const common::async::CPromise<CAffinityOrderCtx>::ResolveFn& fnResolve,
                 const common::async::CPromise<CAffinityOrderCtx>::RejectFn& fnReject)
         {
-            if (!m_exec.Post(
+            if (!m_exec.Post(common::async::TaskKind::kWrite,
                     [fnResolve]()
                     {
                         fnResolve();

@@ -35,14 +35,15 @@
 //   执行器内部组合一个读写门，每条投递都带「类别」：读任务（kRead）可并发、写任务（kWrite）独占。
 //   于是「一个模块 = 一个执行器」时，模块数据在「读任务只读、写任务写完」的规约下不再需要自己的锁
 //   （锁在异步里跨不了挂起点，按任务粒度各自加锁又会占住工作线程且没有公平性）。
-//   默认类别是「写」—— 与旧行为（一切任务在池里排着跑）一致：要并发显式声明读
-//   （`PostRead` / `NewPromise(..., kind)`）。
+//   类别：`NewPromise` 默认「写」（与旧行为一致：要并发显式声明读）；`Post` 的类别**必填**
+//   （`Post(TaskKind::kWrite, fn)` / `Post(TaskKind::kRead, fn)`）。
 //   就地级联同样受门约束（判定在 `detail::ShouldInline` → `CReadWriteGate::CanRunInline`）：
 //   只有「本线程正跑着本门同类任务 + 无人在排队」才就地，否则入队 —— 前者保互斥，后者保公平。
 //
 // 调度对照（各自生态里的同类物）：
 //   CAsyncExecutor  ≈ Java `Executor` / C# `TaskScheduler` / Asio `io_context` / dispatch_queue
 //   exec.Post(fn)   ≈ Asio `io_context::post` / Java `Executor.execute`
+//     （本框架的 Post 多一个必填的类别参数：读可并发 / 写独占。）
 //   exec.CoStart<T> ≈ C# `Task.Run`（续跑线程由调度器决定）
 //   而 JS 这边：`setTimeout(fn, 0)` 是「宿主 API」（不在 Promise 里），`queueMicrotask(fn)`
 //   才是微任务投递 —— 两者都不可控线程，因此不能与 `Post` 画等号。
@@ -50,7 +51,7 @@
 // 用法：
 //   common::async::CAsyncExecutor exec(4);
 //   exec.Start();
-//   exec.Post([]() { /* 无返回值任务 */ });
+//   exec.Post(TaskKind::kWrite, []() { /* 无返回值任务 */ });
 //   auto p = exec.NewPromise(spCtx, StepLoad).Then(StepSave);   // 起 promise
 //   exec.Stop();
 //
@@ -269,11 +270,11 @@ public:
 
     //================ Post ================
 
-    // 投递无返回值任务（fire-and-forget；类别 = 写：与模块内其它任务互斥）。
-    bool Post(std::function<void()> fnTask);
-
-    // 投递无返回值任务（显式声明只读：可与其它读任务并发）。
-    bool PostRead(std::function<void()> fnTask);
+    // 投递无返回值任务（fire-and-forget）：类别必填 —— 读可并发 / 写独占。
+    //
+    // 为什么没有默认值：类别决定模块内的互斥语义（“这条任务能不能和别的任务同时跑”），
+    // 是行为契约而不是可选参数 —— 默认值会让“忘记声明的读”变成静默的并发问题。
+    bool Post(TaskKind eKind, std::function<void()> fnTask);
 
     //================ Chain ================
 
@@ -336,7 +337,7 @@ private:
     // 新建句柄（连同线程池对象 + 读写门：都带上本执行器的名字）。
     std::shared_ptr<detail::CExecutorHandle> MakeHandle() const;
 
-    // 投递实现（Post / PostRead 共用）：包异常兜底后按类别过读写门。
+    // 投递实现（Post 的唯一实现）：包异常兜底后按类别过读写门。
     bool PostImpl(TaskKind eKind, std::function<void()> fnTask);
 
     // 注意声明顺序：成员按「声明序」初始化，而 `m_pHandle` 的构造（MakeHandle）要用到名字 ——

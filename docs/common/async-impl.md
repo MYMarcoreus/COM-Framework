@@ -171,7 +171,7 @@ else
    两条路径的**可见结果完全一样**（只是多一次入队）。延迟启动买到的只剩「少一次投递」。
 2. 它唯一独有的能力是「构链期完全不跑业务代码」，而这用一行 `exec.Post(...)` 就能自建：
    ```cpp
-   exec.Post([&exec, spCtx]()
+   exec.Post(common::async::TaskKind::kWrite, [&exec, spCtx]()
    {
        // 整段构链在执行器线程上同步做完；首层投递出去时，链已挂完
        common::async::CPromise<Ctx> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Then(StepB, ASYNC_LOC);
@@ -418,7 +418,7 @@ if (!DispatchInlineOrPost(Handle(), std::move(fnRun)))
 | --- | --- | --- |
 | 层处理器抛异常 | `MakeLayerRunner` 的 try/catch → 异常原样成为本层拒绝 | 不变（本来就安全） |
 | **通知**（`OnSettled` / `OnSettledOn`）抛异常 | 异常从 `CPromiseState::Settle` 逃出 → worker 无 catch → **`std::terminate`（进程挂掉）** | `detail::RunNotice` 兜住 + 报告诊断 |
-| `exec.Post(fn)` 的任务抛异常 | 同上（同样能弄死进程） | `CAsyncExecutor::Post` 包一层 guard 兜住 + 报告 |
+| `exec.Post(类别, fn)` 的任务抛异常 | 同上（同样能弄死进程） | `CAsyncExecutor::Post` 包一层 guard 兜住 + 报告 |
 | `exec.NewPromise(spCtx, starter)` 的起链回调抛异常 | `RunChainStarter` 兜住 → 异常原样成为拒绝 | 不变 |
 | `Await()` 永久挂住 | 只能靠文档警告 | 新增 `AwaitFor(ms)`（超时返回「等待超时」，不落定、不取消链） |
 | 层内 / 本链线程上 `Await()` 未落定的层（必死锁） | 无任何提示 | `ReportBlockingRisk()` 报诊断（**不硬失败**：等「别的线程 settle 的层」是合法的） |
@@ -470,7 +470,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 | 路径 | 说法 |
 | --- | --- |
-| `exec.Post` / `PostRead` | 包一层异常兜底（`kDiagPostThrow`）后过门 |
+| `exec.Post(类别, fn)` | 包一层异常兜底（`kDiagPostThrow`）后按类别过门 |
 | 层派发 `PostToHandle(handle, kind, fn)` | `StartChain` 首层、`AddHandler` 的「已落定 → 投递」、`DispatchInlineOrPost` 的投递分支 —— 按链的类别过门 |
 | 通知（`OnSettled` / `OnSettledOn`） | **直投**（`PostToHandle(handle, fn)` 的直投重载）：保证送达优先，不去排队等槽位 |
 | 就地（`CanRunInline`） | 不过门：槽位已在外层任务手里（同类），只要求「无人在排队」 |
@@ -500,7 +500,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 测试：`Tests/test_async_gate.cpp`（门本体 13 例：读并发 / 写独占 / 三种 FIFO 顺序 / 同门重入 /
 多门链式 / 16 门压力 / 排空 / 拒绝路径 / 异常仍归还槽位）+ `Tests/test_async_rw.cpp`
-（执行器集成 8 例：默认写链互斥 / `PostRead` 并发 / 读写不重叠 / 读链并发 / 就地级联同线程 /
+（执行器集成 8 例：默认写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / 就地级联同线程 /
 `Stop` 排空不丢任务 / 停止中链以「执行器已停」收口）。
 
 ## 9. 源码位置调试（ASYNC_LOC）
@@ -597,7 +597,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 | 行 | 均值 | 相对基线 |
 | --- | --- | --- |
 | 直接顺序执行同一批工作（基线） | 10.4 ms | 1.0× |
-| `PostRead`（读：并发） | **2.7 ms** | **0.3×**（≈3.8×，接近线程数 4） |
+| `Post(kRead)`（读：并发） | **2.7 ms** | **0.3×**（≈3.8×，接近线程数 4） |
 | `Post`（写：独占） | 12.1 ms | 1.2×（串行 + 每任务调度开销） |
 
 **边界：任务太短时，测到的是线程池的唤醒成本，而不是读写门。** 池在「队列空窗」下每任务要付

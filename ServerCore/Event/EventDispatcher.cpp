@@ -177,7 +177,7 @@ size_t CEventDispatcher::PublishAsync(const EventType& strType, const void* pDat
 
     // ④ 投递到执行器；捕获模块自持引用保证回调期间模块存活
     auto spSelf = Self<CEventDispatcher>();
-    bool bPosted = m_pExecutor->Post(
+    bool bPosted = m_pExecutor->Post(common::async::TaskKind::kWrite,
         [spSelf, strType, vecPayload]()
         {
             if (spSelf)

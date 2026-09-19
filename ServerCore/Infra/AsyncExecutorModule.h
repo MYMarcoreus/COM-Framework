@@ -23,7 +23,7 @@ public:
 
     bool Initialize(const CResolveContext& ctx) override;
     bool Start() override;
-    bool Post(const std::function<void()>& task) override;
+    bool Post(common::async::TaskKind eKind, const std::function<void()>& task) override;
     void Stop() override;
     void Shutdown() override;
 

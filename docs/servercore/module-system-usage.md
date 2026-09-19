@@ -115,7 +115,7 @@ m_pTimer->AddPeriodicTimer(interval, [spSelf]()
 
 ```cpp
 sc::CWeakPtr<sc::IModule> spWeak = WeakSelf();
-m_pExecutor->Post([spWeak]()
+m_pExecutor->Post(common::async::TaskKind::kWrite, [spWeak]()
 {
     sc::ScopedInterfacePtr<sc::IModule> spStrong = spWeak.Lock();
     if (!spStrong) { return; }   // 模块已销毁，丢弃结果

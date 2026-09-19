@@ -74,7 +74,7 @@ ASSERT(bMixOk);
 ```
 
 另有一条相关限制：**lambda 字面量**不能出现在未求值上下文（C++11），
-`ASSERT(exec.Post([]{ … }))` 只有 debug 构建编得过 —— 任务体先收进 `std::function`。
+`ASSERT(exec.Post(common::async::TaskKind::kWrite, []{ … }))` 只有 debug 构建编得过 —— 任务体先收进 `std::function`。
 
 一句话：**断言只描述「应该是什么」，不负责「让它发生」**。
 

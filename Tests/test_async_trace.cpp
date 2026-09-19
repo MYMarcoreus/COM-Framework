@@ -1086,7 +1086,7 @@ void PostResidueProbe(CAsyncExecutor& exec, const std::shared_ptr<CResidueCtx>& 
 {
     spCtx->bProbeInLayer.store(false);
     spCtx->bProbeDone.store(false);
-    const bool bPosted = exec.Post(
+    const bool bPosted = exec.Post(common::async::TaskKind::kWrite,
         [spCtx]()
         {
             const bool bInLayer = (common::async::CurrentLayer() != NULL) || common::async::VisitLayerChain(

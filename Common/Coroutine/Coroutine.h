@@ -362,7 +362,7 @@ private:
             Terminate(CPromiseResult::Reject(std::runtime_error("执行器已停")));  // 无强引用（理论不应发生）。
             return;
         }
-        if (!m_pExec->Post(
+        if (!m_pExec->Post(TaskKind::kWrite,
                 [spSelf, this]()
                 {
                     Resume();

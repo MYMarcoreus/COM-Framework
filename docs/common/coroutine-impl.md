@@ -73,7 +73,7 @@ promise.OnSettled([spSelf, this](CPromiseResult r)
 {
     ...
 });  // 回调期间对象保活
-m_pExec->Post([spSelf, this]()
+m_pExec->Post(common::async::TaskKind::kWrite, [spSelf, this]()
 {
     Resume();
 });

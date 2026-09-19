@@ -54,7 +54,7 @@ private:
 /// 用法：
 /// @code
 ///   sc::CWeakPtr<sc::IModule> spWeak = WeakSelf();
-///   m_pExecutor->Post([spWeak]()
+///   m_pExecutor->Post(common::async::TaskKind::kWrite, [spWeak]()
 ///   {
 ///       sc::ScopedInterfacePtr<sc::IModule> spStrong = spWeak.Lock();
 ///       if (!spStrong)
