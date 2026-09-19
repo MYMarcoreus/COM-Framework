@@ -15,7 +15,7 @@
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 
-/// 业务失败文案（拒绍 = 标准异常；框架只搬运，不维护码表）
+/// 业务失败文案（失败 = 标准异常；框架只搬运，不维护码表）
 static const char* const kBadOrderText = "订单参数非法。";
 
 // ====================================================================
@@ -135,7 +135,8 @@ class COrderModule
     {
         if (sp->nQty <= 0 || sp->nQty > 10)
         {
-            return common::async::CPromiseResult::Reject(kCodeBadOrder);  // 本层拒绝 → 后续 then 不执行
+            return common::async::CPromiseResult::Reject(
+                std::runtime_error("数量不合法"));  // 本层拒绝 → 后续 then 不执行
         }
         sp->strLog += "校验;";
         return common::async::CPromiseResult::Resolve();

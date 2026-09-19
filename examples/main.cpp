@@ -474,7 +474,7 @@ public:
     /// @brief 对外异步函数：写一条账单。
     ///
     /// 回调式起链：`fnStarter` 里发起异步动作（真实场景是 IO / RPC），完成时调
-    /// `fnResolve()` / `fnReject(码)`；它只登记动作，绝不阻塞调用方线程。
+    /// `fnResolve()` / `fnReject(std::runtime_error("…"))`；它只登记动作，绝不阻塞调用方线程。
     ///
     /// @param nOrderId 订单号。
     /// @param nTotal 金额。

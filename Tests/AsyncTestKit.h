@@ -42,7 +42,7 @@ inline const char* CalleeRejectText()
 /// @return true 是。
 inline bool IsStoppedFailure(const common::async::CPromiseResult& result)
 {
-    return result == common::async::CPromiseResult::Reject(common::async::detail::FailureStopped());
+    return result.IsRejected() && result.Message() == "执行器已停";
 }
 
 /// @brief 是不是「等待超时」这类框架侧失败（`AwaitFor` 没等到）。
@@ -52,7 +52,7 @@ inline bool IsStoppedFailure(const common::async::CPromiseResult& result)
 /// @return true 是。
 inline bool IsTimeoutFailure(const common::async::CPromiseResult& result)
 {
-    return result == common::async::CPromiseResult::Reject(common::async::detail::FailureTimeout());
+    return result.IsRejected() && result.Message() == "等待超时";
 }
 
 /// @brief 是不是「未指定原因」这类框架侧失败（组合器空集合等）。
@@ -62,7 +62,7 @@ inline bool IsTimeoutFailure(const common::async::CPromiseResult& result)
 /// @return true 是。
 inline bool IsUnspecifiedFailure(const common::async::CPromiseResult& result)
 {
-    return result == common::async::CPromiseResult::Reject(common::async::detail::FailureUnspecified());
+    return result.IsRejected() && result.Message() == "未指定原因";
 }
 
 /// @brief 步骤轨迹 + 每步所在线程（跨模块共享，写入加锁）。

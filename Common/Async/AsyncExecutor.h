@@ -337,7 +337,7 @@ enum GatherPolicy
 inline CPromiseResult ResolveEmptyGather(GatherPolicy ePolicy)
 {
     return (ePolicy == kGatherAll || ePolicy == kGatherAllSettled) ? CPromiseResult::Resolve()
-                                                                   : CPromiseResult::Reject(detail::FailureUnspecified());
+                                                                   : CPromiseResult::Reject(std::runtime_error("未指定原因"));
 }
 
 /// 与 `CPromiseState` 一样是**非模板**的纯状态：它只关心子 promise 的成败，
@@ -359,7 +359,7 @@ public:
           m_nPending(nTotal),
           m_bRejectSeen(false),
           m_bDone(false),
-          m_firstReject(CPromiseResult::Reject(detail::FailureUnspecified())),
+          m_firstReject(CPromiseResult::Reject(std::runtime_error("未指定原因"))),
           m_fnResolve(fnResolve),
           m_fnReject(fnReject)
     {}

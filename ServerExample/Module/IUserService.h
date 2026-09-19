@@ -79,25 +79,14 @@ private:
 /// @return true 是用户业务失败。
 inline bool TryGetUserError(const common::async::CPromiseResult& result, CUserError::EKind& eKindOut, std::string& strWhatOut)
 {
-    if (result.IsFulfilled())
+    const CUserError* pError = dynamic_cast<const CUserError*>(result.Exception().get());
+    if (pError == nullptr)
     {
-        return false;
+        return false;  // 兑现 / 框架侧失败 / 其他业务异常：交给调用方透传
     }
-    try
-    {
-        std::rethrow_exception(result.Exception());
-    }
-    catch (const CUserError& e)
-    {
-        eKindOut = e.Kind();
-        strWhatOut = e.what();
-        return true;
-    }
-    catch (...)
-    {
-        return false;  // 框架侧失败或其他异常：交给调用方透传
-    }
-    return false;
+    eKindOut = pError->Kind();
+    strWhatOut = pError->what();
+    return true;
 }
 
 /// @brief 用户业务接口标识。

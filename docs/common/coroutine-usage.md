@@ -27,7 +27,7 @@ promise ：一层做完做下一层（then 失败即停）
 | `await promise` | `CO_AWAIT(promise)` |
 | `await Promise.all([a, b])` | `CO_AWAIT_ALL(a, b)` |
 | `return;` | `CO_RETURN_VOID();` / `CO_END();` |
-| `return result;` | `CO_RETURN(CPromiseResult::Reject(码));` |
+| `return result;` | `CO_RETURN(CPromiseResult::Reject(std::runtime_error("原因")));` |
 | 局部变量跨 await | 必须写成派生类成员（无栈约束） |
 
 ## 3. 快速上手

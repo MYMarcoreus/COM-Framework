@@ -88,8 +88,8 @@ private:
 
 /// @brief 提取拒绝原因里的数据访问层失败（**不是** `CDbError` → 返回 false）。
 ///
-/// 这是「按异常类型分流」的标准写法：把结果里的异常重新抛出后 `catch` 具体类型，
-/// 其余（框架侧失败 / 其他业务异常）原封不动地继续透传。
+/// 这是「按异常类型分流」的标准写法：对结果里的异常对象做 `dynamic_cast`（不走 `catch`、不抛不捕）；
+/// 其余（兑现 / 框架侧失败 / 其他业务异常）原封不动地继续透传。
 ///
 /// @param result 待看的结果。
 /// @param eKindOut 输出：失败种类（返回 true 时有效）。
@@ -98,25 +98,14 @@ private:
 /// @return true 是数据访问层业务失败。
 inline bool TryGetDbError(const common::async::CPromiseResult& result, CDbError::EKind& eKindOut, std::string& strWhatOut)
 {
-    if (result.IsFulfilled())
+    const CDbError* pError = dynamic_cast<const CDbError*>(result.Exception().get());
+    if (pError == nullptr)
     {
-        return false;
+        return false;  // 兑现 / 框架侧失败 / 其他业务异常：交给调用方透传
     }
-    try
-    {
-        std::rethrow_exception(result.Exception());
-    }
-    catch (const CDbError& e)
-    {
-        eKindOut = e.Kind();
-        strWhatOut = e.what();
-        return true;
-    }
-    catch (...)
-    {
-        return false;  // 框架侧失败或其他异常：交给调用方透传
-    }
-    return false;
+    eKindOut = pError->Kind();
+    strWhatOut = pError->what();
+    return true;
 }
 
 /// @brief 用户信息表（模拟数据库的数据访问模块接口）。

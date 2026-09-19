@@ -36,14 +36,14 @@ JS 里**根本不存在「执行器」这个概念**，因为两件事由语言 
 | `onFulfilled` 返回 promise（自动等待） | `p.ThenPromise(factory)`（factory 返回一条子 promise） |
 | `p.catch(onRejected)` | `p.Catch(handler)` |
 | `p.finally(onFinally)` | `p.Finally(handler)`（链上的一层）；只做旁路观察用 `p.OnSettled(cb)` ⁽²⁾ |
-| `resolve()` / `reject(reason)` | `CPromiseResult::Resolve()` / `CPromiseResult::Reject(码)` |
+| `resolve()` / `reject(reason)` | `CPromiseResult::Resolve()` / `CPromiseResult::Reject(异常对象)` |
 | `fulfilled` / `rejected` | `result.IsFulfilled()` / `result.IsRejected()` |
 | `p` 已完成 | `p.IsSettled()` |
 | `Promise.all([a, b, c])` | `exec.WhenAll(spCtx, a, b, c)` ⁽¹⁾（全部兑现才继续，任一拒绝立即失败）；协程内也可 `CO_AWAIT_ALL(a, b, c)` |
 | `Promise.allSettled([a, b, c])` | `exec.WhenAllSettled(spCtx, ...)` ⁽¹⁾（全部落定即兑现，不看成败） |
 | `Promise.race([a, b])` | `exec.WhenRace(spCtx, a, b)` ⁽¹⁾（首个落定者定结果，拒绝也算结论） |
 | `Promise.any([a, b])` | `exec.WhenAny(spCtx, a, b)` ⁽¹⁾（首个兑现者定结果，全拒绝才失败） |
-| `Promise.resolve(x)` / `Promise.reject(e)` | `CPromiseResult::Resolve()` / `Reject(码)`（结构化的层结果，不是通用工具函数） |
+| `Promise.resolve(x)` / `Promise.reject(e)` | `CPromiseResult::Resolve()` / `Reject(std::runtime_error("…"))`（结构化的层结果，不是通用工具函数） |
 | `async function` | 协程函数（`Common/Coroutine/Coroutine.h`）⁽³⁾，或纯异步的「层函数 + 链」 |
 
 ⁽¹⁾ **结构差异**：JS 的 `new Promise` 是**构造函数**、`Promise.all` 是**构造函数上的静态方法**；
@@ -139,21 +139,22 @@ p.Then([&exec](common::async::CPromiseResult, const std::shared_ptr<Ctx>& sp)  /
 ### 2.4 错误也走「异常对象」（但不携 stack）
 
 JS 用 `reject(Error)`（带 message / stack）；本框架用 `reject(标准异常)`：
-`CPromiseResult::Reject(std::runtime_error("库存不足"))` —— 异常对象存在结果里（`std::exception_ptr`），
-`Message()` / `What()` 拿到 `what()`，`Exception()` 拿到 `std::exception_ptr`（可重新抛出后
-`catch` 具体类型）。**兑现与拒绝是两件事**：判成败一律看 `IsFulfilled()` / `IsRejected()`，
-结果里**没有任何错误码**。
+`CPromiseResult::Reject(std::runtime_error("库存不足"))` —— 异常对象存在结果里
+（`std::shared_ptr<const std::exception>`），`Message()` / `What()` 拿到 `what()`，
+`Exception()` 拿到那个 `shared_ptr`（可 `dynamic_cast` 到具体类型分流；C++11 没有 virtual clone，
+所以要「搬」一个已抛出的异常只能重新构造）。**兑现与拒绝是两件事**：判成败一律看
+`IsFulfilled()` / `IsRejected()`，结果里**没有任何错误码**。
 
-框架自己的固定失败（同样是标准异常，预建、零分配）：
+框架自己的固定失败（同样是标准异常，**在调用点直接构造**）：
 
-| 预建失败 | 含义 |
+| 代码里的样子 | 含义 |
 |---|---|
-| `detail::FailureStopped()` | 执行器已停止 / 投递失败 / 跨执行器续接失败 |
-| `detail::FailureTimeout()` | `AwaitFor(ms)` 超时（只报「没等到」） |
-| `detail::FailureHandler()` | 框架收口时处理器抛了非 std 异常 |
-| `detail::FailureUnspecified()` | 框架拒绝但无更具体原因（组合器空集合的 race / any 等） |
+| `Reject(std::runtime_error("执行器已停"))` | 执行器已停止 / 投递失败 / 跨执行器续接失败 |
+| `Reject(std::runtime_error("等待超时"))` | `AwaitFor(ms)` 超时（只报「没等到」） |
+| `Reject(std::runtime_error("处理器异常"))` | 框架收口时处理器抛了非 std 异常 |
+| `Reject(std::runtime_error("未指定原因"))` | 框架拒绝但无更具体原因（组合器空集合的 race / any 等） |
 
-跨模块时在桥接层把对方的异常**翻译**成本模块的业务异常（`catch` 具体类型），
+跨模块时在桥接层把对方的异常**翻译**成本模块的业务异常（`dynamic_cast` + 重造一个业务异常），
 或直接原样透传；业务错误的细节（重试次数 / 冲突行 / errno）放**业务上下文**，
 不要塑进结果 —— 比 JS 少的是 stack（C++ 异常里我只保留 `what()`）。
 
@@ -184,7 +185,7 @@ JS 里没人 `catch` 的 promise 拒绝会触发 `unhandledrejection`；本框�
 ### 2.7 其他差异
 
 - **无 `Promise.resolve` / thenable 探测**：跳库、跳回调式 API 的适配要显式写 `exec.NewPromise(spCtx, fnStarter)`；
-- **无 AbortController / 超时**：取消要么在每个层里检查上下文标志，要么用定时器 + `Reject(码)`；
+- **无 AbortController / 超时**：取消要么在每个层里检查上下文标志，要么用定时器 + `Reject(std::runtime_error("已取消"))`；
 - **`Await()` 之外还有协程**：`CO_AWAIT` 是非阻塞挂起（不占 worker），`Await()` 是阻塞等待；
   生产代码里推荐前者，或干脆全回调（`OnSettled`）。
 

@@ -111,7 +111,7 @@ if (IsInExecutorThread(pCore->Handle()) && InlineDepth() < kMaxInlineDepth)
 }
 else if (!PostToHandle(pCore->Handle(), std::move(fnRun)))
 {
-    pState->Settle(CPromiseResult::Reject(CPromiseResult::Reject(detail::FailureStopped())));  // 跨执行器：投递回本链执行器；不可用则拒绝
+    pState->Settle(CPromiseResult::Reject(std::runtime_error("执行器已停")));  // 跨执行器：投递回本链执行器；不可用则使本层失败
 }
 
 // Common/Coroutine/Coroutine.h：协程续跑（ResumeInline）用同一判定
@@ -201,7 +201,7 @@ promiseStock.OnSettled([...](common::async::CPromiseResult result) { /* 回调 *
 链路一步步是：
 
 1. 被调模块的执行器已 `Stop()` → 它内部 `NewPromise` 的投递失败 → `CPromise::StartChain`（当时的
-   `CPromiseCore::PostHandler`）里 `pState->Settle(CPromiseResult::Reject(detail::FailureStopped()))`
+   `CPromiseCore::PostHandler`）里 `pState->Settle(CPromiseResult::Reject(std::runtime_error("执行器已停")))`
    —— **这一步是对的**，子 promise 立即落定为「执行器已停」；
 2. 调用方紧接着 `OnSettled(...)`，此时子 promise **已经 settled** → `CPromiseState::AddHandler` 走路径 ②
    → `PostToHandle(pHandle, ...)` 用的是**被调模块的执行器**（已停止）→ 返回 `false`，

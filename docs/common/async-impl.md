@@ -27,7 +27,7 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 
 | 文件 | 内容 |
 | --- | --- |
-| `PromiseResult.h` | `CPromiseResult`（兑现 / 拒绝 + 标准异常）、`detail::FailureXxx()`（框架预建失败） |
+| `PromiseResult.h` | `CPromiseResult`（兑现 / 拒绝 + 标准异常，拒绝统一用 `std::exception` 派生对象） |
 | `PromiseTypes.h` | `SettledHandler`、`detail::ThenHandler<TContext>`（处理器固定签名） |
 | `SourceLoc.h` | `CSourceLoc` + `ASYNC_LOC`（注册点调试信息，发布构建零开销） |
 | `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle`、`detail::IsInExecutorThread`、`detail::ShouldInline` / `DispatchInlineOrPost`（**调度策略**：跑在哪条线程）、组合器 `detail::Gather*` |
@@ -44,8 +44,8 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 本版把「值」移出层间通道：
 
 ```text
-层间只传：CPromiseResult（24B = shared_ptr<const string> 文案 + int 码 + bool 兑现位；
-                       拒绝可带动态文案，不带文案时零分配）
+层间只传：CPromiseResult（16B = shared_ptr<const std::exception>，空 = 兑现；
+                       拒绝携带动态异常对象，层间透传零分配）
 数据通道：shared_ptr<TContext>（一次流程一个实例，整条链共用）
 ```
 
@@ -74,7 +74,7 @@ struct CExecutorHandle
 - 之后的新投递被 `m_bStopped` 拒绝 → 对应层以「执行器已停」被拒绝。
 
 `detail::PostToHandle(handle, fn)` 是唯一投递入口：句柄空 / 已停止 / 池拒绝都返回 `false`，
-调用方据此把结果置为 `Reject(detail::FailureStopped())`（不抛异常）。
+调用方据此把结果置为 `Reject(std::runtime_error("执行器已停"))`（不抛异常）。
 
 ## 4. CPromiseState：一层的状态机
 
@@ -262,7 +262,8 @@ ThenBridge(fnCreate, fnApply, loc)
                 child.OnSettled([=](r) {             // ③ 子链落定 → 搬数据 → 收口（OnSettled 保证送达）
                     if (r.IsRejected()) { fnReject(r); return; }
                     try { fnApply(spSelf, child.GetContext()); }
-                    catch (...) { fnReject(CPromiseResult::Reject(std::current_exception())); return; }
+                    catch (const std::exception& e) { fnReject(CPromiseResult::Reject(std::runtime_error(e.what()))); return; }
+                    catch (...) { fnReject(CPromiseResult::Reject(std::runtime_error("处理器异常"))); return; }
                     fnResolve();
                 });
             }, loc);
@@ -352,7 +353,7 @@ inline bool DispatchInlineOrPost(const std::shared_ptr<CExecutorHandle>& pExec,
 // Common/Async/Promise.h：层派发入口（只做「造任务体 + 失败收口」，策略全在执行器侧）
 if (!DispatchInlineOrPost(Handle(), std::move(fnRun)))
 {
-    pState->Settle(CPromiseResult::Reject(detail::FailureStopped()));  // 执行器不可用 → 本层被拒绝
+    pState->Settle(CPromiseResult::Reject(std::runtime_error("执行器已停")));  // 执行器不可用 → 本层失败
 }
 ```
 
@@ -589,7 +590,7 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 | `CPromise` 私有构造 | `pCore != nullptr` / `pState != nullptr` | 句柄恒有核心、**恒指向一个层**（无「未挂首层」态） |
 | `MakeHandlerRunner` / `RunHandler` | `spContext` / `pState` 非空 | 内部调用不变量 |
 | ~~`CPromise::Start` / `IsStarted` / `RegisterFirstLayer` / `Append`（延迟分支）~~ | ~~延迟链的载荷非空~~ | 延迟启动已移除（§5.1），相应断言一并删除 |
-| `CPromiseResult::Reject` | **已无断言** | `Reject(0)` 现在是合法的业务拒绝（判兑现一律看 `IsFulfilled()`），码值不再有「0 = 兑现」的约束 |
+| `CPromiseResult::Reject` | **已无断言** | 失败 = 携带一个标准异常对象，不再有「码 0 = 兑现」的约束；判兑现一律看 `IsFulfilled()` |
 | `CCoroutine` 构造 | `spContext != nullptr` | 与 promise 一致 |
 | `CCoroutine::AsPromise` / `AwaitWait` / `AwaitEach` | `m_pExec != nullptr` | 必须在 `CoStart` 之后调用 |
 | `CExampleDbModule` / `CExampleAsyncModule`（业务侧样例） | 模块已启动、参数非空 | 样例示范「业务契约也用断言钉住」 |

@@ -208,6 +208,84 @@ TEST(Promise_ThenHandlerContract)
     ASSERT_TRUE(!rStopped.Message().empty());
 }
 
+/// @brief 测试用的业务异常类型（带自己的种类枚举：想看「按类型分流」怎么写就看它）。
+class CTestBizError : public std::runtime_error
+{
+public:
+    /// @brief 失败种类（业务自己的概念）。
+    enum EKind
+    {
+        kShortage,  ///< 库存不足。
+        kTimeout    ///< 业务超时。
+    };
+
+    /// @brief 构造。
+    ///
+    /// @param eKind 种类。
+    /// @param strWhat 描述。
+    CTestBizError(EKind eKind, const std::string& strWhat) : std::runtime_error(strWhat), m_eKind(eKind)
+    {}
+
+    /// @brief 种类。
+    ///
+    /// @return 种类。
+    EKind Kind() const
+    {
+        return m_eKind;
+    }
+
+private:
+    EKind m_eKind;  ///< 种类。
+};
+
+/// 层：**构造**一个自定义异常类拒绝（保型路径）。
+static common::async::CPromiseResult StepRejectCustomBuilt(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CTestContext>& /*spCtx*/)
+{
+    return common::async::CPromiseResult::Reject(CTestBizError(CTestBizError::kShortage, "自定义异常的文案"));
+}
+
+/// 层：**throw** 同一个自定义异常（文本保留、类型降级路径）。
+static common::async::CPromiseResult StepThrowCustom(
+    common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CTestContext>& /*spCtx*/)
+{
+    throw CTestBizError(CTestBizError::kShortage, "自定义异常的文案");
+}
+
+/// @brief 类型分流与「构造保型 / throw 降级」的边界（`shared_ptr` 存储的直接后果）。
+///
+/// 结果里存的是**自有的**共享异常对象，所以：
+///  - `Reject(CMyError(...))` **构造**出来的拒绝 → 类型完整保留，`dynamic_cast` 能命中；
+///  - 层里 `throw CMyError(...)` 出去的异常 → 框架在 `catch` 里只能按**静态类型**重建
+///    （`Reject(std::runtime_error(e.what()))`），
+///    文本完整保留，但动态类型降级为 `std::runtime_error`。
+/// 要保证类型可分流，请在层里 `return CPromiseResult::Reject(CMyError(...))`。
+TEST(Promise_ExceptionTypeFidelity)
+{
+    common::async::CAsyncExecutor exec(2);
+    ASSERT_TRUE(exec.Start());
+    const std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
+
+    // ① 构造路径：类型保真（分流靠 dynamic_cast，不走 catch、不抛不捕）。
+    const common::async::CPromiseResult rBuilt = exec.NewPromise(spCtx, &StepRejectCustomBuilt, ASYNC_LOC).Await();
+    ASSERT_TRUE(rBuilt.IsRejected());
+    ASSERT_EQ(rBuilt.Message(), std::string("自定义异常的文案"));
+    const CTestBizError* pBuiltError = dynamic_cast<const CTestBizError*>(rBuilt.Exception().get());
+    ASSERT_TRUE(pBuiltError != nullptr);
+    ASSERT_TRUE(pBuiltError->Kind() == CTestBizError::kShortage);
+
+    // ② throw 路径：文本照旧，但类型只剩 runtime_error。
+    const common::async::CPromiseResult rThrown = exec.NewPromise(spCtx, &StepThrowCustom, ASYNC_LOC).Await();
+    ASSERT_TRUE(rThrown.IsRejected());
+    ASSERT_EQ(rThrown.Message(), std::string("自定义异常的文案"));
+    ASSERT_TRUE(dynamic_cast<const CTestBizError*>(rThrown.Exception().get()) == nullptr);
+    ASSERT_TRUE(dynamic_cast<const std::runtime_error*>(rThrown.Exception().get()) != nullptr);
+
+    // ③ 兑现：没有异常对象。
+    ASSERT_TRUE(common::async::CPromiseResult::Resolve().Exception() == nullptr);
+    exec.Stop();
+}
+
 /// @brief 单层 promise：NewPromise → Await（兑现）。
 TEST(Promise_NewPromiseAndAwait)
 {

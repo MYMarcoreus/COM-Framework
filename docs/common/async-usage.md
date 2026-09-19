@@ -83,7 +83,7 @@ common::async::CPromiseResult StepReadParam(common::async::CPromiseResult upResu
         return upResult;  // 上一层被拒绝：原样透传
     }
     spCtx->strAccount = ReadAccount();
-    return spCtx->strAccount.empty() ? common::async::CPromiseResult::Reject(kCodeNoAccount)
+    return spCtx->strAccount.empty() ? common::async::CPromiseResult::Reject(std::runtime_error("账号为空"))
                                      : common::async::CPromiseResult::Resolve();
 }
 
@@ -400,7 +400,7 @@ result.IsFulfilled();  // **判成败只看这一个** —— 结果里**没有�
 result.IsRejected();   // 取反
 result.Message();      // 异常描述（`what()`；兑现 = 空串）
 result.What();         // 同上，const char*（在本结果存活期内有效）
-result.Exception();    // std::exception_ptr（想按类型分流时重新抛出后 catch 具体类型）
+result.Exception();    // const std::shared_ptr<const std::exception>&（兑现 = 空指针）
 ```
 
 怎么写业务拒绝：
@@ -408,27 +408,33 @@ result.Exception();    // std::exception_ptr（想按类型分流时重新抛出
 1. **普通场景**：`Reject(std::runtime_error("库存不足：…"))` —— 文案随结果沿链透传到
    `catch` / `finally` / `OnSettled` / `Await()`；
 2. **需要按种类分流**（重试 / 语义转换）：自定义异常类型（`class CMyError : public std::runtime_error`
-   里带自己的 `enum class EKind`），调用方用 `Exception()` 重新抛出后 `catch` 具体类型 ——
-   `ServerExample/Module/IUserTable.h` 的 `CDbError` / `TryGetDbError` 就是标准写法；
+   里带自己的 `enum class EKind`），调用方用 `dynamic_cast<const CMyError*>(result.Exception().get())`
+   直接分流，**不抛不 catch** —— `ServerExample/Module/IUserTable.h` 的 `CDbError` / `TryGetDbError`
+   就是标准写法；
 3. **业务错误细节**（重试次数、冲突的行、errno……）放**共享上下文或异常对象**，不要塑进结果——
    结果在层间按值传递，只应该携带「成 / 败 + 少量文字」。
 
-框架自己的失败也是标准异常（文案固定、进程级预建 → **零分配**）：
+框架自己的失败也是标准异常，**就在调用点直接构造**（没有 `detail::FailureXxx()` 之类的辅助函数）：
 
-| 预建失败 | 何时出现 | 文案 |
+| 何时出现 | 代码里的样子 | 文案 |
 |---|---|---|
-| `detail::FailureStopped()` | 执行器不可用 / 投递失败 / 跨执行器续接失败 | 「执行器已停」 |
-| `detail::FailureTimeout()` | `AwaitFor(ms)` 没等到 | 「等待超时」 |
-| `detail::FailureHandler()` | 框架收口时处理器抛了非 std 异常 | 「处理器异常」 |
-| `detail::FailureUnspecified()` | 组合器空集合的 race / any、起链回调缺失 | 「未指定原因」 |
-| `detail::FailureUnknown()` | 拿到空的 `std::exception_ptr`（不该发生） | 「未知异常」 |
+| 执行器不可用 / 投递失败 / 跨执行器续接失败 | `Reject(std::runtime_error("执行器已停"))` | 「执行器已停」 |
+| `AwaitFor(ms)` 没等到 | `Reject(std::runtime_error("等待超时"))` | 「等待超时」 |
+| 框架收口时处理器抛了非 std 异常 | `Reject(std::runtime_error("处理器异常"))` | 「处理器异常」 |
+| 组合器空集合的 race / any、起链回调缺失 | `Reject(std::runtime_error("未指定原因"))` | 「未指定原因」 |
 
-处理器 / 起链回调 / 子链工厂 / 搬运抛出的异常由框架**原样收口**为本层拒绝：
-动态类型与 `what()` 都保留，不会向调用方抛出。
+框架文案是**固定字面量**：想判断「是不是框架拒绝」，比对 `result.Message()` 即可
+（框架测试用的就是 `IsStoppedFailure(r) { return r.IsRejected() && r.Message() == "执行器已停"; }`）。
 
-开销：`sizeof(CPromiseResult)` = **8 字节**（一个 `std::exception_ptr`）；层间透传 = 引用计数 +1，
-**零分配**；框架侧拒绝的构造与透传**也零分配**；业务拒绝只在建异常那一次分配，之后透传零分配
-—— 护栏见 `Tests/test_async_alloc.cpp` 的 `AsyncAlloc_RefusalBudget`。
+处理器 / 起链回调 / 子链工厂 / 搬运抛出的异常由框架**在 `catch` 里重新构造**为本层拒绝
+（`Reject(std::runtime_error(e.what()))`）：`What()` 文案保留，但**动态类型降级为 `std::runtime_error`**
+（`std::exception_ptr` 那套要付出每次读取走一次 `rethrow_exception` 的代价，本项目选择不搬 in-flight
+异常对象）。所以「按类型分流」只对**业务自己 `Reject(...)` 构造**的拒绝有效。
+
+开销：`sizeof(CPromiseResult)` = **16 字节**（一个 `std::shared_ptr`）；层间透传 = 引用计数 +1，
+**零分配**（无论拒绝是怎么造出来的）；`What()` / `Message()` 是普通虚调用（约 1 ns / 12 ns，零分配）；
+**造**一个拒绝 = 一次 `make_shared`，只发生在被拒绝的那一层 —— 护栏见
+`Tests/test_async_alloc.cpp` 的 `AsyncAlloc_RefusalBudget`。
 
 两个已知边界（`RejectFn` 是 `void(CPromiseResult)`，**只传整份结果**）：
 

@@ -93,7 +93,7 @@ using common::async::CPromiseResult;
 /// 业务失败文案（拒绝 = 标准异常；文案随拒绝走，**不要维护「码 → 文案」对照表**）。
 ///
 /// 需要按种类分流时，定义自己的异常类型（里面可以带自己的 `enum class EKind`），
-/// 调用方用 `result.Exception()` 重新抛出后 `catch` 具体类型 —— 比拿码比对硬得多。
+/// 调用方用 `result.Exception()` + `dynamic_cast` 直接分流具体类型 —— 比拿码比对硬得多。
 static const char* const kStockShortageText = "库存不足";
 static const char* const kPayDeclinedText = "支付被拒";
 static const char* const kCourierUnavailableText = "快递不可用";
@@ -515,7 +515,9 @@ static CPromise<COrderCtx> WrapCourierPickup(common::async::CAsyncExecutor& exec
             {
                 if (nErrCode != 0)
                 {
-                    fnReject(nErrCode);  // 回调里的失败 → promise 拒绝
+                    // 回调里的失败 → promise 拒绝：回调只有码，异常对象在这里现造
+                    fnReject(CPromiseResult::Reject(
+                        std::runtime_error("快递取件失败：码 " + std::to_string(nErrCode))));
                     return;
                 }
                 spCtx->nPickupNo = nPickupNo;  // 回调里的数据 → 上下文
@@ -619,8 +621,8 @@ static std::shared_ptr<COrderCtx> MakeOrderCtx(
 - `then` 层不用判断 `upResult.IsRejected()`（上游被拒绝 → 框架直接跳过本层）；只有 `Catch` / `Finally` 要看它。
 - 拒绝 = **一个标准异常**：层内直接 `Reject(std::runtime_error("原因"))`，文案随结果沿链透传
   到 catch / 日志 / `Await()`；**没有错误码，也不需要「码 → 文案」对照表**。
-  要按种类分流（重试 / 语义转换）就自定义异常类型并用 `result.Exception()` 重新抛出后 `catch`；
-  框架自己的固定失败在 `detail::FailureXxx()`（「执行器已停」「等待超时」……）。
+  要按种类分流（重试 / 语义转换）就自定义异常类型，调用方用 `dynamic_cast<const CMyError*>(result.Exception().get())` 分流；
+  框架自己的固定失败就在调用点构造（`Reject(std::runtime_error("执行器已停"))` 等固定文案，没有辅助函数）。
 - 「层跑在哪条线程上」只需看**起链的执行器**：每层都在本链执行器线程上跑，跨模块返回后自动拉回。
 
 ## 1. 写法 1：then 链 + `ThenBridge` + `ThenPromise`（默认写法）
@@ -871,7 +873,7 @@ static CPromiseResult StepRecoverByCode(CPromiseResult upResult, const std::shar
     spCtx->bFailed = true;
     spCtx->strFailText = upResult.Message();  // 补偿层据此判断「要不要真的动手」
     spCtx->strTrace += "拒绝;";
-    // 想按「业务失败 / 框架失败」分流：自定义异常类型 + Exception() 重新抛出后 catch；
+    // 想按「业务失败 / 框架失败」分流：自定义异常类型 + `dynamic_cast` 结果里的异常对象；
     // 只想看文字就直接用 Message()（结果里没有任何码可以比）。
     std::printf("    补偿: 流程中断「%s」\n", upResult.Message().c_str());
     return CPromiseResult::Resolve();  // 恢复：链继续（补偿层 / 审计层照常跑）

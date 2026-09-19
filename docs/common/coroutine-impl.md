@@ -113,7 +113,7 @@ void AwaitWait(int nLine, const CPromise<TContext>& promise)
     });
     if (!bOk)
     {
-        Terminate(CPromiseResult::Reject(detail::FailureStopped()));
+        Terminate(CPromiseResult::Reject(std::runtime_error("执行器已停")));
     }  // 注册失败：同步终止并 settle
 }
 ```

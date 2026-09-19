@@ -32,7 +32,7 @@
 //   await p;                     →  CO_AWAIT(p);              // 等待一条 promise
 //   await Promise.all([a, b]);   →  CO_AWAIT_ALL(a, b);       // 并行等待多条 promise
 //   return;                      →  CO_RETURN_VOID(); / CO_END();
-//   return result;               →  CO_RETURN(CPromiseResult::Reject(码));
+//   return result;               →  CO_RETURN(CPromiseResult::Reject(std::runtime_error("原因")));
 //   局部变量跨 await             →  必须写成派生类成员（无栈约束）
 //
 // 用法：
@@ -352,13 +352,13 @@ private:
     {
         if (m_pExec == nullptr)
         {
-            Terminate(CPromiseResult::Reject(detail::FailureStopped()));
+            Terminate(CPromiseResult::Reject(std::runtime_error("执行器已停")));
             return;
         }
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
         if (!spSelf)
         {
-            Terminate(CPromiseResult::Reject(detail::FailureStopped()));  // 无强引用（理论不应发生）。
+            Terminate(CPromiseResult::Reject(std::runtime_error("执行器已停")));  // 无强引用（理论不应发生）。
             return;
         }
         if (!m_pExec->Post(
@@ -367,7 +367,7 @@ private:
                     Resume();
                 }))
         {
-            Terminate(CPromiseResult::Reject(detail::FailureStopped()));  // 执行器已停止 / 不可用。
+            Terminate(CPromiseResult::Reject(std::runtime_error("执行器已停")));  // 执行器已停止 / 不可用。
         }
     }
 
@@ -381,7 +381,7 @@ private:
     {
         if (m_pExec == nullptr || m_pExec->IsStopped())
         {
-            Terminate(CPromiseResult::Reject(detail::FailureStopped()));
+            Terminate(CPromiseResult::Reject(std::runtime_error("执行器已停")));
             return;
         }
         // 就地判定与 promise 层派发共用一处（多一条「线程池无积压」的负载感知条件）：

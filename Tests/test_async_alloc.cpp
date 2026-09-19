@@ -347,77 +347,73 @@ TEST(AsyncAlloc_RunBudget)
 
 // ==================== 拒绝路径的分配预算 ====================
 
-/// @brief 拒绝路径的分配预算：**兑现 / 框架侧拒绝的构造与拷贝都零分配**；
-///        业务拒绝只在「建异常」那一处分配，且**不随透传次数增长**。
+/// @brief 拒绝路径的分配预算：**透传零分配**（结果就是一个 `shared_ptr`）；
+///        造一个拒绝只花**一次分配**（`make_shared` 的对象 + 控制块合并），且**不随透传次数增长**。
 ///
-/// 为什么能零分配：结果本体只有一个 `std::exception_ptr`（拷贝 = 引用计数 +1），
-/// 而框架侧失败用的是预建的异常（`detail::FailureXxx()`，进程级 `static`）—— 见 PromiseResult.h。
+/// 注意：框架侧拒绝也是在调用点直接 `Reject(std::runtime_error("…"))` 造的（不预建），
+/// 所以「造」要 1 次分配；要保住的是「**层间透传**不得分配」—— 那是每层都要做的事。
 TEST(AsyncAlloc_RefusalBudget)
 {
-    // 热身：预建异常首次使用时构造一次（magic static），把它挪到窗口外（否则结果依赖用例执行顺序）。
-    (void)common::async::CPromiseResult::Reject(common::async::detail::FailureStopped());
-    (void)common::async::CPromiseResult::Reject(common::async::detail::FailureTimeout());
-    (void)common::async::CPromiseResult::Reject(common::async::detail::FailureUnspecified());
+    // 尺寸预算：结果 = 一个 `shared_ptr`（两个指针），层间按值透传的就是它。
+    ASSERT_EQ(sizeof(common::async::CPromiseResult), 2 * sizeof(void*));
 
-    // ① 兑现结果 + 框架侧拒绝：构造 + 拷贝都零分配。
+    // ① 兑现结果：构造 + 拷贝都零分配。
     {
         CAllocCounter counter;
         const common::async::CPromiseResult rOk = common::async::CPromiseResult::Resolve();
-        const common::async::CPromiseResult rStopped =
-            common::async::CPromiseResult::Reject(common::async::detail::FailureStopped());
-        const common::async::CPromiseResult rCopy = rStopped;
+        const common::async::CPromiseResult rCopy = rOk;
         counter.Stop();
 
         ASSERT_TRUE(rOk.IsFulfilled());
         ASSERT_TRUE(rOk.Message().empty());
-        ASSERT_TRUE(rStopped.IsRejected() && !rStopped.Message().empty());  // 文案在，但零分配
-        ASSERT_EQ(rCopy.Message(), rStopped.Message());
         ASSERT_EQ(counter.Counts(), 0);
     }
 
-    // ② 框架侧拒绝的透传：500 次拷贝零分配（层间传的就是它）。
+    // ② 层间透传：500 次拷贝零分配（拒绝怎么造出来的与透传成本无关）。
     long long nStopCopyCounts = 0;
     {
-        const common::async::CPromiseResult rStopped =
-            common::async::CPromiseResult::Reject(common::async::detail::FailureStopped());
+        const common::async::CPromiseResult rStopped = common::async::CPromiseResult::Reject(std::runtime_error("执行器已停"));
+        const common::async::CPromiseResult rBiz =
+            common::async::CPromiseResult::Reject(std::runtime_error("库存不足：需 3 件，只剩 1 件"));
+        ASSERT_TRUE(rStopped.IsRejected() && !rStopped.Message().empty());
+        ASSERT_TRUE(rBiz.IsRejected());
+
         CAllocCounter counter;
         common::async::CPromiseResult copy = rStopped;
         for (int i = 0; i < 500; ++i)
         {
-            copy = rStopped;  // 层间透传：拷贝 + 释放旧值（预建异常 → 不再分配）
+            copy = (i % 2 == 0) ? rStopped : rBiz;  // 层间透传：拷贝 + 释放旧值
         }
         counter.Stop();
         nStopCopyCounts = counter.Counts();
+        ASSERT_EQ(copy.Message(), rBiz.Message());
     }
 
-    // ③ 业务拒绝（异常 + 动态长文案）：只在建异常那一处分配；之后 500 次透传（拷贝）不再分配。
-    long long nCreateCounts = 0;
+    // ③ 造失败结果：都是一次 `make_shared`；文案超 SSO（15 字节，中文 6 字 = 18 字节）时再分配一次。
+    long long nFrameworkCreate = 0;
+    {
+        CAllocCounter counter;
+        const common::async::CPromiseResult r = common::async::CPromiseResult::Reject(std::runtime_error("执行器已停"));
+        counter.Stop();
+        nFrameworkCreate = counter.Counts();
+        ASSERT_TRUE(r.IsRejected());
+    }
+
+    long long nBizCreate = 0;
     common::async::CPromiseResult resultSeed;
     {
         const std::string strLong = "库存不足：需 3 件，只剩 1 件（订单 SO-20260919-000123）";
         CAllocCounter counter;
         resultSeed = common::async::CPromiseResult::Reject(std::runtime_error(strLong));
         counter.Stop();
-        nCreateCounts = counter.Counts();
+        nBizCreate = counter.Counts();
     }
 
-    long long nCopyCounts = 0;
-    {
-        CAllocCounter counter;
-        common::async::CPromiseResult copy = resultSeed;
-        for (int i = 0; i < 500; ++i)
-        {
-            copy = resultSeed;  // 层间透传：拷贝 + 释放旧值
-        }
-        counter.Stop();
-        nCopyCounts = counter.Counts();
-    }
-
-    std::printf("      业务拒绝（异常 + 长文案）：构造 %lld 次分配，透传 500 次共 %lld 次分配\n", nCreateCounts, nCopyCounts);
-    std::printf("      框架侧拒绝：构造 + 透传 500 次共 %lld 次分配\n", nStopCopyCounts);
-    ASSERT_EQ(nStopCopyCounts, 0);  // 预建异常：透传零分配
+    std::printf("      造拒绝：框架侧 %lld 次分配，业务侧（动态长文案）%lld 次分配\n", nFrameworkCreate, nBizCreate);
+    std::printf("      层间透传（混合两种拒绝）：500 次拷贝共 %lld 次分配\n", nStopCopyCounts);
+    ASSERT_EQ(nStopCopyCounts, 0);       // 透传零分配（核心性质）
+    ASSERT_TRUE(nFrameworkCreate <= 2);  // `make_shared` 块 +（文案超 SSO 时）文案缓冲
+    ASSERT_TRUE(nBizCreate <= 3);        // `make_shared` 块 + `runtime_error` 内的文案缓冲
     ASSERT_TRUE(resultSeed.IsRejected());
     ASSERT_EQ(resultSeed.Message(), std::string("库存不足：需 3 件，只剩 1 件（订单 SO-20260919-000123）"));
-    ASSERT_TRUE(nCreateCounts <= 6);  // 临时 string + 异常对象 + 异常内的文案副本 + make_exception_ptr 的持有者
-    ASSERT_EQ(nCopyCounts, 0);        // 透传零分配
 }
