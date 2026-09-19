@@ -387,18 +387,28 @@ p.OnSettled([](common::async::CPromiseResult result)
 });
 ```
 
-错误码约定：
+错误码 / 拒绝原因：
+
+拒绝的载荷是 `CRefusal` —— **码 + 文案 + 来源**，沿链原样透传到 catch / finally / `OnSettled` /
+`Await()`。业务码**取值完全自定**（框架不解释，也不占用任何区间）；判兑现一律用 `IsFulfilled()`，
+**不要用 `Code() == 0` 判**（业务码可以是 0）。
 
 ```cpp
-common::async::kFulfilled = 0           // 已兑现
-    common::async::kRejected = 1        // 已拒绝（未指定码时的默认值）
-    common::async::kStopped = 2         // 执行器已停止 / 投递失败（框架）
-    common::async::kException = 3       // 处理器抛异常（框架捕获）
-    common::async::kBusinessBase = 100  // 业务错误码从 100 起取
+CPromiseResult::Reject(CRefusal(码, "文案"));      // 业务侧：码自定，文案随拒绝走
+CPromiseResult::Reject(CRefusal::Stopped());       // 框架侧三个工厂：
+CPromiseResult::Reject(CRefusal::Rejected());      //   Rejected / Stopped / Exception(what)
+CPromiseResult::Reject(CRefusal::Exception(what));
+
+result.Code();             // 错误码（兑现时返回 kFulfilled = 0）
+result.Message();          // 文案（catch / Await 侧直接可读，不必再维护码表）
+result.IsFromFramework();  // 系统侧失败还是业务拒绝（看来源，不看数值区间）
+result.Refusal();          // 整份 CRefusal（含 ERefusalFrom 来源）
 ```
 
-框架只解释 1..99，其余码**原样透传**（语义由业务定义）。处理器抛出的异常会被框架捕获，
-转为本层被拒绝（`kException`），不会向调用方抛出。
+框架侧只产生三个码：`kRejected = 1`（未指定原因）、`kStopped = 2`（执行器停 / 投递失败 / 等待超时）、
+`kException = 3`（处理器 / 起链回调 / 子链工厂 / 搬运抛异常）；`kFulfilled = 0` 只作为兑现时
+`Code()` 的返回值。处理器抛出的异常会被框架捕获，**异常文本随拒绝原因保留**（`Message()`），
+不会向调用方抛出。
 
 注意：`Await()` 返回与 `OnSettled` 回调的执行**没有先后保证**，测试里若依赖「回调已跑完」
 请另用标志 / 条件变量同步。

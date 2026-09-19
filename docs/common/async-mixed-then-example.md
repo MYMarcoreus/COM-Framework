@@ -15,10 +15,10 @@
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 
-/// 业务错误码（从 kBusinessBase 起取）
+/// 业务错误码（**取值自定**：框架不解释业务码，也不占用任何区间）
 enum MinCode
 {
-    kCodeBadOrder = common::async::kBusinessBase + 1  ///< 订单参数非法。
+    kCodeBadOrder = 1  ///< 订单参数非法。
 };
 
 // ====================================================================
@@ -138,7 +138,8 @@ class COrderModule
     {
         if (sp->nQty <= 0 || sp->nQty > 10)
         {
-            return common::async::CPromiseResult::Reject(kCodeBadOrder);  // 本层拒绝 → 后续 then 不执行
+            // 拒绝载荷 = 码 + 文案：catch / finally / Await 侧都能直接读到说明。
+            return common::async::CPromiseResult::Reject(common::async::CRefusal(kCodeBadOrder, "单笔最多 10 件"));
         }
         sp->strLog += "校验;";
         return common::async::CPromiseResult::Resolve();
@@ -164,7 +165,7 @@ class COrderModule
                 // 本回调在库存模块的线程上：只做语义转换 + 改上下文 + settle
                 if (result.IsRejected())
                 {
-                    fnReject(result.Code());  // 跨模块拒绝码 → 本流程拒绝
+                    fnReject(result.AsRefusal());  // 跨模块拒绝：整份原因（码 + 文案 + 来源）原样透传
                     return;
                 }
                 sp->nStock = spStockCtx->nAvail;
@@ -239,5 +240,8 @@ int main()
 - ③ 的链跑在库存模块自己的线程池上，先后顺序靠 `OnSettled → fnResolve → 本层 settle → 下一层`
   这条依赖边保证，不靠共享线程；唯一不保证先后的是旁支 ⑤。
 - 执行器是模块私有资源，不跨模块传；调用方只拿对方的 promise（跨上下文用 `exec.NewPromise(spCtx, fnStarter)` 桥接）。
+- 拒绝的载荷是 `CRefusal`（**码 + 文案 + 来源**）：业务码取值自定（上面就用 1），
+  catch / `Await()` 里直接 `result.Message()` 就能打日志，不必再维护一张码表；
+  跨模块透传用 `fnReject(result.AsRefusal())`（整份原因原样走）。
 - then 里不用判断上一层：上游被拒绝时框架直接跳过本层。要看拒绝用 `Catch`，成败都收尾用 `Finally`。
 - 要「等」子链就返回它（`ThenPromise`）；普通 `Then` 的处理器只能返回 `CPromiseResult`，里面起的链主链一概不等。

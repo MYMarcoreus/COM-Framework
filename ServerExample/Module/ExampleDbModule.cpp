@@ -38,8 +38,7 @@ SC_END_INTERFACE_MAP(CExampleDbModule, sc::CModule)
 /// @brief 创建模拟数据库模块。
 ///
 /// @param nLatencyMs 每次表操作的模拟 IO 延迟（毫秒，负数按 0 处理）。
-CExampleDbModule::CExampleDbModule(int nLatencyMs)
-    : sc::CModule("example-db"), m_nNextId(kFirstAutoId), m_nLatencyMs(nLatencyMs)
+CExampleDbModule::CExampleDbModule(int nLatencyMs) : sc::CModule("example-db"), m_nNextId(kFirstAutoId), m_nLatencyMs(nLatencyMs)
 {
     if (m_nLatencyMs < 0)
     {
@@ -164,7 +163,7 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::InsertUserAsync(const st
 {
     ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
-    return LoadRowAsync(spOp)  // 本模块内的异步函数（读表）
+    return LoadRowAsync(spOp)                                                  // 本模块内的异步函数（读表）
         .Catch(BindHandler(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)  // 「不存在」归一化为兑现
         .Then(BindHandler(&CExampleDbModule::StepRejectIfExists), ASYNC_LOC)   // 查重
         .Then(BindHandler(&CExampleDbModule::StepInsertRow), ASYNC_LOC)        // 写表
@@ -264,7 +263,7 @@ common::async::CPromiseResult CExampleDbModule::StepLoadRow(
     if (!bFound)
     {
         spOp->strTrace += "读表未命中(id=" + std::to_string(spOp->nUserId) + ");";
-        return common::async::CPromiseResult::Reject(kDbRowNotFound);
+        return common::async::CPromiseResult::Reject(common::async::CRefusal(kDbRowNotFound, "记录不存在"));
     }
 
     spOp->recResult = recRow;
@@ -302,7 +301,7 @@ common::async::CPromiseResult CExampleDbModule::StepRejectIfExists(
     if (spOp->bFound)
     {
         spOp->strTrace += "主键冲突;";
-        return common::async::CPromiseResult::Reject(kDbDuplicateKey);
+        return common::async::CPromiseResult::Reject(common::async::CRefusal(kDbDuplicateKey, "主键冲突"));
     }
     return common::async::CPromiseResult::Resolve();
 }
@@ -327,7 +326,8 @@ common::async::CPromiseResult CExampleDbModule::StepInsertRow(
     if (m_mapRows.find(nUserId) != m_mapRows.end())
     {
         spOp->strTrace += "主键冲突;";
-        return common::async::CPromiseResult::Reject(kDbDuplicateKey);  // 双保险：并发插入时兜底。
+        return common::async::CPromiseResult::Reject(
+            common::async::CRefusal(kDbDuplicateKey, "主键冲突"));  // 双保险：并发插入时兜底。
     }
 
     CUserRecord recRow = spOp->recRequest;
@@ -358,14 +358,14 @@ common::async::CPromiseResult CExampleDbModule::StepApplyUpdate(
     if (it == m_mapRows.end())
     {
         spOp->strTrace += "更新失败(记录不存在);";
-        return common::async::CPromiseResult::Reject(kDbRowNotFound);
+        return common::async::CPromiseResult::Reject(common::async::CRefusal(kDbRowNotFound, "记录不存在"));
     }
     if (it->second.nVersion != spOp->recRequest.nVersion)
     {
         spOp->recResult = it->second;  // 回吐库中最新行：上层据此重读并重试。
-        spOp->strTrace += "版本冲突(库=" + std::to_string(it->second.nVersion) +
-                          ",期望=" + std::to_string(spOp->recRequest.nVersion) + ");";
-        return common::async::CPromiseResult::Reject(kDbVersionConflict);
+        spOp->strTrace +=
+            "版本冲突(库=" + std::to_string(it->second.nVersion) + ",期望=" + std::to_string(spOp->recRequest.nVersion) + ");";
+        return common::async::CPromiseResult::Reject(common::async::CRefusal(kDbVersionConflict, "版本冲突"));
     }
 
     CUserRecord recRow = spOp->recRequest;
@@ -393,7 +393,7 @@ common::async::CPromiseResult CExampleDbModule::StepEraseRow(
     if (it == m_mapRows.end())
     {
         spOp->strTrace += "删除失败(记录不存在);";
-        return common::async::CPromiseResult::Reject(kDbRowNotFound);
+        return common::async::CPromiseResult::Reject(common::async::CRefusal(kDbRowNotFound, "记录不存在"));
     }
     m_mapRows.erase(it);
     spOp->strTrace += "写表(删除 id=" + std::to_string(spOp->nUserId) + ");";

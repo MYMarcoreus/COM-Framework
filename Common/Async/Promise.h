@@ -1066,7 +1066,7 @@ private:
     /// @brief 内部：把「子链落定 → 搬数据 → 收口」登记到子链上（`ThenBridge` 的唯一规则）。
     ///
     /// 子链被拒绝 → `fnReject(拒绝原因)`；子链兑现 → `fnApply(本上下文, 子链上下文)` 后 `fnResolve()`；
-    /// 搬运抛异常 → `fnReject(kException)`。子链上下文在本层线程上取好，避免搬运回调里再访子链。
+    /// 搬运抛异常 → `fnReject(CRefusal::Exception(what))`。子链上下文在本层线程上取好，避免搬运回调里再访子链。
     ///
     /// @param promiseChild 要等待的子链（上下文类型任意）。
     /// @param fnApply 数据搬运：入参为本流程上下文与子链上下文。

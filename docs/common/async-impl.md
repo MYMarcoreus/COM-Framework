@@ -73,7 +73,7 @@ struct CExecutorHandle
 - 之后的新投递被 `m_bStopped` 拒绝 → 对应层以 `kStopped` 被拒绝。
 
 `detail::PostToHandle(handle, fn)` 是唯一投递入口：句柄空 / 已停止 / 池拒绝都返回 `false`，
-调用方据此把结果置为 `Reject(kStopped)`（不抛异常）。
+调用方据此把结果置为 `Reject(CRefusal::Stopped())`（不抛异常）。
 
 ## 4. CPromiseState：一层的状态机
 
@@ -222,7 +222,7 @@ result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownR
 ```
 
 - `then` / `catch`：返回值即本层结果 → 决定后续走向（catch 返回 `Resolve()` 即恢复）；
-- `finally`：返回值被忽略，原样透传 `upResult`；只有抛异常才会改变结果（→ `Reject(kException)`），
+- `finally`：返回值被忽略，原样透传 `upResult`；只有抛异常才会改变结果（→ `Reject(CRefusal::Exception(what))`），
   与 JS `finally` 语义一致。
 
 **首层固定在链首、且恒以 then 语义执行**：起链时那一层就是`StartChain` 建好的首层（起点结果视为
@@ -233,7 +233,7 @@ result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownR
 
 | API | JS 对照 | 实现要点 |
 | --- | --- | --- |
-| `exec.NewPromise(spCtx, fnStarter, loc)` | `new Promise((resolve, reject) => …)` | 直接建 `CPromiseState` 并交出 `ResolveFn` / `RejectFn`（内部就是 `pState->Settle(...)`）；起链回调同步执行（与 JS 一致），抛异常 → `Reject(kException)`；`Settle` 幂等，故重复 settle / settle 后异常都安全 |
+| `exec.NewPromise(spCtx, fnStarter, loc)` | `new Promise((resolve, reject) => …)` | 直接建 `CPromiseState` 并交出 `ResolveFn` / `RejectFn`（内部就是 `pState->Settle(...)`）；起链回调同步执行（与 JS 一致），抛异常 → `Reject(CRefusal::Exception(what))`；`Settle` 幂等，故重复 settle / settle 后异常都安全 |
 | `CPromise<T>::ThenPromise(factory, loc)` | `then(处理器返回 promise)` 的 flatten | 建本层 state，在上游 state 上登记 handler：上游被拒 → 直接透传；上游兑现 → `Adopt()` |
 | `CPromise<T>::ThenBridge(fnCreate, fnApply, loc)` | `then` 里「等别的模块 + 取回数据」 | **上面两个原语的语法糖**：内部就是 `Adopt()` + `New`（改走句柄版 `NewFromHandle`）+ `OnSettled`，多出的只是「子链兑现时先 `fnApply` 搬数据」 |
 
@@ -243,7 +243,7 @@ result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownR
 - **不阻塞**：全程只登记回调，不 `Await()`、不占工作线程（单线程执行器也安全）；
 - 子 promise 的 settle 线程可能是**另一个模块的执行器线程** → 流程函数请按值捕获依赖与上下文，
   不要捕获本模块 `this`（这样流程是纯函数，任何线程上都安全）；
-- 工厂抛异常 → 本层 `Reject(kException)`（工厂**必须**给出子链，没有「返回空」这条路）；
+- 工厂抛异常 → 本层 `Reject(CRefusal::Exception(what))`（工厂**必须**给出子链，没有「返回空」这条路）；
   子 promise 的拒绝码**原样**成为本层拒绝码（后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
 - **保活**：子 promise 的最后一段由「上一段 handler 捕获下一段」链保活，本层 state 被子 promise
   的 `OnSettled` handler 捕获 —— 即使句柄被丢弃，在途的整条链仍安全跑完；
@@ -261,7 +261,7 @@ ThenBridge(fnCreate, fnApply, loc)
                 child.OnSettled([=](r) {             // ③ 子链落定 → 搬数据 → 收口（OnSettled 保证送达）
                     if (r.IsRejected()) { fnReject(r.Code()); return; }
                     try { fnApply(spSelf, child.GetContext()); }
-                    catch (...) { fnReject(kException); return; }
+                    catch (...) { fnReject(CRefusal::Exception(nullptr)); return; }
                     fnResolve();
                 });
             }, loc);
@@ -351,7 +351,7 @@ inline bool DispatchInlineOrPost(const std::shared_ptr<CExecutorHandle>& pExec,
 // Common/Async/Promise.h：层派发入口（只做「造任务体 + 失败收口」，策略全在执行器侧）
 if (!DispatchInlineOrPost(Handle(), std::move(fnRun)))
 {
-    pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用 → 本层被拒绝
+    pState->Settle(CPromiseResult::Reject(CRefusal::Stopped()));  // 执行器不可用 → 本层被拒绝
 }
 ```
 

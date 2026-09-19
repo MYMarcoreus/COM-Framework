@@ -113,7 +113,7 @@ void AwaitWait(int nLine, const CPromise<TContext>& promise)
     });
     if (!bOk)
     {
-        Terminate(CPromiseResult::Reject(kStopped));
+        Terminate(CPromiseResult::Reject(CRefusal::Stopped()));
     }  // 注册失败：同步终止并 settle
 }
 ```
