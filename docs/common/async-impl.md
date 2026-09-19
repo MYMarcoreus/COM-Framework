@@ -95,7 +95,7 @@ class CPromiseState
 
 | 成员 | 语义 |
 | --- | --- |
-| `Settle(result)` | 两个重载（`const&` 拷贝 / `&&` 移动），同语义：首次生效 —— 锁内置结果与 `m_bSettled`，换出「内联槽 + 处理器列表」，`notify_all` 后在**锁外**按序调用（内联槽在前）。处理器读到的是**层里存的那份**（`m_result`，落定后再不改写），调用方持有本层状态才调得了它，故 `this` 在整个调用期间恒有效 |
+| `Settle(result)` | 首次生效：锁内置结果与 `m_bSettled`，换出「内联槽 + 处理器列表」，`notify_all` 后在**锁外**按序调用（内联槽在前） |
 | `AddHandler(handle, cb)` | pending → 登记返回 true（第一个进内联槽，其余进列表）；已 settled → 投递 `cb` 到执行器异步触发；已 settled 且执行器不可用 → false |
 | `Await()` | 先自旋 50μs，再在条件变量上阻塞；`notify_all` 支持多线程等待同一 promise |
 | `SetTraceLink/LayerInfo/SetLoc`（仅调试构建） | trace 记录：注册点、上游层、模式、层号/链号（§14） |
@@ -215,21 +215,11 @@ CPromiseResult ResolveLayerResult(int nMode, const CPromiseResult& up, const CPr
 }
 ```
 
-处理器执行体（`MakeHandlerRunner`）按模式分两路，为的是不让上一层结果多拷一份：
+处理器执行体（`MakeHandlerRunner`）里本层结果也只委托一句：
 
 ```cpp
-// 上一层结果按值捕获（一份），then / catch 再把它**移动**给处理器：
-//   一次拷贝 + 一次移动 = 拷贝三次（旧写法）→ 拷一次、之后全靠移动与引用计数。
-if (eMode == kModeFinally)  // finally：上一层结果要原样往下带 → 传副本
-{
-    const CPromiseResult ownResult = fnHandler(upResult, spContext);
-    result = ResolveLayerResult(eMode, upResult, ownResult);  // 忽略 ownResult，原样透传
-}
-else                        // then / catch：本层结果就是处理器返回值，upResult 交出去后本层不再需要
-{
-    result = fnHandler(std::move(upResult), spContext);
-}
-pState->Settle(std::move(result));  // 结果直接搬进本层（省一次引用计数往返）
+const CPromiseResult ownResult = fnHandler(upResult, spContext);
+result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownResult，原样透传
 ```
 
 - `then` / `catch`：返回值即本层结果 → 决定后续走向（catch 返回 `Resolve()` 即恢复）；
@@ -521,8 +511,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 上表数字用 `operator new` 插桩实测（请求字节数，release / `-O2`）。与结果「只带码」的那版相比，
 结果类型 4B → 24B 使层状态 152 → 176B、任务体 72 → 96B（**分配次数没变**，仍是 2 + 1）；
-层的内部拷贝则由 5 次左右降到了 2 次（上一层结果按值捕获一次 + 移动交给处理器，
-`Settle` 也是移动入库）——同机交替微基准显示这与旧版已持平（单链 / 10 层 / 100 层均在 ±2% 内）。
+同机交替微基准（新旧两份库轮流跑 3 轮）显示性能与旧版持平（单链 / 10 层 / 100 层中位数都在 ±2% 内）。
 
 ### 已落地的两处优化
 

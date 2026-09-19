@@ -251,18 +251,34 @@ public:
     /// @param result 本层最终结果（已兑现 / 已拒绝）。
     void Settle(const CPromiseResult& result)
     {
-        SettleStore(result);  // 拷贝进本层（调用方的对象之后还要用）。
-    }
+        Handler handlerInline;
+        std::vector<Handler> vecHandlers;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_bSettled.load(std::memory_order_relaxed))
+            {
+                return;  // 单向开关：只 settle 一次。
+            }
+            m_result = result;
+            m_bSettled.store(true, std::memory_order_relaxed);  // 锁内写；relaxed 即可。
+            handlerInline = std::move(m_handlerInline);         // 第一个（1:1 链的常态）。
+            vecHandlers.swap(m_vecHandlers);                    // 分叉出来的其余（登记序）。
+        }
 
-    /// @brief settle 本状态并触发处理器（**移动版**：结果临时对象 / 用完即弃的局部量）。
-    ///
-    /// 与上面同语义，只是把结果**移动**进本层状态，省一次拷贝（24 字节 + 一次引用计数）——
-    /// 层间透传的常态是「拿到结果 → settle → 不再用它」，框架内部调用点都走这条路。
-    ///
-    /// @param result 本层最终结果（调用后不应再使用）。
-    void Settle(CPromiseResult&& result)
-    {
-        SettleStore(std::move(result));
+        // 支持多线程等待同一 promise（并发 Await）：notify_all 唤醒所有等待者。
+        m_cv.notify_all();
+
+        if (handlerInline)
+        {
+            handlerInline(result);
+        }
+        for (size_t i = 0; i < vecHandlers.size(); ++i)
+        {
+            if (vecHandlers[i])
+            {
+                vecHandlers[i](result);
+            }
+        }
     }
 
     /// @brief 登记处理器（执行器不可用时按策略收口）。
@@ -493,45 +509,6 @@ public:
 #endif  // defined(ASYNC_DEBUG_TRACE)
 
 private:
-    /// @brief settle 的公共实现：结果按值收下（`const&` 版拷贝、`&&` 版移动），再在锁外触发处理器。
-    ///
-    /// 处理器读到的是**本层存下的那份**（`m_result`），不再是调用方的对象：调用方持有本层状态
-    /// （否则调不了 `Settle`）→ 整段调用期间 `this` 恒有效；`m_result` 落定后再不改写，
-    /// 而它只在锁内写一次、处理器与 `Await` 都在其后读，故无数据竞争。
-    ///
-    /// @param result 本层最终结果。
-    void SettleStore(CPromiseResult result)
-    {
-        Handler handlerInline;
-        std::vector<Handler> vecHandlers;
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            if (m_bSettled.load(std::memory_order_relaxed))
-            {
-                return;  // 单向开关：只 settle 一次。
-            }
-            m_result = std::move(result);
-            m_bSettled.store(true, std::memory_order_relaxed);  // 锁内写；relaxed 即可。
-            handlerInline = std::move(m_handlerInline);         // 第一个（1:1 链的常态）。
-            vecHandlers.swap(m_vecHandlers);                    // 分叉出来的其余（登记序）。
-        }
-
-        // 支持多线程等待同一 promise（并发 Await）：notify_all 唤醒所有等待者。
-        m_cv.notify_all();
-
-        if (handlerInline)
-        {
-            handlerInline(m_result);
-        }
-        for (size_t i = 0; i < vecHandlers.size(); ++i)
-        {
-            if (vecHandlers[i])
-            {
-                vecHandlers[i](m_result);
-            }
-        }
-    }
-
     mutable std::mutex m_mutex;          ///< 保护结果与处理器列表（mutable：trace 的只读取结果要加锁）。
     std::condition_variable m_cv;        ///< 通知等待者。
     Handler m_handlerInline;             ///< 第一个处理器（1:1 链常态，免 vector 分配）。
@@ -575,9 +552,6 @@ inline CPromiseResult ResolveLayerResult(HandlerMode eMode, const CPromiseResult
 /// 这样在途任务不需要靠核心存活（因此核心无需 `enable_shared_from_this`），
 /// 也让「保活链」短一截：任务跑完前，只有它自己用到的对象在。
 ///
-/// 上一层结果**按值捕获**（一次拷贝，避免指向上游状态里的那份），then / catch 路径再把它
-/// **移动**给处理器 —— 结果传出去后本层不再需要它，于是每层少一次拷贝（引用计数不再 +1/-1）。
-///
 /// @param spContext 共享上下文（调用方在构造任务时解析好，恒非空）。
 /// @param pState 本层状态（执行结果写入它）。
 /// @param fnHandler 处理器（固定签名）。
@@ -589,7 +563,7 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spConte
     const ThenHandler<TContext>& fnHandler, const CPromiseResult& upResult, HandlerMode eMode)
 {
     ASSERT(spContext != nullptr);  // 任务体把上下文按值捕获交给处理器：必须已经备好。
-    return [spContext, pState, fnHandler, upResult, eMode]() mutable
+    return [spContext, pState, fnHandler, upResult, eMode]()
     {
 #if defined(ASYNC_DEBUG_TRACE)
         // 记录「当前层」：处理器内部就能通过 Trace.h 看到自己处在哪条链上。
@@ -599,17 +573,8 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spConte
         CPromiseResult result;
         try
         {
-            if (eMode == kModeFinally)
-            {
-                // finally：返回值被忽略、上一层结果原样透传 → 传副本（那份还要往下带）。
-                const CPromiseResult ownResult = fnHandler(upResult, spContext);
-                result = ResolveLayerResult(eMode, upResult, ownResult);
-            }
-            else
-            {
-                // then / catch：本层结果就是处理器返回值；上一层结果交出去后本层不再需要 → 移动。
-                result = fnHandler(std::move(upResult), spContext);
-            }
+            const CPromiseResult ownResult = fnHandler(upResult, spContext);
+            result = ResolveLayerResult(eMode, upResult, ownResult);  // finally 忽略 ownResult，原样透传。
         }
         catch (const std::exception& e)
         {
@@ -623,7 +588,7 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spConte
 #if defined(ASYNC_DEBUG_TRACE)
         pState->SetSelfDurationMs(frame.ElapsedMs());  // trace：本层耗时（落定前写一次）。
 #endif
-        pState->Settle(std::move(result));  // settle 本层 → 触发下一层（同执行器内联 / 跨执行器投递）。
+        pState->Settle(result);  // settle 本层 → 触发下一层（同执行器内联 / 跨执行器投递）。
     };
 }
 
@@ -1189,7 +1154,7 @@ private:
             promiseChild.OnSettled(
                 [pState](CPromiseResult childResult)
                 {
-                    pState->Settle(std::move(childResult));  // 结果搬到本层（子链那边已落定，不再用它）。
+                    pState->Settle(childResult);
                 });
         }
         catch (const std::exception& e)
