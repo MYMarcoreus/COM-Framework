@@ -138,22 +138,24 @@ class CPromiseState
 
 ```cpp
 auto fnRun = MakeThenRunner(...) / MakeResultRunner(...);  // 执行处理器 + settle 本层
-if (IsInExecutorThread(pCore->Handle())  // ① 线程亲和：必须在本链执行器线程上
-    && InlineDepth() < kMaxInlineDepth)  // ② 深度未超限（线程局部计数 64）
+if (IsInExecutorThread(pCore->Handle())   // ① 线程亲和：必须在本链执行器线程上
+    && InlineDepth() < kMaxInlineDepth    // ② 深度未超限（线程局部计数 64）
+    && Gate()->CanRunInline(eKind))       // ③ 读写门：本线程持着本门「同类」槽位且无人在排队
 {
     ++InlineDepth();
     fnRun();
-    --InlineDepth();  // 就地执行（省一次投递 + 唤醒）
+    --InlineDepth();  // 就地执行（省一次投递 + 唤醒；槽位沿用外层任务的，不另占不另还）
 }
 else
 {
-    PostToHandle(pCore->Handle(), std::move(fnRun));  // 跨执行器 / 深度超限 → 投递回本链执行器
+    PostToHandle(pCore->Handle(), eKind, std::move(fnRun));  // 过门排队（跨执行器 / 深度超限 / 换类别 / 有人排队）
 }
 ```
 
 `InlineDepth()` 是线程局部计数器，链的级联与协程的内联续接**共用**它，
 因此「promise + 协程」混合递归也被同一上限保护；加上①后，深度只在**同一执行器线程内**累加，
-跨模块不会涨栈。
+跨模块不会涨栈。③ 是 2026-09-19 加读写门时补上的条件：**换类别不能就地**（读任务里的写层
+要等别的读者退出 = 等自己，必自死锁），**有人在排队也不能就地**（否则会插队，破坏公平）。
 
 ### 5.1 起链只有一种语义：立即投递首层（**延迟启动已移除**）
 
@@ -457,6 +459,50 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 - 测试如果要断言线程：让**用例自己指定结算线程**（自己建子 promise + 在选定执行器上投递结算），
   不要靠固定延时抢时序 —— 踩坑记录见 [async-cross-module-findings.md](async-cross-module-findings.md) 末尾。
 
+### 8.4 读写门：调度侧的准入判定（2026-09-19）
+
+「谁能进入模块」从 2026-09-19 起是调度层的一件事（`Common/Async/ReadWriteGate.h`）：
+`CAsyncExecutor` 组合一个 `CReadWriteGate`，挂在**执行器句柄**上（`CExecutorHandle::m_pGate`，
+与线程池同寿命 —— promise / 协程持句柄即保活门，执行器析构后门不会悬垂）。
+能力来源：`ServerCore/Exec` 的 `CModuleScheduler`（读写调度）整体搬进异步框架后，Exec 目录已删除。
+
+投递漏斗（每个任务都带类别）：
+
+| 路径 | 说法 |
+| --- | --- |
+| `exec.Post` / `PostRead` | 包一层异常兜底（`kDiagPostThrow`）后过门 |
+| 层派发 `PostToHandle(handle, kind, fn)` | `StartChain` 首层、`AddHandler` 的「已落定 → 投递」、`DispatchInlineOrPost` 的投递分支 —— 按链的类别过门 |
+| 通知（`OnSettled` / `OnSettledOn`） | **直投**（`PostToHandle(handle, fn)` 的直投重载）：保证送达优先，不去排队等槽位 |
+| 就地（`CanRunInline`） | 不过门：槽位已在外层任务手里（同类），只要求「无人在排队」 |
+
+准入算法（与 Exec 时代同款，随能力搬过来）：
+
+- **单一 FIFO 队列 + 队首放行**：读任务在「无写者且未超读上限」时放行，放行后继续看下一个
+  （连续读一并放行）；队首是写时等读者排空，其后的读/写一并等待 —— 后来者永远不越过先来者
+  （双队列 + 写优先会让「先读后写」执行成「写→读」，这是 Exec 时代踩过的坑）；
+- **非阻塞**：进不了就留在队列，线程立即归还线程池；槽位释放时（`OnTaskExit`）继续泵出；
+- **异常也归还槽位**：池不捕获异常，门在包装里兜住（`kDiagGateThrow`）后照常归还 ——
+  漏归还 = 写者标志回不来 = 模块永久卡死；
+- **就地判定用线程局部任务帧**：`detail::CTaskFrame` / `CTaskFrameGuard`（过门投递的任务压帧，
+  就地跑下来的层沿用外层帧）；`CanRunInline` 只看「帧 = 本门 + 同类」且「队列空」。
+
+开销（`Tests/test_async_alloc.cpp` 守着）：
+
+- 包装任务是**可移动**的 `CWrappedTask`（不是 lambda）—— C++11 的 lambda 不能「移动捕获」，
+  包一层会把任务体拷一份，而 `std::function` 的拷贝要再走一次堆分配；
+- 放行收集缓冲是**线程局部复用**的（`ScratchDispatchBuffer`），不再每次投递新建一个 vector；
+- 合计：每次「过门投递」≈1 次额外分配，就地层 0 次。实测跑链 200 层 213 次、800 层 841 次
+  （≈1.05 次/层；一条链约每 `kMaxInlineDepth`(64) 层才投递一次）。
+
+停止顺序（`CAsyncExecutor::Stop`）：**关读写门 → 标记停止 → `Drain`（等已接受的跑完）→ 停池**。
+先关门再标记，是为了让「看到 `IsStopped()` 为真」的调用方确定「门也已经关了」（门是唯一权威的
+准入点，标记只是快速路径）。
+
+测试：`Tests/test_async_gate.cpp`（门本体 13 例：读并发 / 写独占 / 三种 FIFO 顺序 / 同门重入 /
+多门链式 / 16 门压力 / 排空 / 拒绝路径 / 异常仍归还槽位）+ `Tests/test_async_rw.cpp`
+（执行器集成 8 例：默认写链互斥 / `PostRead` 并发 / 读写不重叠 / 读链并发 / 就地级联同线程 /
+`Stop` 排空不丢任务 / 停止中链以「执行器已停」收口）。
+
 ## 9. 源码位置调试（ASYNC_LOC）
 
 ```cpp
@@ -534,11 +580,34 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 | 阶段 | 次数/层 | 内容 |
 | --- | --- | --- |
 | 建链（`NewPromise` + `Then` × N） | **2** | `make_shared<CPromiseState>`（层状态 176B，含控制块 **192B**）+ 处理器 `std::function`（**72B**） |
-| 跑链（`Start` + `Await`） | **1** | 投递给执行器的任务体（`MakeLayerRunner`，**96B**） |
+| 跑链（`Start` + `Await`） | **1** | 投递给执行器的任务体（`MakeLayerRunner`，**96B**）；就地层不再多花，**过门投递**另加 ≈1 次（读写门包装任务，见 §8.4） |
 
 字节数建链 ≈ **264 字节/层**（release；debug 多一份 `CSourceLoc`），跑链的任务体 96 字节。
 另加每链常数 ≤ 8 次分配（核心、延迟载荷、首层 runner 等）。
 历史上建链是 **3 次/层**（多一次 `std::vector` 缓冲 32B），现已削到 2 次。
+
+过门投递的摊销：一条链大约每 `kMaxInlineDepth`(64) 层才会「过门投递」一次（其余层在门内就地级联），
+所以跑链实测 200 层 **213** 次、800 层 **841** 次（≈1.05 次/层）；护栏按
+`层数 + 层数/16 + 8` 设上限 —— 比实测宽，但仍能抓住「每层多一次分配」这类回归。
+
+### 读并发的实测与「调度开销边界」（2026-09-19）
+
+`Benchmark/cases/ReadWriteCase.cpp`（256 个任务、每个约 40 µs 业务、4 线程执行器）：
+
+| 行 | 均值 | 相对基线 |
+| --- | --- | --- |
+| 直接顺序执行同一批工作（基线） | 10.4 ms | 1.0× |
+| `PostRead`（读：并发） | **2.7 ms** | **0.3×**（≈3.8×，接近线程数 4） |
+| `Post`（写：独占） | 12.1 ms | 1.2×（串行 + 每任务调度开销） |
+
+**边界：任务太短时，测到的是线程池的唤醒成本，而不是读写门。** 池在「队列空窗」下每任务要付
+一次睡眠/唤醒（实测 5~15 µs/任务；`strace` 数到约 2 次 `futex`/任务）：把 512 个「空转 64 次」
+（≈100 ns 业务）的任务直接投进 4 线程池要 **6~7 ms**（≈12 µs/任务，并发峰值只有 1），而同样
+的任务带 40 µs 业务量时读路径能跑满 4 路。也就是说：小任务的瓶颈在池的唤醒策略（`Post` 突发
+与读突发都受影响），与准入判定无关 —— 属于可单独优化的点（窗口式持续吞吐见基准报告 §5）。
+
+实际含义：**读并发优化的是「业务量足够大的读」**（几十 µs 以上），这类才是模块里值得并起来的
+工作；数百纳秒级的小任务无论读写都被调度开销支配，不要指望读写门在那里制造差异。
 
 上表数字用 `operator new` 插桩实测（请求字节数，release / `-O2`）。与结果「只带码」的那版相比，
 结果类型 4B → 24B 使层状态 152 → 176B、任务体 72 → 96B（**分配次数没变**，仍是 2 + 1）；

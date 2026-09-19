@@ -4,6 +4,7 @@
 // ====================================================================
 #include "cases/ChainCase.h"
 #include "cases/CoroutineCase.h"
+#include "cases/ReadWriteCase.h"
 #include "cases/ResumableCase.h"
 #include "cases/StressCase.h"
 #include "cases/SubmitCase.h"
@@ -16,5 +17,6 @@ int main()
     RunCoroutineCases();
     RunResumableCases();
     RunStressCases();
+    RunReadWriteCases();
     return benchmark::ReportToFiles();
 }
