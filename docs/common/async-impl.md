@@ -27,7 +27,7 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 
 | 文件 | 内容 |
 | --- | --- |
-| `PromiseResult.h` | `CPromiseResult`（兑现 / 拒绝 + 错误码）、`PromiseCode` 常量 |
+| `PromiseResult.h` | `CPromiseResult`（兑现 / 拒绝 + 错误码 + 可选文案）、`PromiseCode` 常量 |
 | `PromiseTypes.h` | `SettledHandler`、`detail::ThenHandler<TContext>`（处理器固定签名） |
 | `SourceLoc.h` | `CSourceLoc` + `ASYNC_LOC`（注册点调试信息，发布构建零开销） |
 | `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle`、`detail::IsInExecutorThread`、`detail::ShouldInline` / `DispatchInlineOrPost`（**调度策略**：跑在哪条线程）、组合器 `detail::Gather*` |
@@ -589,7 +589,7 @@ ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入");  //
 | `CPromise` 私有构造 | `pCore != nullptr` / `pState != nullptr` | 句柄恒有核心、**恒指向一个层**（无「未挂首层」态） |
 | `MakeHandlerRunner` / `RunHandler` | `spContext` / `pState` 非空 | 内部调用不变量 |
 | ~~`CPromise::Start` / `IsStarted` / `RegisterFirstLayer` / `Append`（延迟分支）~~ | ~~延迟链的载荷非空~~ | 延迟启动已移除（§5.1），相应断言一并删除 |
-| `CPromiseResult::Reject` | `nCode != kFulfilled` | 用 0 当拒绝码会把失败当成功 |
+| `CPromiseResult::Reject` | **已无断言** | `Reject(0)` 现在是合法的业务拒绝（判兑现一律看 `IsFulfilled()`），码值不再有「0 = 兑现」的约束 |
 | `CCoroutine` 构造 | `spContext != nullptr` | 与 promise 一致 |
 | `CCoroutine::AsPromise` / `AwaitWait` / `AwaitEach` | `m_pExec != nullptr` | 必须在 `CoStart` 之后调用 |
 | `CExampleDbModule` / `CExampleAsyncModule`（业务侧样例） | 模块已启动、参数非空 | 样例示范「业务契约也用断言钉住」 |

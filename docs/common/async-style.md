@@ -90,7 +90,7 @@ using common::async::CPromiseResult;
 ```
 
 ```cpp
-/// 业务拒绝码（从 `kBusinessBase` 起取；层间只传码，文案自己查表）。
+/// 业务拒绝码（从 `kBusinessBase` 起取，避开框架占用的 1 / 2 / 3；**文案随拒绝走**，不必查表）。
 enum
 {
     kStockShortage = common::async::kBusinessBase,  ///< 库存不足

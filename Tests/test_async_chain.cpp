@@ -193,11 +193,14 @@ TEST(Promise_ThenHandlerContract)
     };
     ASSERT_TRUE(static_cast<bool>(fnSettled));
 
-    // 层结果码：框架保留区间 + 业务码起始值。
+    // 层结果：兑现与码分开（判兑现一律看 IsFulfilled()）；框架码自带文案、业务码不带。
     ASSERT_EQ(static_cast<int>(common::async::kFulfilled), 0);
-    ASSERT_TRUE(common::async::kBusinessBase >= 100);
     ASSERT_TRUE(common::async::CPromiseResult::Resolve().IsFulfilled());
-    ASSERT_TRUE(common::async::CPromiseResult::Reject(common::async::kBusinessBase).IsRejected());
+    ASSERT_TRUE(common::async::CPromiseResult::Resolve().Code() == common::async::kFulfilled);
+    ASSERT_TRUE(common::async::CPromiseResult::Reject(0).IsRejected());       // 码 0 也是拒绝，不是兑现
+    ASSERT_TRUE(common::async::CPromiseResult::Reject(0).Message().empty());  // 业务码：不带文案
+    // 框架码：自动带框架固定文案（预建共享串）。
+    ASSERT_TRUE(!common::async::CPromiseResult::Reject(common::async::kStopped).Message().empty());
 }
 
 /// @brief 单层 promise：NewPromise → Await（兑现）。

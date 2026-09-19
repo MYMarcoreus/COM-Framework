@@ -465,7 +465,7 @@ TEST(Smoke_OnSettledSideChannel)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    spCtx->nFailCode = common::async::kBusinessBase + 8;  // 注意：0 表示兑现，别用 0 当错误码
+    spCtx->nFailCode = common::async::kBusinessBase + 8;  // 业务码（本用例自定；避开框架占用的 1 / 2 / 3）
     std::atomic<int> nOk(0);
     std::atomic<int> nFail(0);
     common::async::CPromise<CSmokeCtx> p = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC).Catch(&StepCatchPass, ASYNC_LOC);
