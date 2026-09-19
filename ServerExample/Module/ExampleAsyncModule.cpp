@@ -1,6 +1,7 @@
 #include "Module/ExampleAsyncModule.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <mutex>
@@ -462,13 +463,18 @@ CUserPromise BridgeDeleteUser(const CFlowDeps& deps, const std::shared_ptr<CUser
 ///
 /// 被查询 / 改名 / 删除三个流程复用：同上下文类型，直接串接即可（非阻塞）。
 ///
+/// 类别由业务流程给：查询流程传 `kRead`（可与其他读并发），改名 / 删除传 `kWrite`（独占）——
+/// 使「先读出来判断，再按判断结果去写」的整段业务不被打断（业务层的互斥由异步框架保证，
+/// 模块里不需要自己的锁）。
+///
 /// @param deps 流程依赖。
 /// @param spCtx 业务上下文（命中结果写入 bExists / recResult）。
+/// @param eKind 本流程的读写类别。
 ///
 /// @return 本流程的 promise。
-CUserPromise LoadUserAsync(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
+CUserPromise LoadUserAsync(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx, common::async::TaskKind eKind)
 {
-    return deps.spExec->NewPromise(spCtx, &StepValidateUserId, ASYNC_LOC)
+    return deps.spExec->NewPromise(spCtx, &StepValidateUserId, ASYNC_LOC, eKind)
         .ThenPromise(
             [deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
             {
@@ -479,7 +485,8 @@ CUserPromise LoadUserAsync(const CFlowDeps& deps, const std::shared_ptr<CUserOpC
 
 /// @brief 流程：查询用户（读）。
 ///
-/// 读用户 → 不存在即拒绝 → 审计收尾（finally）。
+/// 读用户 → 不存在即拒绝 → 审计收尾（finally）。整条链声明为读链（`kRead`）：
+/// 多个查询可同时进入本模块，串行的只有跨模块 IO 的等待。
 ///
 /// @param deps 流程依赖。
 /// @param spCtx 业务上下文。
@@ -487,7 +494,9 @@ CUserPromise LoadUserAsync(const CFlowDeps& deps, const std::shared_ptr<CUserOpC
 /// @return 本流程的 promise（结果数据在上下文中）。
 CUserPromise BuildQueryFlow(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
-    return LoadUserAsync(deps, spCtx).Then(&StepRejectIfAbsent, ASYNC_LOC).Finally(&StepAudit, ASYNC_LOC);
+    return LoadUserAsync(deps, spCtx, common::async::TaskKind::kRead)
+        .Then(&StepRejectIfAbsent, ASYNC_LOC)
+        .Finally(&StepAudit, ASYNC_LOC);
 }
 
 /// @brief 流程：注册用户（写）。
@@ -527,7 +536,7 @@ CUserPromise BuildRegisterFlow(const CFlowDeps& deps, const std::shared_ptr<CUse
 /// @return 本流程的 promise（冲突重试次数见上下文的 nAttempt）。
 CUserPromise BuildRenameFlow(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
-    return LoadUserAsync(deps, spCtx)
+    return LoadUserAsync(deps, spCtx, common::async::TaskKind::kWrite)
         .Then(&StepRejectIfAbsent, ASYNC_LOC)
         .Then(&StepPrepareRename, ASYNC_LOC)
         .ThenPromise(
@@ -549,7 +558,7 @@ CUserPromise BuildRenameFlow(const CFlowDeps& deps, const std::shared_ptr<CUserO
 /// @return 本流程的 promise。
 CUserPromise BuildRemoveFlow(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
-    return LoadUserAsync(deps, spCtx)
+    return LoadUserAsync(deps, spCtx, common::async::TaskKind::kWrite)
         .Then(&StepRejectIfAbsent, ASYNC_LOC)
         .ThenPromise(
             [deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
@@ -576,7 +585,7 @@ public:
     /// @param spService 业务模块接口（自持引用：回调期间模块存活）。
     /// @param spTable 数据访问模块接口（场景⑧需要直接观察数据访问层的异常语义）。
     CDemoDriver(const sc::ScopedInterfacePtr<IUserService>& spService, const sc::ScopedInterfacePtr<IUserTable>& spTable)
-        : m_spService(spService), m_spTable(spTable), m_nUserId(0), m_nRenamePending(0), m_strRenameSummary()
+        : m_spService(spService), m_spTable(spTable), m_nUserId(0), m_nPending(0), m_tpPhaseStart(), m_strPhaseSummary()
     {}
 
     /// @brief 启动演示（场景①）。
@@ -666,25 +675,68 @@ private:
                 spSelf->LogScenario(
                     "演示③ 查询用户 名字=" + spCtx->recResult.strName + " 等级=" + std::to_string(spCtx->recResult.nLevel),
                     result, spCtx);
-                spSelf->RunRenameConcurrent();
+                spSelf->RunReadWriteContrast();
             });
     }
 
-    /// @brief 场景④：并发改名 —— 两条链同时改同一行，乐观锁冲突由业务层在回调里自动重试。
-    void RunRenameConcurrent()
+    /// @brief 场景④：读写门对比 —— 同样 3 路并发，「读」可重叠、「写」必须串行。
+    ///
+    /// 阶段一：3 路并发查询（读链 `kRead`）—— 读任务可同时进入本模块，总耗时 ≈ 1 次查询耗时；
+    /// 阶段二：3 路并发改名（写链 `kWrite`）—— 写任务独占进入，总耗时 ≈ 3 倍写流程耗时。
+    /// 注意门只保证「同一时刻只有一个写任务在跑」：三路改名在第一轮写之前就都读到了同一版本，
+    /// 所以更新时照旧撞版 —— 乐观锁自动重试仍在演练（日志里能看到 尝试=1/2/3）。
+    void RunReadWriteContrast()
     {
-        m_nRenamePending.store(2, std::memory_order_relaxed);
+        m_tpPhaseStart = std::chrono::steady_clock::now();
+        m_strPhaseSummary.clear();
+        m_nPending.store(3, std::memory_order_relaxed);
+        for (int nBranch = 1; nBranch <= 3; ++nBranch)
         {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_strRenameSummary.clear();
+            StartGateRead(nBranch);
         }
-        StartRename("A", "carol-a");
-        StartRename("B", "carol-b");
     }
 
-    /// @brief 发起一路改名（两路并发，最后由最后完成者收口）。
+    /// @brief 阶段一的一路：并发查询（读链）。
     ///
-    /// @param strTag 分支标记（A / B）。
+    /// @param nBranch 分支序号（仅用于日志）。
+    void StartGateRead(int nBranch)
+    {
+        CUserPromise promise = m_spService->QueryUserAsync(m_nUserId);
+        const std::shared_ptr<CUserOpContext> spCtx = promise.GetContext();
+        std::shared_ptr<CDemoDriver> spSelf = shared_from_this();
+        promise.OnSettled(
+            [spSelf, spCtx, nBranch](common::async::CPromiseResult result)
+            {
+                spSelf->AccumulateBranch("读" + std::to_string(nBranch) + "=" + DescribeResult(result));
+                if (spSelf->m_nPending.fetch_sub(1, std::memory_order_acq_rel) == 1)
+                {
+                    spSelf->OnReadPhaseDone();
+                }
+            });
+    }
+
+    /// @brief 阶段一收口：记录读链总耗时，随即进入阶段二（3 路并发写）。
+    void OnReadPhaseDone()
+    {
+        std::string strSummary;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            strSummary = m_strPhaseSummary;
+            m_strPhaseSummary.clear();
+        }
+        common::log::CLogger::Instance().Info(
+            "[演示④] 3 路并发读（读链可并发）：总耗时 " + std::to_string(ElapsedMs()) + "ms ＝ 单次查询耗时  " + strSummary);
+
+        m_tpPhaseStart = std::chrono::steady_clock::now();
+        m_nPending.store(3, std::memory_order_relaxed);
+        StartRename("A", "carol-a");
+        StartRename("B", "carol-b");
+        StartRename("C", "carol-c");
+    }
+
+    /// @brief 阶段二的一路：改名（写链；三路同时发起，由读写门排队）。
+    ///
+    /// @param strTag 分支标记（A / B / C）。
     /// @param strNewName 本分支要改成的名字。
     void StartRename(const std::string& strTag, const std::string& strNewName)
     {
@@ -694,28 +746,42 @@ private:
         promise.OnSettled(
             [spSelf, spCtx, strTag](common::async::CPromiseResult result)
             {
-                const std::string strLine = strTag + "=" + DescribeResult(result) + " 尝试=" + std::to_string(spCtx->nAttempt) +
-                                            " 轨迹=" + spCtx->strTrace;
-                {
-                    // 两路回调可能在不同线程 → 汇总数据加锁。
-                    std::lock_guard<std::mutex> lock(spSelf->m_mutex);
-                    if (!spSelf->m_strRenameSummary.empty())
-                    {
-                        spSelf->m_strRenameSummary += " | ";
-                    }
-                    spSelf->m_strRenameSummary += strLine;
-                }
-                if (spSelf->m_nRenamePending.fetch_sub(1, std::memory_order_acq_rel) == 1)
+                spSelf->AccumulateBranch(strTag + "=" + DescribeResult(result) + " 尝试=" + std::to_string(spCtx->nAttempt));
+                if (spSelf->m_nPending.fetch_sub(1, std::memory_order_acq_rel) == 1)
                 {
                     std::string strSummary;
                     {
                         std::lock_guard<std::mutex> lock(spSelf->m_mutex);
-                        strSummary = spSelf->m_strRenameSummary;
+                        strSummary = spSelf->m_strPhaseSummary;
+                        spSelf->m_strPhaseSummary.clear();
                     }
-                    common::log::CLogger::Instance().Info("[演示④] 并发改名（乐观锁冲突自动重试）" + strSummary);
+                    common::log::CLogger::Instance().Info(
+                        "[演示④] 3 路并发写（写链独占串行）：总耗时 " + std::to_string(spSelf->ElapsedMs()) +
+                        "ms ＝ 3 × 写流程耗时（各自读到同一版本 → 乐观锁冲突自动重试）  " + strSummary);
                     spSelf->RunRemove();
                 }
             });
+    }
+
+    /// @brief 汇总一路分支的结果（回调可能在不同线程 → 加锁）。
+    ///
+    /// @param strLine 本分支的结果描述。
+    void AccumulateBranch(const std::string& strLine)
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if (!m_strPhaseSummary.empty())
+        {
+            m_strPhaseSummary += " | ";
+        }
+        m_strPhaseSummary += strLine;
+    }
+
+    /// @brief 当前阶段已耗时。
+    ///
+    /// @return 自 m_tpPhaseStart 起的毫秒数。
+    long long ElapsedMs() const
+    {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - m_tpPhaseStart).count();
     }
 
     /// @brief 场景⑤：删除用户（删）。
@@ -785,12 +851,13 @@ private:
             });
     }
 
-    sc::ScopedInterfacePtr<IUserService> m_spService;  ///< 业务模块接口（自持引用）。
-    sc::ScopedInterfacePtr<IUserTable> m_spTable;      ///< 数据访问模块接口。
-    std::uint64_t m_nUserId;                           ///< 演示用户 id（场景①分配）。
-    std::atomic<int> m_nRenamePending;                 ///< 并发改名未完成的分支数。
-    std::mutex m_mutex;                                ///< 保护并发场景的汇总数据。
-    std::string m_strRenameSummary;                    ///< 并发改名各分支结果汇总。
+    sc::ScopedInterfacePtr<IUserService> m_spService;      ///< 业务模块接口（自持引用）。
+    sc::ScopedInterfacePtr<IUserTable> m_spTable;          ///< 数据访问模块接口。
+    std::uint64_t m_nUserId;                               ///< 演示用户 id（场景①分配）。
+    std::atomic<int> m_nPending;                           ///< 当前阶段未完成的分支数。
+    std::chrono::steady_clock::time_point m_tpPhaseStart;  ///< 当前阶段开始时刻（并发对比用）。
+    std::mutex m_mutex;                                    ///< 保护当前阶段的汇总数据。
+    std::string m_strPhaseSummary;                         ///< 当前阶段各分支结果汇总。
 };
 
 }  // namespace
@@ -848,7 +915,9 @@ bool CExampleAsyncModule::Start()
     // promise 是模板（上下文类型固定），无法放进 IAsyncExecutor 虚接口，故自持执行器；
     // 用 shared_ptr 持有并按值传给流程：流程/回调可能晚于模块停止，
     // 执行器对象按引用计数存活（停止后新投递以 kStopped 被拒绝）。
-    m_spExecutor.reset(new common::async::CAsyncExecutor(2));
+    // 读写门挂在执行器上：本模块的读流程（查询）可并发占满这 4 个线程，
+    // 写流程（注册 / 改名 / 删除）一次只放一个进去 —— 与是否同一条链无关。
+    m_spExecutor.reset(new common::async::CAsyncExecutor(4));
     if (!m_spExecutor->Start())
     {
         m_spExecutor.reset();
@@ -944,6 +1013,8 @@ static CUserPromise MakeRejectedPromise(const CFlowDeps& deps, const std::shared
 
 /// @brief 异步查询用户信息（读）。
 ///
+/// 分类：读链（`kRead`）—— 可与其他查询并发进入本模块（模块内的互斥由读写门保证）。
+///
 /// @param nUserId 目标用户 id。
 ///
 /// @return promise 句柄（立即返回；结果数据在 GetContext() 中）。
@@ -962,6 +1033,8 @@ common::async::CPromise<CUserOpContext> CExampleAsyncModule::QueryUserAsync(std:
 }
 
 /// @brief 异步注册用户（写）。
+///
+/// 分类：写链（`kWrite`，默认类别）—— 独占进入本模块（“查重 → 落库”中间不会被插队）。
 ///
 /// @param recRequest 待注册记录（nUserId 为 0 时由数据访问层自增分配）。
 ///
@@ -982,6 +1055,8 @@ common::async::CPromise<CUserOpContext> CExampleAsyncModule::RegisterUserAsync(c
 
 /// @brief 异步修改用户名（改）。
 ///
+/// 分类：写链（`kWrite`）—— 独占进入本模块，乐观锁重试期间的「重读 → 重写」也不会被读流程插队。
+///
 /// @param nUserId 目标用户 id。
 /// @param strNewName 新用户名。
 ///
@@ -1001,6 +1076,8 @@ common::async::CPromise<CUserOpContext> CExampleAsyncModule::RenameUserAsync(std
 }
 
 /// @brief 异步删除用户（删）。
+///
+/// 分类：写链（`kWrite`）—— 独占进入本模块（"读存在性 → 删除"不被插队）。
 ///
 /// @param nUserId 目标用户 id。
 ///

@@ -609,6 +609,11 @@ exec.NewPromise(spCtx, StepQueryStock, ASYNC_LOC, common::async::TaskKind::kRead
 exec.NewPromise(spCtx, StepApplyChange, ASYNC_LOC);   // 默认写
 ```
 
+业务侧完整落地（模块里不再需要自己的锁）：`ServerExample/Module/ExampleDbModule.cpp`（表不加锁：
+写独占使「读出来改回去」整段不被打断）与 `ServerExample/Module/ExampleAsyncModule.cpp`（查询 = 读链、
+注册 / 改名 / 删除 = 写链）；把 `example.ini` 的 `db.latency_ms` 调大（几十 ms）后，日志里能直接
+看到「3 路并发读 ≈ 1 次耗时、3 路并发写 ≈ 3 倍」。
+
 规则与后果（**都是行为契约，不只是性能开关**）：
 
 - **默认是写**：与旧行为（任务在池里排着队跑）最接近、也最安全 —— 要并发必须**显式**声明读；
@@ -798,7 +803,8 @@ common::async::CPromise<Ctx> p =
 
 - 示例：`examples/main.cpp`（28 个演示：then / catch / finally / 分叉 / 深链 / 协程 / **嵌套** / **跨模块组合** / **多种 then 混用**）；
 - 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
-- 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞）；
+- 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞；
+  查询 = 读链可并发，注册 / 改名 / 删除 = 写链独占，模块内无需自己的锁）；
 - 单元测试（异步共 **105 例**，全量 151 例）：`test_async_smoke.cpp`（17）对外用法逐条冒烟、
   `test_async_chain.cpp`（37）promise 契约 + 协程、`test_async_combine.cpp`（12）组合器、
   `test_async_modules.cpp`（6）+ `test_async_modules_stress.cpp`（8）跨模块与极限、

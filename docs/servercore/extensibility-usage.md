@@ -147,7 +147,14 @@ common::async::CPromise<CMyOpContext> BuildFlow(const CFlowDeps& deps, const std
 要点：
 
 - **每个模块自建执行器**（promise 是模板，无法放进 `IAsyncExecutor` 虚接口）；跨模块调用只登记
-  回调，双方线程池互不占用，因此线程数不必为「等待」留余量（示例业务模块只需 2 个 worker）；
+  回调，双方线程池互不占用，因此线程数不必为「等待」留余量（示例业务模块与数据访问模块各
+  4 个 worker：够几路查询重叠即可）；
+- **模块内的线程安全用「读写门」而不是自己的锁**：执行器的每条投递都带类别 —— 读流程用
+  `NewPromise(spCtx, 首层, ASYNC_LOC, common::async::TaskKind::kRead)`（可并发），写流程用默认的
+  `kWrite`（独占进入）。门对「同一模块的全部任务」生效（与是不是同一条链无关），所以
+  「读出来判断 → 按判断去写」的整段业务不会被插队，模块状态也就不用再拿互斥锁保护
+  （详见 [../common/async-usage.md](../common/async-usage.md) §8.1；示例见
+  `ServerExample/Module/ExampleDbModule.cpp`：表不加锁，靠读并发 / 写独占）；
 - 流程函数应当**按值捕获依赖**（执行器 `shared_ptr`、对方模块接口 `ScopedInterfacePtr`）与上下文，
   **不要在回调里捕获本模块 `this`**：回调可能在别的模块的线程上执行、也可能晚于本模块停止
   （这样写流程就是纯函数，任何线程上都安全）；需要「回调期间模块存活」时用

@@ -115,8 +115,10 @@ bool CExampleApplication::RegisterModules()
 
     // ⑩ 数据访问模块（模拟数据库）：对外提供用户信息表读写改删的异步函数，
     //     须先于依赖它的业务模块注册（拓扑排序保证先初始化 / 启动）。
+    //     threads = 执行器线程数 = 「同时能跑几个读」的上限；写始终独占（读写门）。
     int dbLatencyMs = m_config.GetInt("db.latency_ms", 3);
-    if (!m_moduleManager.RegisterModule(IID_IUserTable(), new CExampleDbModule(dbLatencyMs)))
+    int dbThreads = m_config.GetInt("db.threads", 4);
+    if (!m_moduleManager.RegisterModule(IID_IUserTable(), new CExampleDbModule(dbLatencyMs, dbThreads)))
     {
         return false;
     }
@@ -204,9 +206,9 @@ bool CExampleApplication::OnStart()
         promise.OnSettled(
             [spCtx](common::async::CPromiseResult result)
             {
-                common::log::CLogger::Instance().Info(
-                    "[应用] 外部异步调用完成：" + std::string(result.IsFulfilled() ? "兑现" : "拒绝") +
-                    " id=" + std::to_string(spCtx->nUserId) + " 轨迹=" + spCtx->strTrace);
+                common::log::CLogger::Instance().Info("[应用] 外部异步调用完成：" +
+                                                      std::string(result.IsFulfilled() ? "兑现" : "拒绝") +
+                                                      " id=" + std::to_string(spCtx->nUserId) + " 轨迹=" + spCtx->strTrace);
             });
         common::log::CLogger::Instance().Info("[应用] 已按接口调用业务模块异步函数（回调通知，不阻塞）");
     }

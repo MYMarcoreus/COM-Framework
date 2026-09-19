@@ -1,14 +1,15 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <string>
 
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
+#include "Async/ReadWriteGate.h"
 #include "Module/IUserTable.h"
 #include "Module/InterfaceMap.h"
 #include "Module/Module.h"
@@ -17,21 +18,29 @@ namespace serverexample {
 
 /// @brief 模拟数据库模块（用户信息表的数据访问）。
 ///
-/// 模拟真实数据访问层的三个要点：
-///  - 表数据放内存 map + 互斥锁（模拟数据库行 / 连接资源竞争）；
-///  - 层内 sleep 模拟磁盘 / 网络 IO 延迟（由 `db.latency_ms` 配置）；
+/// 模拟真实数据访问层的要点：
+///  - 表数据放内存 map，但「不加锁」：并发安全交给执行器的读写门 ——
+///      · 查询 = 读链（`TaskKind::kRead`）：多个查询可同时进入（只读表，彼此不冲突）；
+///      · 插入 / 更新 / 删除 = 写链（默认 `TaskKind::kWrite`）：独占进入（连读也不许），
+///        于是「读表 → 改表」整段流程在独占区里跑完，「读到什么就改什么」是确定的；
+///  - 层内 sleep 模拟磁盘 / 网络 IO 延迟（由 `db.latency_ms` 配置）—— 读链并发时这些等待
+///    互相重叠，写链串行时依次排开（演示④ 会把两者量出来）；
 ///  - 「本模块内的异步函数互相复用」：读表由内部异步函数 LoadRowAsync 提供，
 ///    插入 / 更新 / 删除都在它的 promise 上追加 handler（Then / Catch / Finally），
-///    全程非阻塞；
+///    全程非阻塞；LoadRowAsync 的类别由调用方给（查询传读、写流程传写）；
 ///  - 层内异常（模拟驱动故障）由框架捕获，以异常原样收口，不向调用方抛出。
 ///
 /// 模块名 "example-db"，实现接口 IUserTable。
-/// 自建独立执行器：其他模块调用本模块的异步函数时，本模块的层跑在自己的线程池上，
-/// 调用方不需要等待（只登记回调），因此双方互相不占线程。
+/// 自建独立执行器（线程数 = `db.threads`）：其他模块调用本模块的异步函数时，本模块的层
+/// 跑在自己的线程池上，调用方不需要等待（只登记回调），因此双方互相不占线程；
+/// 线程数同时决定「同时能跑几个读」的上限。
+///
+/// @note 「读任务不得改模块状态」是这套机制唯一的规约：表数据只被读链读、被写链改，
+///       因此不需要互斥锁；模块外部（如 GetStatus）只看原子计数，不碰表。
 class CExampleDbModule : public sc::CModule, public IUserTable
 {
 public:
-    explicit CExampleDbModule(int nLatencyMs);
+    CExampleDbModule(int nLatencyMs, int nThreadCount);
 
     virtual ~CExampleDbModule();
 
@@ -58,7 +67,7 @@ private:
     // 处理器类型：then 只接上下文；catch / finally 还要上游结果。
     using ThenHandler = common::async::CPromise<CUserTableOp>::ThenHandler;
     using ResultHandler = common::async::CPromise<CUserTableOp>::ResultHandler;
-    // 成员函数形式的处理器（可访问表数据与互斥锁）：then 与 catch / finally 各一种形状。
+    // 成员函数形式的处理器（可访问表数据）：then 与 catch / finally 各一种形状。
     using ThenMemberFn = common::async::CPromiseResult (CExampleDbModule::*)(const std::shared_ptr<CUserTableOp>& spOp);
     using ResultMemberFn = common::async::CPromiseResult (CExampleDbModule::*)(
         common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
@@ -71,7 +80,8 @@ private:
 
     // ---------------- 本模块内的异步函数 ----------------
     // 读表（取连接 + 读行）；被查询 / 插入 / 更新 / 删除复用（同上下文类型，直接追加 handler）。
-    common::async::CPromise<CUserTableOp> LoadRowAsync(const std::shared_ptr<CUserTableOp>& spOp);
+    // 类别由调用方给：查询流程传 kRead（可并发），写流程传 kWrite（独占，读改之间不被插队）。
+    common::async::CPromise<CUserTableOp> LoadRowAsync(const std::shared_ptr<CUserTableOp>& spOp, common::async::TaskKind eKind);
 
     // ---------------- 处理器（本模块内的步骤） ----------------
     // 取连接 + 模拟 IO 延迟（then 层：只接上下文）。
@@ -97,11 +107,12 @@ private:
     ThenHandler BindThen(ThenMemberFn pfnHandler);
     ResultHandler BindResult(ResultMemberFn pfnHandler);
 
-    std::unique_ptr<common::async::CAsyncExecutor> m_pExecutor;  ///< 自建执行器（promise 调度）。
-    std::map<std::uint64_t, CUserRecord> m_mapRows;              ///< 表数据（m_mutex 保护）。
-    mutable std::mutex m_mutex;                                  ///< 保护表数据。
-    std::uint64_t m_nNextId;                                     ///< 自增主键游标。
+    std::unique_ptr<common::async::CAsyncExecutor> m_pExecutor;  ///< 自建执行器（promise 调度 + 读写门）。
+    std::map<std::uint64_t, CUserRecord> m_mapRows;              ///< 表数据（只被读链读、被写链改）。
+    std::atomic<std::size_t> m_nRows;                            ///< 行数（供模块外部查询：不受读写门保护）。
+    std::uint64_t m_nNextId;                                     ///< 自增主键游标（只在写链里改）。
     int m_nLatencyMs;                                            ///< 模拟 IO 延迟（毫秒）。
+    int m_nThreadCount;                                          ///< 执行器线程数（= 同时能跑几个读）。
 };
 
 }  // namespace serverexample

@@ -38,11 +38,17 @@ SC_END_INTERFACE_MAP(CExampleDbModule, sc::CModule)
 /// @brief 创建模拟数据库模块。
 ///
 /// @param nLatencyMs 每次表操作的模拟 IO 延迟（毫秒，负数按 0 处理）。
-CExampleDbModule::CExampleDbModule(int nLatencyMs) : sc::CModule("example-db"), m_nNextId(kFirstAutoId), m_nLatencyMs(nLatencyMs)
+/// @param nThreadCount 执行器线程数（同时能跑几个读；小于 1 按 1 处理）。
+CExampleDbModule::CExampleDbModule(int nLatencyMs, int nThreadCount)
+    : sc::CModule("example-db"), m_nRows(0), m_nNextId(kFirstAutoId), m_nLatencyMs(nLatencyMs), m_nThreadCount(nThreadCount)
 {
     if (m_nLatencyMs < 0)
     {
         m_nLatencyMs = 0;
+    }
+    if (m_nThreadCount < 1)
+    {
+        m_nThreadCount = 1;
     }
 }
 
@@ -69,38 +75,40 @@ bool CExampleDbModule::Initialize(const sc::CResolveContext& ctx)
 bool CExampleDbModule::Start()
 {
     // ① 装载种子数据（模拟数据库里已有数据）。
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_mapRows.clear();
+    //    此时执行器还没启动 → 没有任何任务在跑，直接写表安全。
+    m_mapRows.clear();
 
-        CUserRecord recAlice;
-        recAlice.nUserId = kSeedUserIdAlice;
-        recAlice.strName = "alice";
-        recAlice.strMail = "alice@example.com";
-        recAlice.nLevel = 3;
-        recAlice.nVersion = 1;
-        m_mapRows[recAlice.nUserId] = recAlice;
+    CUserRecord recAlice;
+    recAlice.nUserId = kSeedUserIdAlice;
+    recAlice.strName = "alice";
+    recAlice.strMail = "alice@example.com";
+    recAlice.nLevel = 3;
+    recAlice.nVersion = 1;
+    m_mapRows[recAlice.nUserId] = recAlice;
 
-        CUserRecord recBob;
-        recBob.nUserId = kSeedUserIdBob;
-        recBob.strName = "bob";
-        recBob.strMail = "bob@example.com";
-        recBob.nLevel = 1;
-        recBob.nVersion = 1;
-        m_mapRows[recBob.nUserId] = recBob;
-    }
+    CUserRecord recBob;
+    recBob.nUserId = kSeedUserIdBob;
+    recBob.strName = "bob";
+    recBob.strMail = "bob@example.com";
+    recBob.nLevel = 1;
+    recBob.nVersion = 1;
+    m_mapRows[recBob.nUserId] = recBob;
+
+    m_nRows.store(m_mapRows.size());
 
     // ② 自建执行器：promise 是模板（上下文类型固定为 CUserTableOp），无法放进
     //    IAsyncExecutor 虚接口，因此本模块自持具体执行器；本模块的层不占用调用方线程。
-    m_pExecutor.reset(new common::async::CAsyncExecutor(2));
+    //    读写门挂在执行器上：本模块的线程数 = 「同时能跑几个读」的上限（写始终独占）。
+    m_pExecutor.reset(new common::async::CAsyncExecutor(m_nThreadCount));
     if (!m_pExecutor->Start())
     {
         m_pExecutor.reset();
         return false;
     }
 
-    common::log::CLogger::Instance().Info(
-        "[数据访问] 模拟数据库已启动（种子数据 2 行，单次 IO 延迟 " + std::to_string(m_nLatencyMs) + "ms）");
+    common::log::CLogger::Instance().Info("[数据访问] 模拟数据库已启动（种子数据 " + std::to_string(m_nRows.load()) +
+                                          " 行，单次 IO 延迟 " + std::to_string(m_nLatencyMs) + "ms，执行器 " +
+                                          std::to_string(m_nThreadCount) + " 线程：读可并发 / 写独占，表不加锁）");
     return true;
 }
 
@@ -118,27 +126,29 @@ void CExampleDbModule::Stop()
 }
 
 /// @brief 停止并清空表数据。
+///
+/// Stop 等待在途任务结束 → 此时没有任何读链 / 写链在跑，直接清表安全。
 void CExampleDbModule::Shutdown()
 {
     Stop();
-    std::lock_guard<std::mutex> lock(m_mutex);
     m_mapRows.clear();
+    m_nRows.store(0);
 }
 
 /// @brief 状态报告。
 ///
 /// @return 模块名 + 当前表行数。
+///
+/// @note 本函数「不受读写门保护」（它不在执行器任务里），所以只读原子行数、不碰表 ——
+///       表数据只有「过门的读链 / 写链」能访问（读任务只读、写任务独占）。
 std::string CExampleDbModule::GetStatus() const
 {
-    size_t nRows = 0;
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        nRows = m_mapRows.size();
-    }
-    return "example-db 行数=" + std::to_string(nRows);
+    return "example-db 行数=" + std::to_string(m_nRows.load());
 }
 
 /// @brief 异步查询用户：读表 → 放连接（finally：失败也执行）。
+///
+/// 读链（`TaskKind::kRead`）：可与其他查询并发进入本模块（表只读）—— 模拟 IO 的等待互相重叠。
 ///
 /// @param spOp 操作上下文（调用方提供，命中行写入 recResult）。
 ///
@@ -148,7 +158,7 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::QueryUserAsync(const std
     // 契约：执行器在 Start() 中创建（失败即模块不可用），操作上下文由调用方提供且非空。
     ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
-    return LoadRowAsync(spOp).Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
+    return LoadRowAsync(spOp, common::async::TaskKind::kRead).Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
 }
 
 /// @brief 异步插入用户：「复用本模块内的读表异步函数」（查重）→ 写表 → 放连接。
@@ -163,7 +173,8 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::InsertUserAsync(const st
 {
     ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
-    return LoadRowAsync(spOp)                                                 // 本模块内的异步函数（读表）
+    // 写链（默认类别）：独占进入 —— 「读表（查重）→ 写表」整段不被其他任务插队。
+    return LoadRowAsync(spOp, common::async::TaskKind::kWrite)                // 本模块内的异步函数（读表）
         .Catch(BindResult(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)  // 「不存在」归一化为兑现
         .Then(BindThen(&CExampleDbModule::StepRejectIfExists), ASYNC_LOC)     // 查重
         .Then(BindThen(&CExampleDbModule::StepInsertRow), ASYNC_LOC)          // 写表
@@ -179,7 +190,8 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::UpdateUserAsync(const st
 {
     ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
-    return LoadRowAsync(spOp)
+    // 写链（默认类别）：独占进入 —— 「读行（拿版本）→ 比对 → 写回」整段不被插队。
+    return LoadRowAsync(spOp, common::async::TaskKind::kWrite)
         .Catch(BindResult(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)
         .Then(BindThen(&CExampleDbModule::StepApplyUpdate), ASYNC_LOC)
         .Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
@@ -194,7 +206,8 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::DeleteUserAsync(const st
 {
     ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
-    return LoadRowAsync(spOp)
+    // 写链（默认类别）：独占进入。
+    return LoadRowAsync(spOp, common::async::TaskKind::kWrite)
         .Catch(BindResult(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)
         .Then(BindThen(&CExampleDbModule::StepEraseRow), ASYNC_LOC)
         .Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
@@ -205,12 +218,17 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::DeleteUserAsync(const st
 /// 被查询 / 插入 / 更新 / 删除四个对外异步函数复用：同上下文类型，直接追加 handler 即可，
 /// 不需要嵌套起 promise，也不会阻塞任何线程。
 ///
+/// 类别由调用方给：查询流程传 `kRead`（可并发），写流程传 `kWrite`（独占）——
+/// 后者使「读到的行不会被别人改掉，写回时也不会有人插队」，乐观锁在模块内不再自相冲突。
+///
 /// @param spOp 操作上下文（命中行写入 recResult，并置 bFound）。
+/// @param eKind 本流程的读写类别（决定能否与其它读并发）。
 ///
 /// @return promise 句柄（未命中时最终以 CDbError(kRowNotFound) 被拒绝）。
-common::async::CPromise<CUserTableOp> CExampleDbModule::LoadRowAsync(const std::shared_ptr<CUserTableOp>& spOp)
+common::async::CPromise<CUserTableOp> CExampleDbModule::LoadRowAsync(
+    const std::shared_ptr<CUserTableOp>& spOp, common::async::TaskKind eKind)
 {
-    return m_pExecutor->NewPromise(spOp, BindThen(&CExampleDbModule::StepAcquireConn), ASYNC_LOC)
+    return m_pExecutor->NewPromise(spOp, BindThen(&CExampleDbModule::StepAcquireConn), ASYNC_LOC, eKind)
         .Then(BindThen(&CExampleDbModule::StepLoadRow), ASYNC_LOC);
 }
 
@@ -244,16 +262,15 @@ common::async::CPromiseResult CExampleDbModule::StepLoadRow(const std::shared_pt
         throw std::runtime_error("模拟数据库驱动异常");  // 框架捕获 → 本层以异常原样被拒绝。
     }
 
+    // 读链可并发：本层只读表（const_iterator）、不改模块状态 —— 与「读任务只读」的规约一致；
+    // 写链是独占的，不会有人在读的同时改表，因此不需要锁。
     CUserRecord recRow;
     bool bFound = false;
+    std::map<std::uint64_t, CUserRecord>::const_iterator it = m_mapRows.find(spOp->nUserId);
+    if (it != m_mapRows.end())
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        std::map<std::uint64_t, CUserRecord>::const_iterator it = m_mapRows.find(spOp->nUserId);
-        if (it != m_mapRows.end())
-        {
-            recRow = it->second;
-            bFound = true;
-        }
+        recRow = it->second;
+        bFound = true;
     }
 
     spOp->bFound = bFound;
@@ -313,16 +330,17 @@ common::async::CPromiseResult CExampleDbModule::StepInsertRow(const std::shared_
 {
     SimulateDbIo(m_nLatencyMs);
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    // 写链独占：本层跑在独占区里（没有并发的读 / 写）→ 不需要锁。
     std::uint64_t nUserId = spOp->recRequest.nUserId;
     if (nUserId == 0)
     {
-        nUserId = m_nNextId++;  // 自增分配主键（模拟数据库自增列）。
+        nUserId = m_nNextId++;  // 自增分配主键（模拟数据库自增列）—— 独占区里改，不会竞态。
     }
     if (m_mapRows.find(nUserId) != m_mapRows.end())
     {
         spOp->strTrace += "主键冲突;";
-        // 双保险：并发插入时兜底。
+        // 双保险：本流程的查重层已经查过（同在独占区里，模块内不会再插队）；
+        // 这里拦的是「模块之外」的改动（另一个进程 / 直连数据库的写入）。
         return common::async::CPromiseResult::Reject(CDbError(CDbError::kDuplicateKey, "主键冲突（并发插入）"));
     }
 
@@ -330,6 +348,7 @@ common::async::CPromiseResult CExampleDbModule::StepInsertRow(const std::shared_
     recRow.nUserId = nUserId;
     recRow.nVersion = 1;
     m_mapRows[nUserId] = recRow;
+    m_nRows.fetch_add(1);
 
     spOp->nUserId = nUserId;
     spOp->recResult = recRow;
@@ -347,7 +366,7 @@ common::async::CPromiseResult CExampleDbModule::StepApplyUpdate(const std::share
 {
     SimulateDbIo(m_nLatencyMs);
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    // 写链独占：读行 + 比对版本 + 写回都在同一个独占区里，不会有人插队 → 不需要锁。
     std::map<std::uint64_t, CUserRecord>::iterator it = m_mapRows.find(spOp->nUserId);
     if (it == m_mapRows.end())
     {
@@ -380,7 +399,7 @@ common::async::CPromiseResult CExampleDbModule::StepEraseRow(const std::shared_p
 {
     SimulateDbIo(m_nLatencyMs);
 
-    std::lock_guard<std::mutex> lock(m_mutex);
+    // 写链独占 → 不需要锁。
     std::map<std::uint64_t, CUserRecord>::iterator it = m_mapRows.find(spOp->nUserId);
     if (it == m_mapRows.end())
     {
@@ -388,6 +407,7 @@ common::async::CPromiseResult CExampleDbModule::StepEraseRow(const std::shared_p
         return common::async::CPromiseResult::Reject(CDbError(CDbError::kRowNotFound, "记录不存在（删除）"));
     }
     m_mapRows.erase(it);
+    m_nRows.fetch_sub(1);
     spOp->strTrace += "写表(删除 id=" + std::to_string(spOp->nUserId) + ");";
     return common::async::CPromiseResult::Resolve();
 }

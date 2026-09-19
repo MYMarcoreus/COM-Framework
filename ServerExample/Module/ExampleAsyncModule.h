@@ -27,6 +27,10 @@ namespace serverexample {
 /// 本模块也不使用协程。
 ///
 /// 内部编排（细节见 .cpp）：
+///  - 「模块内的线程安全」由异步框架的读写门保证（执行器自带）：查询流程声明读链
+///    （`TaskKind::kRead`，可并发），注册 / 改名 / 删除声明写链（`kWrite`，独占进入）；
+///    读写门对「同一模块的全部任务」生效（与是不是同一条链无关）—— 所以模块里不需要锁，
+///    “读出来判断 → 按判断去写”的整段业务不会被别的任务插队；
 ///  - 「本模块内的异步函数」复用：LoadUserAsync（读用户）被查询 / 改名 / 删除流程
 ///    直接串接（同上下文类型，追加 handler 即可，非阻塞）；
 ///  - 「其他模块的异步函数」：数据访问模块（IUserTable）的读 / 写 / 改 / 删，用
@@ -36,7 +40,8 @@ namespace serverexample {
 ///  - 失败即停（then）、catch 归一化 / 恢复、finally 审计收尾、跨模块拒绝码语义转换，
 ///    都在流程里体现。
 ///
-/// 模块名 "user-service"；自建执行器（promise 是模板，无法放进 IAsyncExecutor 虚接口）。
+/// 模块名 "user-service"；自建执行器（promise 是模板，无法放进 IAsyncExecutor 虚接口）：
+/// 4 个 worker + 读写门（读任务最多 4 路并发，写任务一次只放 1 个）。
 /// 周期演示也由纯回调驱动（零阻塞）：定时器只负责投递一次演示任务。
 class CExampleAsyncModule : public sc::CModule, public IUserService
 {
