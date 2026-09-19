@@ -207,6 +207,10 @@ if (eMode == detail::kModeCatch && upResult.IsFulfilled()) { pNextState->Settle(
 return (eMode == detail::kModeFinally) ? upResult : ownResult;
 ```
 
+注意 `finally` 在上面两段里出现的位置不同：**跳过判断里没有它**（永不跳过，成败都执行），
+**结果归一里才有它**（不改结果，原样透传）。两条合起来才是 JS 的 `finally` 语义 ——
+所以它的 `eMode` 只服务后者，别把它塞进跳过判断（那样在 finally 上恒为 false，纯属白判）。
+
 `AppendThenLayer` / `AppendResultLayer` 是 `Then` / `Catch` / `Finally` 各自的实现（两种 handler 形状各一个），
 续接处不再写三态判断：
 

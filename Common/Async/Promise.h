@@ -529,9 +529,21 @@ private:
 #endif
 };
 
-// 三态语义（JS 的 then / catch / finally）**没有公共的「按模式分派」函数**：模式在各自的调用点
-// （`AppendThenLayer` / `AppendResultLayer` / `MakeResultRunner`）就是常量，跳过与结果归一
-// 各写一行在那里即可 —— 多一层函数只是多一次跳转，读的人还得再翻过来。
+// ================= 三态语义（JS 的 then / catch / finally）：三条规则，各写在各处 =================
+//
+// 规则只有三条，各写在它该在的地方 —— **没有公共的「按模式分派」函数**：模式在各自的调用点
+// 就是常量，多一层函数只是多一次跳转。
+//
+//   - then    ：上游兑现才执行；`AppendThenLayer` 判 `IsRejected()` 决定跳过；本层结果 = 处理器返回值
+//               （`MakeThenRunner`，它拿不到上游结果）。
+//   - catch   ：上游被拒绝才执行；`AppendResultLayer` 判 `kModeCatch && IsFulfilled()` 决定跳过；
+//               本层结果 = 处理器返回值（返回 `Resolve()` 即恢复链）。
+//   - finally ：兑现 / 拒绝都执行，**没有跳过分支**（所以那个判断里不该出现 finally）；本层结果 =
+//               忽略处理器返回值、原样透传 upResult（`MakeResultRunner`）。
+//
+// 最后一条是最容易看漏的：finally **既不跳过、也不改结果**，所以它的 eMode 只用在「透传上一层
+// 结果」那一步，**不参与任何跳过判断** —— 硬写成通用条件的话（`(then && 被拒) || (catch && 已兑现)`），
+// 它在 finally 上恒为 false，等于每次白判一次。
 
 /// @brief 造「执行本层处理器」的任务体 —— **框架里唯一跑用户处理器的地方**。
 ///
@@ -599,7 +611,8 @@ std::function<void()> MakeThenRunner(const std::shared_ptr<TContext>& spContext,
 /// @param pState 本层状态（执行结果写入它）。
 /// @param fnHandler 处理器（catch / finally 签名）。
 /// @param upResult 上一层结果。
-/// @param eMode 处理器模式（catch / finally）。
+/// @param eMode 处理器模式（catch / finally）—— 只用来决定**结果归一**：
+///              catch 取处理器返回值（返回 `Resolve()` 即恢复）；finally 忽略它、原样透传上一层结果。
 /// @return 任务体。
 template <typename TContext>
 std::function<void()> MakeResultRunner(const std::shared_ptr<TContext>& spContext, const std::shared_ptr<CPromiseState>& pState,
@@ -800,7 +813,8 @@ public:
 
     /// @brief finally：无论上一层兑现还是被拒绝都执行 fnHandler（收尾：清理 / 审计）。
     ///
-    /// 与 JS 的 `finally` 一致：**忽略处理器返回的成败，原样透传上一层结果**
+    /// 与 JS 的 `finally` 一致：**永不跳过**（与 `Catch` 的「已兑现就跳过」相对），
+    /// 且**忽略处理器返回的成败，原样透传上一层结果**
     /// （只有抛异常才会改变结果 → 本层以 `处理器异常` / `e.what()` 收口）。
     /// 需要在失败时改变链的走向请用 Catch。
     ///
@@ -1286,8 +1300,8 @@ private:
     /// 追加 = 两件事：建新层状态 + 在当前层上登记「本层跑完后启动新层」的处理器。
     /// 当前层还没 settle 就只是登记（settle 时触发）；已 settle 则立即触发（`AddHandler` 内部投递）。
     ///
-    /// 本层跑起来的前提已由三态语义给定（上游被拒 → 上游层直接透传结果，本层根本不执行），
-    /// 所以这里把处理器交给 `RunThenHandler` 即可 —— 它只接共享上下文。
+    /// 三态语义：**上游被拒绝 → 本层跳过**（结果原样交给下一层，处理器根本不会被调用）。
+    /// 所以本层跑起来的前提已定，处理器交 `RunThenHandler` 即可 —— 它只接共享上下文。
     ///
     /// @param fnHandler 本层处理器（then 签名）。
     /// @param loc 注册点源码位置。
@@ -1320,7 +1334,12 @@ private:
     /// @brief 内部：在当前层之后**追加一层 catch / finally**（处理器拿到上游结果）。
     ///
     /// 与 `AppendThenLayer` 同骨架，只差两处：处理器要**上游结果**（交 `RunResultHandler`），
-    /// 以及模式要一路带到处理器里（finally 靠它「忽略返回值、原样透传」）。
+    /// 以及模式要带到处理器里（finally 靠它「忽略返回值、原样透传」）。
+    ///
+    /// 三态语义：
+    ///  - catch：**上游已兑现 → 本层跳过**（拒绝才有得处理）；返回 `Resolve()` 即恢复链；
+    ///  - finally：**永不跳过**（成败都执行），所以下面没有它的跳过分支 —— 它的 eMode 只在
+    ///    `MakeResultRunner` 里用来忽略处理器返回值、原样透传上一层结果。
     ///
     /// @param fnHandler 本层处理器（catch / finally 签名）。
     /// @param eMode 处理器模式（detail::kModeCatch / kModeFinally）。
