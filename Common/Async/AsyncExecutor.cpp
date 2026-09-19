@@ -106,7 +106,7 @@ bool CAsyncExecutor::Post(std::function<void()> fnTask)
 /// @brief 停止并等待任务完成（优雅关闭）。
 ///
 /// 保留句柄与线程池对象：已创建的 promise / 协程仍绑定本执行器句柄，停止后
-/// 新投递被拒绝（对应层以 kStopped 被拒绝），不会访问已销毁对象。
+/// 新投递被拒绝（对应层以系统侧失败 `Stopped()` 收口），不会访问已销毁对象。
 void CAsyncExecutor::Stop()
 {
     const std::shared_ptr<detail::CExecutorHandle>& pHandle = m_pHandle;

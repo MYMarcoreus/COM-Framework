@@ -93,13 +93,10 @@ struct CBillingContext
     {}
 };
 
-/// 本用例的业务错误码（业务码从 kBusinessBase 起取）。
-enum ThenMixCode
-{
-    kCodeOutOfStock = common::async::kBusinessBase + 1,    ///< 库存不足。
-    kCodeBadOrder = common::async::kBusinessBase + 2,      ///< 订单参数非法（单笔最多 10 件）。
-    kCodeReserveFailed = common::async::kBusinessBase + 3  ///< 内层链：确认预占失败。
-};
+/// 本用例的业务失败文案（拒绝统一用标准异常表达；框架只搬运、不解释）。
+static const char* const kOutOfStockText = "库存不足：只剩 5 件";
+static const char* const kBadOrderText = "订单参数非法：单笔最多 10 件";
+static const char* const kReserveFailedText = "预占失败：内部确认未通过";
 
 /// @brief 断言助手：失败时打印原因，返回本条的通过状态。
 ///
@@ -291,12 +288,12 @@ private:
         if (spCtx->nSku <= 0 || spCtx->nQty <= 0)
         {
             spCtx->strTrace += "校验失败(参数非法);";
-            return common::async::CPromiseResult::Reject(kCodeBadOrder);
+            return common::async::CPromiseResult::Reject(std::runtime_error(kBadOrderText));
         }
         if (spCtx->nQty > 10)
         {
             spCtx->strTrace += "校验失败(单笔最多 10 件);";
-            return common::async::CPromiseResult::Reject(kCodeBadOrder);
+            return common::async::CPromiseResult::Reject(std::runtime_error(kBadOrderText));
         }
         spCtx->strTrace += "校验通过;";
         return common::async::CPromiseResult::Resolve();
@@ -326,7 +323,7 @@ private:
                     // 本回调在库存模块的线程上：只做语义转换 + 改上下文 + settle。
                     if (result.IsRejected())
                     {
-                        fnReject(result.Code());  // 库存模块拒绝 → 本流程拒绝（原样透传）。
+                        fnReject(result);  // 库存模块拒绝 → 本流程拒绝（原样透传）。
                         return;
                     }
                     spCtx->nStock = spStock->nAvail;
@@ -335,7 +332,8 @@ private:
                     if (!spCtx->bStockEnough)
                     {
                         spCtx->strTrace += "库存不足;";
-                        fnReject(kCodeOutOfStock);  // 业务拒绝：后续 then 不执行。
+                        fnReject(common::async::CPromiseResult::Reject(
+                            std::runtime_error(kOutOfStockText)));  // 业务拒绝：后续 then 不执行。
                         return;
                     }
                     fnResolve();
@@ -375,7 +373,7 @@ private:
     {
         if (spCtx->bFailReserve)
         {
-            return common::async::CPromiseResult::Reject(kCodeReserveFailed);
+            return common::async::CPromiseResult::Reject(std::runtime_error(kReserveFailedText));
         }
         spCtx->strTrace += "确认预占;";
         return common::async::CPromiseResult::Resolve();
@@ -396,7 +394,7 @@ private:
     static common::async::CPromiseResult StepCompensate(
         common::async::CPromiseResult upResult, const std::shared_ptr<COrderContext>& spCtx)
     {
-        if (upResult.Code() == kCodeOutOfStock)  // 只有库存不足需要释放 / 回滚
+        if (upResult.Message() == kOutOfStockText)  // 只有库存不足需要释放 / 回滚
         {
             spCtx->bCompensated = true;
             spCtx->strTrace += "补偿;";
@@ -457,7 +455,7 @@ bool RunThenMixCase()
     const bool bOkTrace = (spOk->strTrace ==
                            "读订单;校验通过;查库存(5);满减;预占;确认预占;"
                            "记账已发起(不等);落库;审计;");
-    bOk = Expect(resultOk.IsFulfilled(), "正常下单：最终兑现", "码=" + std::to_string(resultOk.Code())) && bOk;
+    bOk = Expect(resultOk.IsFulfilled(), "正常下单：最终兑现", "原因=" + resultOk.Message()) && bOk;
     bOk = Expect(spOk->nTotal == 3375, "正常下单：合计=1250×3×0.9=3375", "实际=" + std::to_string(spOk->nTotal)) && bOk;
     bOk = Expect(bOkStock, "正常下单：库存 5 件足够", "库存=" + std::to_string(spOk->nStock)) && bOk;
     bOk = Expect(spOk->nBillingDone.load() == 1, "正常下单：旁支记账已完成", "nBillingDone!=1") && bOk;
@@ -473,13 +471,13 @@ bool RunThenMixCase()
 
     const common::async::CPromiseResult resultOut = spOrderModule->PlaceOrderAsync(spOut, spStockModule, spBillingModule).Await();
 
-    const bool bOkOutCode = (resultOut.IsRejected() && resultOut.Code() == static_cast<int>(kCodeOutOfStock));
+    const bool bOkOutCode = (resultOut.IsRejected() && resultOut.Message() == kOutOfStockText);
     const bool bOkOutTrace = (spOut->strTrace == "读订单;校验通过;查库存(5);库存不足;补偿;审计;");
-    bOk = Expect(bOkOutCode, "库存不足：拒绝码为 kCodeOutOfStock", "码=" + std::to_string(resultOut.Code())) && bOk;
+    bOk = Expect(bOkOutCode, "库存不足：以库存不足异常拒绝", "原因=" + resultOut.Message()) && bOk;
     bOk = Expect(spOut->bCompensated, "库存不足：catch 补偿已执行", "bCompensated=false") && bOk;
     bOk = Expect(spOut->nTotal == 0, "库存不足：④ 算折扣未执行", "nTotal=" + std::to_string(spOut->nTotal)) && bOk;
     bOk = Expect(bOkOutTrace, "库存不足：执行顺序符合预期", "轨迹=" + spOut->strTrace) && bOk;
-    std::printf("㉘ 混用多种 then（库存不足）: 拒绝码=%d 轨迹=%s\n", resultOut.Code(), spOut->strTrace.c_str());
+    std::printf("㉘ 混用多种 then（库存不足）: 拒绝原因=%s 轨迹=%s\n", resultOut.Message().c_str(), spOut->strTrace.c_str());
 
     // ---------------- 路径 ③：参数非法（② 的 lambda 拒绝 →
     // 连库存模块都没被调用） ----------------
@@ -489,12 +487,12 @@ bool RunThenMixCase()
 
     const common::async::CPromiseResult resultBad = spOrderModule->PlaceOrderAsync(spBad, spStockModule, spBillingModule).Await();
 
-    const bool bOkBadCode = (resultBad.IsRejected() && resultBad.Code() == static_cast<int>(kCodeBadOrder));
+    const bool bOkBadCode = (resultBad.IsRejected() && resultBad.Message() == kBadOrderText);
     const bool bOkBadTrace = (spBad->strTrace == "读订单;校验失败(单笔最多 10 件);审计;");
-    bOk = Expect(bOkBadCode, "参数非法：拒绝码为 kCodeBadOrder", "码=" + std::to_string(resultBad.Code())) && bOk;
+    bOk = Expect(bOkBadCode, "参数非法：以参数非法异常拒绝", "原因=" + resultBad.Message()) && bOk;
     bOk = Expect(bOkBadTrace, "参数非法：失败即停（未查库存、未记账）", "轨迹=" + spBad->strTrace) && bOk;
     bOk = Expect(spBad->nBillingDone.load() == 0, "参数非法：旁支未被发起", "nBillingDone!=0") && bOk;
-    std::printf("㉘ 混用多种 then（参数非法）: 拒绝码=%d 轨迹=%s\n", resultBad.Code(), spBad->strTrace.c_str());
+    std::printf("㉘ 混用多种 then（参数非法）: 拒绝原因=%s 轨迹=%s\n", resultBad.Message().c_str(), spBad->strTrace.c_str());
 
     // ---------------- 路径 ④：内层链拒绝 → 拒绝码沿外层链透传（后续 then
     // 不执行，catch/finally 仍执行）
@@ -507,12 +505,13 @@ bool RunThenMixCase()
     const common::async::CPromiseResult resultInner =
         spOrderModule->PlaceOrderAsync(spInner, spStockModule, spBillingModule).Await();
 
-    const bool bOkInnerCode = (resultInner.IsRejected() && resultInner.Code() == static_cast<int>(kCodeReserveFailed));
+    const bool bOkInnerCode = (resultInner.IsRejected() && resultInner.Message() == kReserveFailedText);
     const bool bOkInnerTrace = (spInner->strTrace == "读订单;校验通过;查库存(5);无折扣;预占;审计;");
-    bOk = Expect(bOkInnerCode, "内层链拒绝：拒绝码透传到外层", "码=" + std::to_string(resultInner.Code())) && bOk;
+    bOk = Expect(bOkInnerCode, "内层链拒绝：拒绝原因透传到外层", "原因=" + resultInner.Message()) && bOk;
     bOk = Expect(bOkInnerTrace, "内层链拒绝：外层后续 then 不执行、finally 仍执行", "轨迹=" + spInner->strTrace) && bOk;
     bOk = Expect(spInner->nBillingDone.load() == 0, "内层链拒绝：后续旁支未发起", "nBillingDone!=0") && bOk;
-    std::printf("㉘ 内层链参与当前链（内层拒绝）: 拒绝码=%d 轨迹=%s\n", resultInner.Code(), spInner->strTrace.c_str());
+    std::printf(
+        "㉘ 内层链参与当前链（内层拒绝）: 拒绝原因=%s 轨迹=%s\n", resultInner.Message().c_str(), spInner->strTrace.c_str());
 
     // 模块的执行器随模块析构自动停（真实项目里由框架按依赖顺序启停）。
     return bOk;

@@ -71,12 +71,10 @@ namespace {
 // 一、通用小工具
 // ====================================================================
 
-/// 示例业务错误码（业务码从 kBusinessBase 起取）。
-enum CErrCode
-{
-    kErrBadParam = common::async::kBusinessBase + 1,  ///< 参数非法。
-    kErrNoStock = common::async::kBusinessBase + 2    ///< 库存不足。
-};
+/// 示例业务失败文案（拒绝统一用标准异常表达；框架只搬运、不解释）。
+static const char* const kErrBadParamText = "参数非法：数量必须 > 0";
+static const char* const kErrNoStockText = "库存不足：只剩 5 件";
+static const char* const kErrExecUnavailableText = "示例：执行器不可用（业务自己的决定，不是框架失败）";
 
 /// @brief 睡一会儿（模拟 IO；示例里不真的连数据库）。
 void SleepMs(int nMs)
@@ -309,7 +307,7 @@ CPromiseResult StepCheckStock(CPromiseResult upResult, const std::shared_ptr<COr
     spCtx->strTrace += "查库存;";
     if (spCtx->bFailStock)
     {
-        return CPromiseResult::Reject(kErrNoStock);  // 失败即停：④…⑪ 都不执行
+        return CPromiseResult::Reject(std::runtime_error(kErrNoStockText));  // 失败即停：④…⑪ 都不执行
     }
     spCtx->nStock = 5;
     return CPromiseResult::Resolve();
@@ -415,7 +413,7 @@ CPromiseResult StepSettle(CPromiseResult upResult, const std::shared_ptr<COrderC
 CPromiseResult StepCompensate(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
 {
     TraceHere("⑫ 补偿（catch：仅被拒绝时执行）");
-    std::printf("      拒绝码=%d（业务码）\n", upResult.Code());
+    std::printf("      拒绝原因=%s\n", upResult.Message().c_str());
     spCtx->nStock = 0;
     spCtx->strTrace += "补偿;";
     return upResult;
@@ -501,7 +499,9 @@ public:
                 });
             if (!bPosted)
             {
-                fnReject(common::async::kStopped);  // 模块已停：别让子链永远挂着
+                // 模块已停：子链首层收不了任务 ⟵ 这是**业务**决定（不是框架内部失败），
+                // 所以用业务码 + 文案拒绝，别让子链永远挂着。
+                fnReject(CPromiseResult::Reject(std::runtime_error(kErrExecUnavailableText)));
             }
         };
 
@@ -611,7 +611,7 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
         TraceHere("② 校验参数（then = lambda）");
         if (spSelf->nQty <= 0)
         {
-            return CPromiseResult::Reject(kErrBadParam);
+            return CPromiseResult::Reject(std::runtime_error(kErrBadParamText));
         }
         spSelf->strTrace += "校验;";
         return CPromiseResult::Resolve();
@@ -718,12 +718,12 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
 /// @param exec 执行器。
 /// @param spCtx 上下文。
 /// @param bReject true = 这一层拒绝。
-/// @param nCode 拒绝码（bReject 为 true 时用）。
+/// @param pszRejectText 非 null 则这一层以该文案拒绝。
 /// @param nSleepMs 这一层耗时（用来做 Race / Any 的先后）。
 CPromise<COrderCtx> MakeQuickChain(
-    CAsyncExecutor& exec, const std::shared_ptr<COrderCtx>& spCtx, bool bReject, int nCode, int nSleepMs)
+    CAsyncExecutor& exec, const std::shared_ptr<COrderCtx>& spCtx, bool bReject, const char* pszRejectText, int nSleepMs)
 {
-    const CPromise<COrderCtx>::ThenHandler fnStep = [bReject, nCode, nSleepMs](
+    const CPromise<COrderCtx>::ThenHandler fnStep = [bReject, pszRejectText, nSleepMs](
                                                         CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spSelf)
     {
         (void)upResult;
@@ -731,7 +731,7 @@ CPromise<COrderCtx> MakeQuickChain(
         SleepMs(nSleepMs);
         if (bReject)
         {
-            return CPromiseResult::Reject(nCode);
+            return CPromiseResult::Reject(std::runtime_error(pszRejectText));
         }
         return CPromiseResult::Resolve();
     };
@@ -746,9 +746,10 @@ void DemoCombinators(CAsyncExecutor& execMain)
     // WhenAll：全部兑现才继续；任一拒绝 → 立即失败。
     {
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
-        const CPromiseResult r =
-            execMain.WhenAll(spCtx, MakeQuickChain(execMain, spCtx, false, 0, 5), MakeQuickChain(execMain, spCtx, false, 0, 5))
-                .Await();
+        const CPromiseResult r = execMain
+                                     .WhenAll(spCtx, MakeQuickChain(execMain, spCtx, false, nullptr, 5),
+                                         MakeQuickChain(execMain, spCtx, false, nullptr, 5))
+                                     .Await();
         ASSERT(r.IsFulfilled());
         std::printf("  WhenAll        （2 条都兑现）→ 兑现\n");
     }
@@ -758,9 +759,9 @@ void DemoCombinators(CAsyncExecutor& execMain)
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
         const CPromiseResult r =  //
             execMain
-                .WhenAllSettled(spCtx,                             //
-                    MakeQuickChain(execMain, spCtx, false, 0, 5),  //
-                    MakeQuickChain(execMain, spCtx, true, kErrNoStock, 5))
+                .WhenAllSettled(spCtx,                                   //
+                    MakeQuickChain(execMain, spCtx, false, nullptr, 5),  //
+                    MakeQuickChain(execMain, spCtx, true, kErrNoStockText, 5))
                 .Await();
         ASSERT(r.IsFulfilled());  // 有一支被拒绝，聚合层照样兑现
         std::printf("  WhenAllSettled （1 兑现 + 1 拒绝）→ 兑现（不看成败）\n");
@@ -771,21 +772,21 @@ void DemoCombinators(CAsyncExecutor& execMain)
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
         const CPromiseResult r =  //
             execMain
-                .WhenRace(spCtx,                                            //
-                    MakeQuickChain(execMain, spCtx, true, kErrNoStock, 0),  //
-                    MakeQuickChain(execMain, spCtx, false, 0, 60))          //
+                .WhenRace(spCtx,                                                //
+                    MakeQuickChain(execMain, spCtx, true, kErrNoStockText, 0),  //
+                    MakeQuickChain(execMain, spCtx, false, nullptr, 60))        //
                 .Await();
         ASSERT(r.IsRejected());
-        ASSERT(r.Code() == static_cast<int>(kErrNoStock));  // 快的那支（拒绝）先到
-        std::printf("  WhenRace       （快=拒绝 0ms / 慢=兑现 60ms）→ 拒绝(码=%d)：先到先得\n", r.Code());
+        ASSERT(r.Message() == std::string(kErrNoStockText));  // 快的那支（拒绝）先到
+        std::printf("  WhenRace       （快=拒绝 0ms / 慢=兑现 60ms）→ 拒绝「%s」：先到先得\n", r.Message().c_str());
     }
 
     // WhenAny：第一个**兑现**的才是聚合结果（全被拒才拒绝）。
     {
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
         const CPromiseResult r = execMain
-                                     .WhenAny(spCtx, MakeQuickChain(execMain, spCtx, true, kErrNoStock, 0),
-                                         MakeQuickChain(execMain, spCtx, false, 0, 60))
+                                     .WhenAny(spCtx, MakeQuickChain(execMain, spCtx, true, kErrNoStockText, 0),
+                                         MakeQuickChain(execMain, spCtx, false, nullptr, 60))
                                      .Await();
         ASSERT(r.IsFulfilled());  // 先到的是拒绝 → 不算，继续等兑现
         std::printf("  WhenAny        （快=拒绝 0ms / 慢=兑现 60ms）→ 兑现（只认第一个兑现者）\n");
@@ -799,7 +800,7 @@ void DemoCombinators(CAsyncExecutor& execMain)
 /// @brief 打印一条父链的最终结果（成功 / 拒绝两条路径共用）。
 void PrintResult(const char* pszPath, const CPromiseResult& r, const std::shared_ptr<COrderCtx>& spCtx)
 {
-    std::printf("\n  ── %s：结果=%s 拒绝码=%d\n", pszPath, r.IsFulfilled() ? "兑现" : "拒绝", r.Code());
+    std::printf("\n  ── %s：结果=%s 拒绝原因=%s\n", pszPath, r.IsFulfilled() ? "兑现" : "拒绝", r.Message().c_str());
     std::printf("     订单=%ld 库存=%d 折扣=%d 总额=%d 账单=%d 优惠券=%d 赠品=%d 积分=%d 物流=%d\n", spCtx->nOrderId,
         spCtx->nStock, spCtx->nDiscount, spCtx->nTotal, spCtx->nBillNo, spCtx->nCoupon, spCtx->nGift, spCtx->nPoints,
         spCtx->nLogistics);
@@ -922,7 +923,7 @@ int main()
     const CPromiseResult rFail = pTailFail.Await();
     PrintResult("拒绝路径", rFail, spCtxFail);
     ASSERT(rFail.IsRejected());
-    ASSERT(rFail.Code() == static_cast<int>(kErrNoStock));                        // ③ 的拒绝码原样透传到调用方
+    ASSERT(rFail.Message() == std::string(kErrNoStockText));                      // ③ 的拒绝原样透传到调用方
     ASSERT(spCtxFail->nTotal == 0);                                               // ⑤⑨⑪ 都没执行（失败即停）
     ASSERT(spCtxFail->nBillNo == 0);                                              // ⑥ 跨模块也没发起
     ASSERT(spCtxFail->strTrace == std::string("读订单;校验;查库存;补偿;审计;"));  // ⑫ 补偿 + ⑬ 审计执行了
@@ -933,7 +934,7 @@ int main()
     // 旁支（⑧）挂在 ⑦ 之下，而主线在 ③ 就失败了 —— 拒绝会沿分叉传播：旁支自己没执行，
     // 但它的句柄同样以这个拒绝码结束（「失败即停」对每一支都成立）。
     ASSERT(rSideFail.IsRejected());
-    ASSERT(rSideFail.Code() == static_cast<int>(kErrNoStock));
+    ASSERT(rSideFail.Message() == std::string(kErrNoStockText));
     ASSERT(spCtxFail->nLogistics == 0);  // ⑧ 确实没跑
 
 #if defined(ASYNC_DEBUG_TRACE)
@@ -947,14 +948,14 @@ int main()
     //==================== 其余常用用法 ====================
     DemoCombinators(execMain);
 
-    // AwaitFor：超时兜底（返回 kStopped；不落定、不取消）。
+    // AwaitFor：超时兜底（框架侧拒绝「等待超时」；不落定、不取消）。
     std::printf("\n==================== Await / AwaitFor ====================\n");
     {
         const std::shared_ptr<COrderCtx> spSlow = std::make_shared<COrderCtx>();
-        const CPromiseResult rSlow = MakeQuickChain(execMain, spSlow, false, 0, 200).AwaitFor(20);
+        const CPromiseResult rSlow = MakeQuickChain(execMain, spSlow, false, nullptr, 200).AwaitFor(20);
         ASSERT(rSlow.IsRejected());
-        ASSERT(rSlow.Code() == static_cast<int>(common::async::kStopped));  // 超时 → kStopped
-        std::printf("  AwaitFor(20ms) 等一个 200ms 的层 → 拒绝码=%d（kStopped：兜底）\n", rSlow.Code());
+        ASSERT(rSlow.Message() == std::string("等待超时"));  // 没等到：框架侧拒绝（预建固定文案）
+        std::printf("  AwaitFor(20ms) 等一个 200ms 的层 → 拒绝「%s」（超时兜底）\n", rSlow.Message().c_str());
     }
 
     std::printf("\n全部演示通过 ✔（自校验用通用 ASSERT：失败会立即打印位置并中止）\n");

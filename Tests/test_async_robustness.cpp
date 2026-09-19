@@ -232,7 +232,7 @@ TEST(Robust_PostedTaskThrowIsContained)
 
 // ==================== 用例：AwaitFor 超时 / 死锁预警 ====================
 
-/// @brief 永不落定的层：`AwaitFor(ms)` 按超时返回 kStopped，不再永久挂住。
+/// @brief 永不落定的层：`AwaitFor(ms)` 按超时返回框架侧拒绝「等待超时」，不再永久挂住。
 TEST(Robust_AwaitForTimesOut)
 {
     common::async::CAsyncExecutor exec(1);
@@ -254,10 +254,11 @@ TEST(Robust_AwaitForTimesOut)
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - tBegin).count());
 
     ASSERT_TRUE(result.IsRejected());
-    ASSERT_EQ(result.Code(), common::async::kStopped);  // 超时：只向调用方报「没等到」。
-    ASSERT_TRUE(nElapsedMs >= 40);                      // 确实等到了超时（不是立即返回）
-    ASSERT_TRUE(nElapsedMs < 2000);                     // 也没有挂死
-    ASSERT_TRUE(!promisePending.IsSettled());           // 超时不落定本层（链仍在后台 pending）
+    ASSERT_TRUE(asynctest::IsTimeoutFailure(result));      // 框架侧拒绝（固定文案）
+    ASSERT_EQ(result.Message(), std::string("等待超时"));  // 超时：只向调用方报「没等到」。
+    ASSERT_TRUE(nElapsedMs >= 40);                         // 确实等到了超时（不是立即返回）
+    ASSERT_TRUE(nElapsedMs < 2000);                        // 也没有挂死
+    ASSERT_TRUE(!promisePending.IsSettled());              // 超时不落定本层（链仍在后台 pending）
 
     // 负超时 = 无限等待；已落定的层再 AwaitFor 立即拿结果。
     auto spDone = std::make_shared<CRobustCtx>();

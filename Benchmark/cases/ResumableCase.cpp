@@ -105,8 +105,7 @@ void RunResumableCases()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
             std::shared_ptr<BenchCoroSeq20> pCoro = exec.CoStart<BenchCoroSeq20>(spCtx);
-            benchmark::SanityCheck(
-                group, "长协程 20 次 await 结果=20", pCoro->Await().IsFulfilled() && spCtx->nValue == 20);
+            benchmark::SanityCheck(group, "长协程 20 次 await 结果=20", pCoro->Await().IsFulfilled() && spCtx->nValue == 20);
         }
 
         benchmark::BenchOp(
@@ -115,7 +114,7 @@ void RunResumableCases()
             {
                 std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
                 std::shared_ptr<BenchCoroSeq20> pCoro = exec.CoStart<BenchCoroSeq20>(spCtx);
-                volatile int s = pCoro->Await().Code();
+                volatile int s = pCoro->Await().IsRejected() ? 1 : 0;  // 防优化：读回结果
                 (void)s;
             },
             11, "单协程 20 次挂起 / 恢复（每次 await 一条单层子链）");

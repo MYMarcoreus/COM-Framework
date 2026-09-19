@@ -27,6 +27,44 @@
 
 namespace asynctest {
 
+/// 被调模块拒绝时用的异常描述（拒绝统一用标准异常表达；测试里用固定文案便于断言）。
+inline const char* CalleeRejectText()
+{
+    return "库存模块：暂时不可用";
+}
+
+// ---- 框架侧失败判据（框架自己的固定文案，见 Common/Async/PromiseResult.h）----
+
+/// @brief 是不是「执行器已停」这类框架侧失败（执行器不可用 / 投递失败）。
+///
+/// @param result 待判定的结果。
+///
+/// @return true 是。
+inline bool IsStoppedFailure(const common::async::CPromiseResult& result)
+{
+    return result == common::async::CPromiseResult::Reject(common::async::detail::FailureStopped());
+}
+
+/// @brief 是不是「等待超时」这类框架侧失败（`AwaitFor` 没等到）。
+///
+/// @param result 待判定的结果。
+///
+/// @return true 是。
+inline bool IsTimeoutFailure(const common::async::CPromiseResult& result)
+{
+    return result == common::async::CPromiseResult::Reject(common::async::detail::FailureTimeout());
+}
+
+/// @brief 是不是「未指定原因」这类框架侧失败（组合器空集合等）。
+///
+/// @param result 待判定的结果。
+///
+/// @return true 是。
+inline bool IsUnspecifiedFailure(const common::async::CPromiseResult& result)
+{
+    return result == common::async::CPromiseResult::Reject(common::async::detail::FailureUnspecified());
+}
+
 /// @brief 步骤轨迹 + 每步所在线程（跨模块共享，写入加锁）。
 struct CTraceSink
 {
@@ -92,12 +130,7 @@ struct CStepProbe
     std::atomic<int> nStockSteps;        ///< 被调模块步骤总数。
 
     CStepProbe()
-        : nOrderInFlight(0),
-          nOrderMaxInFlight(0),
-          nOrderSteps(0),
-          nStockInFlight(0),
-          nStockMaxInFlight(0),
-          nStockSteps(0)
+        : nOrderInFlight(0), nOrderMaxInFlight(0), nOrderSteps(0), nStockInFlight(0), nStockMaxInFlight(0), nStockSteps(0)
     {}
 
     /// @brief 更新峰值。
@@ -193,13 +226,13 @@ struct CCalleeCtx
     int nAvail;                           ///< 出参：可用库存。
     int nDelayMs;                         ///< 每步模拟耗时。
     bool bReject;                         ///< 第二步是否拒绝。
-    int nRejectCode;                      ///< 拒绝码（默认 kBusinessBase）。
+    std::string strRejectText;            ///< 拒绝原因（异常描述，默认 CalleeRejectText()）。
     std::shared_ptr<CTraceSink> spTrace;  ///< 轨迹（跨模块共享观测点，可空）。
     std::shared_ptr<CStepProbe> pProbe;   ///< 探针（可空）。
     std::thread::id idConnect;            ///< 第一步所在线程。
     std::thread::id idRead;               ///< 第二步所在线程。
 
-    CCalleeCtx() : nSku(0), nAvail(5), nDelayMs(0), bReject(false), nRejectCode(common::async::kBusinessBase)
+    CCalleeCtx() : nSku(0), nAvail(5), nDelayMs(0), bReject(false), strRejectText(CalleeRejectText())
     {}
 };
 
@@ -244,7 +277,7 @@ private:
         return common::async::CPromiseResult::Resolve();
     }
 
-    /// 第二步：读库存（与第一步串行、同线程）；`bReject` 时以 `nRejectCode` 拒绝。
+    /// 第二步：读库存（与第一步串行、同线程）；`bReject` 时以 `strRejectText` 拒绝。
     static common::async::CPromiseResult StepRead(
         common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CCalleeCtx>& spCtx)
     {
@@ -258,7 +291,7 @@ private:
         LeaveStockStep(spCtx->pProbe);
         if (spCtx->bReject)
         {
-            return common::async::CPromiseResult::Reject(spCtx->nRejectCode);
+            return common::async::CPromiseResult::Reject(std::runtime_error(spCtx->strRejectText));
         }
         spCtx->nAvail = 5;
         return common::async::CPromiseResult::Resolve();

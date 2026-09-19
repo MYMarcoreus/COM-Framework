@@ -121,9 +121,9 @@ common::async::CPromise<CMyOpContext> BridgeQueryOther(const CFlowDeps& deps,
         {
             if (result.IsRejected())
             {
-                fnReject(kMyDbFailed);
+                fnReject(common::async::CPromiseResult::Reject(std::runtime_error("数据访问不可用")));
                 return;
-            }  // 跨模块拒绝码 → 业务码
+            }  // 跟模块失败 → 本模块语义（要翻译就在这里 catch 具体异常）
             spCtx->nRows = spCtx->spOtherOp->nRows;  // 取回数据
             fnResolve();
         });
@@ -152,7 +152,8 @@ common::async::CPromise<CMyOpContext> BuildFlow(const CFlowDeps& deps, const std
   **不要在回调里捕获本模块 `this`**：回调可能在别的模块的线程上执行、也可能晚于本模块停止
   （这样写流程就是纯函数，任何线程上都安全）；需要「回调期间模块存活」时用
   `Self<IUserService>()` 之类的自持引用（示例的演示驱动即如此）；
-- 桥接处是**唯一**做「跨模块拒绝码 → 业务码」语义转换的地方：把对方语境的「未命中 / 不存在」
-  归一化为兑现（业务上不是错误）或映射成对应业务码，`kException` 一并映射并记日志；
+- 桥接处是**唯一**做「跟模块失败 → 本模块语义」转换的地方：把对方语境的「未命中 / 不存在」
+  归一化为兑现（业务上不是错误）或映射成本模块的异常（`result.Exception()` 重新抛出后
+  `catch` 具体类型）；框架侧失败（执行器已停等）原样透传并记日志；
 - 本模块内复用异步函数时才用 `Then` / `Catch` / `Finally` 串接；`Await()` 是阻塞等待，
   只留给测试与「子流程很短且线程有余量」的场合。

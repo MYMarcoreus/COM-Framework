@@ -13,7 +13,7 @@ promise 负责**编排**（then / catch / finally 串起来，失败即停）；
 - 协程持有一个共享上下文 `std::shared_ptr<TContext>`（与它起的子 promise 同一实例）；
 - await 的对象是**promise**（包含子协程 `AsPromise()` 暴露的 promise）；
 - await 只告知兑现 / 拒绝，**数据一律走共享上下文**；
-- 被等待的 promise 被拒绝 → 协程以该拒绝码终止（透传，与 then 的失败即停一致）。
+- 被等待的 promise 被拒绝 → 协程以**那个拒绝（异常）**终止（透传，与 then 的失败即停一致）。
 
 ```text
 promise ：一层做完做下一层（then 失败即停）
@@ -188,20 +188,20 @@ pCoro->AsPromise().OnSettled([](common::async::CPromiseResult r) { /* 协程跑�
 
 ## 7. 终止语义
 
-- await 的 promise 被拒绝 → 协程**终止**，拒绝码透传；后续 await 不再执行；
-- `CO_RETURN(CPromiseResult::Reject(码))` → 主动以拒绝结束；
+- await 的 promise 被拒绝 → 协程**终止**，拒绝（异常）透传；后续 await 不再执行；
+- `CO_RETURN(CPromiseResult::Reject(std::runtime_error("原因")))` → 主动以拒绝结束；
 - `CO_RETURN_VOID()` / `CO_END()` → 正常结束（兑现）；
-- 执行器未启动 / 已停止 → 协程立即以 `kStopped` 结束（`Await()` 不阻塞）。
+- 执行器未启动 / 已停止 → 协程立即以「执行器已停」结束（`Await()` 不阻塞）。
 
 ```cpp
 common::async::CPromiseResult r = pCoro->Await();
 if (r.IsRejected())
 {
-    // r.Code() 即拒绝码（业务码 / kStopped / kException）
+    // r.Message() 即拒绝原因（异常描述；框架侧失败是「执行器已停」等固定文案）
 }
 ```
 
-`CO_AWAIT_ALL` 中任一条被拒绝 → 协程以**首个拒绝码**终止（仍等全部结束，避免对象提前释放）。
+`CO_AWAIT_ALL` 中任一条被拒绝 → 协程以**首个拒绝（异常）**终止（仍等全部结束，避免对象提前释放）。
 
 ## 8. 生命周期与限制
 
@@ -209,7 +209,7 @@ if (r.IsRejected())
 | --- | --- |
 | 持有 `CoStart` 返回值 | 正常：`Await()` 取结果 |
 | 提前释放 `shared_ptr` | 安全：Resume / 回调捕获自持强引用，对象存活到最后一个 Resume 完成 |
-| 执行器 `Stop()` | 已挂起的 await 以 `kStopped` 结束（不悬垂、不阻塞） |
+| 执行器 `Stop()` | 已挂起的 await 以「执行器已停」结束（不悬垂、不阻塞） |
 | 同一对象再次 `Start(&exec)` | 复位后重新执行（`Await()` 取新结果） |
 
 限制（无栈协程固有）：
@@ -225,7 +225,7 @@ if (r.IsRejected())
 | 维度 | promise `CPromise` | 协程 `CCoroutine` |
 | --- | --- | --- |
 | 单位 | 一层（then / catch / finally） | 一个 await |
-| 失败 | then 失败即停（catch 可回滚 / 恢复） | 终止（透传拒绝码） |
+| 失败 | then 失败即停（catch 可回滚 / 恢复） | 终止（异常透传） |
 | 数据 | 共享上下文 | 共享上下文（同一实例） |
 | 可等待 | 是（`OnSettled`） | 是（`AsPromise()`） |
 | 适合 | 线性业务流程 / 步骤编排 | 多段异步步骤、顺序读写同一份数据 |
@@ -234,7 +234,7 @@ if (r.IsRejected())
 
 并行汇聚有两条路：promise 侧用执行器上的 `exec.WhenAll` / `WhenAllSettled` / `WhenRace` / `WhenAny`
 （聚合链，见 [async-usage.md §10](async-usage.md)）；协程侧用 `CO_AWAIT_ALL`（等全部落定、
-首个拒绝码终止协程）。多步骤且需局部状态时用协程；只需等一群分支收口时用组合器。
+首个拒绝（异常）终止协程）。多步骤且需局部状态时用协程；只需等一群分支收口时用组合器。
 
 ## 10. 测试与示例
 

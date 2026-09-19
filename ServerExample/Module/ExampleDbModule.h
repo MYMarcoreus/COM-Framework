@@ -23,7 +23,7 @@ namespace serverexample {
 ///  - **本模块内的异步函数互相复用**：读表由内部异步函数 LoadRowAsync 提供，
 ///    插入 / 更新 / 删除都在它的 promise 上追加 handler（Then / Catch / Finally），
 ///    全程非阻塞；
-///  - 层内异常（模拟驱动故障）由框架捕获转为 kException，不向调用方抛出。
+///  - 层内异常（模拟驱动故障）由框架捕获，以异常原样收口，不向调用方抛出。
 ///
 /// 模块名 "example-db"，实现接口 IUserTable。
 /// 自建独立执行器：其他模块调用本模块的异步函数时，本模块的层跑在自己的线程池上，
@@ -75,24 +75,22 @@ private:
     // 取连接 + 模拟 IO 延迟。
     common::async::CPromiseResult StepAcquireConn(
         common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
-    // 读表（未命中 → kDbRowNotFound；演示开关打开时抛异常模拟驱动故障）。
-    common::async::CPromiseResult StepLoadRow(
-        common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
+    // 读表（未命中 → CDbError(kRowNotFound)；演示开关打开时抛异常模拟驱动故障）。
+    common::async::CPromiseResult StepLoadRow(common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
     // catch：把「记录不存在」归一化为兑现，供写入流程继续。
     common::async::CPromiseResult StepAcceptNotFound(
         common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
-    // 查重（已存在 → kDbDuplicateKey）。
+    // 查重（已存在 → CDbError(kDuplicateKey)）。
     common::async::CPromiseResult StepRejectIfExists(
         common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
     // 写表：插入行（必要时分配自增 id）。
     common::async::CPromiseResult StepInsertRow(
         common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
-    // 写表：乐观锁更新（版本不匹配 → kDbVersionConflict，并把库中最新行写入 recResult）。
+    // 写表：乐观锁更新（版本不匹配 → CDbError(kVersionConflict)，并把库中最新行写入 recResult）。
     common::async::CPromiseResult StepApplyUpdate(
         common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
     // 写表：删除行。
-    common::async::CPromiseResult StepEraseRow(
-        common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
+    common::async::CPromiseResult StepEraseRow(common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);
     // finally：模拟释放连接（无论成败都执行；返回值被 finally 忽略，结果原样透传）。
     common::async::CPromiseResult StepReleaseConn(
         common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp);

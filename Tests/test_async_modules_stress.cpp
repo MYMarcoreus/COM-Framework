@@ -36,11 +36,8 @@ static const int kStressBranches = 64;      ///< 一层分叉的分支数。
 static const int kStressWaiters = 8;        ///< 同时 Await 同一链的线程数。
 static const int kStressMixedChains = 100;  ///< 混合成败的链数（一半被拒绝）。
 
-/// 业务拒绝码（从 kBusinessBase 起取）。
-enum
-{
-    kStockReject = common::async::kBusinessBase
-};
+/// 本链自己的拒绝文案（拒绝统一用标准异常表达；业务细节放上下文）。
+static const char* const kStockRejectText = "库存模块：部分分支失败";
 
 // ==================== 共享脚手架 ====================
 
@@ -48,6 +45,9 @@ enum
 // 见 Tests/AsyncTestKit.h（与基础/亲和性用例共用同一套观测点）。
 using asynctest::CCalleeCtx;
 using asynctest::CCalleeModule;
+
+/// 桥接层自己的拒绝文案（拒绝统一用标准异常表达）。
+static const char* const kExecUnavailableText = "本模块执行器不可用";
 using asynctest::CStepProbe;
 using asynctest::CTraceSink;
 using asynctest::EnterOrderStep;
@@ -72,7 +72,7 @@ struct CStressOrderCtx
     std::atomic<int> nBranchDone;         ///< 已完成的分支数。
     std::atomic<int> nBranchFail;         ///< 失败的分支数。
     bool bCaught;                         ///< catch 是否执行过。
-    int nCaughtCode;                      ///< catch 收到的码。
+    std::string strCaughtText;            ///< catch 收到的异常描述（兑现 = 空）。
     std::shared_ptr<CTraceSink> spTrace;  ///< 本链轨迹。
     std::shared_ptr<CStepProbe> pProbe;   ///< 共享探针。
     std::thread::id idFirst;              ///< 本模块首层所在线程。
@@ -93,7 +93,7 @@ struct CStressOrderCtx
           nBranchDone(0),
           nBranchFail(0),
           bCaught(false),
-          nCaughtCode(0)
+          strCaughtText()
     {}
 };
 
@@ -322,12 +322,12 @@ private:
         return common::async::CPromiseResult::Resolve();
     }
 
-    /// catch 层：记录被拒绝的码。
+    /// catch 层：记录拒绝原因（异常描述）。
     static common::async::CPromiseResult StepOrderCatch(
         common::async::CPromiseResult upResult, const std::shared_ptr<CStressOrderCtx>& spCtx)
     {
         spCtx->bCaught = true;
-        spCtx->nCaughtCode = upResult.Code();
+        spCtx->strCaughtText = upResult.Message();
         if (spCtx->spTrace != nullptr)
         {
             spCtx->spTrace->Append("C");
@@ -359,7 +359,7 @@ private:
                     spCtx->idStockThread = std::this_thread::get_id();
                     if (result.IsRejected())
                     {
-                        fnReject(result.Code());
+                        fnReject(result);  // 整份结果转交（异常类型 + 文案）。
                         return;
                     }
                     spCtx->nStock = spStock->nAvail;
@@ -382,7 +382,9 @@ private:
                         fnResolve();
                     }))
             {
-                fnReject(common::async::kStopped);
+                // 发起就失败：桥接层用自己的异常 + 文案收口（业务把「依赖不可用」
+                // 当成自己的业务结论，而不是框架失败）。
+                fnReject(common::async::CPromiseResult::Reject(std::runtime_error(kExecUnavailableText)));
             }
         };
         return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -423,7 +425,7 @@ private:
                         {
                             if (spCtx->nBranchFail.load() > 0)
                             {
-                                fnReject(kStockReject);
+                                fnReject(common::async::CPromiseResult::Reject(std::runtime_error(kStockRejectText)));
                                 return;
                             }
                             fnResolve();
@@ -676,11 +678,11 @@ TEST(ModuleStress_MixedRejections)
         const common::async::CPromiseResult result = vecPromise[i].Await();
         if (i % 2 == 1)
         {
-            // 被调模块拒绝 → 本链以同一码拒绝，后续层全跳过，catch 执行
+            // 被调模块拒绝 → 本链以同一异常拒绝，后续层全跳过，catch 执行
             ASSERT_TRUE(result.IsRejected());
-            ASSERT_EQ(result.Code(), kStockReject);
+            ASSERT_EQ(result.Message(), std::string(asynctest::CalleeRejectText()));
             ASSERT_TRUE(vecCtx[i]->bCaught);
-            ASSERT_EQ(vecCtx[i]->nCaughtCode, kStockReject);
+            ASSERT_EQ(vecCtx[i]->strCaughtText, std::string(asynctest::CalleeRejectText()));
             ASSERT_EQ(vecCtx[i]->nOwnSteps, 1);  // 只有 A1 执行过
             ASSERT_EQ(vecCtx[i]->spTrace->strTrace, std::string("A1;B1;B2;C;"));
         }
@@ -698,7 +700,7 @@ TEST(ModuleStress_MixedRejections)
     ASSERT_EQ(spProbe->nStockMaxInFlight.load(), 1);
 }
 
-/// @brief 极限 7：链跑到一半停掉被调模块执行器（退化为 kStopped，不挂死）。
+/// @brief 极限 7：链跑到一半停掉被调模块执行器（退化为框架侧拒绝「执行器已停」，不挂死）。
 TEST(ModuleStress_StopMidFlight)
 {
     auto spStockModule = std::make_shared<CCalleeModule>();
@@ -708,11 +710,11 @@ TEST(ModuleStress_StopMidFlight)
 
     const common::async::CPromiseResult result = spOrderModule->RunStopMidFlightAsync(spCtx, spStockModule).Await();
 
-    // 被调模块已停止：投递失败 → 本链以 kStopped 拒绝，后续步骤全跳过
+    // 被调模块已停止：投递失败 → 本链以框架侧拒绝「执行器已停」收口，后续步骤全跳过
     ASSERT_TRUE(result.IsRejected());
-    ASSERT_EQ(result.Code(), common::async::kStopped);
+    ASSERT_TRUE(asynctest::IsStoppedFailure(result));
     ASSERT_TRUE(spCtx->bCaught);
-    ASSERT_EQ(spCtx->nCaughtCode, common::async::kStopped);
+    ASSERT_EQ(spCtx->strCaughtText, std::string("执行器已停"));        // catch 看到了「执行器不可用」
     ASSERT_EQ(spCtx->nOwnSteps, 1);                                    // 只有 A1 执行过
     ASSERT_EQ(spProbe->nStockSteps.load(), 0);                         // 库存模块一步都没跑
     ASSERT_EQ(spCtx->spTrace->strTrace, std::string("A1;停库存;C;"));  // 后续步骤全跳过，catch 收尾

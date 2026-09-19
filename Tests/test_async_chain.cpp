@@ -7,7 +7,7 @@
 ///  - 处理器签名固定：CPromiseResult(CPromiseResult, const std::shared_ptr<TContext>&)；
 ///  - then：失败即停；catch：仅被拒绝时执行（Resolve() 即恢复）；
 ///    finally：无论成败都执行且不改结果（与 JS 的 finally 一致）；
-///  - 拒绝码透传到 Await() 与 OnSettled，处理器内异常转 kException。
+///  - 拒绝结果（携带标准异常）透传到 Await() 与 OnSettled；处理器内异常原样成为本层拒绝。
 
 #include <atomic>
 #include <chrono>
@@ -20,6 +20,7 @@
 
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
+#include "AsyncTestKit.h"
 #include "Coroutine/Coroutine.h"
 #include "TestFramework.h"
 
@@ -33,7 +34,7 @@ struct CTestContext
     int nCatchRuns;            ///< catch 层执行次数。
     int nSeenOk;               ///< 观察到「上一层成功」的次数。
     int nSeenFailed;           ///< 观察到「上一层失败」的次数。
-    int nFailCode;             ///< 制造成败用的错误码（0 表示成功）。
+    std::string strFailText;   ///< 拒绝原因（异常描述；空 = 不失败）。
     std::thread::id workerId;  ///< 最后一个执行层的工作线程 id。
     std::string strTrace;      ///< 层执行轨迹（每层一个字符）。
 
@@ -46,7 +47,7 @@ struct CTestContext
     std::atomic<int> nParB;  ///< 并行分支 B 的执行次数。
 
     CTestContext()
-        : nValue(0), nSteps(0), nCatchRuns(0), nSeenOk(0), nSeenFailed(0), nFailCode(0), nForkA(0), nForkB(0), nParA(0), nParB(0)
+        : nValue(0), nSteps(0), nCatchRuns(0), nSeenOk(0), nSeenFailed(0), strFailText(), nForkA(0), nForkB(0), nParA(0), nParB(0)
     {}
 };
 
@@ -123,7 +124,7 @@ static common::async::CPromiseResult StepParB(common::async::CPromiseResult upRe
     return common::async::CPromiseResult::Resolve();
 }
 
-/// 层：按上下文里的错误码制造失败。
+/// 层：按上下文里的文案制造失败。
 static common::async::CPromiseResult StepFail(common::async::CPromiseResult upResult, const std::shared_ptr<CTestContext>& spCtx)
 {
     if (upResult.IsRejected())
@@ -132,7 +133,7 @@ static common::async::CPromiseResult StepFail(common::async::CPromiseResult upRe
     }
     ++spCtx->nSteps;
     spCtx->strTrace += "F";
-    return common::async::CPromiseResult::Reject(spCtx->nFailCode);
+    return common::async::CPromiseResult::Reject(std::runtime_error(spCtx->strFailText));
 }
 
 /// 层：被调用即留下痕迹（用于验证失败后不再执行）。
@@ -145,7 +146,7 @@ static common::async::CPromiseResult StepShouldNotRun(
     return common::async::CPromiseResult::Resolve();
 }
 
-/// 层：抛异常（验证框架捕获 → kException，不向调用方抛出）。
+/// 层：抛异常（验证框架捕获 → 异常原样成为本层拒绝，不向调用方抛出）。
 static common::async::CPromiseResult StepThrow(
     common::async::CPromiseResult /*upStep*/, const std::shared_ptr<CTestContext>& /*spCtx*/)
 {
@@ -193,14 +194,18 @@ TEST(Promise_ThenHandlerContract)
     };
     ASSERT_TRUE(static_cast<bool>(fnSettled));
 
-    // 层结果：兑现与码分开（判兑现一律看 IsFulfilled()）；框架码自带文案、业务码不带。
-    ASSERT_EQ(static_cast<int>(common::async::kFulfilled), 0);
+    // 拒绝就是「携带一个标准异常」：兑现 / 拒绝只看 IsFulfilled()，结果里没有任何错误码。
     ASSERT_TRUE(common::async::CPromiseResult::Resolve().IsFulfilled());
-    ASSERT_TRUE(common::async::CPromiseResult::Resolve().Code() == common::async::kFulfilled);
-    ASSERT_TRUE(common::async::CPromiseResult::Reject(0).IsRejected());       // 码 0 也是拒绝，不是兑现
-    ASSERT_TRUE(common::async::CPromiseResult::Reject(0).Message().empty());  // 业务码：不带文案
-    // 框架码：自动带框架固定文案（预建共享串）。
-    ASSERT_TRUE(!common::async::CPromiseResult::Reject(common::async::kStopped).Message().empty());
+    ASSERT_TRUE(common::async::CPromiseResult::Reject(std::runtime_error("业务拒绝：库存不足")).IsRejected());
+    ASSERT_EQ(common::async::CPromiseResult::Reject(std::runtime_error("业务拒绝：库存不足")).Message(),
+        std::string("业务拒绝：库存不足"));                                   // what() 原样保留
+    ASSERT_TRUE(common::async::CPromiseResult::Resolve().Message().empty());  // 兑现：没有异常
+    // 框架侧拒绝：同样是标准异常，只是文案固定（预建）。
+    common::async::CAsyncExecutor execNotStarted(1);  // 故意不 Start：收不了任务 → 首层以框架侧拒绝收口。
+    const common::async::CPromiseResult rStopped =
+        execNotStarted.NewPromise(std::make_shared<CTestContext>(), &StepAdd1, ASYNC_LOC).Await();
+    ASSERT_TRUE(asynctest::IsStoppedFailure(rStopped));
+    ASSERT_TRUE(!rStopped.Message().empty());
 }
 
 /// @brief 单层 promise：NewPromise → Await（兑现）。
@@ -214,7 +219,6 @@ TEST(Promise_NewPromiseAndAwait)
     const common::async::CPromiseResult r = chain.Await();
 
     ASSERT_TRUE(r.IsFulfilled());
-    ASSERT_EQ(r.Code(), static_cast<int>(common::async::kFulfilled));
     ASSERT_EQ(spCtx->nValue, 1);
     ASSERT_EQ(spCtx->nSteps, 1);
     exec.Stop();
@@ -280,20 +284,20 @@ TEST(Promise_ThenFailFast)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
-    spCtx->nFailCode = common::async::kBusinessBase + 7;
+    spCtx->strFailText = "业务拒绝（失败即停）";
 
     common::async::CPromise<CTestContext> tail =
         exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Then(&StepFail, ASYNC_LOC).Then(&StepShouldNotRun, ASYNC_LOC);  // 不执行
     const common::async::CPromiseResult r = tail.Await();
 
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), common::async::kBusinessBase + 7);  // 业务码原样透传
-    ASSERT_EQ(spCtx->nValue, 1);                            // 只跑了第一层
-    ASSERT_EQ(spCtx->strTrace, std::string("1F"));          // 没有 "X"
+    ASSERT_EQ(r.Message(), spCtx->strFailText);     // 异常原样透传（框架不解释）
+    ASSERT_EQ(spCtx->nValue, 1);                    // 只跑了第一层
+    ASSERT_EQ(spCtx->strTrace, std::string("1F"));  // 没有 "X"
     exec.Stop();
 }
 
-/// @brief 处理器内异常 → 本层被拒绝（kException），框架不向调用方抛出。
+/// @brief 处理器内异常 → 本层以「原样透传的异常」收口，框架不向调用方抛出。
 TEST(Promise_ExceptionRejects)
 {
     common::async::CAsyncExecutor exec(2);
@@ -304,8 +308,8 @@ TEST(Promise_ExceptionRejects)
     const common::async::CPromiseResult r = tail.Await();
 
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), static_cast<int>(common::async::kException));
-    ASSERT_EQ(spCtx->nSteps, 0);  // 异常层与后续层都没留下业务痕迹
+    ASSERT_EQ(r.Message(), std::string("chain step boom"));  // 异常原样成为拒绝
+    ASSERT_EQ(spCtx->nSteps, 0);                             // 异常层与后续层都没留下业务痕迹
     exec.Stop();
 }
 
@@ -316,7 +320,7 @@ TEST(Promise_CatchSeesRejection)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
-    spCtx->nFailCode = common::async::kBusinessBase + 3;
+    spCtx->strFailText = "业务拒绝（catch 观察）";
 
     common::async::CPromise<CTestContext> tail = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC)
                                                      .Catch(&StepCatchObserve, ASYNC_LOC)
@@ -324,7 +328,7 @@ TEST(Promise_CatchSeesRejection)
     const common::async::CPromiseResult r = tail.Await();
 
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), common::async::kBusinessBase + 3);
+    ASSERT_EQ(r.Message(), spCtx->strFailText);
     ASSERT_EQ(spCtx->nCatchRuns, 1);
     ASSERT_EQ(spCtx->nSeenFailed, 1);  // 真的看到了上一层的失败
     ASSERT_EQ(spCtx->nSeenOk, 0);
@@ -339,7 +343,7 @@ TEST(Promise_CatchRecover)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
-    spCtx->nFailCode = common::async::kBusinessBase + 5;
+    spCtx->strFailText = "业务拒绝（catch 恢复）";
 
     common::async::CPromise<CTestContext> tail = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC)
                                                      .Catch(&StepCatchRecover, ASYNC_LOC)
@@ -367,7 +371,7 @@ TEST(Promise_OnSettledCallback)
     chainOk.OnSettled(
         [&nOk, &bOkDone](common::async::CPromiseResult r)
         {
-            nOk.store(r.Code() + 1);  // 成功：0 + 1
+            nOk.store(r.IsFulfilled() ? 1 : -1);  // 兑现：结果里没有异常
             bOkDone.store(true);
         });
     chainOk.Await();
@@ -375,18 +379,18 @@ TEST(Promise_OnSettledCallback)
     {
         std::this_thread::yield();
     }
-    ASSERT_EQ(nOk.load(), 1);  // Code()==kFulfilled
+    ASSERT_EQ(nOk.load(), 1);  // 兑现
 
     // 失败链
     std::shared_ptr<CTestContext> spFail = std::make_shared<CTestContext>();
-    spFail->nFailCode = common::async::kBusinessBase + 9;
-    std::atomic<int> nCode(-1);
+    spFail->strFailText = "业务拒绝（OnSettled 用例）";
+    std::atomic<bool> bSawText(false);
     std::atomic<bool> bFailDone(false);
     common::async::CPromise<CTestContext> chainFail = exec.NewPromise(spFail, &StepFail, ASYNC_LOC);
     chainFail.OnSettled(
-        [&nCode, &bFailDone](common::async::CPromiseResult r)
+        [&bSawText, &bFailDone, spFail](common::async::CPromiseResult r)
         {
-            nCode.store(r.Code());
+            bSawText.store(r.Message() == spFail->strFailText);  // 拒绝：异常描述跟着结果走
             bFailDone.store(true);
         });
     chainFail.Await();
@@ -394,7 +398,7 @@ TEST(Promise_OnSettledCallback)
     {
         std::this_thread::yield();
     }
-    ASSERT_EQ(nCode.load(), common::async::kBusinessBase + 9);
+    ASSERT_TRUE(bSawText.load());
     exec.Stop();
 }
 
@@ -466,7 +470,7 @@ TEST(Promise_ThenAfterSettled)
 
 // ==================== 执行器生命周期与线程模型 ====================
 
-/// @brief 未启动执行器起 promise → 立即被拒绝（kStopped），不阻塞。
+/// @brief 未启动执行器起 promise → 立即以框架侧拒绝「执行器已停」收口，不阻塞。
 TEST(Promise_NotStarted)
 {
     common::async::CAsyncExecutor exec(2);
@@ -476,11 +480,11 @@ TEST(Promise_NotStarted)
     const common::async::CPromiseResult r = tail.Await();
 
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), static_cast<int>(common::async::kStopped));
+    ASSERT_TRUE(asynctest::IsStoppedFailure(r));  // 框架侧拒绝「执行器已停」
     ASSERT_EQ(spCtx->nSteps, 0);
 }
 
-/// @brief Stop 之后起 promise → 被拒绝（kStopped）。
+/// @brief Stop 之后起 promise → 以框架侧拒绝「执行器已停」收口。
 TEST(Promise_AfterStop)
 {
     common::async::CAsyncExecutor exec(2);
@@ -490,7 +494,7 @@ TEST(Promise_AfterStop)
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
     const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Await();
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), static_cast<int>(common::async::kStopped));
+    ASSERT_TRUE(asynctest::IsStoppedFailure(r));
 }
 
 /// @brief Stop 之后重新 Start：可继续起链。
@@ -764,7 +768,7 @@ public:
     {
         CO_BEGIN();
         CO_AWAIT(NewPromise(&StepAdd1));
-        CO_RETURN(common::async::CPromiseResult::Reject(common::async::kBusinessBase + 11));
+        CO_RETURN(common::async::CPromiseResult::Reject(std::runtime_error("协程显式拒绝")));
         CO_END();
     }
 };
@@ -848,12 +852,12 @@ TEST(Coro_AwaitRejected)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
-    spCtx->nFailCode = common::async::kBusinessBase + 4;
+    spCtx->strFailText = "业务拒绝（协程内失败）";
     std::shared_ptr<CFailCoro> pCoro = exec.CoStart<CFailCoro>(spCtx);
 
     const common::async::CPromiseResult r = pCoro->Await();
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), common::async::kBusinessBase + 4);
+    ASSERT_EQ(r.Message(), spCtx->strFailText);
     ASSERT_EQ(spCtx->strTrace, std::string("F"));  // 后续层未执行
     exec.Stop();
 }
@@ -869,7 +873,7 @@ TEST(Coro_ReturnRejected)
 
     const common::async::CPromiseResult r = pCoro->Await();
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), common::async::kBusinessBase + 11);
+    ASSERT_EQ(r.Message(), std::string("协程显式拒绝"));
     ASSERT_EQ(spCtx->nValue, 1);  // await 的子链已执行
     exec.Stop();
 }
@@ -889,7 +893,7 @@ TEST(Coro_Nested)
     exec.Stop();
 }
 
-/// @brief 未启动执行器起协程 → 立即被拒绝（kStopped），Await 不阻塞。
+/// @brief 未启动执行器起协程 → 立即以框架侧拒绝「执行器已停」收口，Await 不阻塞。
 TEST(Coro_NotStarted)
 {
     common::async::CAsyncExecutor exec(2);
@@ -898,7 +902,7 @@ TEST(Coro_NotStarted)
 
     const common::async::CPromiseResult r = pCoro->Await();
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), static_cast<int>(common::async::kStopped));
+    ASSERT_TRUE(asynctest::IsStoppedFailure(r));
 }
 
 /// @brief 协程可重复启动（每次 CoStart 都是一个新对象，复用同一上下文）。
@@ -928,17 +932,17 @@ TEST(Coro_OnSettledCallback)
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
     std::shared_ptr<CSequentialCoro> pCoro = exec.CoStart<CSequentialCoro>(spCtx);
 
-    std::atomic<int> nCode(-1);
+    std::atomic<int> nSettled(0);
     pCoro->AsPromise().OnSettled(
-        [&nCode](common::async::CPromiseResult r)
+        [&nSettled](common::async::CPromiseResult r)
         {
-            nCode.store(r.Code());
+            nSettled.store(r.IsFulfilled() ? 1 : -1);
         });
-    while (nCode.load() < 0)
+    while (nSettled.load() == 0)
     {
         std::this_thread::yield();
     }
-    ASSERT_EQ(nCode.load(), static_cast<int>(common::async::kFulfilled));
+    ASSERT_EQ(nSettled.load(), 1);  // 兑现
     exec.Stop();
 }
 
@@ -959,14 +963,14 @@ TEST(Promise_ThenAndCatchComplement)
 
     // 拒绝：catch 执行（upResult 携带拒绝结果）、后续 then 跳过。
     std::shared_ptr<CTestContext> spBad = std::make_shared<CTestContext>();
-    spBad->nFailCode = common::async::kBusinessBase + 21;
+    spBad->strFailText = "业务拒绝（then/catch 互补）";
     common::async::CPromise<CTestContext> tailBad = exec.NewPromise(spBad, &StepFail, ASYNC_LOC)
                                                         .Then(&StepShouldNotRun, ASYNC_LOC)
                                                         .Catch(&StepCatchObserve, ASYNC_LOC)
                                                         .Then(&StepShouldNotRun, ASYNC_LOC);
     const common::async::CPromiseResult r = tailBad.Await();
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), common::async::kBusinessBase + 21);
+    ASSERT_EQ(r.Message(), spBad->strFailText);
     ASSERT_EQ(spBad->nCatchRuns, 1);                // catch 执行了
     ASSERT_EQ(spBad->nSeenFailed, 1);               // 真的看到了上一层的拒绝
     ASSERT_EQ(spBad->strTrace, std::string("FA"));  // 拒绝层 + catch（无 then 层痕迹）
@@ -979,14 +983,14 @@ TEST(Promise_FinallyKeepsResult)
     common::async::CAsyncExecutor exec(2);
     ASSERT_TRUE(exec.Start());
 
-    // 拒绍路径：finally 执行，但结果仍为拒绍（不像 catch 那样能吞掉拒绍）。
+    // 拒绝路径：finally 执行，但结果仍为拒绝（不像 catch 那样能吞掉拒绝）。
     std::shared_ptr<CTestContext> spBad = std::make_shared<CTestContext>();
-    spBad->nFailCode = common::async::kBusinessBase + 31;
+    spBad->strFailText = "业务拒绝（finally 不改结果）";
     const common::async::CPromiseResult rBad = exec.NewPromise(spBad, &StepFail, ASYNC_LOC)
                                                    .Finally(&StepCatchRecover, ASYNC_LOC)  // 返回 Resolve() 但被忽略
                                                    .Await();
     ASSERT_TRUE(rBad.IsRejected());
-    ASSERT_EQ(rBad.Code(), common::async::kBusinessBase + 31);
+    ASSERT_EQ(rBad.Message(), spBad->strFailText);
     ASSERT_EQ(spBad->nCatchRuns, 1);  // finally 已执行
 
     // 兑现路径：finally 也执行，结果仍为兑现。
@@ -1007,7 +1011,7 @@ TEST(Promise_NewPromiseStarts)
 
     std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
     common::async::CPromise<CTestContext> p = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC);  // 起链即投递首层
-    ASSERT_EQ(p.Await().Code(), static_cast<int>(common::async::kFulfilled));
+    ASSERT_TRUE(p.Await().IsFulfilled());
     ASSERT_EQ(spCtx->nValue, 1);
 
     common::async::CPromise<CTestContext> p2 = p.Then(&StepAdd10, ASYNC_LOC);
@@ -1121,11 +1125,8 @@ TEST(Coro_ParallelAwaitMixedContext)
 
 // ==================== 纯异步组合：new Promise + then-promise（无协程、零阻塞） ====================
 
-/// 别的模块的错误码（业务码从 kBusinessBase 起取）。
-enum BridgeCode
-{
-    kOtherModuleFailed = common::async::kBusinessBase + 1  ///< 别的模块（子流程）失败。
-};
+/// 别的模块的拒绝文案（拒绝统一用标准异常表达）。
+static const char* const kOtherModuleFailedText = "别的模块（子流程）失败";
 
 /// 处理器（子流程）：模拟别的模块失败。
 static common::async::CPromiseResult StepQueryRowsFail(
@@ -1136,7 +1137,7 @@ static common::async::CPromiseResult StepQueryRowsFail(
         return upResult;
     }
     spCtx->nRows = -1;
-    return common::async::CPromiseResult::Reject(kOtherModuleFailed);
+    return common::async::CPromiseResult::Reject(std::runtime_error(kOtherModuleFailedText));
 }
 
 /// @brief 跨模块组合（成功路径）：new Promise 桥接别的 promise + then-promise 等它。
@@ -1173,7 +1174,7 @@ TEST(Promise_BridgeForeignPromise)
                                 {
                                     if (result.IsRejected())
                                     {
-                                        fnReject(result.Code());  // 拒绝：本流程后续 then 层不执行。
+                                        fnReject(result);  // 拒绝：整份结果转交（异常类型 + 文案）。
                                         return;
                                     }
                                     spCtxSelf->nValue += spForeign->GetContext()->nRows;  // 汇总别的模块的数据。
@@ -1220,7 +1221,7 @@ TEST(Promise_BridgeForeignRejected)
                                 {
                                     if (result.IsRejected())
                                     {
-                                        fnReject(result.Code());
+                                        fnReject(result);
                                         return;
                                     }
                                     fnResolve();
@@ -1234,20 +1235,20 @@ TEST(Promise_BridgeForeignRejected)
 
     const common::async::CPromiseResult result = pTail.Await();
     ASSERT_TRUE(result.IsRejected());
-    ASSERT_EQ(result.Code(), static_cast<int>(kOtherModuleFailed));  // 拒绝码透传
-    ASSERT_EQ(spCtx->nSteps, 1);                                     // 只有桥接前的 StepAdd1 执行
-    ASSERT_EQ(spCtx->nSeenFailed, 1);                                // catch 观察到拒绝
+    ASSERT_EQ(result.Message(), std::string(kOtherModuleFailedText));  // 异常原样透传
+    ASSERT_EQ(spCtx->nSteps, 1);                                       // 只有桥接前的 StepAdd1 执行
+    ASSERT_EQ(spCtx->nSeenFailed, 1);                                  // catch 观察到拒绝
     ASSERT_EQ(spCtx->nCatchRuns, 1);
     exec.Stop();
 }
 
-/// 层（then）：用「业务码 0」拒绝（旧设计做不到 —— 0 被「兑现」占用）。
+/// 层（then）：用异常拒绝（拒绝与「兑现」完全分开，只看 `IsRejected()`）。
 static common::async::CPromiseResult StepRejectZeroCode(
     common::async::CPromiseResult /*upStep*/, const std::shared_ptr<CTestContext>& spCtx)
 {
     ++spCtx->nSteps;
     spCtx->strTrace += "Z";
-    return common::async::CPromiseResult::Reject(0, "码就是 0：参数非法");
+    return common::async::CPromiseResult::Reject(std::runtime_error("参数非法"));
 }
 
 /// 层（then）：用带运行时数字的长文案拒绝（长度超过 SSO 上限）。
@@ -1256,11 +1257,11 @@ static common::async::CPromiseResult StepRejectDynamicText(
 {
     ++spCtx->nSteps;
     spCtx->strTrace += "F";
-    return common::async::CPromiseResult::Reject(common::async::kBusinessBase + 42,
-        "库存不足：需 " + std::to_string(spCtx->nValue + 3) + " 件，只剩 1 件（订单 SO-20260919-000123）");
+    return common::async::CPromiseResult::Reject(
+        std::runtime_error("库存不足：需 " + std::to_string(spCtx->nValue + 3) + " 件，只剩 1 件（订单 SO-20260919-000123）"));
 }
 
-/// 层（then）：抛异常（异常文本应当随拒绝文案保留，而不是只剩一个 kException）。
+/// 层（then）：抛异常（异常对象原样成为本层拒绝，`what()` 不丢）。
 static common::async::CPromiseResult StepThrowRuntimeError(
     common::async::CPromiseResult /*upStep*/, const std::shared_ptr<CTestContext>& spCtx)
 {
@@ -1268,8 +1269,8 @@ static common::async::CPromiseResult StepThrowRuntimeError(
     throw std::runtime_error("磁盘写失败: /data/order.bin");
 }
 
-/// @brief 兑现与错误码分开：**业务码 0 也是拒绝**，判兑现只看 IsFulfilled()。
-TEST(Promise_CodeZeroIsBusinessRefusal)
+/// @brief 拒绝只看 `IsRejected()`（结果里没有任何码），异常描述原样透传到 catch。
+TEST(Promise_RejectionIsJustAnException)
 {
     common::async::CAsyncExecutor exec(2);
     ASSERT_TRUE(exec.Start());
@@ -1291,10 +1292,9 @@ TEST(Promise_CodeZeroIsBusinessRefusal)
 
     ASSERT_TRUE(result.IsRejected());
     ASSERT_TRUE(!result.IsFulfilled());
-    ASSERT_EQ(result.Code(), 0);  // 码就是 0（不再是「兑现」的同义词）
-    ASSERT_EQ(result.Message(), std::string("码就是 0：参数非法"));
-    ASSERT_EQ(strCaughtMessage, std::string("码就是 0：参数非法"));  // catch 侧读到同一份
-    ASSERT_EQ(spCtx->nSteps, 2);                                     // 拒绝即停：后面的 then 未执行
+    ASSERT_EQ(result.Message(), std::string("参数非法"));
+    ASSERT_EQ(strCaughtMessage, std::string("参数非法"));  // catch 侧读到同一份
+    ASSERT_EQ(spCtx->nSteps, 2);                           // 拒绝即停：后面的 then 未执行
     exec.Stop();
 }
 
@@ -1317,22 +1317,20 @@ TEST(Promise_RefusalMessageTravels)
     const common::async::CPromiseResult rBiz =
         exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Then(&StepRejectDynamicText, ASYNC_LOC).Catch(fnCatch, ASYNC_LOC).Await();
     ASSERT_TRUE(rBiz.IsRejected());
-    ASSERT_EQ(rBiz.Code(), common::async::kBusinessBase + 42);
     ASSERT_EQ(rBiz.Message(), std::string("库存不足：需 4 件，只剩 1 件（订单 SO-20260919-000123）"));
     ASSERT_TRUE(rBiz.Message().size() > 15);      // 超出 SSO 上限也完整保留
     ASSERT_EQ(strCaughtMessage, rBiz.Message());  // catch 侧读到同一份
 
-    // 框架侧①：处理器抛异常 → kException + 异常原文。
+    // 框架侧①：处理器抛异常 → 异常对象原样成为拒绝。
     const common::async::CPromiseResult rThrown =
         exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Then(&StepThrowRuntimeError, ASYNC_LOC).Await();
     ASSERT_TRUE(rThrown.IsRejected());
-    ASSERT_EQ(rThrown.Code(), static_cast<int>(common::async::kException));
-    ASSERT_TRUE(rThrown.Message().find("磁盘写失败") != std::string::npos);
+    ASSERT_EQ(rThrown.Message(), std::string("磁盘写失败: /data/order.bin"));
 
-    // 框架侧②：停掉的执行器 → kStopped + 固定文案。
+    // 框架侧②：停掉的执行器 → 「执行器已停」（固定文案）。
     exec.Stop();
     const common::async::CPromiseResult rStopped = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Await();
     ASSERT_TRUE(rStopped.IsRejected());
-    ASSERT_EQ(rStopped.Code(), static_cast<int>(common::async::kStopped));
+    ASSERT_TRUE(asynctest::IsStoppedFailure(rStopped));
     ASSERT_EQ(rStopped.Message(), std::string("执行器已停"));
 }

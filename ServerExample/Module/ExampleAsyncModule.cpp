@@ -23,6 +23,7 @@ namespace {
 using CUserPromise = common::async::CPromise<CUserOpContext>;
 using ResolveFn = CUserPromise::ResolveFn;
 using RejectFn = CUserPromise::RejectFn;
+using common::async::CPromiseResult;  ///< 结果类型（桥接里要作业务拒绝）。
 
 /// @brief 用户名长度上限（业务校验约束）。
 const std::size_t kMaxNameLength = 32;
@@ -31,13 +32,20 @@ const std::size_t kMaxNameLength = 32;
 const int kMaxUpdateAttempts = 3;
 
 /// @brief 结果描述（供日志使用）。
+///
+/// 拒绝一律是携带的标准异常（业务失败 / 框架失败都是 `std::exception` 派生），
+/// 描述直接取 `what()`；要按种类分流请用 `CUserError` / `CDbError` 的类型判断。
+///
+/// @param result 待描述的结果。
+///
+/// @return 人类可读的一句话。
 std::string DescribeResult(const common::async::CPromiseResult& result)
 {
     if (result.IsFulfilled())
     {
         return "兑现";
     }
-    return "拒绝(码=" + std::to_string(result.Code()) + ")";
+    return "拒绝(「" + result.Message() + "」)";
 }
 
 /// @brief 用户名合法性校验（1..kMaxNameLength 个字母 / 数字 / 下划线 / 连字符）。
@@ -98,7 +106,7 @@ struct CFlowDeps
 ///
 /// @param spCtx 业务上下文。
 ///
-/// @return 兑现；id 非法返回 kUserInvalidParam。
+/// @return 兑现；id 非法返回 `CUserError(kInvalidParam)`。
 common::async::CPromiseResult StepValidateUserId(
     common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
 {
@@ -106,7 +114,7 @@ common::async::CPromiseResult StepValidateUserId(
     if (spCtx->nUserId == 0)
     {
         spCtx->strError = "用户 id 非法";
-        return common::async::CPromiseResult::Reject(kUserInvalidParam);
+        return common::async::CPromiseResult::Reject(CUserError(CUserError::kInvalidParam, spCtx->strError));
     }
     return common::async::CPromiseResult::Resolve();
 }
@@ -117,7 +125,7 @@ common::async::CPromiseResult StepValidateUserId(
 ///
 /// @param spCtx 业务上下文（recRequest 为入参）。
 ///
-/// @return 兑现；入参非法返回 kUserInvalidParam（失败即停，后续层不再执行）。
+/// @return 兑现；入参非法返回 `CUserError(kInvalidParam)`（失败即停，后续层不再执行）。
 common::async::CPromiseResult StepValidateRecord(
     common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
 {
@@ -125,17 +133,17 @@ common::async::CPromiseResult StepValidateRecord(
     if (!IsValidUserName(spCtx->recRequest.strName))
     {
         spCtx->strError = "用户名非法（1-" + std::to_string(kMaxNameLength) + " 个字母 / 数字 / 下划线 / 连字符）";
-        return common::async::CPromiseResult::Reject(kUserInvalidParam);
+        return common::async::CPromiseResult::Reject(CUserError(CUserError::kInvalidParam, spCtx->strError));
     }
     if (spCtx->recRequest.strMail.find('@') == std::string::npos)
     {
         spCtx->strError = "邮箱格式非法";
-        return common::async::CPromiseResult::Reject(kUserInvalidParam);
+        return common::async::CPromiseResult::Reject(CUserError(CUserError::kInvalidParam, spCtx->strError));
     }
     if (spCtx->recRequest.nLevel <= 0)
     {
         spCtx->strError = "用户等级非法";
-        return common::async::CPromiseResult::Reject(kUserInvalidParam);
+        return common::async::CPromiseResult::Reject(CUserError(CUserError::kInvalidParam, spCtx->strError));
     }
     return common::async::CPromiseResult::Resolve();
 }
@@ -146,7 +154,7 @@ common::async::CPromiseResult StepValidateRecord(
 ///
 /// @param spCtx 业务上下文（读 bExists）。
 ///
-/// @return 存在兑现；不存在返回 kUserNotFound（失败即停，后续层不执行）。
+/// @return 存在兑现；不存在返回 `CUserError(kNotFound)`（失败即停，后续层不执行）。
 common::async::CPromiseResult StepRejectIfAbsent(
     common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
 {
@@ -154,7 +162,7 @@ common::async::CPromiseResult StepRejectIfAbsent(
     {
         spCtx->strError = "用户不存在";
         spCtx->strTrace += "拒绝(用户不存在);";
-        return common::async::CPromiseResult::Reject(kUserNotFound);
+        return common::async::CPromiseResult::Reject(CUserError(CUserError::kNotFound, spCtx->strError));
     }
     return common::async::CPromiseResult::Resolve();
 }
@@ -165,7 +173,7 @@ common::async::CPromiseResult StepRejectIfAbsent(
 ///
 /// @param spCtx 业务上下文（读 bExists）。
 ///
-/// @return 不存在兑现；已存在返回 kUserDuplicate。
+/// @return 不存在兑现；已存在返回 `CUserError(kDuplicate)`。
 common::async::CPromiseResult StepRejectIfExists(
     common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserOpContext>& spCtx)
 {
@@ -173,7 +181,7 @@ common::async::CPromiseResult StepRejectIfExists(
     {
         spCtx->strError = "用户已存在";
         spCtx->strTrace += "拒绝(用户已存在);";
-        return common::async::CPromiseResult::Reject(kUserDuplicate);
+        return common::async::CPromiseResult::Reject(CUserError(CUserError::kDuplicate, spCtx->strError));
     }
     return common::async::CPromiseResult::Resolve();
 }
@@ -191,7 +199,7 @@ common::async::CPromiseResult StepPrepareRename(
     if (!spCtx->bExists)
     {
         spCtx->strError = "用户不存在";
-        return common::async::CPromiseResult::Reject(kUserNotFound);
+        return common::async::CPromiseResult::Reject(CUserError(CUserError::kNotFound, spCtx->strError));
     }
 
     CUserRecord recRequest = spCtx->recResult;  // 沿用库中其余字段。
@@ -213,9 +221,8 @@ common::async::CPromiseResult StepAudit(common::async::CPromiseResult upResult, 
     // finally 层：成败都执行，upResult 可能是拒绝（返回值被忽略，原样透传）。
     spCtx->strTrace += "审计;";
     common::log::CLogger& logger = common::log::CLogger::Instance();
-    const std::string strResult = upResult.IsFulfilled()
-                                      ? std::string("兑现")
-                                      : ("拒绝(码=" + std::to_string(upResult.Code()) + " " + spCtx->strError + ")");
+    // 拒绝原因就在结果的异常描述里（不重复拼 strError）。
+    const std::string strResult = DescribeResult(upResult);
     logger.Info("[用户业务] 审计 " + spCtx->strAction + " 用户=" + std::to_string(spCtx->nUserId) + " 结果=" + strResult +
                 " 轨迹=" + spCtx->strTrace);
     return upResult;
@@ -227,14 +234,15 @@ common::async::CPromiseResult StepAudit(common::async::CPromiseResult upResult, 
 // 写法就是 JS 的 `new Promise((resolve, reject) => ...)`：
 //   ① executor 里发起数据访问模块的异步调用（立即返回，不等待、不占线程）；
 //   ② 在它的 OnSettled 回调里做「跨模块拒绝码 → 业务码」语义转换，
-//      然后 resolve() 兑现 / reject(码) 拒绝本 promise；
+///      然后 resolve() 兑现 / reject(业务码[, 文案]) 拒绝本 promise；
 //   ③ 本流程的后续 handler 由这个 settle 自然触发（ThenPromise 已把它接进链里）。
 // ====================================================================
 
 /// @brief 桥接：查询用户（数据访问模块）。
 ///
 /// 语义转换：数据访问层的「记录不存在」对业务来说不是错误 → 归一化为兑现 + bExists=false；
-/// 其他拒绝（含 kException）统一映射为业务码 kUserDbUnavailable。
+/// 其他数据访问层失败 → 翻译成业务异常 `CUserError(kDbUnavailable)`（带文案）；
+/// 非数据访问层的拒绝（业务 / 框架侧失败）不做翻译，**原样透传**（异常类型与文案都不丢）。
 ///
 /// @param deps 流程依赖（执行器 + 数据访问接口）。
 /// @param spCtx 业务上下文（写入 bExists / recResult）。
@@ -259,16 +267,26 @@ CUserPromise BridgeQueryUser(const CFlowDeps& deps, const std::shared_ptr<CUserO
                         fnResolve();
                         return;
                     }
-                    if (result.Code() == kDbRowNotFound)
+
+                    // 按异常类型分流：能拿到 CDbError 就走翻译，拿不到（框架侧失败 / 其他业务异常）就透传。
+                    CDbError::EKind eKind = CDbError::kRowNotFound;
+                    std::string strDbWhat;
+                    if (!TryGetDbError(result, eKind, strDbWhat))
+                    {
+                        spCtx->strTrace += "失败(非数据层);";
+                        fnReject(result);
+                        return;
+                    }
+                    if (eKind == CDbError::kRowNotFound)
                     {
                         spCtx->bExists = false;  // 语义转换：查询没查到不是错误。
                         spCtx->strTrace += "查库未命中;";
                         fnResolve();
                         return;
                     }
-                    spCtx->strError = "查询失败：数据访问码=" + std::to_string(result.Code());
+                    spCtx->strError = "查询失败：" + strDbWhat;
                     spCtx->strTrace += "失败(查询);";
-                    fnReject(kUserDbUnavailable);
+                    fnReject(CPromiseResult::Reject(CUserError(CUserError::kDbUnavailable, spCtx->strError)));
                 });
     };
     return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -298,16 +316,25 @@ CUserPromise BridgeInsertUser(const CFlowDeps& deps, const std::shared_ptr<CUser
                         fnResolve();
                         return;
                     }
-                    if (result.Code() == kDbDuplicateKey)
+                    // 按异常类型分流：非数据访问层的拒绝原样透传。
+                    CDbError::EKind eKind = CDbError::kDuplicateKey;
+                    std::string strDbWhat;
+                    if (!TryGetDbError(result, eKind, strDbWhat))
+                    {
+                        spCtx->strTrace += "失败(非数据层);";
+                        fnReject(result);
+                        return;
+                    }
+                    if (eKind == CDbError::kDuplicateKey)
                     {
                         spCtx->strError = "用户已存在";
                         spCtx->strTrace += "写库冲突;";
-                        fnReject(kUserDuplicate);
+                        fnReject(CPromiseResult::Reject(CUserError(CUserError::kDuplicate, spCtx->strError)));
                         return;
                     }
-                    spCtx->strError = "插入失败：数据访问码=" + std::to_string(result.Code());
+                    spCtx->strError = "插入失败：" + strDbWhat;
                     spCtx->strTrace += "失败(插入);";
-                    fnReject(kUserDbUnavailable);
+                    fnReject(CPromiseResult::Reject(CUserError(CUserError::kDbUnavailable, spCtx->strError)));
                 });
     };
     return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -317,7 +344,7 @@ CUserPromise BridgeInsertUser(const CFlowDeps& deps, const std::shared_ptr<CUser
 ///
 /// 每次尝试都会重新走数据访问模块的「读表 + 乐观锁更新」promise：版本不匹配时
 /// 数据访问层回吐库中最新行，本层据此更新期望版本后立即再试一次；
-/// 尝试次数用尽则以 kUserVersionConflict 拒绝。
+/// 尝试次数用尽则以 `CUserError(kVersionConflict)` 拒绝。
 ///
 /// @param deps 流程依赖。
 /// @param spCtx 业务上下文（recRequest 为期望版本 + 新字段；nAttempt 记录尝试次数）。
@@ -342,13 +369,24 @@ void UpdateUserAttempt(const CFlowDeps& deps, const std::shared_ptr<CUserOpConte
                     return;
                 }
 
-                if (result.Code() != kDbVersionConflict || nAttempt >= kMaxUpdateAttempts)
+                // 按异常类型分流。
+                CDbError::EKind eKind = CDbError::kRowNotFound;
+                std::string strDbWhat;
+                if (!TryGetDbError(result, eKind, strDbWhat))
                 {
-                    const bool bConflict = (result.Code() == kDbVersionConflict);
-                    spCtx->strError =
-                        bConflict ? "乐观锁冲突重试次数用尽" : ("更新失败：数据访问码=" + std::to_string(result.Code()));
+                    // 非数据访问层的拒绝（业务 / 框架侧失败）：原样透传，保住类型与文案。
+                    spCtx->strTrace += "失败(非数据层);";
+                    fnReject(result);
+                    return;
+                }
+
+                if (eKind != CDbError::kVersionConflict || nAttempt >= kMaxUpdateAttempts)
+                {
+                    const bool bConflict = (eKind == CDbError::kVersionConflict);
+                    spCtx->strError = bConflict ? "乐观锁冲突重试次数用尽" : ("更新失败：" + strDbWhat);
                     spCtx->strTrace += "失败(更新);";
-                    fnReject(bConflict ? kUserVersionConflict : kUserDbUnavailable);
+                    fnReject(CPromiseResult::Reject(
+                        CUserError(bConflict ? CUserError::kVersionConflict : CUserError::kDbUnavailable, spCtx->strError)));
                     return;
                 }
 
@@ -397,15 +435,25 @@ CUserPromise BridgeDeleteUser(const CFlowDeps& deps, const std::shared_ptr<CUser
                         fnResolve();
                         return;
                     }
-                    if (result.Code() == kDbRowNotFound)
+                    // 按异常类型分流：非数据访问层的拒绝原样透传。
+                    CDbError::EKind eKind = CDbError::kRowNotFound;
+                    std::string strDbWhat;
+                    if (!TryGetDbError(result, eKind, strDbWhat))
                     {
-                        spCtx->strError = "用户不存在";
-                        fnReject(kUserNotFound);
+                        spCtx->strTrace += "失败(非数据层);";
+                        fnReject(result);
                         return;
                     }
-                    spCtx->strError = "删除失败：数据访问码=" + std::to_string(result.Code());
+                    if (eKind == CDbError::kRowNotFound)
+                    {
+                        spCtx->strError = "用户不存在";
+                        spCtx->strTrace += "删库未命中;";
+                        fnReject(CPromiseResult::Reject(CUserError(CUserError::kNotFound, spCtx->strError)));
+                        return;
+                    }
+                    spCtx->strError = "删除失败：" + strDbWhat;
                     spCtx->strTrace += "失败(删除);";
-                    fnReject(kUserDbUnavailable);
+                    fnReject(CPromiseResult::Reject(CUserError(CUserError::kDbUnavailable, spCtx->strError)));
                 });
     };
     return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -592,7 +640,7 @@ private:
             });
     }
 
-    /// @brief 场景②：重复注册同一用户（查重命中 → 业务拒绝码 kUserDuplicate）。
+    /// @brief 场景②：重复注册同一用户（查重命中 → CUserError(kDuplicate)）。
     void RunDuplicateRegister()
     {
         CUserRecord recDup;
@@ -689,7 +737,7 @@ private:
             });
     }
 
-    /// @brief 场景⑥：重复删除（数据访问层未命中 → 业务拒绝码 kUserNotFound）。
+    /// @brief 场景⑥：重复删除（数据访问层未命中 → CUserError(kNotFound)）。
     void RunRemoveAgain()
     {
         CUserPromise promise = m_spService->RemoveUserAsync(m_nUserId);
@@ -723,7 +771,7 @@ private:
 
     /// @brief 场景⑧：数据访问模块层内异常（模拟驱动故障）。
     ///
-    /// 处理器内抛出异常 → 框架转为 kException（不向调用方抛出），
+    /// 处理器内抛出异常 → 框架以系统失败（EFailureKind::kException）收口（不向调用方抛出），
     /// 且数据访问模块的 finally 层（放连接）仍然执行。
     void RunDbError()
     {
@@ -734,8 +782,9 @@ private:
         m_spTable->QueryUserAsync(spDbOp).OnSettled(
             [spSelf, spDbOp](common::async::CPromiseResult result)
             {
-                common::log::CLogger::Instance().Warn("[演示⑧] 数据访问层内异常 " + DescribeResult(result) + "（kException=" +
-                                                      std::to_string(common::async::kException) + "）轨迹=" + spDbOp->strTrace);
+                // 层内抛异常 → 异常原样成为本层拒绝（类型与 what() 都不丢）。
+                common::log::CLogger::Instance().Warn(
+                    "[演示⑧] 数据访问层内异常 " + DescribeResult(result) + " 轨迹=" + spDbOp->strTrace);
                 common::log::CLogger::Instance().Info(
                     "=========== 用户业务演示结束（全流程回调驱动，未阻塞任何线程）===========");
             });
@@ -887,13 +936,13 @@ static CFlowDeps MakeFlowDeps(
 /// @param deps 流程依赖（执行器须非空）。
 /// @param spCtx 业务上下文。
 ///
-/// @return 立即以 kUserDbUnavailable 被拒绝的 promise。
+/// @return 立即以 `CUserError(kDbUnavailable)` 被拒绝的 promise。
 static CUserPromise MakeRejectedPromise(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     CUserPromise::ChainStarter fnStarter = [spCtx](const ResolveFn& /*fnResolve*/, const RejectFn& fnReject)
     {
         spCtx->strError = "数据访问模块不可用";
-        fnReject(kUserDbUnavailable);
+        fnReject(CPromiseResult::Reject(CUserError(CUserError::kDbUnavailable, spCtx->strError)));
     };
     return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
 }

@@ -73,7 +73,7 @@ flowchart TD
 
 > 「扣款成功要退款」也是同形的第三个反向操作，本篇只演示机制，不再多写一个模块。
 
-### 0.2 文件头与业务码
+### 0.2 文件头与业务失败文案
 
 ```cpp
 #include <cstdio>
@@ -90,39 +90,16 @@ using common::async::CPromiseResult;
 ```
 
 ```cpp
-/// 业务拒绝码（从 `kBusinessBase` 起取，避开框架占用的 1 / 2 / 3；**文案随拒绝走**，不必查表）。
-enum
-{
-    kStockShortage = common::async::kBusinessBase,  ///< 库存不足
-    kPayDeclined,                                   ///< 支付被拒
-    kCourierUnavailable,                            ///< 快递不可用
-    kShipFailed                                     ///< 发货失败（仓库故障）
-};
-
-/// 拒绝码 → 文案。
+/// 业务失败文案（拒绝 = 标准异常；文案随拒绝走，**不要维护「码 → 文案」对照表**）。
 ///
-/// 只在「只拿得到一个码」的通道里当兜底（起链回调 `fnReject(码)`、日志里回看历史码）；
-/// 层内拒绝请直接用 `CPromiseResult::Reject(码, 文案)` 把文案带上（不必再查表）。
-static const char* CodeText(int nCode)
-{
-    switch (nCode)
-    {
-        case kStockShortage:
-            return "库存不足";
-        case kPayDeclined:
-            return "支付被拒";
-        case kCourierUnavailable:
-            return "快递不可用";
-        case kShipFailed:
-            return "发货失败";
-        case common::async::kStopped:
-            return "执行器已停";
-        case common::async::kException:
-            return "系统错误";
-        default:
-            return "未知错误";
-    }
-}
+/// 需要按种类分流时，定义自己的异常类型（里面可以带自己的 `enum class EKind`），
+/// 调用方用 `result.Exception()` 重新抛出后 `catch` 具体类型 —— 比拿码比对硬得多。
+static const char* const kStockShortageText = "库存不足";
+static const char* const kPayDeclinedText = "支付被拒";
+static const char* const kCourierUnavailableText = "快递不可用";
+static const char* const kShipFailedText = "发货失败（仓库故障）";
+/// 本模块执行器不可用（依赖不可用是**业务**结论，用业务文案而非框架文案）。
+static const char* const kExecutorUnavailableText = "本模块执行器不可用";
 ```
 
 ### 0.3 库存模块（用法① 的对象：**对方给 promise**）
@@ -183,7 +160,8 @@ public:
                 {
                     if (bShortage)
                     {
-                        fnReject(kStockShortage);  // 业务拒绝：只给码
+                        // 业务拒绝：异常自己带着原因（不需要「码 + 查表」）
+                        fnReject(CPromiseResult::Reject(std::runtime_error(kStockShortageText)));
                         return;
                     }
                     spCtx->nReserveNo = nReserveNo;
@@ -192,7 +170,7 @@ public:
                 });
             if (!bPosted)
             {
-                fnReject(common::async::kStopped);  // 本模块已停：别让对方的链永久挂着
+                fnReject(CPromiseResult::Reject(std::runtime_error(kExecutorUnavailableText)));  // 本模块已停：别让对方的链永久挂着
             }
         };
         return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -219,7 +197,7 @@ public:
                 });
             if (!bPosted)
             {
-                fnReject(common::async::kStopped);
+                fnReject(CPromiseResult::Reject(std::runtime_error(kExecutorUnavailableText)));
             }
         };
         return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -233,7 +211,7 @@ private:
 ```
 
 - 模块**自持执行器**（`("stock", 1)`）：跨模块只交换 promise + 上下文，不传执行器。
-- 对外接口自己决定什么时候 settle（这里是 `Post` 到本模块线程后 `fnResolve()` / `fnReject(码)`）。
+- 对外接口自己决定什么时候 settle（这里是 `Post` 到本模块线程后 `fnResolve()` / `fnReject(结果)`）。
 - `ReleaseAsync` 特意做成**幂等**：传 `0`（没预占过）就是空操作 —— 补偿层因此不必先判断有没有东西要撤。
 
 ### 0.4 支付模块（用法① 的另一个对象）
@@ -293,7 +271,7 @@ public:
                 {
                     if (bDecline)
                     {
-                        fnReject(kPayDeclined);
+                        fnReject(CPromiseResult::Reject(std::runtime_error(kPayDeclinedText)));
                         return;
                     }
                     spCtx->nPayNo = nPayNo;
@@ -302,7 +280,7 @@ public:
                 });
             if (!bPosted)
             {
-                fnReject(common::async::kStopped);
+                fnReject(CPromiseResult::Reject(std::runtime_error(kExecutorUnavailableText)));
             }
         };
         return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -354,7 +332,7 @@ public:
             {
                 if (m_bUnavailable)
                 {
-                    fnCallback(0, kCourierUnavailable);
+                    fnCallback(0, kCourierUnavailableText);
                     return;
                 }
                 const int nPickupNo = m_nNextPickupNo++;
@@ -398,7 +376,8 @@ struct COrderCtx
     int nReserveNo;          ///< 库存模块的预占号（桥接搬回来）
     int nPayNo;              ///< 支付模块的支付号（桥接搬回来）
     int nPickupNo;           ///< 快递 SDK 的取件单号（回调搬进来）
-    int nFailCode;           ///< 非 0 = 流程失败过（补偿层据此决定动不动手）
+    bool bFailed;             ///< 流程是否失败过（补偿层据此决定动不动手）
+    std::string strFailText;  ///< 失败原因（拒绝异常的描述；审计 / 补偿层直接用）
     std::string strTrace;    ///< 步骤轨迹（自校验）
 
     CStockModule* pStock;                  ///< 要调的别的模块（真实项目里是接口指针 / ScopedInterfacePtr）
@@ -416,7 +395,8 @@ struct COrderCtx
           nReserveNo(0),
           nPayNo(0),
           nPickupNo(0),
-          nFailCode(0),
+          bFailed(false),
+          strFailText(),
           strTrace(),
           pStock(NULL),
           pPay(NULL),
@@ -446,7 +426,7 @@ static CPromiseResult StepShip(CPromiseResult /*upResult*/, const std::shared_pt
     spCtx->strTrace += "发货;";
     if (g_bWarehouseDown)
     {
-        return CPromiseResult::Reject(kShipFailed);
+        return CPromiseResult::Reject(std::runtime_error(kShipFailedText));
     }
     std::printf("    本模块: 发货（预占号 %d / 支付号 %d / 取件单 %d）\n", spCtx->nReserveNo, spCtx->nPayNo, spCtx->nPickupNo);
     return CPromiseResult::Resolve();
@@ -456,7 +436,7 @@ static CPromiseResult StepShip(CPromiseResult /*upResult*/, const std::shared_pt
 static CPromiseResult StepReportReject(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
 {
     spCtx->strTrace += "拒绝;";
-    std::printf("    兜底: 流程中断 [%d] %s\n", upResult.Code(), CodeText(upResult.Code()));
+    std::printf("    兜底: 流程中断「%s」\n", upResult.Message().c_str());
     return upResult;
 }
 
@@ -469,7 +449,7 @@ static CPromiseResult StepAudit(CPromiseResult /*upResult*/, const std::shared_p
 ```
 
 - 层与层之间**只传「兑现 / 拒绝」**，数据全放共享上下文 → 所以五种写法的步骤完全一样。
-- `nFailCode`：兜底层记下「流程失败过」，补偿层据此判断要不要真的动手（§5）。
+- `bFailed`：兜底层记下「流程失败过」，补偿层据此判断要不要真的动手（§5）。
 - `spReserve` / `spCharge`：并行写法要拿它们的上下文取数据（§4）。
 
 ### 0.7 用法③：子 Promise 链（本模块的多步过程，外层当成一步）
@@ -510,7 +490,7 @@ static CPromise<COrderCtx> BuildQuoteChain(common::async::CAsyncExecutor& exec, 
 
 - `BuildQuoteChain` 返回一条 **3 层的链**（首层由执行器投递 → 对调用方是真异步）。
 - 外层用 `ThenPromise(工厂)` 接住它：**同 `TContext` → 直接 adopt**，外层等子链跑完才继续；
-  子链被拒绝 → 本层以同一拒绝码被拒绝。
+  子链被拒绝 → 本层以同一拒绝（异常）被拒绝。
 - 契约：工厂**必须**给出可等待的子链（框架里没有「返回空 = 没有子链」这条路）；真要条件分支，
   就在工厂里返回不同形状的链。
 - 如果这条子链跑在**别的模块的执行器**上（跨上下文）→ 那就该用 `ThenBridge`（= `ThenPromise` + 落定时搬数据）。
@@ -523,7 +503,7 @@ static CPromise<COrderCtx> BuildQuoteChain(common::async::CAsyncExecutor& exec, 
 /// 把「预约取件」的回调式接口包成 promise。
 ///
 /// `NewPromise(spCtx, fnStarter)` 就是 JS 的 `new Promise((resolve, reject) => …)`；包装只做三件事：
-/// **发起调用** → 回调里**成功 `fnResolve()` / 失败 `fnReject(码)`** → 把回调给的数据落进上下文。
+/// **发起调用** → 回调里**成功 `fnResolve()` / 失败 `fnReject(结果)`** → 把回调给的数据落进上下文。
 static CPromise<COrderCtx> WrapCourierPickup(common::async::CAsyncExecutor& exec, const std::shared_ptr<COrderCtx>& spCtx)
 {
     const CPromise<COrderCtx>::ChainStarter fnStarter =
@@ -543,7 +523,7 @@ static CPromise<COrderCtx> WrapCourierPickup(common::async::CAsyncExecutor& exec
             });
         if (!bPosted)
         {
-            fnReject(common::async::kStopped);  // 发起就失败：别让链永久挂着
+            fnReject(CPromiseResult::Reject(std::runtime_error(kExecutorUnavailableText)));  // 发起就失败：别让链永久挂着
         }
     };
     return exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -553,8 +533,9 @@ static CPromise<COrderCtx> WrapCourierPickup(common::async::CAsyncExecutor& exec
 包装就三件事，缺一件都会留坑：
 
 1. **发起**：只在 starter 里发起调用 + 登记回调（starter 是**同步执行**的，别做重活）；
-2. **收口**：回调里成功 `fnResolve()`、失败 `fnReject(码)`，回调给的数据落进上下文；
-3. **边界**：发起就失败（`Post` 返回 `false` / 执行器已停）必须 `fnReject(kStopped)`，否则链会**永久挂着**。
+2. **收口**：回调里成功 `fnResolve()`、失败 `fnReject(结果)`，回调给的数据落进上下文；
+3. **边界**：发起就失败（`Post` 返回 `false` / 执行器已停）必须拒绝本层
+   （`fnReject(CPromiseResult::Reject(std::runtime_error("本模块执行器不可用")))`），否则链会**永久挂着**。
 
 - 包装出来的 promise 建在**本模块执行器**上（`exec.NewPromise`），所以后续层自动回到本模块线程。
 - 建议抽成独立函数（`WrapCourierPickup(exec, spCtx)`）：协程写法与补偿路径都要用它。
@@ -636,10 +617,10 @@ static std::shared_ptr<COrderCtx> MakeOrderCtx(
 
 - 处理器签名固定 `CPromiseResult handler(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)`。
 - `then` 层不用判断 `upResult.IsRejected()`（上游被拒绝 → 框架直接跳过本层）；只有 `Catch` / `Finally` 要看它。
-- 拒绝是「码 + 可选文案」：层内用 `Reject(码, 文案)` 直接把文案带上（动态字符串，随结果沿链透传
-  到 catch / 日志 / `Await()`）；框架码（`kStopped` / `kException` / `kRejected`）经 `Reject(码)`
-  **自带框架文案**。只有「只拿得到一个 `int` 码」的通道（起链回调里的 `fnReject(码)`）才需要
-  自己查表 —— 下面 §0.2 的 `CodeText` 就是这种兜底用法。
+- 拒绝 = **一个标准异常**：层内直接 `Reject(std::runtime_error("原因"))`，文案随结果沿链透传
+  到 catch / 日志 / `Await()`；**没有错误码，也不需要「码 → 文案」对照表**。
+  要按种类分流（重试 / 语义转换）就自定义异常类型并用 `result.Exception()` 重新抛出后 `catch`；
+  框架自己的固定失败在 `detail::FailureXxx()`（「执行器已停」「等待超时」……）。
 - 「层跑在哪条线程上」只需看**起链的执行器**：每层都在本链执行器线程上跑，跨模块返回后自动拉回。
 
 ## 1. 写法 1：then 链 + `ThenBridge` + `ThenPromise`（默认写法）
@@ -670,7 +651,7 @@ static void RunBridgeFlow(common::async::CAsyncExecutor& exec, CStockModule& sto
 - ① 跨模块 → `.ThenBridge(&CreateReserve, &ApplyReserve)`（起子链 + 搬数据合成一层）
 - ② 包装 → `.ThenPromise(MakePickupFactory(exec))`（等回调兑现的那条 promise）
 
-子链被拒绝 / 回调报错 / 对方模块拒绝，都会**以同一个拒绝码**拒绝本层：后续 `Then` 跳过，
+子链被拒绝 / 回调报错 / 对方模块拒绝，都会**以同一个拒绝（异常）**拒绝本层：后续 `Then` 跳过，
 `Catch` 与 `Finally` 照常执行。两段跨模块调用是**串行**的（预占成功才扣款），要并行见写法 4。
 
 ## 2. 写法 2：协程（`CO_AWAIT` 直线书写）
@@ -679,7 +660,7 @@ static void RunBridgeFlow(common::async::CAsyncExecutor& exec, CStockModule& sto
 //================ 写法 2：协程（`CO_AWAIT` 直线书写） ================
 
 /// 协程体里三类调用都只是「一行 await」：子链、跨模块、包装出来的回调 promise。
-/// 被 await 的层被拒绝 → 协程立即终止、拒绝码透传（与 then 的失败即停一致）。
+/// 被 await 的层被拒绝 → 协程立即终止、拒绝（异常）透传（与 then 的失败即停一致）。
 class COrderCoroutine : public common::async::CCoroutine<COrderCtx>
 {
 public:
@@ -783,7 +764,7 @@ static CPromise<COrderCtx> BridgeReserveManually(common::async::CAsyncExecutor& 
             {
                 if (childResult.IsRejected())
                 {
-                    fnReject(childResult.Code());  // 对方的拒绝码原样透传
+                    fnReject(childResult);  // 对方的拒绝原样透传
                     return;
                 }
                 spCtx->nReserveNo = spChildCtx->nReserveNo;  // 搬数据（跑在对方线程上：只搬字段）
@@ -821,7 +802,7 @@ static void RunManualFlow(common::async::CAsyncExecutor& exec, CStockModule& sto
 
 - 留住子 promise 句柄（`shared_ptr` 装，才能 `GetContext()` 取对方数据）；
 - 在对方的 `OnSettled` 回调里**搬数据**；
-- 把对方的拒绝码**原样透传**（`fnReject(childResult.Code())`）；
+- 把对方的拒绝**原样透传**（`fnReject(childResult)`）；
 - 外加「对方已落定 / 执行器已停」这些收口 —— 这就是被收掉的样板。
 
 结论：默认用 `ThenBridge`；手写版只用于理解机制或需要完全自定义收口逻辑。
@@ -884,26 +865,22 @@ static void RunParallelFlow(common::async::CAsyncExecutor& exec, CStockModule& s
 ```cpp
 //================ 写法 5：失败补偿（`Catch` 分流 + 反向操作） ================
 
-/// 兜底：记下「流程失败过」，按码分流后**返回 Resolve() = 恢复** —— 让链继续走到补偿层与审计层。
+/// 兜底：记下「流程失败过」，记录原因后**返回 Resolve() = 恢复** —— 让链继续走到补偿层与审计层。
 static CPromiseResult StepRecoverByCode(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
 {
-    spCtx->nFailCode = upResult.Code();  // 补偿层据此判断「要不要真的动手」
+    spCtx->bFailed = true;
+    spCtx->strFailText = upResult.Message();  // 补偿层据此判断「要不要真的动手」
     spCtx->strTrace += "拒绝;";
-    if (upResult.Code() >= common::async::kBusinessBase)
-    {
-        std::printf("    补偿: 业务拒绝 [%d] %s\n", upResult.Code(), CodeText(upResult.Code()));
-    }
-    else
-    {
-        std::printf("    补偿: 系统错误 [%d] %s\n", upResult.Code(), CodeText(upResult.Code()));
-    }
+    // 想按「业务失败 / 框架失败」分流：自定义异常类型 + Exception() 重新抛出后 catch；
+    // 只想看文字就直接用 Message()（结果里没有任何码可以比）。
+    std::printf("    补偿: 流程中断「%s」\n", upResult.Message().c_str());
     return CPromiseResult::Resolve();  // 恢复：链继续（补偿层 / 审计层照常跑）
 }
 
 /// 反向操作②：释放预占（库存模块的 promise 接口）。条件 = **流程失败过 且 真的预占过**。
 static CPromise<CStockCtx> CreateCompensateStock(const std::shared_ptr<COrderCtx>& spSelf)
 {
-    const bool bNeedRollback = (spSelf->nFailCode != 0 && spSelf->nReserveNo != 0);
+    const bool bNeedRollback = (spSelf->bFailed && spSelf->nReserveNo != 0);
     if (bNeedRollback)
     {
         spSelf->strTrace += "释放;";
@@ -915,7 +892,7 @@ static CPromise<CStockCtx> CreateCompensateStock(const std::shared_ptr<COrderCtx
 /// 反向操作①：取消取件 —— **又是回调式接口，所以又要包装一次**（这次不抽独立函数，直接内联在工厂里）。
 static CPromise<COrderCtx> CreateCompensatePickup(common::async::CAsyncExecutor& exec, const std::shared_ptr<COrderCtx>& spSelf)
 {
-    const bool bNeedCancel = (spSelf->nFailCode != 0 && spSelf->nPickupNo != 0);
+    const bool bNeedCancel = (spSelf->bFailed && spSelf->nPickupNo != 0);
     if (bNeedCancel)
     {
         spSelf->strTrace += "取消取件;";
@@ -936,7 +913,7 @@ static CPromise<COrderCtx> CreateCompensatePickup(common::async::CAsyncExecutor&
             });
         if (!bPosted)
         {
-            fnReject(common::async::kStopped);
+            fnReject(CPromiseResult::Reject(std::runtime_error(kExecutorUnavailableText)));
         }
     };
     return exec.NewPromise(spSelf, fnStarter, ASYNC_LOC);
@@ -970,7 +947,7 @@ static void RunCompensatingFlow(common::async::CAsyncExecutor& exec, CStockModul
   返回 `upResult` 则继续以拒绝状态透传（写法 1 的兜底就是这么写的）。
 - 补偿按**与正向相反的顺序**做：正向是「预占 → 扣款 → 取件」，反向就是「取消取件 → 释放预占」。
 - **补偿层是链上的普通层，成功路径也会跑到** —— 所以每个补偿层都必须能「什么都不做」。
-  本例两个判据都要带上下两半：`nFailCode != 0`（流程失败过）**且** 那个副作用真的发生过。
+  本例两个判据都要带上下两半：`bFailed`（流程失败过）**且** 那个副作用真的发生过。
   这是本篇最容易踩的坑：第一版只判了后者，结果**正常路径把已经预约好的取件单给取消了**。
 - 反向操作面对的接口形态不同，收尾方式也不同：
   库存模块给的是 promise（而且 `ReleaseAsync(0)` 幂等）→ 直接桥一层；
@@ -1324,7 +1301,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
 | ① 跨模块 | `ThenBridge(fnCreate, fnApply)` | `CO_AWAIT(子 promise)` + 手动搬数据 | `NewPromise(fnStarter)` + `OnSettled` + `ThenPromise` | 扇出 + `WhenAll` + `ThenBridge` 汇聚 | 反向再桥一次 |
 | ② 包装回调式接口 | `ThenPromise(包装函数)` | `CO_AWAIT(包装函数)` | 同写法 1 | 同写法 1 | 反向再包装一次（内联） |
 | ③ 子链 | `ThenPromise(子链工厂)` | `CO_AWAIT(子链)` | 同写法 1 | 同写法 1 | — |
-| 对方的拒绝怎么处理 | 同码拒绝本层（后续跳过） | 协程立即终止、码透传 | 手动 `fnReject(childResult.Code())` | 聚合立即拒绝（分支不取消） | `Catch` 分流后可**恢复** |
+| 对方的拒绝怎么处理 | 同拒绝（异常）拒绝本层（后续跳过） | 协程立即终止、异常透传 | 手动 `fnReject(childResult)` | 聚合立即拒绝（分支不取消） | `Catch` 分流后可**恢复** |
 | 失败要做反向操作 | `Catch` + 反向层（写法 5） | 放外层 `Catch` | 同写法 1 | 同写法 1（注意并行的副作用） | 就是本法 |
 | 代码量 | 最少 | 中（跨 await 变量要变成员） | 多（自己收口边界） | 中（多一层扇出） | 中（多两个判空 + 反向层） |
 | 什么时候用 | **默认** | 步骤多 / 分支循环多 | 只为了理解 `ThenBridge` 内部 | 两个调用互不依赖、要压时延 | 有跨模块副作用要回滚 |

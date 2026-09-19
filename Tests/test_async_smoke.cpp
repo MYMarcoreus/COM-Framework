@@ -4,14 +4,14 @@
 /// 覆盖（与 docs/common/async-usage.md、docs/common/async-vs-js.md 对应）：
 ///  - 一条链里混用：具名处理器 / lambda / ThenPromise（内层链）/ 旁支 / catch / finally；
 ///  - then 失败即停、catch 恢复或透传、finally 不改结果；
-///  - ThenPromise 等子 promise（flatten）、内层拒绝码沿外层链透传；
+///  - ThenPromise 等子 promise（flatten）、内层拒绝（异常）沿外层链透传；
 ///  - `exec.NewPromise(spCtx, fnStarter)`（由外部回调 settle）：resolve / reject / 起链回调抛异常 / 空回调；
 ///  - 跨模块桥接：两个模块各持执行器，只通过 promise 交接；
-///  - 处理器抛异常 → kException，finally / OnSettled 仍执行；
+///  - 处理器抛异常 → 异常原样成为本层拒绝（动态类型与 what() 都保住），finally / OnSettled 仍执行；
 ///  - OnSettled 旁路通知：不改结果、可多次登记；
 ///  - Catch / Finally 紧挂在链首之后（起点已兑现 → Catch 不执行）；
 ///  - 单线程执行器下嵌套 + 旁支全部完成（证明「不占 worker、不阻塞」）；
-///  - 执行器未启动 → kStopped；Await 取最终结果；上下文为全链同一实例。
+///  - 执行器未启动 → 框架侧拒绝「执行器已停」；Await 取最终结果；上下文为全链同一实例。
 
 #include <atomic>
 #include <chrono>
@@ -22,6 +22,7 @@
 
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
+#include "AsyncTestKit.h"
 #include "TestFramework.h"
 
 // ==================== 冒烟测试用的上下文与层函数 ====================
@@ -33,12 +34,12 @@ struct CSmokeCtx
     int nSteps;                ///< 已执行的层数。
     int nCatchRuns;            ///< catch 层执行次数。
     int nFinallyRuns;          ///< finally 层执行次数。
-    int nFailCode;             ///< 制造成败用的码（0 表示不失败）。
+    std::string strFailText;   ///< 拒绝原因（异常描述；空 = 不失败）。
     std::atomic<int> nSide;    ///< 旁支完成计数（跨线程）。
     std::thread::id workerId;  ///< 最后一个执行层的线程。
     std::string strTrace;      ///< 层执行轨迹。
 
-    CSmokeCtx() : nValue(0), nSteps(0), nCatchRuns(0), nFinallyRuns(0), nFailCode(0), nSide(0)
+    CSmokeCtx() : nValue(0), nSteps(0), nCatchRuns(0), nFinallyRuns(0), strFailText(), nSide(0)
     {}
 };
 
@@ -62,12 +63,12 @@ static common::async::CPromiseResult StepAdd10(
     return common::async::CPromiseResult::Resolve();
 }
 
-/// 层：按上下文里的码制造拒绝。
+/// 层：按上下文里的文案制造拒绝。
 static common::async::CPromiseResult StepFail(common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& spCtx)
 {
     ++spCtx->nSteps;
     spCtx->strTrace += "F";
-    return common::async::CPromiseResult::Reject(spCtx->nFailCode);
+    return common::async::CPromiseResult::Reject(std::runtime_error(spCtx->strFailText));
 }
 
 /// 层：记录轨迹（用来验证「失败后不再执行」）。
@@ -78,7 +79,7 @@ static common::async::CPromiseResult StepMark(common::async::CPromiseResult /*up
     return common::async::CPromiseResult::Resolve();
 }
 
-/// 层：抛异常（验证框架捕获 → kException，不向调用方抛出）。
+/// 层：抛异常（验证框架捕获 → 异常原样成为本层拒绝，不向调用方抛出）。
 static common::async::CPromiseResult StepThrow(
     common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CSmokeCtx>& /*spCtx*/)
 {
@@ -109,7 +110,7 @@ static common::async::CPromiseResult StepFinallyIgnoreReturn(
 {
     ++spCtx->nFinallyRuns;
     spCtx->strTrace += "f";
-    return common::async::CPromiseResult::Reject(common::async::kBusinessBase + 99);
+    return common::async::CPromiseResult::Reject(std::runtime_error("finally 层的拒绝（应被忽略）"));
 }
 
 /// @brief 等旁支完成（旁支是 fire-and-forget，断言前等一下）。
@@ -217,7 +218,7 @@ TEST(Smoke_ThenPromiseInnerReject)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    spCtx->nFailCode = common::async::kBusinessBase + 7;
+    spCtx->strFailText = "业务拒绝（用例 7）";
     common::async::CPromise<CSmokeCtx>::PromiseFactory fnInner = [&exec](const std::shared_ptr<CSmokeCtx>& spSelf)
     {
         return exec.NewPromise(spSelf, &StepFail, ASYNC_LOC);
@@ -231,7 +232,7 @@ TEST(Smoke_ThenPromiseInnerReject)
                                                 .Await();
 
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), spCtx->nFailCode);
+    ASSERT_EQ(r.Message(), spCtx->strFailText);
     ASSERT_EQ(spCtx->nCatchRuns, 1);
     ASSERT_TRUE(spCtx->strTrace == "XFcX");
     exec.Stop();
@@ -309,17 +310,17 @@ TEST(Smoke_NewExternalSettle)
             },
             ASYNC_LOC);
 
-        fnRejectHolder(common::async::kBusinessBase + 5);
+        fnRejectHolder(common::async::CPromiseResult::Reject(std::runtime_error("业务拒绝（用例 5）")));
         const common::async::CPromiseResult r = p.Then(&StepMark, ASYNC_LOC).Catch(&StepCatchPass, ASYNC_LOC).Await();
         ASSERT_TRUE(r.IsRejected());
-        ASSERT_EQ(r.Code(), common::async::kBusinessBase + 5);
+        ASSERT_EQ(r.Message(), std::string("业务拒绝（用例 5）"));
         ASSERT_EQ(spCtx->nCatchRuns, 1);
         ASSERT_EQ(spCtx->nSteps, 0);  // then 层被跳过
     }
     exec.Stop();
 }
 
-/// @brief New 的 executor 抛异常 → 本 promise 被拒绝（kException）；空 executor → 拒绝。
+/// @brief 起链回调抛异常 → 异常原样成为本 promise 的拒绝；空回调 → 同样拒绝。
 TEST(Smoke_NewBadExecutor)
 {
     common::async::CAsyncExecutor exec(2);
@@ -337,13 +338,13 @@ TEST(Smoke_NewBadExecutor)
                                                          ASYNC_LOC)
                                                      .Await();
     ASSERT_TRUE(rThrow.IsRejected());
-    ASSERT_EQ(rThrow.Code(), static_cast<int>(common::async::kException));
+    ASSERT_EQ(rThrow.Message(), std::string("executor boom"));  // 异常原样成为拒绝（what() 都保住）
 
     std::shared_ptr<CSmokeCtx> spCtxEmpty = std::make_shared<CSmokeCtx>();
     const common::async::CPromiseResult rEmpty =
         exec.NewPromise(spCtxEmpty, common::async::CPromise<CSmokeCtx>::ChainStarter(), ASYNC_LOC).Await();
     ASSERT_TRUE(rEmpty.IsRejected());
-    ASSERT_EQ(rEmpty.Code(), static_cast<int>(common::async::kRejected));
+    ASSERT_TRUE(asynctest::IsUnspecifiedFailure(rEmpty));  // 未给起链回调：框架侧收口
     exec.Stop();
 }
 
@@ -356,7 +357,7 @@ TEST(Smoke_FailFast)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    spCtx->nFailCode = common::async::kBusinessBase + 3;
+    spCtx->strFailText = "业务拒绝（用例 3）";
     const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepMark, ASYNC_LOC)
                                                 .Then(&StepFail, ASYNC_LOC)
                                                 .Then(&StepMark, ASYNC_LOC)  // 跳过
@@ -364,7 +365,7 @@ TEST(Smoke_FailFast)
                                                 .Await();
 
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), spCtx->nFailCode);
+    ASSERT_EQ(r.Message(), spCtx->strFailText);
     ASSERT_TRUE(spCtx->strTrace == "XF");
     exec.Stop();
 }
@@ -376,7 +377,7 @@ TEST(Smoke_CatchRecoverContinues)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    spCtx->nFailCode = common::async::kBusinessBase + 4;
+    spCtx->strFailText = "业务拒绝（用例 4）";
     const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC)
                                                 .Catch(&StepCatchRecover, ASYNC_LOC)
                                                 .Then(&StepAdd1, ASYNC_LOC)  // 恢复后继续执行
@@ -396,14 +397,14 @@ TEST(Smoke_CatchPassthrough)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    spCtx->nFailCode = common::async::kBusinessBase + 5;
+    spCtx->strFailText = "业务拒绝（用例 5）";
     const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC)
                                                 .Catch(&StepCatchPass, ASYNC_LOC)
                                                 .Then(&StepMark, ASYNC_LOC)  // 跳过
                                                 .Await();
 
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), spCtx->nFailCode);
+    ASSERT_EQ(r.Message(), spCtx->strFailText);
     ASSERT_TRUE(spCtx->strTrace == "Fc");
     exec.Stop();
 }
@@ -423,20 +424,20 @@ TEST(Smoke_FinallyIgnoresReturn)
         ASSERT_EQ(spCtx->nFinallyRuns, 1);
     }
 
-    // 拒绝路径：码原样透传
+    // 拒绝路径：异常原样透传
     {
         std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-        spCtx->nFailCode = common::async::kBusinessBase + 6;
+        spCtx->strFailText = "业务拒绝（用例 6）";
         const common::async::CPromiseResult r =
             exec.NewPromise(spCtx, &StepFail, ASYNC_LOC).Finally(&StepFinallyIgnoreReturn, ASYNC_LOC).Await();
         ASSERT_TRUE(r.IsRejected());
-        ASSERT_EQ(r.Code(), spCtx->nFailCode);
+        ASSERT_EQ(r.Message(), spCtx->strFailText);  // finally 的拒绝被忽略
         ASSERT_EQ(spCtx->nFinallyRuns, 1);
     }
     exec.Stop();
 }
 
-/// @brief 处理器抛异常 → 拒绝码 kException；catch / finally 仍执行。
+/// @brief 处理器抛异常 → 异常原样成为拒绝；catch / finally 仍执行。
 TEST(Smoke_HandlerThrowIsException)
 {
     common::async::CAsyncExecutor exec(2);
@@ -450,7 +451,7 @@ TEST(Smoke_HandlerThrowIsException)
                                                 .Await();
 
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), static_cast<int>(common::async::kException));
+    ASSERT_EQ(r.Message(), std::string("smoke step boom"));  // 处理器抛的异常原样成为拒绝
     ASSERT_EQ(spCtx->nCatchRuns, 1);
     ASSERT_TRUE(spCtx->strTrace == "cX");
     exec.Stop();
@@ -465,7 +466,7 @@ TEST(Smoke_OnSettledSideChannel)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    spCtx->nFailCode = common::async::kBusinessBase + 8;  // 业务码（本用例自定；避开框架占用的 1 / 2 / 3）
+    spCtx->strFailText = "业务拒绝（用例 8）";  // 拒绝原因由业务自己定（框架不解释）
     std::atomic<int> nOk(0);
     std::atomic<int> nFail(0);
     common::async::CPromise<CSmokeCtx> p = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC).Catch(&StepCatchPass, ASYNC_LOC);
@@ -492,7 +493,7 @@ TEST(Smoke_OnSettledSideChannel)
 
     const common::async::CPromiseResult r = p.Await();
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), spCtx->nFailCode);  // OnSettled 不吞结果
+    ASSERT_EQ(r.Message(), spCtx->strFailText);  // OnSettled 不吞结果
     // Await 返回只保证「已落定」；已登记的 OnSettled 回调随后在 settle 线程上跑，这里等一下
     for (int nWaited = 0; nWaited < 500 && nFail.load() < 2; nWaited += 2)
     {
@@ -555,7 +556,7 @@ TEST(Smoke_BridgeTwoModules)
                 idStock = std::this_thread::get_id();  // 回调跑在库存模块的线程上
                 if (result.IsRejected())
                 {
-                    fnReject(result.Code());
+                    fnReject(result);  // 整份结果转交（异常类型 + 文案）。
                     return;
                 }
                 spCtx->strTrace += "b";
@@ -630,7 +631,7 @@ TEST(Smoke_SingleWorkerNoBlocking)
 
 // ==================== 9. 执行器状态与结果类型 ====================
 
-/// @brief 执行器未启动：起链即被拒绝（kStopped），Await 不阻塞、不崩。
+/// @brief 执行器未启动：起链即以框架侧拒绝「执行器已停」收口，Await 不阻塞、不崩。
 TEST(Smoke_ChainOnUnstartedExecutor)
 {
     common::async::CAsyncExecutor exec(1);  // 故意不 Start
@@ -638,7 +639,7 @@ TEST(Smoke_ChainOnUnstartedExecutor)
     const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Await();
 
     ASSERT_TRUE(r.IsRejected());
-    ASSERT_EQ(r.Code(), static_cast<int>(common::async::kStopped));
+    ASSERT_TRUE(asynctest::IsStoppedFailure(r));  // 执行器未启动 → 框架侧拒绝「执行器已停」
     ASSERT_EQ(spCtx->nSteps, 0);
 }
 
@@ -656,9 +657,10 @@ TEST(Smoke_PromiseIntrospection)
 
     ASSERT_TRUE(r.IsFulfilled());
     ASSERT_TRUE(!r.IsRejected());
-    ASSERT_EQ(r.Code(), static_cast<int>(common::async::kFulfilled));
+    ASSERT_TRUE(r.Message().empty());  // 兑现：没有异常
     ASSERT_TRUE(r == common::async::CPromiseResult::Resolve());
-    ASSERT_TRUE(common::async::CPromiseResult::Reject(1) != common::async::CPromiseResult::Reject(2));
+    ASSERT_TRUE(common::async::CPromiseResult::Reject(std::runtime_error("A")) !=
+                common::async::CPromiseResult::Reject(std::runtime_error("B")));
     ASSERT_TRUE(p.GetContext() == spCtx);
     exec.Stop();
 }

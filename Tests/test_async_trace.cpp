@@ -533,13 +533,13 @@ TEST(Trace_CompleteChainInComplexFlow)
     std::shared_ptr<CProbeCoroutine> pCoro = execMain.CoStart<CProbeCoroutine>(spCtx);
     ASSERT_TRUE(pCoro->Await().IsFulfilled());
 
-    //---------------- 异常路径：层内抛异常 → kException，帧栈照样弹回 ----------------
+    //---------------- 异常路径：层内抛异常 → 异常原样成为拒绝，帧栈照样弹回 ----------------
 
     lines.nThrow = __LINE__ + 1;
     CPromise<CTraceCtx> pThrow = execMain.NewPromise(spCtx, &StepCaptureThenThrow, ASYNC_LOC);
     const CPromiseResult rThrow = pThrow.Catch(&StepPassThrough, ASYNC_LOC).Await();
     ASSERT_TRUE(rThrow.IsRejected());
-    ASSERT_TRUE(rThrow.Code() == static_cast<int>(common::async::kException));
+    ASSERT_EQ(rThrow.Message(), std::string("trace 用例：层内故意抛异常"));
 
 #if defined(ASYNC_DEBUG_TRACE)
 
@@ -1174,7 +1174,7 @@ TEST(Trace_DeepChainAndFrameStackResidue)
     pThrow = pThrow.Then(&ResidueStepThrow, ASYNC_LOC);
     const CPromiseResult rThrow = pThrow.Catch(&ResidueStepPassThrough, ASYNC_LOC).Await();
     ASSERT_TRUE(rThrow.IsRejected());
-    ASSERT_TRUE(rThrow.Code() == static_cast<int>(common::async::kException));
+    ASSERT_EQ(rThrow.Message(), std::string("trace：层内抛异常"));
     PostResidueProbe(exec, spCtx);
 
     // ---- ④ 上一条链的帧不影响下一条链：新链的链根只应看到自己 1 层 ----

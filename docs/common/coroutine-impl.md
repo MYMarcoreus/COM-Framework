@@ -44,7 +44,7 @@ class CCoroutine
     std::shared_ptr<detail::CPromiseState> m_pSegment;         // 协程完成状态（AsPromise 暴露）
     CAsyncExecutor* m_pExec;                                   // 调度（Resume + 子 promise 投递）
     std::weak_ptr<void> m_wpSelf;                              // 自持弱引用（生命周期加固）
-    CHotState m_hot;                                           // 步号 / 终止标志 / 拒绝码
+    CHotState m_hot;                                           // 步号 / 终止标志 / 终止结果
 };
 ```
 
@@ -55,7 +55,7 @@ struct CHotState
 {
     std::atomic<int> nStep;         // 状态机步号（恢复点）
     std::atomic<bool> bTerminated;  // await 到拒绝 → 终止
-    std::atomic<int> nCode;         // 终止拒绝码
+    CPromiseResult resultTerminate;  // 终止结果（携带那个异常；发布 / 读取用 release / acquire）
 };
 ```
 
@@ -91,7 +91,7 @@ exec.CoStart<TCoroutine>(args...)
     └── pCoro->Start(this)
              ├── BindExecutor(pExec)         m_pExec = pExec；把执行器句柄写入 m_pCore
              ├── Reset()                     新建 m_pSegment；步号 / 终止标志复位
-             └── PostResume()                投递首次 Resume（执行器不可用 → 立即以 kStopped 结束）
+             └── PostResume()                投递首次 Resume（执行器不可用 → 立即以「执行器已停」结束）
 ```
 
 `Reset()` 让同一协程对象可以重新 `Start`（重复使用）。
@@ -113,7 +113,7 @@ void AwaitWait(int nLine, const CPromise<TContext>& promise)
     });
     if (!bOk)
     {
-        Terminate(CPromiseResult::Reject(kStopped));
+        Terminate(CPromiseResult::Reject(detail::FailureStopped()));
     }  // 注册失败：同步终止并 settle
 }
 ```
@@ -150,18 +150,18 @@ struct CAwaitAllGroup
 {
     std::atomic<int> nPending;   // 剩余未完成 promise 数
     std::atomic<int> bRejected;  // 是否已有 promise 被拒绝
-    std::atomic<int> nCode;      // 首个拒绝码
+    CPromiseResult resultFirst;  // 首个拒绝的整份结果（异常 + 文案）
 };
 ```
 
 `AwaitAll(nLine, promises...)` → `AwaitEach(pGroup, promises...)` 递归展开：
 
 1. 每条 promise 注册 settled 通知（回调捕获组状态与自持强引用）；
-2. `OnAwaitDone`：被拒绝时用 CAS 记录**首个拒绝码**，`nPending` 减 1；
+2. `OnAwaitDone`：被拒绝时用 CAS 记录**首个拒绝结果**，`nPending` 减 1；
 3. `nPending` 归零 → 若组内有拒绝则标记终止 → `ResumeInline()` 恢复协程。
 
 设计取舍：**等全部结束再恢复**（而不是首个拒绝立即恢复），避免提前释放仍在等待的对象，
-也让拒绝码确定（首个）。
+也让终止原因确定（首个）。
 
 ## 7. 终止与结束
 
@@ -222,9 +222,9 @@ CPromise<TContext> NewPromise(const ThenHandler& fnHandler, const CSourceLoc& lo
 | --- | --- |
 | `Coro_Sequential` | 顺序 await、上下文共享、轨迹顺序确定 |
 | `Coro_Parallel` | `CO_AWAIT_ALL` 并行等待 |
-| `Coro_AwaitRejected` | await 被拒绝 → 终止，拒绝码透传，后续不执行 |
+| `Coro_AwaitRejected` | await 被拒绝 → 终止，异常透传，后续不执行 |
 | `Coro_ReturnRejected` | `CO_RETURN(Reject(...))` 主动拒绝 |
 | `Coro_Nested` | 子协程 `AsPromise()` 嵌套 await |
-| `Coro_NotStarted` | 未启动执行器 → `kStopped`，`Await()` 不阻塞 |
+| `Coro_NotStarted` | 未启动执行器 → 「执行器已停」，`Await()` 不阻塞 |
 | `Coro_Restart` | 同一对象二次 `Start` 复用 |
 | `Coro_OnSettledCallback` | `AsPromise().OnSettled` 外部观察协程完成 |

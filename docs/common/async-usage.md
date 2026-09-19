@@ -20,7 +20,7 @@
 | `promise.catch(onRejected)` | `p.Catch(处理器)` |
 | `promise.finally(onFinally)` | `p.Finally(处理器)` |
 | `promise` 已完成 | `p.IsSettled()` |
-| `resolve()` / `reject(reason)` | `CPromiseResult::Resolve()` / `CPromiseResult::Reject(码)` |
+| `resolve()` / `reject(reason)` | `CPromiseResult::Resolve()` / `CPromiseResult::Reject(异常对象)`（拒绝 = 标准异常） |
 | `fulfilled` / `rejected` | `result.IsFulfilled()` / `result.IsRejected()` |
 | 状态 pending → settled | 每个 then/catch/finally 都返回「指向新一层的 promise」 |
 | `Promise.all([a, b])` | `exec.WhenAll(spCtx, a, b)`（详见 §10）；协程内并行也可用 `CO_AWAIT_ALL(a, b)` ⁽*⁾ |
@@ -136,7 +136,7 @@ if (r.IsFulfilled())
 > 需要「handler 能被 then / catch / finally 复用」或「独立成可测单元」时，再保留那句判断。
 
 ```cpp
-// 失败即停：StepStore 被拒绝 → 后续 then 不执行，拒绝码透传
+// 失败即停：StepStore 被拒绝 → 后续 then 不执行，拒绝（异常）透传
 auto r = exec.NewPromise(spCtx, StepReadParam).Then(StepStore).Then(StepNotify).Await();
 // r.IsRejected() == true，StepNotify 未执行
 
@@ -275,13 +275,14 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
 | 情形 | 行为 |
 | --- | --- |
 | 子链**兑现** | 先 `fnApply(本上下文, 子上下文)` 搬数据，再兑现本层 |
-| 子链**被拒绝** | 本层以**同一拒绝码**被拒绝（不搬数据；后续 `Then` 不执行，`Catch` / `Finally` 仍执行） |
-| `fnApply` **抛异常** | 本层以 `kException` 拒绝（异常不会窜出通知回调） |
+| 子链**被拒绝** | 本层以**同一个异常**被拒绝（不搬数据；后续 `Then` 不执行，`Catch` / `Finally` 仍执行） |
+| `fnApply` **抛异常** | 本层以该异常被拒绝（异常不会窜出通知回调） |
 | 上层被拒绝 | 本层不执行，拒绝原因原样透传 |
 
 - `fnCreate` 在**本链执行器线程**上执行（只做「发起 + 登记回调」）；`fnApply` 在**子链的结算线程**
   （典型：模块 B 的线程）上执行 —— 通知不迁移，所以它只应搬数据；
-- 需要因业务规则拒绝（如「库存不足」）时，请在**桥接之后的层**里 `return CPromiseResult::Reject(码)`，
+  需因业务规则拒绝（如「库存不足」）时，请在**桥接之后的层**里
+  `return CPromiseResult::Reject(std::runtime_error("库存不足：…"))`，
   不要塞进 `fnApply`（它没有返回值，也不该做业务分支）。
 
 #### 等价的手写版：`ThenPromise` + `exec.NewPromise(spCtx, fnStarter)`（`ThenBridge` 内部就是这两步）
@@ -301,9 +302,9 @@ common::async::CPromise<CMyContext> BridgeQueryOther(const CDeps& deps, const st
             // 执行器不可用时框架会就地送达本通知，不必检查返回值
             if (result.IsRejected())
             {
-                fnReject(码);
+                fnReject(result);  // 拒绝（含框架侧失败）原样转交：异常类型与文案都不丢
                 return;
-            }  // 跨模块拒绝码 → 业务码
+            }  // 跨模块失败 → 本模块语义（需要翻译就在这里 catch 具体异常）
             spCtx->nRows = spCtx->spOtherOp->nRows;  // 取回数据
             fnResolve();
         });
@@ -338,17 +339,18 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
 - **`OnSettled` 保证送达**（2026-09-11 框架修复）：子 promise 已 settled 且它的执行器不可用
   （被调模块已停止 / 拒绝投递）时，通知改为在**调用线程**上就地执行 —— `OnSettled` 现在**没有返回值**
   （登记即生效），漏检不可能再发生，桥接层不会因此永久 pending。
-  注意「层」的语义不变：`Then` / `Catch` / `Finally` 在同样情况下仍以 `kStopped` 收口
+  注意「层」的语义不变：`Then` / `Catch` / `Finally` 在同样情况下仍以「执行器已停」收口
   （停了的执行器不再跑新层）。背景见 [async-cross-module-findings.md](async-cross-module-findings.md)；
 - 子 promise 可以是**任意 promise**：同一 `TContext` 的 then 链**直接返回**就会被 adopt（无需桥接）；
-  跨上下文才需要 `exec.NewPromise(spCtx, fnStarter)` 桥接（本节写法）。内层链被拒绝时，拒绝码会作为本层拒绝
+  跳上下文才需要 `exec.NewPromise(spCtx, fnStarter)` 桥接（本节写法）。内层链被拒绝时，拒绝（异常）会作为本层拒绝
   沿**外层链**透传（外层后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
 - `ThenPromise` 的语义与 `Then` 一致（上层被拒绝则本层不执行），差别是**本层等子 promise**：
-  子 promise 兑现 → 本层兑现；子 promise 被拒绝 → 本层以**同一拒绝码**被拒绝（`Catch` / `Finally` 仍会执行）；
+  子 promise 兑现 → 本层兑现；子 promise 被拒绝 → 本层以**同一个异常**被拒绝（`Catch` / `Finally` 仍会执行）；
 - `exec.NewPromise(spCtx, fnStarter)` 的起链回调 **立即（同步）执行**（与 JS 一致），只应做「发起 + 登记回调」，
-  由回调调 `fnResolve()` / `fnReject(码)`；
-- 桥接处是**唯一**做「跨模块拒绝码 → 业务码」语义转换的地方（例如把数据访问层的
-  `kDbRowNotFound` 归一化成「兑现 + bFound=false」，把 `kException` 映射成业务码）；
+  由回调调 `fnResolve()` / `fnReject(结果)`（要造业务拒绝就 `fnReject(CPromiseResult::Reject(std::runtime_error("原因")))`）；
+- 桥接处是**唯一**做「跟模块失败 → 本模块语义」转换的地方（例如把数据访问层的
+  `CDbError(kRowNotFound)` 归一化成「兑现 + bFound=false」，把它的其他失败翻译成本模块的
+  `CUserError`；框架侧失败则原样透传）；
 - 工厂 / 回调请**按值捕获依赖**（执行器 `shared_ptr`、接口 `ScopedInterfacePtr`）与上下文，
   不要在回调里捕获模块 `this` —— 回调可能在模块停止后、甚至在**另一个模块的线程**上执行。
   `ServerExample/Module/ExampleAsyncModule.cpp` 是本形态的完整业务示例（业务模块 ↔ 数据访问模块）。
@@ -377,54 +379,63 @@ const common::async::CPromiseResult sub = exec.NewPromise(spSub, &StepQueryRows,
 common::async::CPromiseResult r = p.Await();  // 阻塞等待本层结果（不抛异常；多线程可同时等）
 if (r.IsRejected())
 {
-    Log(r.Code());  // 错误码（业务码 / 框架码）
+    Log(r.Message());  // 拒绝原因（异常的 what()，框架只搬运）
 }
 
 // settled 通知：兑现 / 拒绝都触发一次（不产生新层、不改变结果）
 p.OnSettled([](common::async::CPromiseResult result)
 {
-    Log(result.Code());
+    Log(result.Message());
 });
 ```
 
-错误码与文案：
+拒绝：一个标准异常（框架只搬运，不解释）
 
 ```cpp
-// 拒绝：码自定 + 可选文案（动态字符串，任意长度，随结果沿链透传到 catch / finally / Await）
-return CPromiseResult::Reject(kStockShortage, "库存不足：需 " + std::to_string(nQty) + " 件");
+// 拒绝 = 携带一个 std::exception 派生对象；业务细节放共享上下文 / 异常自己的字段
+spCtx->strError = "库存不足：需 " + std::to_string(nQty) + " 件";
+return CPromiseResult::Reject(std::runtime_error(spCtx->strError));
 
-result.Code();        // 错误码（兑现时返回 kFulfilled = 0）
-result.Message();     // 文案（没带文案 = 空串；catch / Await 侧直接可读）
-result.IsFulfilled(); // **判兑现的唯一依据** —— 别再拿 Code() == 0 判（业务码可以是 0）
+result.IsFulfilled();  // **判成败只看这一个** —— 结果里**没有任何错误码**
+result.IsRejected();   // 取反
+result.Message();      // 异常描述（`what()`；兑现 = 空串）
+result.What();         // 同上，const char*（在本结果存活期内有效）
+result.Exception();    // std::exception_ptr（想按类型分流时重新抛出后 catch 具体类型）
 ```
 
-框架只解释自己产生的三个码，其余码**原样透传**（语义由业务定义）：
+怎么写业务拒绝：
 
-| 码 | 含义 | `Reject(码)` 自动附上的文案 |
+1. **普通场景**：`Reject(std::runtime_error("库存不足：…"))` —— 文案随结果沿链透传到
+   `catch` / `finally` / `OnSettled` / `Await()`；
+2. **需要按种类分流**（重试 / 语义转换）：自定义异常类型（`class CMyError : public std::runtime_error`
+   里带自己的 `enum class EKind`），调用方用 `Exception()` 重新抛出后 `catch` 具体类型 ——
+   `ServerExample/Module/IUserTable.h` 的 `CDbError` / `TryGetDbError` 就是标准写法；
+3. **业务错误细节**（重试次数、冲突的行、errno……）放**共享上下文或异常对象**，不要塑进结果——
+   结果在层间按值传递，只应该携带「成 / 败 + 少量文字」。
+
+框架自己的失败也是标准异常（文案固定、进程级预建 → **零分配**）：
+
+| 预建失败 | 何时出现 | 文案 |
 |---|---|---|
-| `kRejected = 1` | 已拒绝但未指定原因（组合器空集合的 race / any、起链回调缺失） | 「未指定原因」 |
-| `kStopped = 2` | 执行器已停 / 投递失败 / `AwaitFor` 超时 | 「执行器已停」「等待超时」 |
-| `kException = 3` | 处理器 / 起链回调 / 子链工厂 / 搬运抛异常 | 异常的 `what()` |
+| `detail::FailureStopped()` | 执行器不可用 / 投递失败 / 跨执行器续接失败 | 「执行器已停」 |
+| `detail::FailureTimeout()` | `AwaitFor(ms)` 没等到 | 「等待超时」 |
+| `detail::FailureHandler()` | 框架收口时处理器抛了非 std 异常 | 「处理器异常」 |
+| `detail::FailureUnspecified()` | 组合器空集合的 race / any、起链回调缺失 | 「未指定原因」 |
+| `detail::FailureUnknown()` | 拿到空的 `std::exception_ptr`（不该发生） | 「未知异常」 |
 
-**`Reject(码)` 自带框架文案**（进程级预建的共享串，零分配）—— 所以「只拿得到一个 int 码」的通道
-（起链回调里的 `fnReject(码)`、协程终止码、组合器首个拒绝码）也带得上文案，调用方不必自己写码表。
-业务码建议从 `kBusinessBase = 100` 起取（**只是编号习惯**，框架不校验），并**避开 1 / 2 / 3**
-（它们被框架占用：`Reject(1)` 就是 `kRejected`，只是自动带上了「未指定原因」）。
-**别拿「码 >= kBusinessBase」当分类依据**：框架码只有上面三个，要分流就直接判具体码
-（`码 >= kRejected && 码 <= kException`，或直接 `switch` 到业务自己的码）。
-处理器抛出的异常会被框架捕获转为本层被拒绝，**异常文本随文案保留**，不会向调用方抛出。
+处理器 / 起链回调 / 子链工厂 / 搬运抛出的异常由框架**原样收口**为本层拒绝：
+动态类型与 `what()` 都保留，不会向调用方抛出。
 
-开销：不带文案的拒绝（含框架侧全部）**零分配**；带文案的拒绝**两次分配**（文案对象 + 字符串缓冲，
-短文案走 SSO 只剩一次），之后沿链透传只加引用计数 —— 护栏见 `Tests/test_async_alloc.cpp` 的
-`AsyncAlloc_RefusalBudget`。
+开销：`sizeof(CPromiseResult)` = **8 字节**（一个 `std::exception_ptr`）；层间透传 = 引用计数 +1，
+**零分配**；框架侧拒绝的构造与透传**也零分配**；业务拒绝只在建异常那一次分配，之后透传零分配
+—— 护栏见 `Tests/test_async_alloc.cpp` 的 `AsyncAlloc_RefusalBudget`。
 
-两个已知边界（`RejectFn` 是 `void(int)`，**只传码**）：
+两个已知边界（`RejectFn` 是 `void(CPromiseResult)`，**只传整份结果**）：
 
-1. 在自己的 `ChainStarter` 里 `fnReject(业务码)`（典型：桥接回调式接口）**带不了业务文案**
-   ——框架码仍会自动带框架文案；需要业务文案就在那条链上改用显式 `Reject(码, 文案)`
-   （例如桥接后的那个层里）；
-2. 组合器（`WhenAll` 一族）的聚合拒绝只保留首个拒绝的**码**（框架码的文案仍由框架补上）；子链自己的
-   结果依然带完整文案，需要时从子句柄读。
+1. 在自己的 `ChainStarter` 里造业务拒绝要写全：
+   `fnReject(CPromiseResult::Reject(std::runtime_error("原因")))`（没有「只传码」的简写）；
+2. 组合器（`WhenAll` 一族）的聚合拒绝携带的是**首个拒绝的整份结果**（异常与文案都在），
+   子链自己的结果依旧保留，需要时从子句柄读。
 
 注意：`Await()` 返回与 `OnSettled` 回调的执行**没有先后保证**，测试里若依赖「回调已跑完」
 请另用标志 / 条件变量同步。
@@ -432,7 +443,7 @@ result.IsFulfilled(); // **判兑现的唯一依据** —— 别再拿 Code() ==
 ### 7.1 带超时的等待（`AwaitFor`）
 
 ```cpp
-common::async::CPromiseResult r = p.AwaitFor(500);  // 最多等 500ms；超时返回被拒绝（kStopped）
+common::async::CPromiseResult r = p.AwaitFor(500);  // 最多等 500ms；超时返回被拒绝（「等待超时」）
 common::async::CPromiseResult r2 = p.AwaitFor(-1);  // 负值 = 无限等待，等价 Await()
 ```
 
@@ -557,7 +568,7 @@ static common::async::CPromiseResult StepVerify(common::async::CPromiseResult up
 ```cpp
 common::async::CAsyncExecutor exec(4);              // 4 个工作线程（未命名）
 common::async::CAsyncExecutor execDb("db", 4);      // 具名：调试用（见下）
-exec.Start();                            // 启动（未启动时起 promise 立即被拒绝 kStopped）
+exec.Start();                            // 启动（未启动时起 promise 立即被拒绝「执行器已停」）
 exec.Post([]() { /* 无返回值任务 */ });  // fire-and-forget（返回是否提交成功）
 exec.Stop();                             // 停止并等待已投递任务完成
 ```
@@ -633,10 +644,10 @@ exec.Post([&exec, spCtx]()
 
 | 入口 | 何时兑现 | 何时拒绝 | 一个子 promise 都不给 |
 | --- | --- | --- | --- |
-| `exec.WhenAll` | 全部子 promise **兑现** | **任一拒绝 → 立即以该拒绝码拒绝**（对齐 JS 及时失败；其余分支跑完，结果被忽略） | 立即兑现 |
+| `exec.WhenAll` | 全部子 promise **兑现** | **任一拒绝 → 立即以那个拒绝（异常 + 文案）拒绝**（对齐 JS 及时失败；其余分支跑完，结果被忽略） | 立即兑现 |
 | `exec.WhenAllSettled` | 全部子 promise **落定**（恒兑现） | 不会拒绝 | 立即兑现 |
-| `exec.WhenRace` | **首个落定者**兑现 | 首个落定者是拒绝 → 以该拒绝码拒绝 | 立即以 `kRejected` 拒绝 |
-| `exec.WhenAny` | **首个兑现者**兑现 | 全部拒绝 → 以**首个拒绝码**拒绝 | 立即以 `kRejected` 拒绝 |
+| `exec.WhenRace` | **首个落定者**兑现 | 首个落定者是拒绝 → 以那个拒绝（异常 + 文案）拒绝 | 立即以「未指定原因」拒绝 |
+| `exec.WhenAny` | **首个兑现者**兑现 | 全部拒绝 → 以**首个拒绝（异常 + 文案）**拒绝 | 立即以「未指定原因」拒绝 |
 
 共性语义：
 
@@ -665,7 +676,7 @@ common::async::CPromise<COrderCtx> pRace = exec.WhenRace(spCtx, pPrimary, pBacku
 各分支的成败从**子句柄**读：组合器收口时子句柄都已落定，`child.Await()` 立即返回（不阻塞），
 也可以事先给子句柄挂 `OnSettled`。
 
-协程里的等价能力是 `CO_AWAIT_ALL`（并行 await，首个拒绝码终止协程）—— 两条路怎么选见
+协程里的等价能力是 `CO_AWAIT_ALL`（并行 await，首个拒绝即终止协程）—— 两条路怎么选见
 [coroutine-usage.md 第 9 节](coroutine-usage.md)。
 
 ## 11. 线程模型与生命周期
@@ -698,7 +709,7 @@ auto t = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Then(StepB, ASYNC_LOC).Catch(S
 auto t2 = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Finally(StepAudit, ASYNC_LOC);
 
 // 不允许永久挂住：带超时等 + 在自己线程收尾
-common::async::CPromiseResult r2 = t2.AwaitFor(500);  // 超时 → kStopped
+common::async::CPromiseResult r2 = t2.AwaitFor(500);  // 超时 → 「等待超时」
 t2.OnSettledOn(m_exec, [](common::async::CPromiseResult)
 {
 });  // 通知投到本模块执行器
@@ -733,8 +744,8 @@ common::async::CPromise<Ctx> p =
 | 旧写法（已移除） | 新写法 |
 | --- | --- |
 | `exec.Submit([]{ return 3; }).Then([](int n){ return n * 2; })` | 数据放上下文：`spCtx->n = 3;`，处理器读改写 |
-| `return common::async::None;`（无值终止） | `return common::async::CPromiseResult::Reject(码);` |
-| `r.HasValue() / r.Value()` | `r.IsFulfilled() / r.Code()`，数据从 `GetContext()` 取 |
+| `return common::async::None;`（无值终止） | `return common::async::CPromiseResult::Reject(std::runtime_error("原因"));` |
+| `r.HasValue() / r.Value()` | `r.IsFulfilled()`；数据从 `GetContext()` 取 |
 | `OnSuccess / OnNone` | `Then` / `Catch`（统一用 `CPromiseResult` 判断） |
 | `Get()` | `Await()` |
 | `NOTHROW_LOC` | `ASYNC_LOC` |

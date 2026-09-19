@@ -93,13 +93,12 @@ void RunChainCases()
         [&exec]()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-            common::async::CPromise<bench::CChainContext> tail =
-                exec.NewPromise(spCtx, &bench::StepInc).Then(&bench::StepFail);
+            common::async::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc).Then(&bench::StepFail);
             for (int k = 0; k < 18; ++k)
             {
                 tail = tail.Then(&bench::StepInc);  // 全部短路
             }
-            volatile int s = tail.Await().Code();
+            volatile int s = tail.Await().IsRejected() ? 1 : 0;
             (void)s;
         },
         21, "失败后后续层短路（不执行层函数，仅透传结果）");

@@ -60,9 +60,8 @@ public:
     {
         CO_BEGIN();
         CO_AWAIT_ALL(NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc),
-            NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc),
-            NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc),
-            NewPromise(&bench::StepInc));
+            NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc),
+            NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -90,8 +89,7 @@ void RunCoroutineCases()
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
         std::shared_ptr<BenchCoroAll10> pCoro = exec.CoStart<BenchCoroAll10>(spCtx);
-        benchmark::SanityCheck(
-            group, "协程并行 await ×10 结果=10", pCoro->Await().IsFulfilled() && spCtx->nValue == 10);
+        benchmark::SanityCheck(group, "协程并行 await ×10 结果=10", pCoro->Await().IsFulfilled() && spCtx->nValue == 10);
     }
 
     // 基线：直接函数调用。
@@ -122,7 +120,7 @@ void RunCoroutineCases()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
             std::shared_ptr<BenchCoroOnce> pCoro = exec.CoStart<BenchCoroOnce>(spCtx);
-            volatile int s = pCoro->Await().Code();
+            volatile int s = pCoro->Await().IsRejected() ? 1 : 0;  // 防优化：读回结果
             (void)s;
         },
         7, "CoStart → 1 次 CO_AWAIT（子链）→ 完成");
@@ -150,7 +148,7 @@ void RunCoroutineCases()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
             std::shared_ptr<BenchCoroSeq10> pCoro = exec.CoStart<BenchCoroSeq10>(spCtx);
-            volatile int s = pCoro->Await().Code();
+            volatile int s = pCoro->Await().IsRejected() ? 1 : 0;  // 防优化：读回结果
             (void)s;
         },
         7, "10 次挂起 / 恢复（每次起一条单层子链）");
@@ -162,7 +160,7 @@ void RunCoroutineCases()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
             std::shared_ptr<BenchCoroAll10> pCoro = exec.CoStart<BenchCoroAll10>(spCtx);
-            volatile int s = pCoro->Await().Code();
+            volatile int s = pCoro->Await().IsRejected() ? 1 : 0;  // 防优化：读回结果
             (void)s;
         },
         7, "CO_AWAIT_ALL：10 条子链并行等待，一次恢复");

@@ -111,7 +111,7 @@ if (IsInExecutorThread(pCore->Handle()) && InlineDepth() < kMaxInlineDepth)
 }
 else if (!PostToHandle(pCore->Handle(), std::move(fnRun)))
 {
-    pState->Settle(CPromiseResult::Reject(kStopped));  // 跨执行器：投递回本链执行器；不可用则拒绝
+    pState->Settle(CPromiseResult::Reject(CPromiseResult::Reject(detail::FailureStopped())));  // 跨执行器：投递回本链执行器；不可用则拒绝
 }
 
 // Common/Coroutine/Coroutine.h：协程续跑（ResumeInline）用同一判定
@@ -188,7 +188,7 @@ else
 之后再发起跨模块调用（`ModuleStress_StopMidFlight`）。
 
 - 修复前：测试进程**挂住不返回**（45 s 超时才能杀掉），既不崩溃也不报错——最难查的一类问题；
-- 修复后：链以 `kStopped(=2)` 拒绝、库存模块 0 步执行、`Catch` 正常收尾，用例 0.5 s 内跑完。
+- 修复后：链以「执行器已停」拒绝、库存模块 0 步执行、`Catch` 正常收尾，用例 0.5 s 内跑完。
 
 ### 2.2 根因：子 promise 已 settled，但它的执行器已不可用（修复前）
 
@@ -201,8 +201,8 @@ promiseStock.OnSettled([...](common::async::CPromiseResult result) { /* 回调 *
 链路一步步是：
 
 1. 被调模块的执行器已 `Stop()` → 它内部 `NewPromise` 的投递失败 → `CPromise::StartChain`（当时的
-   `CPromiseCore::PostHandler`）里 `pState->Settle(CPromiseResult::Reject(kStopped))`
-   —— **这一步是对的**，子 promise 立即落定为 `kStopped`；
+   `CPromiseCore::PostHandler`）里 `pState->Settle(CPromiseResult::Reject(detail::FailureStopped()))`
+   —— **这一步是对的**，子 promise 立即落定为「执行器已停」；
 2. 调用方紧接着 `OnSettled(...)`，此时子 promise **已经 settled** → `CPromiseState::AddHandler` 走路径 ②
    → `PostToHandle(pHandle, ...)` 用的是**被调模块的执行器**（已停止）→ 返回 `false`，
    **回调永远不会执行**；
@@ -220,7 +220,7 @@ promiseStock.OnSettled([...](common::async::CPromiseResult result) { /* 回调 *
 ```cpp
 // Common/Async/Promise.h —— detail::CPromiseState
 // ① 层处理器（then / catch / finally / thenPromise）：保持原语义
-//    执行器不可用 → 返回 false，由框架以 kStopped 收口本层（“停了的执行器不再跑新层”）。
+//    执行器不可用 → 返回 false，由框架以「执行器已停」收口本层（“停了的执行器不再跑新层”）。
 bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler);
 
 // ② 通知（OnSettled）：送达保证（同一个 AddHandler，多传一个策略位）
@@ -233,8 +233,8 @@ bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandl
 - `OnSettled` **只在 promise 无效时**返回 `false`；桥接代码**不需要再检查返回值**；
 - 送达位置：执行器可用 → 执行器线程（不阻塞调用方）；不可用 → **调用线程**（就地，微秒级）；
 - 不会因此递归加深：通知里通常只 settle 本层，而本层后续的层处理器走 `RunHandler`，
-  执行器不可用时以 `kStopped` 收口 → 链立即结束（有 `InlineDepth` 计数兼底）；
-- **层的语义不变**：`Then` / `Catch` / `Finally` 在“已 settled + 执行器不可用”时依旧以 `kStopped` 结算，
+  执行器不可用时以「执行器已停」收口 → 链立即结束（有 `InlineDepth` 计数兼底）；
+- **层的语义不变**：`Then` / `Catch` / `Finally` 在“已 settled + 执行器不可用”时依旧以「执行器已停」结算，
   不会“就地执行一层”（验收：`SettledNotice_LayerStillRejectedWhenExecutorUnavailable`）。
 
 验收用例（`Tests/test_async_settled_delivery.cpp`，4 例）：
@@ -243,8 +243,8 @@ bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandl
 |---|---|
 | `SettledNotice_DeliveredEvenIfExecutorStopped` | 执行器已停 → 已 settled 上注册通知：回调就地执行、层仍不跑 |
 | `SettledNotice_ManyRegistrationsAllDelivered` | 一次注册 100 个通知：全部送达、按注册顺序、均在调用线程 |
-| `SettledNotice_BridgeWithoutReturnCheckNoDeadlock` | **关键回归**：桥接不检查返回值的原形状 → 链以 `kStopped` 拒绝，不再死等 |
-| `SettledNotice_LayerStillRejectedWhenExecutorUnavailable` | 对照：层不被就地执行，仍以 `kStopped` 收口 |
+| `SettledNotice_BridgeWithoutReturnCheckNoDeadlock` | **关键回归**：桥接不检查返回值的原形状 → 链以「执行器已停」拒绝，不再死等 |
+| `SettledNotice_LayerStillRejectedWhenExecutorUnavailable` | 对照：层不被就地执行，仍以「执行器已停」收口 |
 
 > 后续（2026-09-12，批次 2）：`OnSettled` **不再返回 `bool`**（“调用方漏检返回值”这一
 > 病因从 API 上消失），`SettledNotice_InvalidPromiseReturnsFalse` 用例随之删除——
@@ -299,7 +299,7 @@ promiseStock.OnSettled([...](common::async::CPromiseResult result) { /* 桥接�
 | `ModuleStress_ConcurrentAwaitSameChain` | 8 线程并发 `Await` 同一条链：`notify_all`、链只跑一遍 |
 | `ModuleStress_FanOutJoin` | 一层分叉 64 分支 + 手写汇聚：全完成、库存串行（纯 async 可用 `exec.WhenAll` 直接写） |
 | `ModuleStress_MixedRejections` | 100 条链一半被拒：成功/失败互不串 |
-| `ModuleStress_StopMidFlight` | 半路 `Stop()` 被调模块 → `kStopped` 退化（问题 ②） |
+| `ModuleStress_StopMidFlight` | 半路 `Stop()` 被调模块 → 退化为「执行器已停」（问题 ②） |
 | `Tests/test_async_settled_delivery.cpp`（5 例） | 问题 ② 的修复验收：通知送达保证 + 层的语义不变（含“漏检返回值不死等”回归） |
 
 ```bash

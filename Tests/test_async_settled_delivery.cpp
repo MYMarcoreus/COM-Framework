@@ -9,7 +9,7 @@
 /// 就地执行；返回值只在「promise 无效」时才为 `false`。
 ///
 /// 边界（本文件同时验收）：层处理器（then / catch / finally）**不变**——执行器不可用时
-/// 仍以 `kStopped` 收口，「停了的执行器不再跑新层」。
+/// 仍以「执行器已停」收口，「停了的执行器不再跑新层」。
 
 #include <atomic>
 #include <memory>
@@ -19,6 +19,7 @@
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
+#include "AsyncTestKit.h"
 #include "TestFramework.h"
 
 // ==================== 可停止的被调模块（1 线程） ====================
@@ -49,7 +50,7 @@ public:
         m_exec.Stop();
     }
 
-    /// @brief 查询（一层）：执行器不可用时首层以 `kStopped` 被拒绝。
+    /// @brief 查询（一层）：执行器不可用时首层以「执行器已停」被拒绝。
     ///
     /// @param spCtx 本模块上下文。
     ///
@@ -84,12 +85,12 @@ static common::async::CPromiseResult StepMark(
 /// @brief 调用方上下文。
 struct CCallerCtx
 {
-    int nOwnSteps;    ///< 本模块自有层执行次数。
-    bool bCaught;     ///< catch 是否执行。
-    int nCaughtCode;  ///< catch 收到的码。
-    int nNotify;      ///< 桥接里收到的通知次数。
+    int nOwnSteps;              ///< 本模块自有层执行次数。
+    bool bCaught;               ///< catch 是否执行。
+    std::string strCaughtText;  ///< catch 收到的异常描述（兑现 = 空）。
+    int nNotify;                ///< 桥接里收到的通知次数。
 
-    CCallerCtx() : nOwnSteps(0), bCaught(false), nCaughtCode(0), nNotify(0)
+    CCallerCtx() : nOwnSteps(0), bCaught(false), strCaughtText(), nNotify(0)
     {}
 };
 
@@ -139,12 +140,12 @@ private:
         return common::async::CPromiseResult::Resolve();
     }
 
-    /// 兜底：记录拒绝码。
+    /// 兜底：记录拒绝原因（异常描述）。
     static common::async::CPromiseResult StepCatch(
         common::async::CPromiseResult upResult, const std::shared_ptr<CCallerCtx>& spCtx)
     {
         spCtx->bCaught = true;
-        spCtx->nCaughtCode = upResult.Code();
+        spCtx->strCaughtText = upResult.Message();
         return upResult;
     }
 
@@ -168,7 +169,7 @@ private:
                     ++spCtx->nNotify;
                     if (result.IsRejected())
                     {
-                        fnReject(result.Code());
+                        fnReject(result);  // 整份结果转交（异常类型 + 文案）。
                         return;
                     }
                     fnResolve();
@@ -195,7 +196,7 @@ TEST(SettledNotice_DeliveredEvenIfExecutorStopped)
 
     const common::async::CPromiseResult result = promise.Await();
     ASSERT_TRUE(result.IsRejected());
-    ASSERT_EQ(result.Code(), common::async::kStopped);
+    ASSERT_TRUE(asynctest::IsStoppedFailure(result));
     ASSERT_EQ(spCtx->nStepRuns.load(), 0);  // 首层没跑（投递失败）
 
     // 在「已 settled + 执行器不可用」的层上注册通知：必须被送达
@@ -254,7 +255,7 @@ TEST(SettledNotice_ManyRegistrationsAllDelivered)
     ASSERT_EQ(strOrder, strExpected);  // 注册顺序 = 送达顺序
 }
 
-/// @brief 关键回归：桥接里**漏检**返回值（问题 ② 的原形状）→ 链以 kStopped 拒绝，不死等。
+/// @brief 关键回归：桥接里**漏检**返回值（问题 ② 的原形状）→ 链以系统侧失败收口，不死等。
 TEST(SettledNotice_BridgeWithoutReturnCheckNoDeadlock)
 {
     auto spCallee = std::make_shared<CDeliveryModule>();
@@ -267,14 +268,14 @@ TEST(SettledNotice_BridgeWithoutReturnCheckNoDeadlock)
     const common::async::CPromiseResult result = spCaller->RunAsync(spCtx, spCallee).Await();
 
     ASSERT_TRUE(result.IsRejected());
-    ASSERT_EQ(result.Code(), common::async::kStopped);  // 被调模块的拒绝码原样透传
-    ASSERT_EQ(spCtx->nNotify, 1);                       // 桥接通知被送达
-    ASSERT_TRUE(spCtx->bCaught);                        // 兜底执行
-    ASSERT_EQ(spCtx->nCaughtCode, common::async::kStopped);
-    ASSERT_EQ(spCtx->nOwnSteps, 1);  // 只有 StepOrderA 执行（跨模块之后的层被跳过）
+    ASSERT_TRUE(asynctest::IsStoppedFailure(result));            // 被调模块不可用
+    ASSERT_EQ(spCtx->nNotify, 1);                                // 桥接通知被送达
+    ASSERT_TRUE(spCtx->bCaught);                                 // 兜底执行
+    ASSERT_EQ(spCtx->strCaughtText, std::string("执行器已停"));  // catch 看到的也是框架侧拒绝
+    ASSERT_EQ(spCtx->nOwnSteps, 1);                              // 只有 StepOrderA 执行（跨模块之后的层被跳过）
 }
 
-/// @brief 对照：层处理器（then）不变 —— 执行器不可用时仍以 kStopped 收口，不就地执行。
+/// @brief 对照：层处理器（then）不变 —— 执行器不可用时仍以框架侧拒绝「执行器已停」收口，不就地执行。
 TEST(SettledNotice_LayerStillRejectedWhenExecutorUnavailable)
 {
     auto spModule = std::make_shared<CDeliveryModule>();
@@ -286,10 +287,10 @@ TEST(SettledNotice_LayerStillRejectedWhenExecutorUnavailable)
 
     spModule->Stop();  // 之后执行器不可用
 
-    // 已 settled + 执行器不可用：追加层 → 本层以 kStopped 结算（不是就地执行）
+    // 已 settled + 执行器不可用：追加层 → 本层以框架侧拒绝结算（不是就地执行）
     const common::async::CPromiseResult result = promise.Then(&StepMark, ASYNC_LOC).Await();
 
     ASSERT_TRUE(result.IsRejected());
-    ASSERT_EQ(result.Code(), common::async::kStopped);
+    ASSERT_TRUE(asynctest::IsStoppedFailure(result));
     ASSERT_EQ(spCtx->nMarkRuns, 0);  // "停了的执行器不再跑新层"
 }

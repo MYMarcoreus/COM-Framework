@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 #include "Async/Promise.h"
@@ -32,15 +33,72 @@ struct CUserOpContext
     {}
 };
 
-/// @brief 用户业务错误码（业务错误码从 kBusinessBase 起取）。
-enum UserServiceCode
+
+/// @brief 用户业务的失败（业务自定义的异常类型）。
+///
+/// 拒绝统一用标准异常表达（框架只搬运、不解释）；业务要按种类分流时，
+/// 就定义自己的异常类型并在里面带上**业务自己的**种类 —— 框架侧没有任何错误码。
+class CUserError : public std::runtime_error
 {
-    kUserInvalidParam = common::async::kBusinessBase + 11,    ///< 入参非法（id / 用户名）。
-    kUserNotFound = common::async::kBusinessBase + 12,        ///< 用户不存在。
-    kUserDuplicate = common::async::kBusinessBase + 13,       ///< 用户已存在（重复注册）。
-    kUserDbUnavailable = common::async::kBusinessBase + 14,   ///< 数据访问失败 / 不可用。
-    kUserVersionConflict = common::async::kBusinessBase + 15  ///< 乐观锁重试次数用尽。
+public:
+    /// @brief 失败种类（业务自己的概念）。
+    enum EKind
+    {
+        kInvalidParam,    ///< 入参非法（id / 用户名）。
+        kNotFound,        ///< 用户不存在。
+        kDuplicate,       ///< 用户已存在（重复注册）。
+        kDbUnavailable,   ///< 数据访问失败 / 不可用。
+        kVersionConflict  ///< 乐观锁重试次数用尽。
+    };
+
+    /// @brief 构造。
+    ///
+    /// @param eKind 失败种类。
+    /// @param strWhat 异常描述（日志 / 审计用）。
+    CUserError(EKind eKind, const std::string& strWhat) : std::runtime_error(strWhat), m_eKind(eKind)
+    {}
+
+    /// @brief 失败种类。
+    ///
+    /// @return 种类。
+    EKind Kind() const
+    {
+        return m_eKind;
+    }
+
+private:
+    EKind m_eKind;  ///< 失败种类。
 };
+
+/// @brief 提取拒绝原因里的用户业务失败（**不是** `CUserError` → 返回 false）。
+///
+/// @param result 待看的结果。
+/// @param eKindOut 输出：失败种类（返回 true 时有效）。
+/// @param strWhatOut 输出：异常描述。
+///
+/// @return true 是用户业务失败。
+inline bool TryGetUserError(const common::async::CPromiseResult& result, CUserError::EKind& eKindOut, std::string& strWhatOut)
+{
+    if (result.IsFulfilled())
+    {
+        return false;
+    }
+    try
+    {
+        std::rethrow_exception(result.Exception());
+    }
+    catch (const CUserError& e)
+    {
+        eKindOut = e.Kind();
+        strWhatOut = e.what();
+        return true;
+    }
+    catch (...)
+    {
+        return false;  // 框架侧失败或其他异常：交给调用方透传
+    }
+    return false;
+}
 
 /// @brief 用户业务接口标识。
 inline const sc::InterfaceId& IID_IUserService()
@@ -55,8 +113,8 @@ inline const sc::InterfaceId& IID_IUserService()
 /// 调用方（其他模块 / 应用层）用 `Then` / `Catch` / `Finally` / `OnSettled` 接管后续 ——
 /// **全程不需要阻塞等待**；操作数据从 `promise.GetContext()` 取。
 ///
-/// 拒绝码：见 UserServiceCode；框架码（kStopped / kException）与跨模块码在这里被
-/// 映射为业务码后透传。
+/// 拒绝：见 `CUserError`（业务异常）；跨模块的数据访问失败在这里被翻译成业务异常，
+/// 框架侧失败（执行器已停 / 处理器异常）原样透传。
 class IUserService : public virtual sc::IUnknown
 {
 public:
@@ -70,8 +128,7 @@ public:
     virtual common::async::CPromise<CUserOpContext> RegisterUserAsync(const CUserRecord& recRequest) = 0;
 
     // 异步修改用户名（改；乐观锁冲突在回调里自动重试）。
-    virtual common::async::CPromise<CUserOpContext> RenameUserAsync(
-        std::uint64_t nUserId, const std::string& strNewName) = 0;
+    virtual common::async::CPromise<CUserOpContext> RenameUserAsync(std::uint64_t nUserId, const std::string& strNewName) = 0;
 
     // 异步删除用户（删）。
     virtual common::async::CPromise<CUserOpContext> RemoveUserAsync(std::uint64_t nUserId) = 0;

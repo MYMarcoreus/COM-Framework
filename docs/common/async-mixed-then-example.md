@@ -15,11 +15,8 @@
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 
-/// 业务错误码（从 kBusinessBase 起取）
-enum MinCode
-{
-    kCodeBadOrder = common::async::kBusinessBase + 1  ///< 订单参数非法。
-};
+/// 业务失败文案（拒绍 = 标准异常；框架只搬运，不维护码表）
+static const char* const kBadOrderText = "订单参数非法。";
 
 // ====================================================================
 // 库存模块：自持执行器，对外只给 promise
@@ -164,7 +161,7 @@ class COrderModule
                 // 本回调在库存模块的线程上：只做语义转换 + 改上下文 + settle
                 if (result.IsRejected())
                 {
-                    fnReject(result.Code());  // 跨模块拒绝码 → 本流程拒绝
+                    fnReject(result);  // 跟模块拒绝 → 本流程拒绝（原样透传）
                     return;
                 }
                 sp->nStock = spStockCtx->nAvail;

@@ -117,7 +117,7 @@ std::string ThreadText(const std::thread::id& tid)
 /// @brief 落定结果的文本（还没落定 → 未落定）。
 ///
 /// @param info 一层。
-/// @return `「未落定」/「兑现」/「拒绝(码)」`。
+/// @return `「未落定」/「兑现」/「拒绝(「异常描述」)」`。
 std::string ResultText(const CLayerInfo& info)
 {
     if (!info.bSettled)
@@ -128,9 +128,7 @@ std::string ResultText(const CLayerInfo& info)
     {
         return "兑现";
     }
-    char szBuf[32];
-    std::snprintf(szBuf, sizeof(szBuf), "拒绝(%d)", info.nCode);
-    return std::string(szBuf);
+    return info.strMessage.empty() ? std::string("拒绝") : ("拒绝(「" + info.strMessage + "」)");
 }
 
 /// @brief 链根标记的文本（空 / `[链根]` / `[子链根]`）。
@@ -175,7 +173,7 @@ void FillView(CLayerInfo& info, const detail::CPromiseState& layer, long long nS
     if (info.bSettled)
     {
         info.bFulfilled = result.IsFulfilled();
-        info.nCode = result.Code();
+        info.strMessage = result.IsFulfilled() ? std::string() : result.Message();  // 拒绝：异常描述
     }
 }
 

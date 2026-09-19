@@ -59,9 +59,9 @@ JS 里**根本不存在「执行器」这个概念**，因为两件事由语言 
 | `exec.Post(fn)` | 投递无返回值任务（fire-and-forget） | Asio `io_context::post` / Java `Executor.execute` |
 | `exec.CoStart<T>(spCtx)` + `CO_AWAIT` | 无栈协程（顺序代码 await 多条链） | C# `Task.Run` + `async/await` |
 | `p.Await()` | **阻塞**等待结果（占住 worker，可能死锁） | C# `Task.Wait()` / Java `future.get()` |
-| `p.AwaitFor(ms)` | 阻塞等待 + 超时（超时返 `kStopped`，不落定本层） | 要手写 `Promise.race` |
+| `p.AwaitFor(ms)` | 阻塞等待 + 超时（超时返「等待超时」，不落定本层） | 要手写 `Promise.race` |
 | `p.OnSettledOn(exec, cb)` | 收尾通知投到指定执行器线程 | — |
-| `exec.Stop()` + `kStopped` | 优雅关闭；停止后新投递以 `kStopped` 收口 | —— （JS 没有「运行库被关掉」这一态） |
+| `exec.Stop()`（停后的新投递报「执行器已停」） | 优雅关闭；停止后新投递以「执行器已停」收口 | —— （JS 没有「运行库被关掉」这一态） |
 
 > JS 侧的 `setTimeout(fn, ms)` / `queueMicrotask(fn)` **不是** `exec.Post` 的对应物：它们是宿主 API，
 > 且不可控线程；本框架的定时请用 `Common/Timer` 组件。
@@ -93,7 +93,7 @@ static common::async::CPromiseResult StepLoad(common::async::CPromiseResult /*up
 
 ### 2.2 then 的失败即停、catch / finally：与 JS 一致
 
-- 上游被拒绝时，后续 `Then` 层**不会被执行**，拒绝码直接透传（= JS 的 rejection 跳过 onFulfilled）；
+- 上游被拒绝时，后续 `Then` 层**不会被执行**，拒绝（异常）直接透传（= JS 的 rejection 跳过 onFulfilled）；
 - `Catch` 只在被拒绝时执行，返回 `Resolve()` 即吞掉拒绝继续（= JS 的 `catch` 返回普通值）；
   返回 `upResult` 即继续透传（= JS 的 `throw e`）；
 - `Finally` 成败都执行、**忽略返回值**、原样透传上层结果（= JS 的 `finally`）。
@@ -136,23 +136,26 @@ p.Then([&exec](common::async::CPromiseResult, const std::shared_ptr<Ctx>& sp)  /
 普通 `Then` 的处理器只能返回 `CPromiseResult`，里面起的链只能是旁支；要参与当前链必须 `ThenPromise`
 （同上下文直接把子链返回即可；**跨上下文**先 `exec.NewPromise(spCtx, fnStarter)` 桥接）。
 
-### 2.4 错误是错误码（可带文案），不是异常对象
+### 2.4 错误也走「异常对象」（但不携 stack）
 
-JS 用 `reject(Error)`，可以带 message / stack；本框架用 `int` 码（业务码从 `kBusinessBase` 起）
-**加一段可选文案**：`Reject(码, 文案)` 的文案是动态字符串，随结果沿链透传到 `catch` / `finally` /
-`Await()`。**兑现与码是分开的两件事**：判兑现一律看 `IsFulfilled()`，不再看「码是否非 0」。
+JS 用 `reject(Error)`（带 message / stack）；本框架用 `reject(标准异常)`：
+`CPromiseResult::Reject(std::runtime_error("库存不足"))` —— 异常对象存在结果里（`std::exception_ptr`），
+`Message()` / `What()` 拿到 `what()`，`Exception()` 拿到 `std::exception_ptr`（可重新抛出后
+`catch` 具体类型）。**兑现与拒绝是两件事**：判成败一律看 `IsFulfilled()` / `IsRejected()`，
+结果里**没有任何错误码**。
 
-框架只解释三个保留码（经 `Reject(码)` 会自动带上固定文案，共享串、零分配）：
+框架自己的固定失败（同样是标准异常，预建、零分配）：
 
-| 码 | 含义 |
+| 预建失败 | 含义 |
 |---|---|
-| `kFulfilled = 0` | 兑现 —— `Code()` 在兑现时的返回值；**`Reject(0)` 是拒绝（码 0）**，业务码 0 合法 |
-| `kRejected = 1` | 拒绝（未指定原因：组合器空集合的 race / any、起链回调缺失） |
-| `kStopped = 2` | 执行器已停止 / 投递失败 / `AwaitFor` 超时 |
-| `kException = 3` | 处理器或起链回调（`ChainStarter`）抛了异常（框架捕获并转成拒绝，不会向调用方抛） |
+| `detail::FailureStopped()` | 执行器已停止 / 投递失败 / 跨执行器续接失败 |
+| `detail::FailureTimeout()` | `AwaitFor(ms)` 超时（只报「没等到」） |
+| `detail::FailureHandler()` | 框架收口时处理器抛了非 std 异常 |
+| `detail::FailureUnspecified()` | 框架拒绝但无更具体原因（组合器空集合的 race / any 等） |
 
-业务码避开 1 / 2 / 3（框架占用）。跨模块时在桥接层把对方的码翻译成本模块的业务码；
-需要给人看的原因就写进文案（比 JS 少的是 stack —— C++ 异常对象在层里只保留 `what()`）。
+跨模块时在桥接层把对方的异常**翻译**成本模块的业务异常（`catch` 具体类型），
+或直接原样透传；业务错误的细节（重试次数 / 冲突行 / errno）放**业务上下文**，
+不要塑进结果 —— 比 JS 少的是 stack（C++ 异常里我只保留 `what()`）。
 
 ### 2.5 线程模型不同：没有事件循环，回调可能跑在别人的线程上
 
@@ -218,8 +221,8 @@ return m_exec
 | 你的直觉（JS） | 本框架实际 |
 |---|---|
 | `then` 里 `return` 一个 promise 就会等它 | 必须用 `ThenPromise`；普通 `Then` 里起的链是旁支 |
-| `reject(new Error('xx'))` | `Reject(码)` / `Reject(码, 文案)`（文案沿链透传）；`Reject(0)` 是**拒绝**，判兑现用 `IsFulfilled()`；没有 stack |
-| `try/catch` 包住 `await` | `Await()` 不抛异常，返回 `CPromiseResult`；处理器抛异常会被转成 `kException` 拒绝 |
+| `reject(new Error('xx'))` | `Reject(std::runtime_error("xx"))`（异常随结果走）；判成败用 `IsFulfilled()`；没有 stack |
+| `try/catch` 包住 `await` | `Await()` 不抛异常，返回 `CPromiseResult`；处理器抛异常会被框架原样收口为拒绝 |
 | 回调都在同一个线程，改共享变量不用锁 | 本链的层恒在本模块线程（线程亲和），但 `OnSettled` 回调跑在被调模块线程，共享数据要原子/锁 |
 | `await` 不阻塞线程 | `Await()` 阻塞一个 worker；线程池占满会死锁，纯异步场景请用 `ThenPromise` / `OnSettled` |
 | 忘记 catch 会有 `unhandledrejection` | 静默；旁支要自己挂 `OnSettled` |
@@ -265,7 +268,7 @@ fetchUser(123)
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 
-/// 上下文：JS 里沿链流动的值，本框架都放这里（层间只传兑现 / 拒绝码）。
+/// 上下文：JS 里沿链流动的值，本框架都放这里（层间只传兑现 / 拒绝）。
 struct CTradeCtx
 {
     int nUserId;
@@ -387,5 +390,5 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon nested_chain.cpp build/deb
 三点说明：
 
 - `.then(user => { return 内层链 })` 这一层要写成 `ThenPromise(工厂)`：外层等内层链 settle 后再继续，等价 JS 里「回调返回 promise 会被展平」。
-- 值不沿链传：`user` / `orders` / `payment` / `total` 都放在共享上下文 `CTradeCtx` 里，层间只传「兑现 / 拒绝码」，所以每层拿到的是 `spCtx`。
-- 内层链被拒绝时，`ThenPromise` 那一层以同一拒绝码被拒绝：外层后续 `Then` 跳过，`Catch` / `Finally` 照常执行。
+- 值不沿链传：`user` / `orders` / `payment` / `total` 都放在共享上下文 `CTradeCtx` 里，层间只传「兑现 / 拒绝」，所以每层拿到的是 `spCtx`。
+- 内层链被拒绝时，`ThenPromise` 那一层以同一个异常被拒绝：外层后续 `Then` 跳过，`Catch` / `Finally` 照常执行。

@@ -28,6 +28,9 @@
 // 两步）与观测点（CStepProbe 的步数/并发峰值）。本文件不依赖轨迹，故不接 CTraceSink。
 using asynctest::CCalleeCtx;
 using asynctest::CCalleeModule;
+
+/// 桥接层自己的拒绝文案（拒绝统一用标准异常表达；业务细节放上下文）。
+static const char* const kExecUnavailableText = "本模块执行器不可用";
 using asynctest::CStepProbe;
 
 // ==================== 订单模块（调用方，1 线程） ====================
@@ -242,7 +245,7 @@ private:
                     spCtx->idOnSettled = std::this_thread::get_id();
                     if (result.IsRejected())
                     {
-                        fnReject(result.Code());
+                        fnReject(result);  // 拒绝：整份结果转交（异常类型 + 文案）。
                         return;
                     }
                     spCtx->nStock = spStock->nAvail;
@@ -265,7 +268,9 @@ private:
                         fnResolve();
                     }))
             {
-                fnReject(common::async::kStopped);
+                // 发起就失败：本模块执行器不可用 —— 桥接层用自己的异常 + 文案收口
+                // （业务会把「依赖不可用」当成自己的业务结论，而不是框架失败）。
+                fnReject(common::async::CPromiseResult::Reject(std::runtime_error(kExecUnavailableText)));
             }
         };
         return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);

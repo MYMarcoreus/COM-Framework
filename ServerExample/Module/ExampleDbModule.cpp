@@ -38,8 +38,7 @@ SC_END_INTERFACE_MAP(CExampleDbModule, sc::CModule)
 /// @brief 创建模拟数据库模块。
 ///
 /// @param nLatencyMs 每次表操作的模拟 IO 延迟（毫秒，负数按 0 处理）。
-CExampleDbModule::CExampleDbModule(int nLatencyMs)
-    : sc::CModule("example-db"), m_nNextId(kFirstAutoId), m_nLatencyMs(nLatencyMs)
+CExampleDbModule::CExampleDbModule(int nLatencyMs) : sc::CModule("example-db"), m_nNextId(kFirstAutoId), m_nLatencyMs(nLatencyMs)
 {
     if (m_nLatencyMs < 0)
     {
@@ -143,7 +142,7 @@ std::string CExampleDbModule::GetStatus() const
 ///
 /// @param spOp 操作上下文（调用方提供，命中行写入 recResult）。
 ///
-/// @return promise 句柄（未命中时最终以 kDbRowNotFound 被拒绝）。
+/// @return promise 句柄（未命中时最终以 CDbError(kRowNotFound) 被拒绝）。
 common::async::CPromise<CUserTableOp> CExampleDbModule::QueryUserAsync(const std::shared_ptr<CUserTableOp>& spOp)
 {
     // 契约：执行器在 Start() 中创建（失败即模块不可用），操作上下文由调用方提供且非空。
@@ -154,17 +153,17 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::QueryUserAsync(const std
 
 /// @brief 异步插入用户：**复用本模块内的读表异步函数**（查重）→ 写表 → 放连接。
 ///
-/// 读表未命中（kDbRowNotFound）由 catch 归一化为兑现，因此查重层 / 写表层照常执行；
-/// 其他拒绝（如 kException）继续透传，写表层不执行。
+/// 读表未命中（CDbError(kRowNotFound)）由 catch 归一化为兑现，因此查重层 / 写表层照常执行；
+/// 其他拒绝（含框架侧失败）继续透传，写表层不执行。
 ///
 /// @param spOp 操作上下文（recRequest 为待插入行；nUserId 为 0 时自增分配）。
 ///
-/// @return promise 句柄（主键冲突时最终以 kDbDuplicateKey 被拒绝）。
+/// @return promise 句柄（主键冲突时最终以 CDbError(kDuplicateKey) 被拒绝）。
 common::async::CPromise<CUserTableOp> CExampleDbModule::InsertUserAsync(const std::shared_ptr<CUserTableOp>& spOp)
 {
     ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
-    return LoadRowAsync(spOp)  // 本模块内的异步函数（读表）
+    return LoadRowAsync(spOp)                                                  // 本模块内的异步函数（读表）
         .Catch(BindHandler(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)  // 「不存在」归一化为兑现
         .Then(BindHandler(&CExampleDbModule::StepRejectIfExists), ASYNC_LOC)   // 查重
         .Then(BindHandler(&CExampleDbModule::StepInsertRow), ASYNC_LOC)        // 写表
@@ -175,7 +174,7 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::InsertUserAsync(const st
 ///
 /// @param spOp 操作上下文（recRequest 为期望版本 + 新字段）。
 ///
-/// @return promise 句柄（版本冲突时最终以 kDbVersionConflict 被拒绝，recResult 为库中最新行）。
+/// @return promise 句柄（版本冲突时最终以 CDbError(kVersionConflict) 被拒绝，recResult 为库中最新行）。
 common::async::CPromise<CUserTableOp> CExampleDbModule::UpdateUserAsync(const std::shared_ptr<CUserTableOp>& spOp)
 {
     ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
@@ -190,7 +189,7 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::UpdateUserAsync(const st
 ///
 /// @param spOp 操作上下文（nUserId 为目标用户）。
 ///
-/// @return promise 句柄（未命中时最终以 kDbRowNotFound 被拒绝）。
+/// @return promise 句柄（未命中时最终以 CDbError(kRowNotFound) 被拒绝）。
 common::async::CPromise<CUserTableOp> CExampleDbModule::DeleteUserAsync(const std::shared_ptr<CUserTableOp>& spOp)
 {
     ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
@@ -208,7 +207,7 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::DeleteUserAsync(const st
 ///
 /// @param spOp 操作上下文（命中行写入 recResult，并置 bFound）。
 ///
-/// @return promise 句柄（未命中时最终以 kDbRowNotFound 被拒绝）。
+/// @return promise 句柄（未命中时最终以 CDbError(kRowNotFound) 被拒绝）。
 common::async::CPromise<CUserTableOp> CExampleDbModule::LoadRowAsync(const std::shared_ptr<CUserTableOp>& spOp)
 {
     return m_pExecutor->NewPromise(spOp, BindHandler(&CExampleDbModule::StepAcquireConn), ASYNC_LOC)
@@ -236,7 +235,7 @@ common::async::CPromiseResult CExampleDbModule::StepAcquireConn(
 /// @param upResult 上一层结果。
 /// @param spOp 操作上下文（命中写 recResult / bFound；演示开关触发驱动异常）。
 ///
-/// @return 命中兑现；未命中返回 kDbRowNotFound；驱动异常抛出（框架转为 kException）。
+/// @return 命中兑现；未命中返回 CDbError(kRowNotFound)；驱动异常抛出（框架原样收口为拒绝）。
 common::async::CPromiseResult CExampleDbModule::StepLoadRow(
     common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
 {
@@ -245,7 +244,7 @@ common::async::CPromiseResult CExampleDbModule::StepLoadRow(
     if (spOp->bSimulateDbError)
     {
         spOp->strTrace += "驱动异常;";
-        throw std::runtime_error("模拟数据库驱动异常");  // 框架捕获 → 本层以 kException 被拒绝。
+        throw std::runtime_error("模拟数据库驱动异常");  // 框架捕获 → 本层以异常原样被拒绝。
     }
 
     CUserRecord recRow;
@@ -264,7 +263,8 @@ common::async::CPromiseResult CExampleDbModule::StepLoadRow(
     if (!bFound)
     {
         spOp->strTrace += "读表未命中(id=" + std::to_string(spOp->nUserId) + ");";
-        return common::async::CPromiseResult::Reject(kDbRowNotFound);
+        return common::async::CPromiseResult::Reject(
+            CDbError(CDbError::kRowNotFound, "记录不存在(id=" + std::to_string(spOp->nUserId) + ")"));
     }
 
     spOp->recResult = recRow;
@@ -274,20 +274,22 @@ common::async::CPromiseResult CExampleDbModule::StepLoadRow(
 
 /// @brief 处理器（catch）：把「记录不存在」归一化为兑现，供写入流程继续执行。
 ///
-/// @param upResult 上一层结果（可能是 kDbRowNotFound 的拒绝）。
+/// @param upResult 上一层结果（可能是 CDbError(kRowNotFound) 的拒绝）。
 /// @param spOp 操作上下文（追加轨迹）。
 ///
-/// @return 上一层为 kDbRowNotFound 时返回 Resolve()（吞掉该拒绝）；否则原样透传。
+/// @return 上一层为 `CDbError(kRowNotFound)` 时返回 Resolve()（吞掉该拒绝）；否则原样透传。
 common::async::CPromiseResult CExampleDbModule::StepAcceptNotFound(
     common::async::CPromiseResult upResult, const std::shared_ptr<CUserTableOp>& spOp)
 {
     // catch 层：只在被拒绝时执行，upResult 必定是拒绝 —— 只有这里才必须看它。
-    if (upResult.Code() == kDbRowNotFound)
+    CDbError::EKind eKind = CDbError::kRowNotFound;
+    std::string strWhat;
+    if (TryGetDbError(upResult, eKind, strWhat) && eKind == CDbError::kRowNotFound)
     {
         spOp->strTrace += "归一化(未命中→兑现);";
         return common::async::CPromiseResult::Resolve();
     }
-    return upResult;  // 其他拒绝（如 kException）继续透传：后续 Then 层不执行。
+    return upResult;  // 其他拒绝（业务 / 框架侧失败）继续透传：后续 Then 层不执行。
 }
 
 /// @brief 处理器：查重（已存在则本层拒绝）。
@@ -295,14 +297,14 @@ common::async::CPromiseResult CExampleDbModule::StepAcceptNotFound(
 /// @param upResult 上一层结果。
 /// @param spOp 操作上下文（读 bFound）。
 ///
-/// @return 不存在兑现；存在返回 kDbDuplicateKey。
+/// @return 不存在兑现；存在返回 `CDbError(kDuplicateKey)`。
 common::async::CPromiseResult CExampleDbModule::StepRejectIfExists(
     common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
 {
     if (spOp->bFound)
     {
         spOp->strTrace += "主键冲突;";
-        return common::async::CPromiseResult::Reject(kDbDuplicateKey);
+        return common::async::CPromiseResult::Reject(CDbError(CDbError::kDuplicateKey, "主键冲突（用户已存在）"));
     }
     return common::async::CPromiseResult::Resolve();
 }
@@ -312,7 +314,7 @@ common::async::CPromiseResult CExampleDbModule::StepRejectIfExists(
 /// @param upResult 上一层结果。
 /// @param spOp 操作上下文（写入 recResult / nUserId）。
 ///
-/// @return 兑现；主键冲突返回 kDbDuplicateKey。
+/// @return 兑现；主键冲突返回 CDbError(kDuplicateKey)。
 common::async::CPromiseResult CExampleDbModule::StepInsertRow(
     common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
 {
@@ -327,7 +329,8 @@ common::async::CPromiseResult CExampleDbModule::StepInsertRow(
     if (m_mapRows.find(nUserId) != m_mapRows.end())
     {
         spOp->strTrace += "主键冲突;";
-        return common::async::CPromiseResult::Reject(kDbDuplicateKey);  // 双保险：并发插入时兜底。
+        // 双保险：并发插入时兜底。
+        return common::async::CPromiseResult::Reject(CDbError(CDbError::kDuplicateKey, "主键冲突（并发插入）"));
     }
 
     CUserRecord recRow = spOp->recRequest;
@@ -346,8 +349,8 @@ common::async::CPromiseResult CExampleDbModule::StepInsertRow(
 /// @param upResult 上一层结果。
 /// @param spOp 操作上下文（recRequest.nVersion 为期望版本）。
 ///
-/// @return 兑现（版本 +1）；不存在返回 kDbRowNotFound；版本不匹配返回
-///         kDbVersionConflict，并把库中最新行写入 recResult 供上层重试。
+/// @return 兑现（版本 +1）；不存在返回 CDbError(kRowNotFound)；版本不匹配返回
+///         CDbError(kVersionConflict)，并把库中最新行写入 recResult 供上层重试。
 common::async::CPromiseResult CExampleDbModule::StepApplyUpdate(
     common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
 {
@@ -358,14 +361,14 @@ common::async::CPromiseResult CExampleDbModule::StepApplyUpdate(
     if (it == m_mapRows.end())
     {
         spOp->strTrace += "更新失败(记录不存在);";
-        return common::async::CPromiseResult::Reject(kDbRowNotFound);
+        return common::async::CPromiseResult::Reject(CDbError(CDbError::kRowNotFound, "记录不存在（更新）"));
     }
     if (it->second.nVersion != spOp->recRequest.nVersion)
     {
         spOp->recResult = it->second;  // 回吐库中最新行：上层据此重读并重试。
-        spOp->strTrace += "版本冲突(库=" + std::to_string(it->second.nVersion) +
-                          ",期望=" + std::to_string(spOp->recRequest.nVersion) + ");";
-        return common::async::CPromiseResult::Reject(kDbVersionConflict);
+        spOp->strTrace +=
+            "版本冲突(库=" + std::to_string(it->second.nVersion) + ",期望=" + std::to_string(spOp->recRequest.nVersion) + ");";
+        return common::async::CPromiseResult::Reject(CDbError(CDbError::kVersionConflict, "乐观锁版本冲突（库中最新行已回吐）"));
     }
 
     CUserRecord recRow = spOp->recRequest;
@@ -382,7 +385,7 @@ common::async::CPromiseResult CExampleDbModule::StepApplyUpdate(
 /// @param upResult 上一层结果。
 /// @param spOp 操作上下文（nUserId 为目标用户）。
 ///
-/// @return 兑现；不存在返回 kDbRowNotFound。
+/// @return 兑现；不存在返回 CDbError(kRowNotFound)。
 common::async::CPromiseResult CExampleDbModule::StepEraseRow(
     common::async::CPromiseResult /*upResult*/, const std::shared_ptr<CUserTableOp>& spOp)
 {
@@ -393,7 +396,7 @@ common::async::CPromiseResult CExampleDbModule::StepEraseRow(
     if (it == m_mapRows.end())
     {
         spOp->strTrace += "删除失败(记录不存在);";
-        return common::async::CPromiseResult::Reject(kDbRowNotFound);
+        return common::async::CPromiseResult::Reject(CDbError(CDbError::kRowNotFound, "记录不存在（删除）"));
     }
     m_mapRows.erase(it);
     spOp->strTrace += "写表(删除 id=" + std::to_string(spOp->nUserId) + ");";

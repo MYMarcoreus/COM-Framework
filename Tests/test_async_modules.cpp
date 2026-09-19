@@ -27,6 +27,9 @@
 //   CTraceSink（步骤轨迹 + 每步线程）/ CStepProbe（并发与步数探针）/ CCalleeCtx、CCalleeModule（两步被调模块）
 using asynctest::CCalleeCtx;
 using asynctest::CCalleeModule;
+
+/// 桥接层自己的拒绝文案（拒绝统一用标准异常表达；业务细节放上下文）。
+static const char* const kExecUnavailableText = "本模块执行器不可用";
 using asynctest::CStepProbe;
 using asynctest::CTraceSink;
 using asynctest::SleepMs;
@@ -186,7 +189,7 @@ private:
                     // 本回调在被调模块线程上执行：只做语义转换 + 改上下文 + settle。
                     if (result.IsRejected())
                     {
-                        fnReject(result.Code());  // 库存模块拒绝 → 本流程拒绝（原样透传）。
+                        fnReject(result);  // 库存模块拒绝 → 本流程拒绝（整份结果原样透传）。
                         return;
                     }
                     spCtx->nStock = spStock->nAvail;
@@ -214,7 +217,9 @@ private:
                         fnResolve();
                     }))
             {
-                fnReject(common::async::kStopped);
+                // 发起就失败：桥接层用自己的异常 + 文案收口（业务把「依赖不可用」
+                // 当成自己的业务结论，而不是框架失败）。
+                fnReject(common::async::CPromiseResult::Reject(std::runtime_error(kExecUnavailableText)));
             }
         };
         return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -418,10 +423,10 @@ TEST(Module_BridgeHelperPropagatesRejection)
         spCtx->spTrace->Append("A2");
         return common::async::CPromiseResult::Resolve();
     };
-    int nCaughtCode = 0;
-    auto fnCatch = [&nCaughtCode](common::async::CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
+    std::string strCaughtMessage;
+    auto fnCatch = [&strCaughtMessage](common::async::CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
     {
-        nCaughtCode = upResult.Code();  // 桥接层把子链的拒绝码原样透传到这里。
+        strCaughtMessage = upResult.Message();  // 桥接层把子链的整份拒绝结果透传到这里（异常描述一起到位）。
         spCtx->spTrace->Append("C1");
         return common::async::CPromiseResult::Resolve();  // 吞掉拒绝：链从此处继续。
     };
@@ -431,24 +436,24 @@ TEST(Module_BridgeHelperPropagatesRejection)
         return common::async::CPromiseResult::Resolve();
     };
 
-    // 桥接那一层的结果：以子链的拒绝码被拒绝（不是 kRejected、也不是 kStopped）。
+    // 桥接那一层的结果：以子链的异常被拒绝（框架只搬运、不解释）。
     common::async::CPromise<COrderCtx> promiseBridge =
         exec.NewPromise(spCtx, &StepLoadOrderForTest, ASYNC_LOC).ThenBridge(fnCreateReject, fnApplyNever, ASYNC_LOC);
 
-    // 后续层：A2 跳过 → Catch 看到同一拒绝码并恢复 → A3 执行。
+    // 后续层：A2 跳过 → Catch 看到同一异常并恢复 → A3 执行。
     const common::async::CPromiseResult resultTail =
         promiseBridge.Then(fnAfterBridge, ASYNC_LOC).Catch(fnCatch, ASYNC_LOC).Then(fnAfterCatch, ASYNC_LOC).Await();
 
     const common::async::CPromiseResult resultBridge = promiseBridge.Await();
     ASSERT_TRUE(resultBridge.IsRejected());
-    ASSERT_EQ(resultBridge.Code(), common::async::kBusinessBase);  // 拒绝码原样透传（不是 kRejected）。
-    ASSERT_TRUE(resultTail.IsFulfilled());                         // Catch 已恢复：链尾兑现
-    ASSERT_EQ(nCaughtCode, common::async::kBusinessBase);
+    ASSERT_EQ(resultBridge.Message(), std::string(asynctest::CalleeRejectText()));  // 异常原样透传
+    ASSERT_TRUE(resultTail.IsFulfilled());                                          // Catch 已恢复：链尾兑现
+    ASSERT_EQ(strCaughtMessage, std::string(asynctest::CalleeRejectText()));
     ASSERT_EQ(spCtx->nStock, 0);                                          // 被拒绝 → 不搬数据
     ASSERT_EQ(spCtx->spTrace->strTrace, std::string("A1;B1;B2;C1;A3;"));  // A2 跳过，Catch 恢复后 A3 执行
 }
 
-/// @brief 搬数据时抛异常：本层以 kException 拒绝（不让异常窜出通知回调）。
+/// @brief 搬数据时抛异常：本层以异常（原样透传）收口（不让异常窜出通知回调）。
 TEST(Module_BridgeHelperApplyThrowRejects)
 {
     auto spStockModule = std::make_shared<CCalleeModule>();
@@ -466,12 +471,12 @@ TEST(Module_BridgeHelperApplyThrowRejects)
     };
     auto fnApplyThrow = [](const std::shared_ptr<COrderCtx>&, const std::shared_ptr<CCalleeCtx>&)
     {
-        throw std::runtime_error("搬数据失败");  // 处理器里抛异常 → 本层 kException。
+        throw std::runtime_error("搬数据失败");  // 处理器里抛异常 → 本层以异常原样收口。
     };
-    int nCaughtCode = 0;
-    auto fnCatch = [&nCaughtCode](common::async::CPromiseResult upResult, const std::shared_ptr<COrderCtx>&)
+    std::string strCaughtText;
+    auto fnCatch = [&strCaughtText](common::async::CPromiseResult upResult, const std::shared_ptr<COrderCtx>&)
     {
-        nCaughtCode = upResult.Code();
+        strCaughtText = upResult.Message();  // 看得出「是搬运抛的异常」，且文案还在
         return common::async::CPromiseResult::Resolve();
     };
 
@@ -480,8 +485,8 @@ TEST(Module_BridgeHelperApplyThrowRejects)
                                                      .Catch(fnCatch, ASYNC_LOC)
                                                      .Await();
 
-    ASSERT_TRUE(result.IsFulfilled());  // Catch 恢复了结果
-    ASSERT_EQ(nCaughtCode, common::async::kException);
+    ASSERT_TRUE(result.IsFulfilled());                    // Catch 恢复了结果
+    ASSERT_EQ(strCaughtText, std::string("搬数据失败"));  // 搬运抛的异常原样到位
     ASSERT_EQ(spCtx->nStock, 0);
     ASSERT_EQ(spCtx->spTrace->strTrace, std::string("A1;B1;B2;"));  // 子链照常跑完
 }

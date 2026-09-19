@@ -109,12 +109,12 @@ struct CLayerInfo
 
     //================ 遍历时填的视图字段 ================
 
-    int nDepth;        ///< 距当前层几跳（0 = 正在执行的那一层）。
-    bool bCurrent;     ///< 是不是正在执行的那一层。
-    long long nAgeMs;  ///< 本层状态创建 → 现在（链根上 = 整条链的年龄）。
-    bool bSettled;     ///< 是否已落定（正在跑的当前层恒为 false）。
-    bool bFulfilled;   ///< 落定结果是否兑现（`bSettled` 为 true 时有意义）。
-    int nCode;         ///< 落定结果码（`bSettled` 为 true 时有意义）。
+    int nDepth;              ///< 距当前层几跳（0 = 正在执行的那一层）。
+    bool bCurrent;           ///< 是不是正在执行的那一层。
+    long long nAgeMs;        ///< 本层状态创建 → 现在（链根上 = 整条链的年龄）。
+    bool bSettled;           ///< 是否已落定（正在跑的当前层恒为 false）。
+    bool bFulfilled;         ///< 落定结果是否兑现（`bSettled` 为 true 时有意义）。
+    std::string strMessage;  ///< 落定结果里异常的 `what()`（兑现 / 未落定 = 空）。
 
     /// @brief 默认：空信息（创建时刻取当下；视图字段为 0）。
     CLayerInfo()
@@ -134,7 +134,7 @@ struct CLayerInfo
           nAgeMs(0),
           bSettled(false),
           bFulfilled(false),
-          nCode(0)
+          strMessage()
     {}
 };
 

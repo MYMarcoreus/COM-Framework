@@ -27,7 +27,7 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 
 | 文件 | 内容 |
 | --- | --- |
-| `PromiseResult.h` | `CPromiseResult`（兑现 / 拒绝 + 错误码 + 可选文案）、`PromiseCode` 常量 |
+| `PromiseResult.h` | `CPromiseResult`（兑现 / 拒绝 + 标准异常）、`detail::FailureXxx()`（框架预建失败） |
 | `PromiseTypes.h` | `SettledHandler`、`detail::ThenHandler<TContext>`（处理器固定签名） |
 | `SourceLoc.h` | `CSourceLoc` + `ASYNC_LOC`（注册点调试信息，发布构建零开销） |
 | `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle`、`detail::IsInExecutorThread`、`detail::ShouldInline` / `DispatchInlineOrPost`（**调度策略**：跑在哪条线程）、组合器 `detail::Gather*` |
@@ -71,10 +71,10 @@ struct CExecutorHandle
 - `CAsyncExecutor` 持有该句柄；promise / 协程各自持一份 `shared_ptr`；
 - 执行器析构 → `Stop()` → 置 `m_bStopped` 并 `pool->Stop()`（等待已投递任务完成）；
   句柄仍被 promise 持有 → 线程池对象**不会悬垂**，已起的 promise 照常跑完；
-- 之后的新投递被 `m_bStopped` 拒绝 → 对应层以 `kStopped` 被拒绝。
+- 之后的新投递被 `m_bStopped` 拒绝 → 对应层以「执行器已停」被拒绝。
 
 `detail::PostToHandle(handle, fn)` 是唯一投递入口：句柄空 / 已停止 / 池拒绝都返回 `false`，
-调用方据此把结果置为 `Reject(kStopped)`（不抛异常）。
+调用方据此把结果置为 `Reject(detail::FailureStopped())`（不抛异常）。
 
 ## 4. CPromiseState：一层的状态机
 
@@ -223,7 +223,7 @@ result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownR
 ```
 
 - `then` / `catch`：返回值即本层结果 → 决定后续走向（catch 返回 `Resolve()` 即恢复）；
-- `finally`：返回值被忽略，原样透传 `upResult`；只有抛异常才会改变结果（→ `Reject(kException)`），
+- `finally`：返回值被忽略，原样透传 `upResult`；只有抛异常才会改变结果（异常原样成为本层拒绝），
   与 JS `finally` 语义一致。
 
 **首层固定在链首、且恒以 then 语义执行**：起链时那一层就是`StartChain` 建好的首层（起点结果视为
@@ -234,7 +234,7 @@ result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownR
 
 | API | JS 对照 | 实现要点 |
 | --- | --- | --- |
-| `exec.NewPromise(spCtx, fnStarter, loc)` | `new Promise((resolve, reject) => …)` | 直接建 `CPromiseState` 并交出 `ResolveFn` / `RejectFn`（内部就是 `pState->Settle(...)`）；起链回调同步执行（与 JS 一致），抛异常 → `Reject(kException)`；`Settle` 幂等，故重复 settle / settle 后异常都安全 |
+| `exec.NewPromise(spCtx, fnStarter, loc)` | `new Promise((resolve, reject) => …)` | 直接建 `CPromiseState` 并交出 `ResolveFn` / `RejectFn`（内部就是 `pState->Settle(...)`）；起链回调同步执行（与 JS 一致），抛异常 → 异常原样成为本层拒绝；`Settle` 幂等，故重复 settle / settle 后异常都安全 |
 | `CPromise<T>::ThenPromise(factory, loc)` | `then(处理器返回 promise)` 的 flatten | 建本层 state，在上游 state 上登记 handler：上游被拒 → 直接透传；上游兑现 → `Adopt()` |
 | `CPromise<T>::ThenBridge(fnCreate, fnApply, loc)` | `then` 里「等别的模块 + 取回数据」 | **上面两个原语的语法糖**：内部就是 `Adopt()` + `New`（改走句柄版 `NewFromHandle`）+ `OnSettled`，多出的只是「子链兑现时先 `fnApply` 搬数据」 |
 
@@ -244,8 +244,8 @@ result = ResolveLayerResult(nMode, upResult, ownResult);  // finally 忽略 ownR
 - **不阻塞**：全程只登记回调，不 `Await()`、不占工作线程（单线程执行器也安全）；
 - 子 promise 的 settle 线程可能是**另一个模块的执行器线程** → 流程函数请按值捕获依赖与上下文，
   不要捕获本模块 `this`（这样流程是纯函数，任何线程上都安全）；
-- 工厂抛异常 → 本层 `Reject(kException)`（工厂**必须**给出子链，没有「返回空」这条路）；
-  子 promise 的拒绝码**原样**成为本层拒绝码（后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
+- 工厂抛异常 → 异常原样成为本层拒绝（工厂**必须**给出子链，没有「返回空」这条路）；
+  子 promise 的拒绝**原样**成为本层拒绝（后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
 - **保活**：子 promise 的最后一段由「上一段 handler 捕获下一段」链保活，本层 state 被子 promise
   的 `OnSettled` handler 捕获 —— 即使句柄被丢弃，在途的整条链仍安全跑完；
 - **`New` 恒为「立即启动」**：它建的是独立新链，起链回调当场同步执行；
@@ -260,9 +260,9 @@ ThenBridge(fnCreate, fnApply, loc)
         return NewFromHandle(本链执行器句柄, spSelf, // ② 造一条「由外部 settle」的本上下文 promise
             [=](fnResolve, fnReject) {
                 child.OnSettled([=](r) {             // ③ 子链落定 → 搬数据 → 收口（OnSettled 保证送达）
-                    if (r.IsRejected()) { fnReject(r.Code()); return; }
+                    if (r.IsRejected()) { fnReject(r); return; }
                     try { fnApply(spSelf, child.GetContext()); }
-                    catch (...) { fnReject(kException); return; }
+                    catch (...) { fnReject(CPromiseResult::Reject(std::current_exception())); return; }
                     fnResolve();
                 });
             }, loc);
@@ -282,7 +282,7 @@ ThenBridge(fnCreate, fnApply, loc)
 四个入口（`WhenAll` / `WhenAllSettled` / `WhenRace` / `WhenAny`）**只差一个策略位**，共用
 `detail::Gather(executor, spContext, nPolicy, child...)`：
 
-- **聚合状态是纯状态**：`detail::CGatherState` 不碰上下文类型（只关心子 promise 的成败与拒绝码），
+- **聚合状态是纯状态**：`detail::CGatherState` 不碰上下文类型（只关心子 promise 的成败），
   所以**跨模块 / 跨上下文类型**的分支能汇到同一个聚合上，无需额外机制；
 - **登记路径只有一条**：`detail::BindChildGather` 给每个子 promise 挂 `OnSettled`（恒送达），
   已落定的子 promise 直接计入；
@@ -311,7 +311,7 @@ ThenBridge(fnCreate, fnApply, loc)
 它是「通知」不是「层」，因此带**送达保证** ——
 执行器可用时投递（同上表第二种），执行器不可用时（被调模块已停 / 拒绝投递）**在调用线程上就地执行**，
 绝不丢弃（否则手写桥接漏检返回值就会让本层永久 pending、上层 `Await()` 死等）。
-层处理器仍保持 `AddHandler` 的语义：执行器不可用 → 返回 `false` → 框架以 `kStopped` 收口本层。
+层处理器仍保持 `AddHandler` 的语义：执行器不可用 → 返回 `false` → 框架以「执行器已停」收口本层。
 
 ## 8. 线程模型与不变量
 
@@ -352,7 +352,7 @@ inline bool DispatchInlineOrPost(const std::shared_ptr<CExecutorHandle>& pExec,
 // Common/Async/Promise.h：层派发入口（只做「造任务体 + 失败收口」，策略全在执行器侧）
 if (!DispatchInlineOrPost(Handle(), std::move(fnRun)))
 {
-    pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用 → 本层被拒绝
+    pState->Settle(CPromiseResult::Reject(detail::FailureStopped()));  // 执行器不可用 → 本层被拒绝
 }
 ```
 
@@ -383,11 +383,11 @@ if (!DispatchInlineOrPost(Handle(), std::move(fnRun)))
 
 | 场景 | 以前 | 现在 |
 | --- | --- | --- |
-| 层处理器抛异常 | `MakeHandlerRunner` 的 try/catch → 本层 `kException` | 不变（本来就安全） |
+| 层处理器抛异常 | `detail::MakeHandlerRunner` 的 try/catch → 异常原样成为本层拒绝 | 不变（本来就安全） |
 | **通知**（`OnSettled` / `OnSettledOn`）抛异常 | 异常从 `CPromiseState::Settle` 逃出 → worker 无 catch → **`std::terminate`（进程挂掉）** | `detail::RunNotice` 兜住 + 报告诊断 |
 | `exec.Post(fn)` 的任务抛异常 | 同上（同样能弄死进程） | `CAsyncExecutor::Post` 包一层 guard 兜住 + 报告 |
-| `exec.NewPromise(spCtx, starter)` 的起链回调抛异常 | `RunChainStarter` 兜住 → `kException` | 不变 |
-| `Await()` 永久挂住 | 只能靠文档警告 | 新增 `AwaitFor(ms)`（超时返回 `kStopped`，不落定、不取消链） |
+| `exec.NewPromise(spCtx, starter)` 的起链回调抛异常 | `RunChainStarter` 兜住 → 异常原样成为拒绝 | 不变 |
+| `Await()` 永久挂住 | 只能靠文档警告 | 新增 `AwaitFor(ms)`（超时返回「等待超时」，不落定、不取消链） |
 | 层内 / 本链线程上 `Await()` 未落定的层（必死锁） | 无任何提示 | `ReportBlockingRisk()` 报诊断（**不硬失败**：等「别的线程 settle 的层」是合法的） |
 | 调用方误用（未传上下文 / 模块未启动 / 对空上下文起链） | 运行期崩在别处，难定位 | `ASSERT` 在开发期直接报位置（见 §13）；无效句柄态已从类型上消除 |
 
@@ -453,10 +453,10 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 3. **then / catch / finally 三分**：默认安全（`then` 忘写判断也不会在拒绝后误执行后续业务），
    同时给回滚（`Catch`）与收尾（`Finally`）留出与 JS 完全对应的显式出口。
 4. **不做取消 / 链级超时**：状态是单向开关，没有取消 API。需要取消时，在业务层用定时器 / 事件
-   唤醒后检查标志位；等待侧不挂死由 `AwaitFor(ms)` 兑底（超时返回 `kStopped`，**不**取消链）。
+   唤醒后检查标志位；等待侧不挂死由 `AwaitFor(ms)` 兜底（超时返回「等待超时」，**不**取消链）。
 5. **上下文为编译期类型**：不提供「向上下文追加任意类型」的容器（如 `std::any`），
    以保证 `TContext` 字段编译期可查、无堆分配、无类型擦除开销。
-6. **用户回调的异常在 async 边界收口**（见 §8.2）：层处理器 → `kException`；通知 → 报诊断后忽略；
+6. **用户回调的异常在 async 边界收口**（见 §8.2）：层处理器 → 异常原样成为本层拒绝；通知 → 报诊断后忽略；
    `exec.Post` 的任务 → guard 包一层。**不改线程池契约**（`WorkerLoop` 仍不捕获异常）：
    池层吞异常会丢掉「谁抛的」这唯一的线索，而 async 边界知道自己在跑谁的回调、能报告出来。
 7. **诊断出口是进程级单槽 + 可替换**（`SetDiagnosticHandler`）：默认 debug 打印 stderr、发布忽略；
@@ -472,11 +472,11 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
     `OnSettled` / `OnSettledOn` 也不再有返回值。
     权衡：默认构造方便了「先声明后赋值」（改成 `shared_ptr` 装句柄即可，样例已改），
     换来的是一整类运行时分支的消失：`Append` / `ThenPromise` 的无效处理、两条诊断文案、
-    2 处 `OnSettled` 空判、组合器的「无效子 promise 计 kStopped」特例、
+    2 处 `OnSettled` 空判、组合器的「无效子 promise 计「执行器已停」」特例、
     以及调用方到处要写的 `if (!bOk)`。详见 §13。
 11. **契约用断言表达，不用运行时宽容**：调用方违约（未传上下文、模块未启动、参数为空）
     在开发期用 `ASSERT` 直接报位置；发布构建下这些断言零开销。
-    **业务错误仍走拒绝码**，两者不要混。
+    **业务错误仍走标准异常（拒绝）**，两者不要混。
 
 ## 11. 测试与基准
 
@@ -658,8 +658,8 @@ return [spContext, pState, fnHandler, upResult, eMode]()
 - 名字只在执行器构造时给（`CAsyncExecutor("db", 4)`；空串 = 未命名 → `-`）。
 
 「结果」是在**读的时候**从层状态里取的（`TryGetResult()`，锁内拷一份），所以正在跑的当前层
-显示「未落定」、跑完的层显示兑现 / 拒绝（含业务码）—— 失败路径上「被跳过的层照样在链上、
-但结果停在上一层的拒绝码」一眼就能看出来。
+显示「未落定」、跑完的层显示兑现 / 拒绝（含异常描述）—— 失败路径上「被跳过的层照样在链上、
+但结果停在上一层的拒绝」一眼就能看出来。
 
 ### 四个设计决定（都是为了「不改签名、不增加分配」）
 

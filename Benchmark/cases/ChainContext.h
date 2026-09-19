@@ -13,6 +13,9 @@
 
 namespace bench {
 
+/// @brief 基准用业务失败文案（拒绝统一用标准异常表达）。
+static const char* const kStepFailText = "基准：业务失败（用于失败即停链）";
+
 /// @brief 基准用共享上下文（一次流程的数据载体）。
 struct CChainContext
 {
@@ -24,8 +27,7 @@ struct CChainContext
 };
 
 /// 层：值 +1（固定签名：上一层结果 + 共享上下文 → 本层结果）。
-inline common::async::CPromiseResult StepInc(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CChainContext>& spCtx)
+inline common::async::CPromiseResult StepInc(common::async::CPromiseResult upResult, const std::shared_ptr<CChainContext>& spCtx)
 {
     if (upResult.IsRejected())
     {
@@ -37,15 +39,14 @@ inline common::async::CPromiseResult StepInc(
 }
 
 /// 层：业务失败（用于失败即停链）。
-inline common::async::CPromiseResult StepFail(
-    common::async::CPromiseResult upResult, const std::shared_ptr<CChainContext>& spCtx)
+inline common::async::CPromiseResult StepFail(common::async::CPromiseResult upResult, const std::shared_ptr<CChainContext>& spCtx)
 {
     if (upResult.IsRejected())
     {
         return upResult;
     }
     ++spCtx->nSteps;
-    return common::async::CPromiseResult::Reject(common::async::kBusinessBase + 1);
+    return common::async::CPromiseResult::Reject(std::runtime_error(kStepFailText));
 }
 
 }  // namespace bench

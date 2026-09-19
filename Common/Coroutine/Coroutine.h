@@ -171,7 +171,7 @@ public:
     ///
     /// 供协程体内 await 使用：CO_AWAIT(NewPromise(StepLoad))。
     /// 与 `exec.NewPromise(spCtx, handler)` 走同一条起链路径（建首层 + 强制投递首层）；
-    /// 未启动（`m_pExec == nullptr`，句柄还是空）时首层投递失败 → 该 promise 以 kStopped 被拒绝。
+    /// 未启动（`m_pExec == nullptr`，句柄还是空）时首层投递失败 → 该 promise 以系统侧失败 `Stopped()` 收口。
     ///
     /// @param fnHandler 首层处理器（固定签名）。
     /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
@@ -251,13 +251,7 @@ protected:
         return m_hot.bTerminated.load(std::memory_order_acquire);  // acquire：同下面的终止结果配对
     }
 
-    /// @brief 终止拒绝码（IsTerminated() 为 true 时有效）。
-    int TerminateCode() const
-    {
-        return m_hot.resultTerminate.Code();
-    }
-
-    /// @brief 终止结果（IsTerminated() 为 true 时有效）—— await 到的那份结果整份保留（含文案）。
+    /// @brief 终止结果（IsTerminated() 为 true 时有效）—— await 到的那份结果整份保留（码 / 文案 / 来源）。
     const CPromiseResult& TerminateResult() const
     {
         return m_hot.resultTerminate;
@@ -291,7 +285,7 @@ private:
     /// @brief 在指定执行器上启动协程（绑定 + 复位 + 投递首次执行）。
     ///
     /// 由 CAsyncExecutor::CoStart 调用；执行器须存活于协程生命周期
-    /// （未启动 / 已停止时协程立即以 kStopped 被拒绝）。
+    /// （未启动 / 已停止时协程立即以系统侧失败 `Stopped()` 结束）。
     ///
     /// @param pExec 执行器指针。
     void Start(CAsyncExecutor* pExec)
@@ -358,13 +352,13 @@ private:
     {
         if (m_pExec == nullptr)
         {
-            Terminate(CPromiseResult::Reject(kStopped));
+            Terminate(CPromiseResult::Reject(detail::FailureStopped()));
             return;
         }
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
         if (!spSelf)
         {
-            Terminate(CPromiseResult::Reject(kStopped));  // 无强引用（理论不应发生）。
+            Terminate(CPromiseResult::Reject(detail::FailureStopped()));  // 无强引用（理论不应发生）。
             return;
         }
         if (!m_pExec->Post(
@@ -373,7 +367,7 @@ private:
                     Resume();
                 }))
         {
-            Terminate(CPromiseResult::Reject(kStopped));  // 执行器已停止 / 不可用。
+            Terminate(CPromiseResult::Reject(detail::FailureStopped()));  // 执行器已停止 / 不可用。
         }
     }
 
@@ -387,7 +381,7 @@ private:
     {
         if (m_pExec == nullptr || m_pExec->IsStopped())
         {
-            Terminate(CPromiseResult::Reject(kStopped));
+            Terminate(CPromiseResult::Reject(detail::FailureStopped()));
             return;
         }
         // 就地判定与 promise 层派发共用一处（多一条「线程池无积压」的负载感知条件）：

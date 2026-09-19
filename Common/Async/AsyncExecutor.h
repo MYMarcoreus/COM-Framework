@@ -29,7 +29,7 @@
 //   - 一条链的层在哪条线程上跑：**本链执行器**（同线程内联级联；跨执行器/跨模块返回则投递回本链）。
 //     （曾有过「逐层指定线程」的 `ThenInline` / `ThenOn`，2026-09-13 已移除 —— 理由见
 //      docs/common/async-impl.md §8.1「历史」：就地层的落点取决于上游何时落定，一层可能三种落点。）
-//   - 执行器停了以后怎么办：`Stop` + 句柄加固（新投递以 `kStopped` 收口）。
+//   - 执行器停了以后怎么办：`Stop` + 句柄加固（新投递以系统侧失败 `Stopped()` 收口）。
 //
 // 调度对照（各自生态里的同类物）：
 //   CAsyncExecutor  ≈ Java `Executor` / C# `TaskScheduler` / Asio `io_context` / dispatch_queue
@@ -47,7 +47,7 @@
 //
 // 生命周期：执行器析构会停止线程池并等待已投递任务完成；promise / 协程通过
 // 共享句柄引用线程池，执行器析构后已起动的 promise 仍安全跑完（新投递以
-// kStopped 被拒绝）。
+// kStopped（系统侧失败：执行器不可用）。
 // ====================================================================
 
 namespace common {
@@ -161,7 +161,7 @@ inline bool ShouldInline(const std::shared_ptr<CExecutorHandle>& pExec, bool bRe
 ///
 /// @param pExec 本链执行器句柄。
 /// @param fnTask 任务体（按值接收：就地执行或移动投递）。
-/// @return true 已就地执行 / 已投递；false 执行器不可用（调用方以 `kStopped` 收口本层）。
+/// @return true 已就地执行 / 已投递；false 执行器不可用（调用方以 `Stopped()` 收口本层）。
 inline bool DispatchInlineOrPost(const std::shared_ptr<CExecutorHandle>& pExec, std::function<void()> fnTask)
 {
     if (ShouldInline(pExec))
@@ -325,22 +325,22 @@ enum GatherPolicy
     kGatherAny = 3          ///< 对齐 JS `Promise.any`：首个兑现者兑现；全部拒绝才以首个拒绝码拒绝。
 };
 
+/// @brief 组合器聚合状态（把 N 个子 promise 的落定折算成「一条聚合链」的落定）。
+///
 /// @brief 一处子 promise 都没有时的收口结果（对齐 JS）。
 ///
 /// `all` / `allSettled` 视为成功（没有要等的东西）；`race` / `any` 不可能有结果 →
-/// 以 `kRejected` 拒绝（否则聚合链永久 pending，`Await()` 会死等）。
+/// 立即以框架侧拒绝收口（否则聚合链永久 pending，`Await()` 会死等）。
 ///
 /// @param ePolicy 策略（GatherPolicy 四档）。
 /// @return 空集合应立即采用的最终结果。
 inline CPromiseResult ResolveEmptyGather(GatherPolicy ePolicy)
 {
     return (ePolicy == kGatherAll || ePolicy == kGatherAllSettled) ? CPromiseResult::Resolve()
-                                                                   : CPromiseResult::Reject(kRejected);
+                                                                   : CPromiseResult::Reject(detail::FailureUnspecified());
 }
 
-/// @brief 组合器聚合状态（把 N 个子 promise 的落定折算成「一条聚合链」的落定）。
-///
-/// 与 `CPromiseState` 一样是**非模板**的纯状态：它只关心子 promise 的成败与拒绝码，
+/// 与 `CPromiseState` 一样是**非模板**的纯状态：它只关心子 promise 的成败，
 /// 完全不碰上下文类型 —— 所以「跨模块（不同 TContext）的分支汇到同一个聚合」不需要额外机制。
 ///
 /// 收口动作由调用方以 resolve / reject 传入（聚合链的层状态由它们 settle）。
@@ -353,13 +353,13 @@ public:
     /// @param nTotal 子 promise 总数（> 0；空集合由调用方在收口前先处理）。
     /// @param fnResolve 兑现聚合链的当前层。
     /// @param fnReject 拒绝聚合链的当前层。
-    CGatherState(
-        GatherPolicy ePolicy, int nTotal, const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
+    CGatherState(GatherPolicy ePolicy, int nTotal, const std::function<void()>& fnResolve,
+        const std::function<void(CPromiseResult)>& fnReject)
         : m_ePolicy(ePolicy),
           m_nPending(nTotal),
           m_bRejectSeen(false),
           m_bDone(false),
-          m_nFirstRejectCode(kRejected),
+          m_firstReject(CPromiseResult::Reject(detail::FailureUnspecified())),
           m_fnResolve(fnResolve),
           m_fnReject(fnReject)
     {}
@@ -371,7 +371,7 @@ public:
     {
         bool bResolve = false;
         bool bReject = false;
-        int nCode = 0;
+        CPromiseResult resultOut;  // 收口交给聚合层的结果（锁内填、锁外交付）。
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             if (m_bDone)
@@ -382,8 +382,9 @@ public:
             --m_nPending;
             if (!result.IsFulfilled() && !m_bRejectSeen)
             {
+                // 整份结果（码 / 文案 / 系统侧失败都不丢）——`any` 全部拒绝时用它收口。
                 m_bRejectSeen = true;
-                m_nFirstRejectCode = result.Code();  // `any` 在全部拒绝时用它收口。
+                m_firstReject = result;
             }
 
             switch (m_ePolicy)
@@ -399,7 +400,7 @@ public:
                     {
                         m_bDone = true;
                         bReject = true;
-                        nCode = result.Code();
+                        resultOut = result;
                     }
                     break;
                 case kGatherAllSettled:
@@ -412,7 +413,7 @@ public:
                     m_bDone = true;
                     bResolve = result.IsFulfilled();
                     bReject = !bResolve;
-                    nCode = m_nFirstRejectCode;
+                    resultOut = result;
                     break;
                 case kGatherAny:
                 default:
@@ -426,7 +427,7 @@ public:
                     {
                         m_bDone = true;
                         bReject = true;
-                        nCode = m_nFirstRejectCode;
+                        resultOut = m_firstReject;
                     }
                     break;
             }
@@ -439,19 +440,19 @@ public:
         }
         if (bReject && m_fnReject)
         {
-            m_fnReject(nCode);
+            m_fnReject(resultOut);
         }
     }
 
 private:
-    std::mutex m_mutex;                   ///< 保护下面的计数（子 promise 在不同线程上落定）。
-    GatherPolicy m_ePolicy;               ///< 策略（GatherPolicy 四档）。
-    int m_nPending;                       ///< 尚未落定的子 promise 数。
-    bool m_bRejectSeen;                   ///< 是否已见过拒绝（`any` 收口要用首个拒绝码）。
-    bool m_bDone;                         ///< 聚合是否已收口（收口后忽略迟到的子 promise）。
-    int m_nFirstRejectCode;               ///< 首个拒绝码（m_bRejectSeen 为 true 时有效）。
-    std::function<void()> m_fnResolve;    ///< 兑现聚合链的当前层。
-    std::function<void(int)> m_fnReject;  ///< 拒绝聚合链的当前层。
+    std::mutex m_mutex;                              ///< 保护下面的计数（子 promise 在不同线程上落定）。
+    GatherPolicy m_ePolicy;                          ///< 策略（GatherPolicy 四档）。
+    int m_nPending;                                  ///< 尚未落定的子 promise 数。
+    bool m_bRejectSeen;                              ///< 是否已见过拒绝（`any` 收口要用首个拒绝结果）。
+    bool m_bDone;                                    ///< 聚合是否已收口（收口后忽略迟到的子 promise）。
+    CPromiseResult m_firstReject;                    ///< 首个拒绝的整份结果（m_bRejectSeen 为 true 时有效）。
+    std::function<void()> m_fnResolve;               ///< 兑现聚合链的当前层。
+    std::function<void(CPromiseResult)> m_fnReject;  ///< 拒绝聚合链的当前层。
 };
 
 /// @brief 把「子 promise 落定 → 聚合状态」登记到子 promise 上（组合器唯一的登记路径）。
@@ -515,7 +516,7 @@ void AppendGatherBindings(std::vector<std::function<void(const std::shared_ptr<C
 /// 不做重活、不阻塞 —— 子 promise 落在哪个线程都不会占住聚合链的线程。
 ///
 /// 一处子 promise 都没有时直接在此收口（对齐 JS）：`all` / `allSettled` 立即兑现；
-/// `race` / `any` 不可能有结果 → 立即以 `kRejected` 拒绝（否则永久 pending，死等）。
+/// `race` / `any` 不可能有结果 → 立即以系统侧失败 `Refused()` 拒绝（否则永久 pending，死等）。
 ///
 /// @note 本函数在此头文件里定义（见本节开头的说明），**实例化需要 `CPromise` 完整类型** ——
 ///       调用方 TU 需 include "Async/Promise.h"（拿 promise 句柄时本来就会 include）。
@@ -538,8 +539,7 @@ CPromise<TContext> Gather(
     if (vecBindings.empty())
     {
         // 一处子 promise 都没有：按策略直接收口（语义只有 `ResolveEmptyGather` 一处）。
-        // 用「一层 handler」而不是起链回调：handler 直接返回整份结果 → **码 + 文案都保留**
-        // （起链回调的 reject 通道只有 int）。
+        // 用「一层 handler」而不是起链回调：handler 直接返回整份结果，语义最直白。
         return executor.NewPromise(
             spContext, typename CPromise<TContext>::ThenHandler(
                            [ePolicy](CPromiseResult /*upResult*/, const std::shared_ptr<TContext>& /*spContext*/)
@@ -549,17 +549,17 @@ CPromise<TContext> Gather(
     }
 
     const int nTotal = static_cast<int>(vecBindings.size());
-    return executor.NewPromise(spContext,
-        typename CPromise<TContext>::ChainStarter(
-            [ePolicy, nTotal, vecBindings](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
-            {
-                const std::shared_ptr<CGatherState> pGather =
-                    std::make_shared<CGatherState>(ePolicy, nTotal, fnResolve, fnReject);
-                for (size_t i = 0; i < vecBindings.size(); ++i)
-                {
-                    vecBindings[i](pGather);  // 登记动作恒非空。
-                }
-            }));
+    return executor.NewPromise(spContext, typename CPromise<TContext>::ChainStarter(
+                                              [ePolicy, nTotal, vecBindings](const std::function<void()>& fnResolve,
+                                                  const std::function<void(CPromiseResult)>& fnReject)
+                                              {
+                                                  const std::shared_ptr<CGatherState> pGather =
+                                                      std::make_shared<CGatherState>(ePolicy, nTotal, fnResolve, fnReject);
+                                                  for (size_t i = 0; i < vecBindings.size(); ++i)
+                                                  {
+                                                      vecBindings[i](pGather);  // 登记动作恒非空。
+                                                  }
+                                              }));
 }
 
 }  // namespace detail
@@ -620,7 +620,7 @@ CPromise<TContext> CAsyncExecutor::WhenAllSettled(const std::shared_ptr<TContext
 /// @warning 「先到」取决于各子 promise 实际落定的时刻与送达顺序（跨执行器时不保证与参数顺序一致）。
 ///          框架不取消落败的分支，它们会继续跑完（结果被忽略）。
 ///
-/// @note 其余语义同 `WhenAll`；空集合 → 立即以 `kRejected` 拒绝（race 无结果可用）。
+/// @note 其余语义同 `WhenAll`；空集合 → 立即以系统侧失败 `Refused()` 拒绝（race 无结果可用）。
 ///
 /// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
 /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
@@ -638,7 +638,7 @@ CPromise<TContext> CAsyncExecutor::WhenRace(const std::shared_ptr<TContext>& spC
 /// 用法：多条等价路径取「第一个成功的」（典型：多副本 / 多后端取先返回成功者）；
 /// 全部失败时以**首个拒绝码**收口（JS 是 AggregateError，本框架用码表达）。
 ///
-/// @note 其余语义同 `WhenAll`；空集合 → 立即以 `kRejected` 拒绝（不可能有兑现者）。
+/// @note 其余语义同 `WhenAll`；空集合 → 立即以系统侧失败 `Refused()` 拒绝（不可能有兑现者）。
 ///
 /// @tparam TContext 聚合 promise 的上下文类型（由 spContext 推导）。
 /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
