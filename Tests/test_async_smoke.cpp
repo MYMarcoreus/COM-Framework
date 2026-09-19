@@ -67,7 +67,7 @@ static common::async::CPromiseResult StepFail(common::async::CPromiseResult /*up
 {
     ++spCtx->nSteps;
     spCtx->strTrace += "F";
-    return common::async::CPromiseResult::Reject(spCtx->nFailCode);
+    return common::async::CPromiseResult::Reject(common::async::CRefusal(spCtx->nFailCode, "业务拒绝"));
 }
 
 /// 层：记录轨迹（用来验证「失败后不再执行」）。
@@ -109,7 +109,7 @@ static common::async::CPromiseResult StepFinallyIgnoreReturn(
 {
     ++spCtx->nFinallyRuns;
     spCtx->strTrace += "f";
-    return common::async::CPromiseResult::Reject(common::async::kBusinessBase + 99);
+    return common::async::CPromiseResult::Reject(common::async::CRefusal(kTestCodeBase + 99, "业务拒绝"));
 }
 
 /// @brief 等旁支完成（旁支是 fire-and-forget，断言前等一下）。
@@ -217,7 +217,7 @@ TEST(Smoke_ThenPromiseInnerReject)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    spCtx->nFailCode = common::async::kBusinessBase + 7;
+    spCtx->nFailCode = kTestCodeBase + 7;
     common::async::CPromise<CSmokeCtx>::PromiseFactory fnInner = [&exec](const std::shared_ptr<CSmokeCtx>& spSelf)
     {
         return exec.NewPromise(spSelf, &StepFail, ASYNC_LOC);
@@ -309,10 +309,10 @@ TEST(Smoke_NewExternalSettle)
             },
             ASYNC_LOC);
 
-        fnRejectHolder(common::async::kBusinessBase + 5);
+        fnRejectHolder(common::async::CRefusal(kTestCodeBase + 5, "外部回调里拒绝"));
         const common::async::CPromiseResult r = p.Then(&StepMark, ASYNC_LOC).Catch(&StepCatchPass, ASYNC_LOC).Await();
         ASSERT_TRUE(r.IsRejected());
-        ASSERT_EQ(r.Code(), common::async::kBusinessBase + 5);
+        ASSERT_EQ(r.Code(), kTestCodeBase + 5);
         ASSERT_EQ(spCtx->nCatchRuns, 1);
         ASSERT_EQ(spCtx->nSteps, 0);  // then 层被跳过
     }
@@ -356,7 +356,7 @@ TEST(Smoke_FailFast)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    spCtx->nFailCode = common::async::kBusinessBase + 3;
+    spCtx->nFailCode = kTestCodeBase + 3;
     const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepMark, ASYNC_LOC)
                                                 .Then(&StepFail, ASYNC_LOC)
                                                 .Then(&StepMark, ASYNC_LOC)  // 跳过
@@ -376,7 +376,7 @@ TEST(Smoke_CatchRecoverContinues)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    spCtx->nFailCode = common::async::kBusinessBase + 4;
+    spCtx->nFailCode = kTestCodeBase + 4;
     const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC)
                                                 .Catch(&StepCatchRecover, ASYNC_LOC)
                                                 .Then(&StepAdd1, ASYNC_LOC)  // 恢复后继续执行
@@ -396,7 +396,7 @@ TEST(Smoke_CatchPassthrough)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    spCtx->nFailCode = common::async::kBusinessBase + 5;
+    spCtx->nFailCode = kTestCodeBase + 5;
     const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC)
                                                 .Catch(&StepCatchPass, ASYNC_LOC)
                                                 .Then(&StepMark, ASYNC_LOC)  // 跳过
@@ -426,7 +426,7 @@ TEST(Smoke_FinallyIgnoresReturn)
     // 拒绝路径：码原样透传
     {
         std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-        spCtx->nFailCode = common::async::kBusinessBase + 6;
+        spCtx->nFailCode = kTestCodeBase + 6;
         const common::async::CPromiseResult r =
             exec.NewPromise(spCtx, &StepFail, ASYNC_LOC).Finally(&StepFinallyIgnoreReturn, ASYNC_LOC).Await();
         ASSERT_TRUE(r.IsRejected());
@@ -465,7 +465,7 @@ TEST(Smoke_OnSettledSideChannel)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    spCtx->nFailCode = common::async::kBusinessBase + 8;  // 注意：0 表示兑现，别用 0 当错误码
+    spCtx->nFailCode = kTestCodeBase + 8;  // 注意：0 表示兑现，别用 0 当错误码
     std::atomic<int> nOk(0);
     std::atomic<int> nFail(0);
     common::async::CPromise<CSmokeCtx> p = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC).Catch(&StepCatchPass, ASYNC_LOC);
@@ -555,7 +555,7 @@ TEST(Smoke_BridgeTwoModules)
                 idStock = std::this_thread::get_id();  // 回调跑在库存模块的线程上
                 if (result.IsRejected())
                 {
-                    fnReject(result.Code());
+                    fnReject(result.AsRefusal());
                     return;
                 }
                 spCtx->strTrace += "b";
@@ -658,7 +658,8 @@ TEST(Smoke_PromiseIntrospection)
     ASSERT_TRUE(!r.IsRejected());
     ASSERT_EQ(r.Code(), static_cast<int>(common::async::kFulfilled));
     ASSERT_TRUE(r == common::async::CPromiseResult::Resolve());
-    ASSERT_TRUE(common::async::CPromiseResult::Reject(1) != common::async::CPromiseResult::Reject(2));
+    ASSERT_TRUE(common::async::CPromiseResult::Reject(common::async::CRefusal(1, "业务拒绝")) !=
+                common::async::CPromiseResult::Reject(common::async::CRefusal(2, "业务拒绝")));
     ASSERT_TRUE(p.GetContext() == spCtx);
     exec.Stop();
 }

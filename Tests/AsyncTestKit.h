@@ -24,6 +24,7 @@
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
+#include "TestFramework.h"
 
 namespace asynctest {
 
@@ -92,12 +93,7 @@ struct CStepProbe
     std::atomic<int> nStockSteps;        ///< 被调模块步骤总数。
 
     CStepProbe()
-        : nOrderInFlight(0),
-          nOrderMaxInFlight(0),
-          nOrderSteps(0),
-          nStockInFlight(0),
-          nStockMaxInFlight(0),
-          nStockSteps(0)
+        : nOrderInFlight(0), nOrderMaxInFlight(0), nOrderSteps(0), nStockInFlight(0), nStockMaxInFlight(0), nStockSteps(0)
     {}
 
     /// @brief 更新峰值。
@@ -193,13 +189,13 @@ struct CCalleeCtx
     int nAvail;                           ///< 出参：可用库存。
     int nDelayMs;                         ///< 每步模拟耗时。
     bool bReject;                         ///< 第二步是否拒绝。
-    int nRejectCode;                      ///< 拒绝码（默认 kBusinessBase）。
+    int nRejectCode;                      ///< 拒绝码（默认 kTestCodeBase）。
     std::shared_ptr<CTraceSink> spTrace;  ///< 轨迹（跨模块共享观测点，可空）。
     std::shared_ptr<CStepProbe> pProbe;   ///< 探针（可空）。
     std::thread::id idConnect;            ///< 第一步所在线程。
     std::thread::id idRead;               ///< 第二步所在线程。
 
-    CCalleeCtx() : nSku(0), nAvail(5), nDelayMs(0), bReject(false), nRejectCode(common::async::kBusinessBase)
+    CCalleeCtx() : nSku(0), nAvail(5), nDelayMs(0), bReject(false), nRejectCode(kTestCodeBase)
     {}
 };
 
@@ -258,7 +254,7 @@ private:
         LeaveStockStep(spCtx->pProbe);
         if (spCtx->bReject)
         {
-            return common::async::CPromiseResult::Reject(spCtx->nRejectCode);
+            return common::async::CPromiseResult::Reject(common::async::CRefusal(spCtx->nRejectCode, "业务拒绝"));
         }
         spCtx->nAvail = 5;
         return common::async::CPromiseResult::Resolve();

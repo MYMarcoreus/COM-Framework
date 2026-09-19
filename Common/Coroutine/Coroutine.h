@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <utility>
 
 #include "Assert.h"
@@ -79,9 +80,11 @@ struct CAwaitAllGroup
 {
     std::atomic<int> nPending;   ///< 剩余未完成的 promise 数。
     std::atomic<int> bRejected;  ///< 是否已有 promise 被拒绝（0/1）。
-    std::atomic<int> nCode;      ///< 首个拒绝码（bRejected 为 1 时有效）。
 
-    CAwaitAllGroup() : nPending(0), bRejected(0), nCode(kRejected)
+    std::mutex mtxFirstRefusal;  ///< 保护首个拒绝原因（各 promise 可能在不同线程上落定）。
+    CRefusal firstRefusal;       ///< 首个拒绝原因（bRejected 为 1 时有效）。
+
+    CAwaitAllGroup() : nPending(0), bRejected(0), mtxFirstRefusal(), firstRefusal(CRefusal::Rejected())
     {}
 };
 
@@ -214,7 +217,7 @@ protected:
             {
                 if (result.IsRejected())
                 {
-                    MarkTerminated(result);  // 被等待的 promise 被拒绝 → 协程终止（码透传）。
+                    MarkTerminated(result);  // 被等待的 promise 被拒绝 → 协程终止（拒绝原因整份透传）。
                 }
                 ResumeInline();  // 就地续跑 / 投递回本执行器（负载感知）。
             });
@@ -248,10 +251,17 @@ protected:
         return m_hot.bTerminated.load();
     }
 
+    /// @brief 终止拒绝原因（IsTerminated() 为 true 时有效）—— await 到的那份拒绝原样保留。
+    CRefusal TerminateRefusal() const
+    {
+        std::lock_guard<std::mutex> lock(m_hot.mtxTerminate);
+        return m_hot.spTerminate != nullptr ? *m_hot.spTerminate : CRefusal::Rejected();
+    }
+
     /// @brief 终止拒绝码（IsTerminated() 为 true 时有效）。
     int TerminateCode() const
     {
-        return m_hot.nCode.load();
+        return TerminateRefusal().Code();
     }
 
     /// @brief 协程以指定结果结束（CO_RETURN 用）。
@@ -268,10 +278,10 @@ protected:
         m_pSegment->Settle(CPromiseResult::Resolve());
     }
 
-    /// @brief 协程以终止拒绝码结束（await 到拒绝后的统一出口）。
+    /// @brief 协程以终止原因结束（await 到拒绝后的统一出口）。
     void CompleteTerminated()
     {
-        m_pSegment->Settle(CPromiseResult::Reject(TerminateCode()));
+        m_pSegment->Settle(CPromiseResult::Reject(TerminateRefusal()));
     }
 
 private:
@@ -306,14 +316,18 @@ private:
         m_wpSelf = sp;
     }
 
-    /// @brief 协程热状态：步号 / 终止标志 / 拒绝码（紧邻打包，减少跨线程迁移的 cache line 数）。
+    /// @brief 协程热状态：步号 / 终止标志 / 终止原因（紧邻打包，减少跨线程迁移的 cache line 数）。
     struct CHotState
     {
         std::atomic<int> nStep;         ///< 状态机步号（恢复点）。
         std::atomic<bool> bTerminated;  ///< await 到拒绝 → 终止。
-        std::atomic<int> nCode;         ///< 终止拒绝码。
 
-        CHotState() : nStep(0), bTerminated(false), nCode(kRejected)
+        /// 终止原因（await 到的那份拒绝整份留下）：在结算线程写、在协程线程读，
+        /// 用小锁发布 —— 只在终止时各写 / 读一次，不在热路径上。
+        mutable std::mutex mtxTerminate;
+        std::shared_ptr<const CRefusal> spTerminate;
+
+        CHotState() : nStep(0), bTerminated(false), mtxTerminate(), spTerminate()
         {}
     };
 
@@ -335,7 +349,10 @@ private:
         m_pSegment = std::make_shared<detail::CPromiseState>();
         m_hot.nStep.store(0, std::memory_order_relaxed);
         m_hot.bTerminated.store(false, std::memory_order_relaxed);
-        m_hot.nCode.store(kRejected, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lock(m_hot.mtxTerminate);
+            m_hot.spTerminate.reset();
+        }
     }
 
     /// @brief 把 Resume 投递到执行器（执行器不可用 → 以拒绝结束，不悬垂）。
@@ -346,13 +363,13 @@ private:
     {
         if (m_pExec == nullptr)
         {
-            Terminate(CPromiseResult::Reject(kStopped));
+            Terminate(CPromiseResult::Reject(CRefusal::Stopped()));
             return;
         }
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
         if (!spSelf)
         {
-            Terminate(CPromiseResult::Reject(kStopped));  // 无强引用（理论不应发生）。
+            Terminate(CPromiseResult::Reject(CRefusal::Stopped()));  // 无强引用（理论不应发生）。
             return;
         }
         if (!m_pExec->Post(
@@ -361,7 +378,7 @@ private:
                     Resume();
                 }))
         {
-            Terminate(CPromiseResult::Reject(kStopped));  // 执行器已停止 / 不可用。
+            Terminate(CPromiseResult::Reject(CRefusal::Stopped()));  // 执行器已停止 / 不可用。
         }
     }
 
@@ -375,7 +392,7 @@ private:
     {
         if (m_pExec == nullptr || m_pExec->IsStopped())
         {
-            Terminate(CPromiseResult::Reject(kStopped));
+            Terminate(CPromiseResult::Reject(CRefusal::Stopped()));
             return;
         }
         // 就地判定与 promise 层派发共用一处（多一条「线程池无积压」的负载感知条件）：
@@ -400,10 +417,15 @@ private:
     }
 
     /// @brief 标记终止（不 settle；等待协程体走到统一出口）。
+    ///
+    /// 拒绝原因整份留下（码 + 文案）—— 与 settle 的那个结果共享同一份对象（零分配）。
     void MarkTerminated(const CPromiseResult& result)
     {
-        m_hot.bTerminated.store(true, std::memory_order_relaxed);
-        m_hot.nCode.store(result.Code(), std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lock(m_hot.mtxTerminate);
+            m_hot.spTerminate = result.RefusalPtr();
+        }
+        m_hot.bTerminated.store(true, std::memory_order_release);
     }
 
     /// @brief 标记终止并立即 settle（同步失败的出口：协程体不会再被恢复）。
@@ -437,7 +459,7 @@ private:
         AwaitEach(pGroup, std::forward<TRest>(rest)...);
     }
 
-    /// @brief 并行 await：一条 promise settled（记首个拒绝码；全部结束时恢复 / 终止）。
+    /// @brief 并行 await：一条 promise settled（记首个拒绝原因；全部结束时恢复 / 终止）。
     void OnAwaitDone(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup, const CPromiseResult& result)
     {
         if (result.IsRejected())
@@ -445,14 +467,20 @@ private:
             int nExpected = 0;
             if (pGroup->bRejected.compare_exchange_strong(nExpected, 1))
             {
-                pGroup->nCode.store(result.Code(), std::memory_order_relaxed);  // 首个拒绝码。
+                std::lock_guard<std::mutex> lock(pGroup->mtxFirstRefusal);
+                pGroup->firstRefusal = result.AsRefusal();
             }
         }
         if (pGroup->nPending.fetch_sub(1, std::memory_order_acq_rel) == 1)
         {
             if (pGroup->bRejected.load(std::memory_order_relaxed))
             {
-                MarkTerminated(CPromiseResult::Reject(pGroup->nCode.load(std::memory_order_relaxed)));
+                CRefusal refusal = CRefusal::Rejected();
+                {
+                    std::lock_guard<std::mutex> lock(pGroup->mtxFirstRefusal);
+                    refusal = pGroup->firstRefusal;
+                }
+                MarkTerminated(CPromiseResult::Reject(refusal));  // 以首个拒绝原因终止（整份透传）。
             }
             ResumeInline();  // 就地续跑或投递回本执行器（负载感知）。
         }

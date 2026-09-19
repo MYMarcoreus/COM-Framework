@@ -186,7 +186,7 @@ private:
                     // 本回调在被调模块线程上执行：只做语义转换 + 改上下文 + settle。
                     if (result.IsRejected())
                     {
-                        fnReject(result.Code());  // 库存模块拒绝 → 本流程拒绝（原样透传）。
+                        fnReject(result.AsRefusal());  // 库存模块拒绝 → 本流程拒绝（原样透传）。
                         return;
                     }
                     spCtx->nStock = spStock->nAvail;
@@ -214,7 +214,7 @@ private:
                         fnResolve();
                     }))
             {
-                fnReject(common::async::kStopped);
+                fnReject(common::async::CRefusal::Stopped());
             }
         };
         return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -404,7 +404,7 @@ TEST(Module_BridgeHelperPropagatesRejection)
     auto fnCreateReject = [spStockModule](const std::shared_ptr<COrderCtx>& spSelf) -> common::async::CPromise<CCalleeCtx>
     {
         auto spStock = std::make_shared<CCalleeCtx>();
-        spStock->bReject = true;  // 让库存模块在第二步拒绝（码 = kRejectCode = kBusinessBase）。
+        spStock->bReject = true;  // 让库存模块在第二步拒绝（码 = kTestCodeBase）。
         spStock->spTrace = spSelf->spTrace;
         return spStockModule->QueryStockAsync(spStock);
     };
@@ -441,9 +441,9 @@ TEST(Module_BridgeHelperPropagatesRejection)
 
     const common::async::CPromiseResult resultBridge = promiseBridge.Await();
     ASSERT_TRUE(resultBridge.IsRejected());
-    ASSERT_EQ(resultBridge.Code(), common::async::kBusinessBase);  // 拒绝码原样透传（不是 kRejected）。
-    ASSERT_TRUE(resultTail.IsFulfilled());                         // Catch 已恢复：链尾兑现
-    ASSERT_EQ(nCaughtCode, common::async::kBusinessBase);
+    ASSERT_EQ(resultBridge.Code(), kTestCodeBase);  // 拒绝码原样透传（不是 kRejected）。
+    ASSERT_TRUE(resultTail.IsFulfilled());          // Catch 已恢复：链尾兑现
+    ASSERT_EQ(nCaughtCode, kTestCodeBase);
     ASSERT_EQ(spCtx->nStock, 0);                                          // 被拒绝 → 不搬数据
     ASSERT_EQ(spCtx->spTrace->strTrace, std::string("A1;B1;B2;C1;A3;"));  // A2 跳过，Catch 恢复后 A3 执行
 }

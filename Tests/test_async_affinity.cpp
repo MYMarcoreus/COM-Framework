@@ -242,7 +242,7 @@ private:
                     spCtx->idOnSettled = std::this_thread::get_id();
                     if (result.IsRejected())
                     {
-                        fnReject(result.Code());
+                        fnReject(result.AsRefusal());
                         return;
                     }
                     spCtx->nStock = spStock->nAvail;
@@ -265,7 +265,7 @@ private:
                         fnResolve();
                     }))
             {
-                fnReject(common::async::kStopped);
+                fnReject(common::async::CRefusal::Stopped());
             }
         };
         return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
