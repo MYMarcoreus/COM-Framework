@@ -73,7 +73,8 @@ bool CReadWriteGate::Submit(TaskKind eKind, std::function<void()> fnTask)
     }
 
     // ② 统一入队（严格按提交顺序），随后在锁内尝试从队首放行。
-    std::vector<CDispatchEntry> vecDispatch;
+    std::vector<CDispatchEntry>& vecDispatch = ScratchDispatchBuffer();
+    vecDispatch.clear();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         CDispatchEntry entry;
@@ -90,9 +91,53 @@ bool CReadWriteGate::Submit(TaskKind eKind, std::function<void()> fnTask)
 
 // #endregion
 
+// #region Inline
+
+//================ Inline ================
+
+/// @brief 能否「就地」跑本层（不投递、直接在当前线程继续）。
+///
+/// 两个条件（都在本函数里判定，不在调用方复制规则）：
+///  - 本线程正跑着「本门 + 同类」的任务：那时槽位已经在手，就地跑不新增占用 ——
+///    帧由「过门投递的任务」压上，就地跑下来的层沿用外层帧（同类）；
+///  - 无人在排队：有人排队就让路（就地会插队，破坏公平）。
+///
+/// @param eKind 本层类别。
+/// @return true 可以就地执行（调用方直接跑任务体即可，无需占位 / 归还）。
+bool CReadWriteGate::CanRunInline(TaskKind eKind) const
+{
+    // ① 手上的槽位是不是「本门 + 同类」（不在任务里 / 别的门 / 别的类别 → 都不能就地）。
+    const detail::CTaskFrame* pFrame = detail::TaskFrameTop();
+    if (pFrame == nullptr || pFrame->pGate != this || pFrame->eKind != eKind)
+    {
+        return false;
+    }
+
+    // ② 无人排队才让就地（先来后到：就地任务不得越过队列里的任务）。
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_dequeTasks.empty();
+}
+
+// #endregion
+
 // #region Internal
 
 //================ Internal ================
+
+/// @brief 放行收集缓冲（线程局部复用）。
+///
+/// 为什么复用：`Submit` / `OnTaskExit` 每次都要收集「本轮放行的任务」，临时 vector
+/// 会给每次投递带来一次堆分配。缓冲是线程局部的，容量在第一次用满后不再增长。
+///
+/// 安全前提：只在「锁内收集 → 锁外投递 → 清空」这一段里使用；投递动作只入队、
+/// 不同步回调（线程池不在这里跑任务），所以同一线程上不会嵌套使用它。
+///
+/// @return 本线程的收集缓冲（调用方负责先清空、用完由 `DispatchToPool` 清空）。
+std::vector<CReadWriteGate::CDispatchEntry>& CReadWriteGate::ScratchDispatchBuffer()
+{
+    static thread_local std::vector<CDispatchEntry> s_vecDispatch;
+    return s_vecDispatch;
+}
 
 /// @brief 空闲判定（持锁调用）。
 ///
@@ -159,7 +204,8 @@ void CReadWriteGate::PumpLocked(std::vector<CDispatchEntry>& vecDispatch)
 /// @param eKind 刚结束任务的类别（决定归还哪个槽位）。
 void CReadWriteGate::OnTaskExit(TaskKind eKind)
 {
-    std::vector<CDispatchEntry> vecDispatch;
+    std::vector<CDispatchEntry>& vecDispatch = ScratchDispatchBuffer();
+    vecDispatch.clear();
     {
         std::lock_guard<std::mutex> lock(m_mutex);
 
@@ -200,28 +246,17 @@ void CReadWriteGate::DispatchToPool(std::vector<CDispatchEntry>& vecDispatch)
         const TaskKind eKind = vecDispatch[i].eKind;
         std::function<void()> fnTask = std::move(vecDispatch[i].fnTask);
 
-        // 包装：执行 + 归还槽位；异常不逃出线程池线程（报告诊断后照常归还）。
-        std::function<void()> fnWrapped = [this, eKind, fnTask]()
-        {
-            try
-            {
-                fnTask();
-            }
-            catch (...)
-            {
-                ReportDiagnostic(detail::kDiagGateThrow);
-            }
-            OnTaskExit(eKind);
-        };
-        if (m_pPool->Submit(std::move(fnWrapped)))
+        // 包成「可移动」目标：执行 + 归还槽位（全程移动，每次投递只花一次分配）。
+        CWrappedTask wrapped(this, eKind, std::move(fnTask));
+        if (m_pPool->Submit(std::move(wrapped)))
         {
             continue;
         }
 
-        // 线程池不可用：稍后回滚槽位并放回队首（先收集，锁外统一的回滚临界区）。
+        // 线程池不可用：把任务体取回来，稍后回滚槽位并放回队首（统一的回滚临界区在下面）。
         CDispatchEntry entry;
         entry.eKind = eKind;
-        entry.fnTask = std::move(fnTask);
+        entry.fnTask = std::move(wrapped.fnTask);
         vecFailed.push_back(std::move(entry));
     }
 

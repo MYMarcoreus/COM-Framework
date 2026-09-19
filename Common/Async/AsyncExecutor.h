@@ -11,6 +11,7 @@
 #include "Async/Diagnostics.h"
 #include "Async/PromiseResult.h"
 #include "Async/PromiseTypes.h"
+#include "Async/ReadWriteGate.h"
 #include "Async/SourceLoc.h"
 #include "Thread/ThreadPool.h"
 
@@ -30,6 +31,14 @@
 //     （曾有过「逐层指定线程」的 `ThenInline` / `ThenOn`，2026-09-13 已移除 —— 理由见
 //      docs/common/async-impl.md §8.1「历史」：就地层的落点取决于上游何时落定，一层可能三种落点。）
 //   - 执行器停了以后怎么办：`Stop` + 句柄加固（新投递以系统侧失败 `Stopped()` 收口）。
+// 模块内读写（读写门，见 Async/ReadWriteGate.h）：
+//   执行器内部组合一个读写门，每条投递都带「类别」：读任务（kRead）可并发、写任务（kWrite）独占。
+//   于是「一个模块 = 一个执行器」时，模块数据在「读任务只读、写任务写完」的规约下不再需要自己的锁
+//   （锁在异步里跨不了挂起点，按任务粒度各自加锁又会占住工作线程且没有公平性）。
+//   默认类别是「写」—— 与旧行为（一切任务在池里排着跑）一致：要并发显式声明读
+//   （`PostRead` / `NewPromise(..., kind)`）。
+//   就地级联同样受门约束（判定在 `detail::ShouldInline` → `CReadWriteGate::CanRunInline`）：
+//   只有「本线程正跑着本门同类任务 + 无人在排队」才就地，否则入队 —— 前者保互斥，后者保公平。
 //
 // 调度对照（各自生态里的同类物）：
 //   CAsyncExecutor  ≈ Java `Executor` / C# `TaskScheduler` / Asio `io_context` / dispatch_queue
@@ -68,17 +77,21 @@ constexpr const char* kDiagPostEmpty = "exec.Post(): 任务为空（未提交）
 /// @brief 执行器句柄（生命周期加固核心）。
 ///
 /// promise / 协程持有本句柄：执行器析构后线程池对象仍存活（已投递任务跑完），
-/// 新投递被 m_bStopped 拒绝并转为拒绝结果。
+/// 新投递被 m_bStopped 拒绝并转为拒绝结果；读写门与线程池同寿命（模块的并发规则跟着句柄走）。
 struct CExecutorHandle
 {
     std::shared_ptr<common::thread::CThreadPool> m_pPool;  ///< 工作线程池。
+    std::shared_ptr<CReadWriteGate> m_pGate;               ///< 读写门（模块内读并发 / 写独占）。
     std::atomic<bool> m_bStopped;                          ///< 是否已停止（拒绝新投递）。
 
     CExecutorHandle() : m_bStopped(false)
     {}
 };
 
-/// @brief 向执行器句柄投递任务（句柄不可用时返回 false，不抛异常）。
+/// @brief 向执行器句柄「直投」任务（不过读写门）—— 只给「通知」这类必须送达的轻量任务用。
+///
+/// 通知受「保证送达」保护（执行器不可用时就地执行），不能去排队等槽位；业务任务请走
+/// 带类别的重载（过门）。
 ///
 /// @param pHandle 执行器句柄。
 /// @param fnTask 任务函数（移动投递）。
@@ -90,6 +103,21 @@ inline bool PostToHandle(const std::shared_ptr<CExecutorHandle>& pHandle, std::f
         return false;
     }
     return pHandle->m_pPool->Submit(std::move(fnTask));
+}
+
+/// @brief 向执行器句柄「按类别过门」投递任务 —— 业务任务（层派发 / Post）走这条。
+///
+/// @param pHandle 执行器句柄。
+/// @param eKind 任务类别（读可并发 / 写独占）。
+/// @param fnTask 任务函数（移动投递）。
+/// @return true 已接受（可能已投递，也可能在门口排队）；false 句柄不可用（空 / 已停止 / 门已关闭）。
+inline bool PostToHandle(const std::shared_ptr<CExecutorHandle>& pHandle, TaskKind eKind, std::function<void()> fnTask)
+{
+    if (pHandle == nullptr || pHandle->m_pGate == nullptr || pHandle->m_bStopped)
+    {
+        return false;
+    }
+    return pHandle->m_pGate->Submit(eKind, std::move(fnTask));
 }
 
 /// @brief 当前线程是否在某个执行器的工作线程上。
@@ -141,41 +169,55 @@ struct CInlineGuard
 /// 「就地还是投递」的唯一判定处（promise 的层派发与协程的续跑共用）：
 ///  - 已在本链执行器线程上：就地（省一次入队 + 保序）；
 ///  - 连续内联已达 `kMaxInlineDepth`：投递（防超长链爆栈）；
+///  - 读写门放行（`CanRunInline`）：本线程须持着本门「同类」槽位（读任务里的读层 / 写任务里的写层），
+///    且无人在排队 —— 换类别会自死锁（读里等写 = 等自己退出），插队会破坏公平；
 ///  - `bRequireIdle`：还要求线程池无积压（协程续跑用 —— 有积压时投递，保住并行度）。
 ///
 /// @param pExec 本链执行器句柄。
+/// @param eKind 本层类别（读 / 写）。
 /// @param bRequireIdle 是否要求线程池无积压才内联。
 /// @return true = 调用方应当直接执行任务体；false = 应当投递。
-inline bool ShouldInline(const std::shared_ptr<CExecutorHandle>& pExec, bool bRequireIdle = false)
+inline bool ShouldInline(const std::shared_ptr<CExecutorHandle>& pExec, TaskKind eKind, bool bRequireIdle = false)
 {
+    // ① 线程亲和 + 内联深度。
     if (!IsInExecutorThread(pExec) || InlineDepth() >= kMaxInlineDepth)
     {
         return false;
     }
-    return !bRequireIdle || (pExec != nullptr && pExec->m_pPool != nullptr && pExec->m_pPool->PendingCount() == 0);
+
+    // ② 读写门放行（同类 + 无人排队）。
+    if (pExec->m_pGate == nullptr || !pExec->m_pGate->CanRunInline(eKind))
+    {
+        return false;
+    }
+
+    // ③ 协程续跑的额外条件：线程池无积压。
+    return !bRequireIdle || (pExec->m_pPool != nullptr && pExec->m_pPool->PendingCount() == 0);
 }
 
-/// @brief 派发一个任务体：能就地就就地，否则投递回本链执行器。
+/// @brief 派发一个任务体：能就地就就地，否则按类别投递回本链执行器。
 ///
-/// 判定见 `ShouldInline`（就地）与 `PostToHandle`（投递）。
+/// 判定见 `ShouldInline`（就地）与 `PostToHandle`（投递）；就地跑在外层任务已持有的槽位里
+/// （不占位、不归还），投递则按类别过读写门排队。
 ///
 /// @param pExec 本链执行器句柄。
+/// @param eKind 本层类别（读 / 写）。
 /// @param fnTask 任务体（按值接收：就地执行或移动投递）。
 /// @return true 已就地执行 / 已投递；false 执行器不可用（调用方以 `Stopped()` 收口本层）。
-inline bool DispatchInlineOrPost(const std::shared_ptr<CExecutorHandle>& pExec, std::function<void()> fnTask)
+inline bool DispatchInlineOrPost(const std::shared_ptr<CExecutorHandle>& pExec, TaskKind eKind, std::function<void()> fnTask)
 {
-    if (ShouldInline(pExec))
+    if (ShouldInline(pExec, eKind))
     {
         CInlineGuard guard;  // 深度 +1 / -1 成对（异常 / 提前 return 也不漏减）。
         fnTask();
         return true;
     }
-    return PostToHandle(pExec, std::move(fnTask));
+    return PostToHandle(pExec, eKind, std::move(fnTask));
 }
 
 }  // namespace detail
 
-/// @brief 异步执行器：工作线程池 + 投递入口。
+/// @brief 异步执行器：工作线程池 + 读写门 + 投递入口。
 ///
 /// 非模板类；起 promise 通过模板成员 NewPromise 完成（上下文类型由参数推导）。
 class CAsyncExecutor
@@ -227,20 +269,24 @@ public:
 
     //================ Post ================
 
-    // 投递无返回值任务（fire-and-forget）。
+    // 投递无返回值任务（fire-and-forget；类别 = 写：与模块内其它任务互斥）。
     bool Post(std::function<void()> fnTask);
+
+    // 投递无返回值任务（显式声明只读：可与其它读任务并发）。
+    bool PostRead(std::function<void()> fnTask);
 
     //================ Chain ================
 
     // 起 promise（等价 JS `new Promise(executor)`）：创建 promise 并投递首层。
     template <typename TContext>
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext, typename CPromise<TContext>::ThenHandler fnHandler,
-        const CSourceLoc& loc = CSourceLoc());
+        const CSourceLoc& loc = CSourceLoc(), TaskKind eKind = TaskKind::kWrite);
 
     // 起 promise（对齐 JS `new Promise((resolve, reject) => ...)`）：由起链回调内部的 resolve / reject 兑现。
     template <typename TContext>
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
-        const typename CPromise<TContext>::ChainStarter& fnStarter, const CSourceLoc& loc = CSourceLoc());
+        const typename CPromise<TContext>::ChainStarter& fnStarter, const CSourceLoc& loc = CSourceLoc(),
+        TaskKind eKind = TaskKind::kWrite);
 
     //================ Combine ================
 
@@ -287,8 +333,11 @@ private:
         return m_pHandle;
     }
 
-    // 新建句柄（连同线程池对象：都带上本执行器的名字）。
+    // 新建句柄（连同线程池对象 + 读写门：都带上本执行器的名字）。
     std::shared_ptr<detail::CExecutorHandle> MakeHandle() const;
+
+    // 投递实现（Post / PostRead 共用）：包异常兜底后按类别过读写门。
+    bool PostImpl(TaskKind eKind, std::function<void()> fnTask);
 
     // 注意声明顺序：成员按「声明序」初始化，而 `m_pHandle` 的构造（MakeHandle）要用到名字 ——
     // 所以 `m_strName` 必须声明在它前面。

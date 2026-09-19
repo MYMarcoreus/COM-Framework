@@ -298,8 +298,9 @@ TEST(Module_SingleThreadSerializesOwnSteps)
         ASSERT_TRUE(vecStock[i]->idConnect == vecStock[0]->idConnect);
     }
 
-    // 顺序：单 worker + FIFO 投递 ⇒ 每条链的两步连在一起、链间依次排队
-    ASSERT_EQ(spTrace->strTrace, std::string("B1;B2;B1;B2;B1;B2;B1;B2;"));
+    // 顺序：单 worker + 公平 FIFO ⇒ 先到的 4 个连接步依次跑完，4 个读步排在它们后面
+    //（读写门的「不插队」规则：队列里有人在排队时，层不再就地级联 —— 每条链的两步因此被拆开）
+    ASSERT_EQ(spTrace->strTrace, std::string("B1;B1;B1;B1;B2;B2;B2;B2;"));
 }
 
 /// @brief 并发多条跨模块链：每条链自身顺序不乱，模块线程固定。

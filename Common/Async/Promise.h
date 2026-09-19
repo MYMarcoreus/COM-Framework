@@ -293,7 +293,7 @@ public:
         }
     }
 
-    /// @brief 登记处理器（执行器不可用时按策略收口）。
+    /// @brief 登记「层处理器」（已 settled 时按类别过读写门投递）。
     ///
     /// 两种送达策略：
     ///  - 「层处理器」（then / catch / finally / thenPromise，`bGuaranteedDelivery == false`）：
@@ -304,10 +304,12 @@ public:
     ///    而本层后续处理器走 `Dispatch`，执行器不可用时以 `Stopped()` 收口，链会立即结束。
     ///
     /// @param pHandle 执行器句柄（已 settled 时投递用）。
+    /// @param eKind 本层类别（读 / 写）。
     /// @param fnHandler 处理器（按值接收，登记时移动存储避免拷贝）。
-    /// @param bGuaranteedDelivery 是否要求「送达保证」（通知用 true）。
+    /// @param bGuaranteedDelivery 是否要求「送达保证」（通知用 true；层恒为 false）。
     /// @return true 已登记 / 已投递 / 已就地送达；false 仅当层处理器已 settled 且执行器不可用。
-    bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler, bool bGuaranteedDelivery = false)
+    bool AddHandler(
+        const std::shared_ptr<CExecutorHandle>& pHandle, TaskKind eKind, Handler fnHandler, bool bGuaranteedDelivery = false)
     {
         bool bFireNow = false;
         CPromiseResult result;
@@ -345,7 +347,9 @@ public:
         {
             fnHandler(result);
         };
-        if (PostToHandle(pHandle, fnRun))
+        // 层：按类别过读写门（可能排一小会儿队，但不会丢）；通知：直投（不过门，保证送达）。
+        const bool bPosted = bGuaranteedDelivery ? PostToHandle(pHandle, fnRun) : PostToHandle(pHandle, eKind, fnRun);
+        if (bPosted)
         {
             return true;
         }
@@ -362,6 +366,20 @@ public:
             fnRun();
         }
         return true;
+    }
+
+    /// @brief 登记「通知」（不过读写门）：执行器不可用时在调用线程就地送达，绝不丢弃。
+    ///
+    /// 与 `AddHandler` 的唯一差别：通知「保证送达」—— 不过读写门（不能去排队等槽位），
+    /// 所以通知里只应做轻量搬运 / 收尾，不要长时间占用模块（那会把排队中的任务一起拖住）。
+    ///
+    /// @param pHandle 执行器句柄（已 settled 时投递用）。
+    /// @param fnHandler 通知处理器。
+    /// @return 恒 true（通知绝不丢）。
+    bool AddNotice(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler)
+    {
+        // 类别只服务读写门，通知不过门：传写档占位（不使用）。
+        return AddHandler(pHandle, TaskKind::kWrite, fnHandler, /* bGuaranteedDelivery = */ true);
     }
 
     /// @brief 阻塞等待本状态 settle（先短自旋，超时再阻塞等待）。
@@ -652,12 +670,12 @@ std::function<void()> MakeResultRunner(const std::shared_ptr<TContext>& spContex
         });
 }
 
-/// @brief promise 共享核心：共享上下文 + 执行器句柄。
+/// @brief promise 共享核心：共享上下文 + 执行器句柄 + 读写类别。
 ///
-/// 一条链的所有层共用同一个核心（同一上下文 + 同一执行器），句柄持有者彼此
+/// 一条链的所有层共用同一个核心（同一上下文 + 同一执行器 + 同一类别），句柄持有者彼此
 /// 保活（执行器析构后链仍安全跑完）。
 ///
-/// 「本层怎么跑」的「调度策略」（就地内联 / 投递、内联深度限额）归属执行器侧
+/// 「本层怎么跑」的「调度策略」（就地内联 / 投递、内联深度限额、读写门准入）归属执行器侧
 /// （`detail::ShouldInline` / `detail::DispatchInlineOrPost`，在 AsyncExecutor.h）；
 /// 这里只做两件事：「造任务体」（`MakeThenRunner` / `MakeResultRunner`，层语义）
 /// 与「失败收口」（框架侧拒绝「执行器已停」）。
@@ -672,8 +690,9 @@ public:
     ///
     /// @param pHandle 执行器句柄（可为空：协程构造时尚未绑定执行器，`Start` 时注入）。
     /// @param spContext 共享上下文（「必传」；调用方负责在建链前备好数据，框架不管它的生命周期）。
-    CPromiseCore(const std::shared_ptr<CExecutorHandle>& pHandle, const std::shared_ptr<TContext>& spContext)
-        : m_pHandle(pHandle), m_spContext(spContext)
+    /// @param eKind 本链读写类别（读可并发 / 写独占；各层默认继承它，见 Async/ReadWriteGate.h）。
+    CPromiseCore(const std::shared_ptr<CExecutorHandle>& pHandle, const std::shared_ptr<TContext>& spContext, TaskKind eKind)
+        : m_pHandle(pHandle), m_spContext(spContext), m_eKind(eKind)
     {
         // 上下文强制传入：没有它就无从「共享」——断言把这一契约钉在唯一入口上。
         ASSERT_MSG(spContext != nullptr, "共享上下文必须由调用方传入（框架不做懒创建）");
@@ -695,6 +714,16 @@ public:
     const std::shared_ptr<CExecutorHandle>& Handle() const
     {
         return m_pHandle;
+    }
+
+    /// @brief 本链的读写类别（起链时定下、之后只读；各层默认继承它）。
+    ///
+    /// 调度用它决定本层的准入与就地：读层可并发进入模块，写层独占（见 Async/ReadWriteGate.h）。
+    ///
+    /// @return 本链类别。
+    TaskKind Kind() const
+    {
+        return m_eKind;
     }
 
     /// @brief 绑定执行器句柄（协程 Start 时注入）。
@@ -741,8 +770,9 @@ private:
     {
         ASSERT(pState != nullptr);  // 内部调用：本层状态恒存在。
 
-        // ① 派发：策略（已在本链执行器线程 → 就地；否则投递回去；超过内联深度也改投递）由执行器侧决定。
-        const bool bDispatched = DispatchInlineOrPost(Handle(), std::move(fnRun));
+        // ① 派发：策略（已在本链执行器线程 + 持本门同类槽位 + 无人在排队 → 就地；否则按类别过门投递；
+        //    超过内联深度也改投递）由执行器侧决定。
+        const bool bDispatched = DispatchInlineOrPost(Handle(), m_eKind, std::move(fnRun));
 
         // ② 派发失败（执行器已停 / 拒绝投递）→ 本层以框架侧失败收口，绝不让它永远 pending。
         if (!bDispatched)
@@ -754,6 +784,7 @@ private:
 private:
     std::shared_ptr<CExecutorHandle> m_pHandle;  ///< 执行器句柄。
     std::shared_ptr<TContext> m_spContext;       ///< 共享上下文（构造时传入，之后只读）。
+    TaskKind m_eKind;  ///< 本链读写类别（各层默认继承；构造时传入，之后只读）。
 };
 
 }  // namespace detail
@@ -879,7 +910,7 @@ public:
         const std::shared_ptr<detail::CPromiseState> pNextState = NewNextLayer(m_pState, loc, detail::kModeThen);
 
         // ② 在上游层登记「轮到本层时干什么」：上游失败 → 跳过；上游兑现 → 起子链并等它。
-        const bool bOk = pUpState->AddHandler(pCore->Handle(),
+        const bool bOk = pUpState->AddHandler(pCore->Handle(), pCore->Kind(),
             [pCore, pNextState, fnFactory](const CPromiseResult& upResult)
             {
                 // 上游失败 → 本层跳过，结果原样交给下一层（与 Then 一致）。
@@ -935,7 +966,8 @@ public:
                 BindChildSettle(promiseChild, fnApply, spSelf, fnResolve, fnReject);  // 规则只有一份。
             };
             // 父层 = 桥接层（工厂跑在它下面的作用域里）：这一层（以及它等到的子链）都能追回本链。
-            return NewFromHandle(pCore->Handle(), spSelf, fnStarter, loc);
+            // 类别继承本链：桥接层本身跑在本链的槽位里，子链的类别由它自己的起链入口决定。
+            return NewFromHandle(pCore->Handle(), spSelf, fnStarter, loc, pCore->Kind());
         };
         return ThenPromise(fnFactory, loc);
     }
@@ -953,13 +985,11 @@ public:
     /// @param fnSettled 收尾通知（入参为本层最终结果）。
     void OnSettled(const SettledNotice& fnSettled) const
     {
-        m_pState->AddHandler(
-            m_pCore->Handle(),
+        m_pState->AddNotice(m_pCore->Handle(),
             [fnSettled](const CPromiseResult& result)
             {
                 detail::RunNotice(fnSettled, result);  // 通知里抛异常：只报告，不逃出（否则 terminate）。
-            },
-            /* bGuaranteedDelivery = */ true);
+            });
     }
 
     /// @brief onSettled（「指定执行器」版）：通知在给定执行器线程上触发（不在结算线程）。
@@ -978,14 +1008,12 @@ public:
     void OnSettledOn(CAsyncExecutor& executor, const SettledNotice& fnSettled) const
     {
         const std::shared_ptr<detail::CExecutorHandle> pTarget = executor.Handle();
-        m_pState->AddHandler(
-            pTarget,
+        m_pState->AddNotice(pTarget,
             [pTarget, fnSettled](const CPromiseResult& result)
             {
                 // 与 OnSettled 对称：通知路径各一行，差异只在「去哪条线程」。
                 detail::RunNoticeOn(pTarget, fnSettled, result);
-            },
-            /* bGuaranteedDelivery = */ true);
+            });
     }
 
     /// @brief await：阻塞等待本层结果（JS await 的阻塞版，不抛异常）。
@@ -1093,7 +1121,7 @@ private:
         // 起点结果视为「已兑现」；首层恒以 then 语义执行（catch / finally 是追加层的写法）。
         // ③ 造首层任务体并「强制投递」（不内联：起链线程不跑业务代码）。
         std::function<void()> fnRun = detail::MakeThenRunner(pCore->Context(), pState, fnHandler);
-        if (!detail::PostToHandle(pCore->Handle(), std::move(fnRun)))
+        if (!detail::PostToHandle(pCore->Handle(), pCore->Kind(), std::move(fnRun)))
         {
             SettleStopped(pState);  // 执行器不可用 → 首层被拒绝（链绝不永久 pending）。
         }
@@ -1225,9 +1253,10 @@ private:
     /// @param spContext 共享上下文（本 promise 所有层共用该实例）。
     /// @param fnStarter 起链回调（拿到 resolve / reject 句柄）。
     /// @param loc 注册点源码位置。
+    /// @param eKind 本链读写类别（读可并发 / 写独占）。
     /// @return 指向本 promise 的句柄（pending；由 fnStarter 触发 settle）。
     static CPromise NewFromHandle(const std::shared_ptr<detail::CExecutorHandle>& pHandle,
-        const std::shared_ptr<TContext>& spContext, const ChainStarter& fnStarter, const CSourceLoc& loc)
+        const std::shared_ptr<TContext>& spContext, const ChainStarter& fnStarter, const CSourceLoc& loc, TaskKind eKind)
     {
         // ① 建「由外部 settle」的层状态（pending：等 fnStarter 里的 resolve / reject）。
         const std::shared_ptr<detail::CPromiseState> pState = std::make_shared<detail::CPromiseState>();
@@ -1243,7 +1272,7 @@ private:
         // ③ 这里恒为「立即启动」：与 JS 的 `new Promise(executor)` 一样，起链回调当场同步执行。
         RunChainStarter(pState, fnStarter);
 
-        return CPromise(std::make_shared<detail::CPromiseCore<TContext> >(pHandle, spContext), pState);
+        return CPromise(std::make_shared<detail::CPromiseCore<TContext> >(pHandle, spContext, eKind), pState);
     }
 
     /// @brief 内部：执行 promise 工厂并 adopt 子 promise（ThenPromise 的收口逻辑）。
@@ -1372,7 +1401,7 @@ private:
         const std::shared_ptr<detail::CPromiseState> pNextState = NewNextLayer(m_pState, loc, detail::kModeThen);
 
         // ② 在本层登记「本层跑完后启动新层」：本层未落定就只是登记；已落定则立刻投递去跑。
-        const bool bOk = m_pState->AddHandler(pCore->Handle(),
+        const bool bOk = m_pState->AddHandler(pCore->Handle(), pCore->Kind(),
             [pCore, pNextState, fnHandler](const CPromiseResult& upResult)
             {
                 // 三态语义（then）：上游被拒绝 → 本层跳过，结果原样交给下一层（失败即停）。
@@ -1416,7 +1445,7 @@ private:
         const std::shared_ptr<detail::CPromiseState> pNextState = NewNextLayer(m_pState, loc, eMode);
 
         // ② 在本层登记「本层跑完后启动新层」：未落定 → 只登记；已落定 → 立刻投递去跑。
-        const bool bOk = m_pState->AddHandler(pCore->Handle(),
+        const bool bOk = m_pState->AddHandler(pCore->Handle(), pCore->Kind(),
             [pCore, pNextState, fnHandler, eMode](const CPromiseResult& upResult)
             {
                 // 三态语义（catch）：上游已兑现 → 本层跳过（finally 从不跳过：成败都执行）。
@@ -1475,13 +1504,16 @@ private:
 /// @param spContext 共享上下文（所有层共用）。
 /// @param fnHandler 首层处理器（固定签名）。
 /// @param loc 注册点源码位置（可选）。
+/// @param eKind 本链读写类别（默认写 = 与模块内其它任务互斥；读链请显式传 `TaskKind::kRead`）。
 /// @return 指向首层的 promise 句柄。
 template <typename TContext>
 CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& spContext,
-    typename CPromise<TContext>::ThenHandler fnHandler, const CSourceLoc& loc /* = CSourceLoc() */)
+    typename CPromise<TContext>::ThenHandler fnHandler, const CSourceLoc& loc /* = CSourceLoc() */,
+    TaskKind eKind /* = TaskKind::kWrite */)
 {
-    // 起链 = 建核心（共享上下文 + 本执行器句柄）+ 起首层（建层状态 + 投递执行），只有这一条路。
-    return CPromise<TContext>::StartChain(std::make_shared<detail::CPromiseCore<TContext> >(Handle(), spContext), fnHandler, loc);
+    // 起链 = 建核心（共享上下文 + 本执行器句柄 + 类别）+ 起首层（建层状态 + 投递执行），只有这一条路。
+    return CPromise<TContext>::StartChain(
+        std::make_shared<detail::CPromiseCore<TContext> >(Handle(), spContext, eKind), fnHandler, loc);
 }
 
 /// @brief 起链实现（对齐 JS `new Promise(executor)`）：由 `fnStarter` 里的 resolve / reject 兑现。
@@ -1494,12 +1526,14 @@ CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& s
 /// @param spContext 共享上下文（本 promise 所有层共用该实例）。
 /// @param fnStarter 起链回调（对齐 JS executor：拿到 resolve / reject 句柄）。
 /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
+/// @param eKind 本链读写类别（默认写；读链请显式传 `TaskKind::kRead`）。
 /// @return 指向本 promise 的句柄（pending；由 fnStarter 触发 settle）。
 template <typename TContext>
 CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& spContext,
-    const typename CPromise<TContext>::ChainStarter& fnStarter, const CSourceLoc& loc /* = CSourceLoc() */)
+    const typename CPromise<TContext>::ChainStarter& fnStarter, const CSourceLoc& loc /* = CSourceLoc() */,
+    TaskKind eKind /* = TaskKind::kWrite */)
 {
-    return CPromise<TContext>::NewFromHandle(Handle(), spContext, fnStarter, loc);
+    return CPromise<TContext>::NewFromHandle(Handle(), spContext, fnStarter, loc, eKind);
 }
 
 }  // namespace async

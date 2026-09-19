@@ -626,7 +626,8 @@ TEST(Promise_ConcurrentAwait)
     exec.Stop();
 }
 
-/// @brief 多条链并行执行（不被串行化）。
+/// @brief 多条链并行执行（不被串行化）。显式声明为「读」链 —— 读任务之间可并发；
+///        默认的写链会与模块内其它任务互斥（见 Async/ReadWriteGate.h）。
 TEST(Promise_ParallelPromises)
 {
     common::async::CAsyncExecutor exec(4);
@@ -653,7 +654,7 @@ TEST(Promise_ParallelPromises)
                 nActive.fetch_sub(1);
                 return common::async::CPromiseResult::Resolve();
             },
-            ASYNC_LOC);
+            ASYNC_LOC, common::async::TaskKind::kRead);
         chains.push_back(chain);
     }
 

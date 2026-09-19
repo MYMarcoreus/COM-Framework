@@ -8,6 +8,7 @@
 #include <mutex>
 #include <vector>
 
+#include "Async/Diagnostics.h"
 #include "Thread/ThreadPool.h"
 
 // ====================================================================
@@ -34,6 +35,14 @@
 //   「写→读」）；统一队列严格按提交顺序放行，队首是写且读者未排空时直接停住，其后的读/写
 //   一律等待 —— 后来的任务永远不会越过先前的任务（ServerCore/Exec 时代的同款实现即因此定型）。
 //
+// 就地（不投递、直接在当前线程继续）：
+//   执行器侧的层派发有一条快路径 —— 本线程已经在本执行器的线程上、且正跑着本门的「同类」任务时，
+//   下一层直接在当前线程接着跑（省一次入队 + 唤醒）。判定收敛在 CanRunInline 一处，只有两个条件：
+//     - 同类：槽位已经在手（读任务里的读层 / 写任务里的写层），不需要也不允许换类别 ——
+//             读任务里出现写层只能排队等别的读者退出，写任务里出现读层也只能排队；
+//     - 无人在排队：有人排队就让路（就地会插队，破坏公平）。
+//   注意「就地」不额外占槽位、也不额外归还：它跑在外层任务已经持有的槽位里。
+//
 // 与执行器的关系：由 CAsyncExecutor 组合（挂在执行器句柄上，与线程池同寿命），执行器的每条
 //   投递路径都带类别过这道门；门本身不认识 promise / 协程 / 上下文，只认识「任务」。
 //
@@ -53,10 +62,54 @@ enum class TaskKind
     kWrite  ///< 写任务：独占执行（排斥本门内所有读写任务）。
 };
 
+class CReadWriteGate;  // 前置声明（任务帧只存指针）。
+
 namespace detail {
 
 /// @brief 读写门侧诊断文案（集中一处：测试断言常量，而不是去匹配子串）。
 constexpr const char* kDiagGateThrow = "读写门：任务抛出了异常（已兜住，未终止进程）";
+
+/// @brief 「当前任务」帧：本线程正跑着哪个门的哪类任务（「就地」判定的唯一依据）。
+///
+/// 只有「过门投递出去的任务」会压帧（见 ReadWriteGate.cpp 的包装任务）——
+/// 就地跑下来的层沿用外层任务的帧：同类，槽位已经在手，不需要新的占用。
+/// 因此 `CanRunInline(kind)` 只需回答两件事：① 本线程手上是不是本门的同类槽位；② 有没有人在排队。
+struct CTaskFrame
+{
+    const CReadWriteGate* pGate;  ///< 所属门。
+    TaskKind eKind;               ///< 任务类别。
+    const CTaskFrame* pPrev;      ///< 外层帧（弹栈还原用；不在任务里时为 nullptr）。
+};
+
+/// @brief 当前线程的任务帧栈顶（不在任何任务里 = nullptr）。
+///
+/// @return 栈顶帧的引用（可读、可写：守卫在构造 / 析构时改写它）。
+inline const CTaskFrame*& TaskFrameTop()
+{
+    static thread_local const CTaskFrame* s_pFrameTop = nullptr;
+    return s_pFrameTop;
+}
+
+/// @brief 任务帧守卫（构造压栈、析构弹栈）。
+///
+/// 压帧的时机 = 任务体开跑之前；弹帧 = 任务体跑完（异常路径也弹，因为它是栈上对象）。
+struct CTaskFrameGuard
+{
+    CTaskFrame m_frame;  ///< 本帧（地址稳定：守卫活在任务的调用栈上）。
+
+    CTaskFrameGuard(const CReadWriteGate* pGate, TaskKind eKind) : m_frame{pGate, eKind, TaskFrameTop()}
+    {
+        TaskFrameTop() = &m_frame;
+    }
+
+    ~CTaskFrameGuard()
+    {
+        TaskFrameTop() = m_frame.pPrev;
+    }
+
+    CTaskFrameGuard(const CTaskFrameGuard&) = delete;
+    CTaskFrameGuard& operator=(const CTaskFrameGuard&) = delete;
+};
 
 }  // namespace detail
 
@@ -91,6 +144,11 @@ public:
     // 提交任务（线程安全；严格按提交顺序入队，能放行则立即投递到线程池）。
     bool Submit(TaskKind eKind, std::function<void()> fnTask);
 
+    //================ Inline ================
+
+    // 能否「就地」跑本层（不投递、直接在当前线程继续）。
+    bool CanRunInline(TaskKind eKind) const;
+
     //================ Query ================
 
     // 是否已关闭。
@@ -118,8 +176,57 @@ private:
         std::function<void()> fnTask;  ///< 任务体。
     };
 
+    /// @brief 过门任务包装（把「跑任务 + 归还槽位」合成一个「可移动」目标）。
+    ///
+    /// 为什么不用 lambda 包一层：C++11 的 lambda 不能「移动捕获」——包一层会把任务体
+    /// 拷一份，而 `std::function` 的拷贝要再走一次堆分配（每次投递 +2 次分配）。
+    /// 本类型可移动：构造时把任务体「移」进来，之后全程移动存储 ——
+    /// 于是每次投递只花一次分配（`std::function` 存它自己的目标块），符合门定下的开销预算。
+    struct CWrappedTask
+    {
+        CReadWriteGate* pGate;         ///< 所属门（归还槽位用）。
+        TaskKind eKind;                ///< 任务类别。
+        std::function<void()> fnTask;  ///< 任务体。
+
+        /// @brief 构造（移动任务体）。
+        CWrappedTask(CReadWriteGate* pGate, TaskKind eKind, std::function<void()> fnTask)
+            : pGate(pGate), eKind(eKind), fnTask(std::move(fnTask))
+        {}
+
+        /// @brief 移动构造（`std::function` 存放目标时用它，避免拷贝任务体）。
+        CWrappedTask(CWrappedTask&& other) : pGate(other.pGate), eKind(other.eKind), fnTask(std::move(other.fnTask))
+        {}
+
+        /// @brief 拷贝构造（只为满足 `std::function` 目标的 CopyConstructible 要求）。
+        ///
+        /// @note 实际不会走到：投递全程是移动（`Submit(CTask&&)` → 池队列移动存储）。
+        CWrappedTask(const CWrappedTask& other) : pGate(other.pGate), eKind(other.eKind), fnTask(other.fnTask)
+        {}
+
+        CWrappedTask& operator=(const CWrappedTask&) = delete;
+        CWrappedTask& operator=(CWrappedTask&&) = delete;
+
+        /// @brief 执行任务体（压「当前任务」帧 → 兜异常 → 归还槽位）。
+        void operator()()
+        {
+            const detail::CTaskFrameGuard frame(pGate, eKind);  // 跑完自动弹帧（异常路径也弹）。
+            try
+            {
+                fnTask();
+            }
+            catch (...)
+            {
+                ReportDiagnostic(detail::kDiagGateThrow);
+            }
+            pGate->OnTaskExit(eKind);
+        }
+    };
+
     // 空闲判定（持锁调用）。
     bool IsIdleLocked() const;
+
+    // 放行收集缓冲（线程局部复用，省掉每次投递的临时 vector 分配）。
+    static std::vector<CDispatchEntry>& ScratchDispatchBuffer();
 
     // 公平 FIFO：从队首顺序放行可准入的任务（持锁调用）。
     void PumpLocked(std::vector<CDispatchEntry>& vecDispatch);

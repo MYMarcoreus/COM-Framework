@@ -34,15 +34,17 @@ CAsyncExecutor::~CAsyncExecutor()
     Stop();
 }
 
-/// @brief 新建句柄（连同线程池对象：都带上本执行器的名字）。
+/// @brief 新建句柄（连同线程池对象 + 读写门：都带上本执行器的名字）。
 ///
 /// 前提：`m_strName` 已经初始化（它在 `m_pHandle` 「之前」声明，所以构造时轮得到）。
 ///
-/// @return 新句柄（线程池对象已创建但未启动）。
+/// @return 新句柄（线程池对象与读写门已创建，线程池未启动）。
 std::shared_ptr<detail::CExecutorHandle> CAsyncExecutor::MakeHandle() const
 {
     std::shared_ptr<detail::CExecutorHandle> pHandle(new detail::CExecutorHandle());
     pHandle->m_pPool.reset(new common::thread::CThreadPool(m_nThreadCount, m_strName));
+    // 读写门绑在这条线程池上（池只执行、门只调度）；与池同寿命：门跟着句柄走。
+    pHandle->m_pGate.reset(new CReadWriteGate(pHandle->m_pPool.get()));
     return pHandle;
 }
 
@@ -67,13 +69,37 @@ bool CAsyncExecutor::Start()
     return m_pHandle->m_pPool->Start();
 }
 
-/// @brief 投递无返回值任务（fire-and-forget）。
+/// @brief 投递无返回值任务（fire-and-forget；类别 = 写）。
 ///
-/// 按值接收 + 移动投递，避免 std::function 拷贝。
+/// 「写」= 与模块内其它任务互斥（默认与旧行为一致）；只读任务请用 `PostRead`。
 ///
 /// @param fnTask 任务函数。
-/// @return true 提交成功；false 执行器已停止 / 线程池未启动。
+/// @return true 已接受（已投递或在门口排队）；false 执行器已停止 / 未启动。
 bool CAsyncExecutor::Post(std::function<void()> fnTask)
+{
+    return PostImpl(TaskKind::kWrite, std::move(fnTask));
+}
+
+/// @brief 投递无返回值任务（显式声明只读：可与其它读任务并发）。
+///
+/// 规约：读任务不得修改模块状态（并发读之间没有互斥）。
+///
+/// @param fnTask 任务函数。
+/// @return true 已接受（已投递或在门口排队）；false 执行器已停止 / 未启动。
+bool CAsyncExecutor::PostRead(std::function<void()> fnTask)
+{
+    return PostImpl(TaskKind::kRead, std::move(fnTask));
+}
+
+/// @brief 投递实现（`Post` / `PostRead` 共用）：包异常兜底后按类别过读写门。
+///
+/// 包一层异常兜底的原因：线程池 worker 不捕获异常（异常逃出线程函数即 `std::terminate`），
+/// 而这里投递的是「用户任务」，所以在框架边界上收口。
+///
+/// @param eKind 任务类别（读可并发 / 写独占）。
+/// @param fnTask 任务函数（按值接收 + 移动投递，避免 std::function 拷贝）。
+/// @return true 已接受（已投递或在门口排队）；false 执行器已停止 / 未启动 / 门已关闭。
+bool CAsyncExecutor::PostImpl(TaskKind eKind, std::function<void()> fnTask)
 {
     // 直接解引用句柄（不复制 shared_ptr），避免每次提交时原子引用计数
     // 在高并发下争抢同一 cache line。
@@ -87,8 +113,6 @@ bool CAsyncExecutor::Post(std::function<void()> fnTask)
         return false;
     }
 
-    // 包一层异常兜底：线程池 worker 不捕获异常（异常逃出线程函数即 std::terminate），
-    // 而 Post 投递的是「用户任务」，所以在框架边界上收口。
     std::function<void()> fnTaskGuarded = [fnTask]()
     {
         try
@@ -100,18 +124,34 @@ bool CAsyncExecutor::Post(std::function<void()> fnTask)
             ReportDiagnostic(detail::kDiagPostThrow);
         }
     };
-    return m_pHandle->m_pPool->Submit(std::move(fnTaskGuarded));  // 移动投递；未启动 → false。
+    return m_pHandle->m_pGate->Submit(eKind, std::move(fnTaskGuarded));  // 未启动 / 已关闭 → false。
 }
 
 /// @brief 停止并等待任务完成（优雅关闭）。
 ///
+/// 顺序固定（反了会让门口排队的任务永远投不出去 —— 它们已经算「已接受」）：
+///  ① 关读写门（拒新入队）→ ② 标记停止（`Post` / 层的快速拒绝路径）→ ③ 等门排空
+///  （已接受的任务跑完）→ ④ 停线程池。
+///
+/// 注：先关门再标记，是为了让「看到 `IsStopped()` 为真」的调用方确定「门也已经关了」
+/// （门是唯一权威的准入点，标记只是快速路径）—— 否则「刚标记、还没关门」的窗口里
+/// 仍可能accept一个新层，停止语义就不可预测。
+///
 /// 保留句柄与线程池对象：已创建的 promise / 协程仍绑定本执行器句柄，停止后
-/// 新投递被拒绝（对应层以系统侧失败 `Stopped()` 收口），不会访问已销毁对象。
+/// 新投递被拒绝（对应层以「执行器已停」收口），不会访问已销毁对象。
 void CAsyncExecutor::Stop()
 {
     const std::shared_ptr<detail::CExecutorHandle>& pHandle = m_pHandle;
-    pHandle->m_bStopped = true;
-    pHandle->m_pPool->Stop();  // 线程池对象保留（回到未启动状态）。
+    if (pHandle->m_pGate != nullptr)
+    {
+        pHandle->m_pGate->Close();  // ① 门拒新（队列里已有的照旧跑完）。
+    }
+    pHandle->m_bStopped = true;  // ② 标记停止（Post / 层的快速拒绝路径）。
+    if (pHandle->m_pGate != nullptr)
+    {
+        pHandle->m_pGate->Drain();  // ③ 等门口排队的任务跑完。
+    }
+    pHandle->m_pPool->Stop();  // ④ 线程池对象保留（回到未启动状态）。
 }
 
 /// @brief 是否正在运行。

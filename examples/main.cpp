@@ -61,6 +61,7 @@ using common::async::CAsyncExecutor;
 using common::async::CCoroutine;
 using common::async::CPromise;
 using common::async::CPromiseResult;
+using common::async::TaskKind;
 #if defined(ASYNC_DEBUG_TRACE)
 using common::async::CLayerInfo;
 #endif
@@ -700,6 +701,9 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
 
 /// @brief 起一条「一步就完」的小链（组合器演示用）。
 ///
+/// 类别显式给 `kRead`：本演示里这些分支是「并行查询」，读任务之间才能并发 ——
+/// 默认的写任务会与执行器内其它任务互斥（`Promise.race` 的「先到者」就无从谈起了）。
+///
 /// @param exec 执行器。
 /// @param spCtx 上下文。
 /// @param bReject true = 这一层拒绝。
@@ -718,7 +722,7 @@ CPromise<COrderCtx> MakeQuickChain(
         }
         return CPromiseResult::Resolve();
     };
-    return exec.NewPromise(spCtx, fnStep, ASYNC_LOC);
+    return exec.NewPromise(spCtx, fnStep, ASYNC_LOC, TaskKind::kRead);
 }
 
 /// @brief 组合器一族：WhenAll / WhenAllSettled / WhenRace / WhenAny。

@@ -115,7 +115,8 @@ public:
     ///
     /// @param spContext 共享上下文（「必传」：与 promise 一致，框架不做懒创建）。
     explicit CCoroutine(const std::shared_ptr<TContext>& spContext)
-        : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(std::shared_ptr<detail::CExecutorHandle>(), spContext)),
+        : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(
+              std::shared_ptr<detail::CExecutorHandle>(), spContext, TaskKind::kWrite)),
           m_pSegment(std::make_shared<detail::CPromiseState>()),
           m_pExec(nullptr),
           m_wpSelf(),
@@ -385,8 +386,10 @@ private:
             return;
         }
         // 就地判定与 promise 层派发共用一处（多一条「线程池无积压」的负载感知条件）：
-        // 有积压时投递回本执行器，保住并行度。
-        if (detail::ShouldInline(m_pExec->Handle(), /* bRequireIdle = */ true))
+        // 类别按「写」判：协程体（以及它起、它等的子 promise）是本执行器上的写任务，
+        // 只有当前线程正持着本门写槽位时才就地 —— 否则恢复要排队（读任务里等到的
+        // 协程恢复不能就地跑写代码）。
+        if (detail::ShouldInline(m_pExec->Handle(), TaskKind::kWrite, /* bRequireIdle = */ true))
         {
             detail::CInlineGuard guard;  // 深度 +1 / -1 成对。
             Resume();
