@@ -93,12 +93,12 @@ struct CBillingContext
     {}
 };
 
-/// 本用例的业务错误码（**业务码取值自定**：框架不解释业务码，也不再保留任何区间）。
+/// 本用例的业务错误码（业务码从 kBusinessBase 起取）。
 enum ThenMixCode
 {
-    kCodeOutOfStock = 1,    ///< 库存不足。
-    kCodeBadOrder = 2,      ///< 订单参数非法（单笔最多 10 件）。
-    kCodeReserveFailed = 3  ///< 内层链：确认预占失败。
+    kCodeOutOfStock = common::async::kBusinessBase + 1,    ///< 库存不足。
+    kCodeBadOrder = common::async::kBusinessBase + 2,      ///< 订单参数非法（单笔最多 10 件）。
+    kCodeReserveFailed = common::async::kBusinessBase + 3  ///< 内层链：确认预占失败。
 };
 
 /// @brief 断言助手：失败时打印原因，返回本条的通过状态。
@@ -291,12 +291,12 @@ private:
         if (spCtx->nSku <= 0 || spCtx->nQty <= 0)
         {
             spCtx->strTrace += "校验失败(参数非法);";
-            return common::async::CPromiseResult::Reject(common::async::CRefusal(kCodeBadOrder, "订单参数非法"));
+            return common::async::CPromiseResult::Reject(kCodeBadOrder);
         }
         if (spCtx->nQty > 10)
         {
             spCtx->strTrace += "校验失败(单笔最多 10 件);";
-            return common::async::CPromiseResult::Reject(common::async::CRefusal(kCodeBadOrder, "单笔最多 10 件"));
+            return common::async::CPromiseResult::Reject(kCodeBadOrder);
         }
         spCtx->strTrace += "校验通过;";
         return common::async::CPromiseResult::Resolve();
@@ -326,7 +326,7 @@ private:
                     // 本回调在库存模块的线程上：只做语义转换 + 改上下文 + settle。
                     if (result.IsRejected())
                     {
-                        fnReject(result.AsRefusal());  // 库存模块拒绝 → 本流程拒绝（整份原因原样透传）。
+                        fnReject(result.Code());  // 库存模块拒绝 → 本流程拒绝（原样透传）。
                         return;
                     }
                     spCtx->nStock = spStock->nAvail;
@@ -335,7 +335,7 @@ private:
                     if (!spCtx->bStockEnough)
                     {
                         spCtx->strTrace += "库存不足;";
-                        fnReject(common::async::CRefusal(kCodeOutOfStock, "库存不足"));  // 业务拒绝：后续 then 不执行。
+                        fnReject(kCodeOutOfStock);  // 业务拒绝：后续 then 不执行。
                         return;
                     }
                     fnResolve();
@@ -375,7 +375,7 @@ private:
     {
         if (spCtx->bFailReserve)
         {
-            return common::async::CPromiseResult::Reject(common::async::CRefusal(kCodeReserveFailed, "确认预占失败"));
+            return common::async::CPromiseResult::Reject(kCodeReserveFailed);
         }
         spCtx->strTrace += "确认预占;";
         return common::async::CPromiseResult::Resolve();

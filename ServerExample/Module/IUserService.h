@@ -32,14 +32,14 @@ struct CUserOpContext
     {}
 };
 
-/// @brief 用户业务错误码（**业务码取值自定**：框架不解释业务码，也不再保留任何区间）。
+/// @brief 用户业务错误码（业务错误码从 kBusinessBase 起取）。
 enum UserServiceCode
 {
-    kUserInvalidParam = 11,    ///< 入参非法（id / 用户名）。
-    kUserNotFound = 12,        ///< 用户不存在。
-    kUserDuplicate = 13,       ///< 用户已存在（重复注册）。
-    kUserDbUnavailable = 14,   ///< 数据访问失败 / 不可用。
-    kUserVersionConflict = 15  ///< 乐观锁重试次数用尽。
+    kUserInvalidParam = common::async::kBusinessBase + 11,    ///< 入参非法（id / 用户名）。
+    kUserNotFound = common::async::kBusinessBase + 12,        ///< 用户不存在。
+    kUserDuplicate = common::async::kBusinessBase + 13,       ///< 用户已存在（重复注册）。
+    kUserDbUnavailable = common::async::kBusinessBase + 14,   ///< 数据访问失败 / 不可用。
+    kUserVersionConflict = common::async::kBusinessBase + 15  ///< 乐观锁重试次数用尽。
 };
 
 /// @brief 用户业务接口标识。
@@ -70,7 +70,8 @@ public:
     virtual common::async::CPromise<CUserOpContext> RegisterUserAsync(const CUserRecord& recRequest) = 0;
 
     // 异步修改用户名（改；乐观锁冲突在回调里自动重试）。
-    virtual common::async::CPromise<CUserOpContext> RenameUserAsync(std::uint64_t nUserId, const std::string& strNewName) = 0;
+    virtual common::async::CPromise<CUserOpContext> RenameUserAsync(
+        std::uint64_t nUserId, const std::string& strNewName) = 0;
 
     // 异步删除用户（删）。
     virtual common::async::CPromise<CUserOpContext> RemoveUserAsync(std::uint64_t nUserId) = 0;

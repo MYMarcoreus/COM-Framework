@@ -136,22 +136,19 @@ p.Then([&exec](common::async::CPromiseResult, const std::shared_ptr<Ctx>& sp)  /
 普通 `Then` 的处理器只能返回 `CPromiseResult`，里面起的链只能是旁支；要参与当前链必须 `ThenPromise`
 （同上下文直接把子链返回即可；**跨上下文**先 `exec.NewPromise(spCtx, fnStarter)` 桥接）。
 
-### 2.4 错误是异常载荷（码 + 文案 + 来源），不只是码
+### 2.4 错误是错误码，不是异常对象
 
-JS 用 `reject(Error)`（可以带 message / stack）；本框架的拒绝载荷是 `CRefusal`，
-同样「自带说明」，但不依赖 RTTI、不走栈展开：
+JS 用 `reject(Error)`，可以带 message / stack；本框架用 `int` 码（业务码从 `kBusinessBase` 起），
+框架只解释 4 个保留码：
 
-| 字段 | 说明 |
+| 码 | 含义 |
 |---|---|
-| `Code()` | 错误码。业务码**取值自定**（0/1/2/3 都合法）；框架侧只产生 `kRejected = 1` / `kStopped = 2` / `kException = 3` |
-| `Message()` | 人可读文案（处理器抛异常时就是那个异常的 `what()`） |
-| `From()` / `IsFromFramework()` | 来源：业务构造的还是框架构造的 —— **看来源，不看数值区间** |
+| `kFulfilled = 0` | 兑现 —— **注意 `Reject(0)` 等于兑现**，别拿 0 当错误码 |
+| `kRejected = 1` | 拒绝（未指定码时的默认值） |
+| `kStopped = 2` | 执行器已停止 / 投递失败 |
+| `kException = 3` | 处理器或起链回调（`ChainStarter`）抛了异常（框架捕获并转成拒绝，不会向调用方抛） |
 
-`kFulfilled = 0` 只是兑现时 `Code()` 的返回值：判兑现请用 `IsFulfilled()`，
-**不要用 `Code() == 0`**（业务码可以是 0 —— 旧设计里 0 被「兑现」占用，做不到这一点）。
-
-要带更多上下文就写进共享上下文；跨模块时在桥接层把对方的拒绝**整份透传**
-（`fnReject(childResult.AsRefusal())`），要翻译语义就在那里换码 + 换文案。
+要带上下文就打日志 / 记到共享上下文里；跨模块时在桥接层把对方的码翻译成本模块的业务码。
 
 ### 2.5 线程模型不同：没有事件循环，回调可能跑在别人的线程上
 

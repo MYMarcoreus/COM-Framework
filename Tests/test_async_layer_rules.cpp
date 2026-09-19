@@ -15,8 +15,7 @@
 TEST(LayerRules_ShouldPassThrough)
 {
     const common::async::CPromiseResult ok = common::async::CPromiseResult::Resolve();
-    const common::async::CPromiseResult fail =
-        common::async::CPromiseResult::Reject(common::async::CRefusal(kTestCodeBase + 1, "业务拒绝"));
+    const common::async::CPromiseResult fail = common::async::CPromiseResult::Reject(common::async::kBusinessBase + 1);
 
     // then：上一层兑现才执行；被拒绝 → 跳过（失败即停）。
     ASSERT_TRUE(!common::async::detail::ShouldPassThrough(common::async::detail::kModeThen, ok));
@@ -35,21 +34,23 @@ TEST(LayerRules_ShouldPassThrough)
 TEST(LayerRules_ResolveLayerResult)
 {
     const common::async::CPromiseResult ok = common::async::CPromiseResult::Resolve();
-    const common::async::CPromiseResult fail =
-        common::async::CPromiseResult::Reject(common::async::CRefusal(kTestCodeBase + 2, "业务拒绝"));
+    const common::async::CPromiseResult fail = common::async::CPromiseResult::Reject(common::async::kBusinessBase + 2);
 
     // then：处理器返回什么就是什么（拒绝即停）。
-    ASSERT_EQ(common::async::detail::ResolveLayerResult(common::async::detail::kModeThen, ok, fail).Code(), fail.Code());
     ASSERT_EQ(
-        common::async::detail::ResolveLayerResult(common::async::detail::kModeThen, ok, ok).Code(), common::async::kFulfilled);
+        common::async::detail::ResolveLayerResult(common::async::detail::kModeThen, ok, fail).Code(), fail.Code());
+    ASSERT_EQ(common::async::detail::ResolveLayerResult(common::async::detail::kModeThen, ok, ok).Code(),
+        common::async::kFulfilled);
 
     // catch：可恢复 —— 处理器返回 Resolve() 即吞掉拒绝，链继续。
+    ASSERT_EQ(common::async::detail::ResolveLayerResult(common::async::detail::kModeCatch, fail, ok).Code(),
+        common::async::kFulfilled);
     ASSERT_EQ(
-        common::async::detail::ResolveLayerResult(common::async::detail::kModeCatch, fail, ok).Code(), common::async::kFulfilled);
-    ASSERT_EQ(common::async::detail::ResolveLayerResult(common::async::detail::kModeCatch, fail, fail).Code(), fail.Code());
+        common::async::detail::ResolveLayerResult(common::async::detail::kModeCatch, fail, fail).Code(), fail.Code());
 
     // finally：忽略处理器返回值，原样透传上一层结果。
-    ASSERT_EQ(common::async::detail::ResolveLayerResult(common::async::detail::kModeFinally, fail, ok).Code(), fail.Code());
+    ASSERT_EQ(
+        common::async::detail::ResolveLayerResult(common::async::detail::kModeFinally, fail, ok).Code(), fail.Code());
     ASSERT_EQ(common::async::detail::ResolveLayerResult(common::async::detail::kModeFinally, ok, fail).Code(),
         common::async::kFulfilled);
 }

@@ -36,10 +36,10 @@ static const int kStressBranches = 64;      ///< 一层分叉的分支数。
 static const int kStressWaiters = 8;        ///< 同时 Await 同一链的线程数。
 static const int kStressMixedChains = 100;  ///< 混合成败的链数（一半被拒绝）。
 
-/// 业务拒绝码（取值自定，框架不解释）。
+/// 业务拒绝码（从 kBusinessBase 起取）。
 enum
 {
-    kStockReject = kTestCodeBase
+    kStockReject = common::async::kBusinessBase
 };
 
 // ==================== 共享脚手架 ====================
@@ -359,7 +359,7 @@ private:
                     spCtx->idStockThread = std::this_thread::get_id();
                     if (result.IsRejected())
                     {
-                        fnReject(result.AsRefusal());
+                        fnReject(result.Code());
                         return;
                     }
                     spCtx->nStock = spStock->nAvail;
@@ -382,7 +382,7 @@ private:
                         fnResolve();
                     }))
             {
-                fnReject(common::async::CRefusal::Stopped());
+                fnReject(common::async::kStopped);
             }
         };
         return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -423,7 +423,7 @@ private:
                         {
                             if (spCtx->nBranchFail.load() > 0)
                             {
-                                fnReject(common::async::CRefusal(kStockReject, "业务拒绝"));
+                                fnReject(kStockReject);
                                 return;
                             }
                             fnResolve();

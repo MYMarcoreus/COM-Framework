@@ -168,7 +168,7 @@ private:
                     ++spCtx->nNotify;
                     if (result.IsRejected())
                     {
-                        fnReject(result.AsRefusal());
+                        fnReject(result.Code());
                         return;
                     }
                     fnResolve();

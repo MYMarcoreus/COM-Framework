@@ -3,11 +3,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -45,7 +43,7 @@
 //   promise.finally(onFinally)     →  p.Finally(StepLog);   // 无论成败都执行，不改结果
 //   await promise                  →  p.Await()             // 阻塞等待（返回 CPromiseResult）
 //   promise 已 settle              →  p.IsSettled()
-//   resolve() / reject(reason)     →  CPromiseResult::Resolve() / CPromiseResult::Reject(CRefusal(码, 文案))
+//   resolve() / reject(reason)     →  CPromiseResult::Resolve() / CPromiseResult::Reject(码)
 //   fulfilled / rejected           →  result.IsFulfilled() / result.IsRejected()
 //   then(onFulfilled 返回 promise)  →  p.ThenPromise(FnFactory);   // 等子 promise（flatten）
 //   + 把子 promise 的数据搬回本上下文 →  p.ThenBridge(FnCreate, FnApply);  // 跨模块 / 跨上下文桥接（推荐）
@@ -75,7 +73,7 @@
 //  - 失败即停：then 层在上一层被拒绝时不执行，拒绝原因沿链透传；
 //  - catch 层可恢复：返回 Resolve() 即吞掉拒绝，链从本层之后继续；
 //  - finally 层只做收尾（回滚 / 清理 / 日志），**忽略返回值、原样透传上层结果**；
-//  - 层内异常 → 本层被拒绝（kException，异常文案随拒绝原因保留），不向调用方抛出；
+//  - 层内异常 → 本层被拒绝（kException），不向调用方抛出；
 //  - 首层投递一次；后续层都回**本链执行器**：已在该执行器线程上就地级联（超过 kMaxInlineDepth
 //    改投递防爆栈），否则（跨执行器 / 跨模块返回）投递回本链执行器 —— 所以**每层都在本链执行器线程上**，
 //    逐层线程归属不需要逐个去想（要「换执行器」请用「模块自持执行器 + 子链 / `ThenBridge`」）。
@@ -93,7 +91,7 @@
 //
 // ⑤ 跨模块 / 跨上下文组合（**纯异步、零阻塞、不需要协程**）：把别的 promise 桥接进本流程 ——
 //      ① 用 `exec.NewPromise(spCtx, fnStarter)` 造一条「由外部 settle」的 promise
-//         （起链回调里发起别的模块的调用，在其 OnSettled 回调里 resolve() / reject(拒绝原因)）；
+//         （起链回调里发起别的模块的调用，在其 OnSettled 回调里 resolve() / reject(码)）；
 //      ② 用 `p.ThenPromise([&]{ return bridgePromise; })` 把它接进本流程（then 的 promise 版）。
 //      ③ ①② 合一、不用写样板的简写：`p.ThenBridge(fnCreate, fnApply, ASYNC_LOC)` ——
 //       fnCreate 在轮到本层时起子链，fnApply 在子链兑现时把它的上下文数据搬进本上下文。
@@ -120,7 +118,7 @@
 //                                                      // 上一层被拒绝时框架直接跳过本层（失败即停），
 //                                                      // 要处理拒绝请用 Catch（async-usage.md §4）
 //     spCtx->strAccount = ReadAccountFromRequest();
-//     return spCtx->strAccount.empty() ? CPromiseResult::Reject(CRefusal(kCodeNoAccount, "账户为空"))
+//     return spCtx->strAccount.empty() ? CPromiseResult::Reject(kCodeNoAccount)
 //                                      : CPromiseResult::Resolve();
 // }
 //
@@ -391,7 +389,7 @@ public:
                     return m_bSettled.load(std::memory_order_relaxed);
                 }))
         {
-            return CPromiseResult::Reject(CRefusal::Stopped());  // 超时：不落定本层，只向调用方报「没等到」。
+            return CPromiseResult::Reject(kStopped);  // 超时：不落定本层，只向调用方报「没等到」。
         }
         return m_result;
     }
@@ -578,14 +576,9 @@ std::function<void()> MakeHandlerRunner(const std::shared_ptr<TContext>& spConte
             const CPromiseResult ownResult = fnHandler(upResult, spContext);
             result = ResolveLayerResult(eMode, upResult, ownResult);  // finally 忽略 ownResult，原样透传。
         }
-        catch (const std::exception& e)
-        {
-            // 处理器抛异常 → 拒绝（finally 抛异常同样覆盖）；异常文案随拒绝原因带走。
-            result = CPromiseResult::Reject(CRefusal::Exception(e.what()));
-        }
         catch (...)
         {
-            result = CPromiseResult::Reject(CRefusal::Exception(nullptr));
+            result = CPromiseResult::Reject(kException);  // 处理器抛异常 → 拒绝（finally 抛异常同样覆盖）。
         }
 #if defined(ASYNC_DEBUG_TRACE)
         pState->SetSelfDurationMs(frame.ElapsedMs());  // trace：本层耗时（落定前写一次）。
@@ -666,7 +659,7 @@ public:
         // 派发策略（就地 / 投递 / 深度限额）在执行器侧；这里只管「造任务体 + 失败收口」。
         if (!DispatchInlineOrPost(Handle(), std::move(fnRun)))
         {
-            pState->Settle(CPromiseResult::Reject(CRefusal::Stopped()));  // 执行器不可用 → 本层被拒绝。
+            pState->Settle(CPromiseResult::Reject(kStopped));  // 执行器不可用 → 本层被拒绝。
         }
     }
 
@@ -706,12 +699,12 @@ public:
     /// 兑现函数（对齐 JS `new Promise` 交给 executor 的 resolve）。
     using ResolveFn = std::function<void()>;
 
-    /// 拒绝函数（对齐 JS `new Promise` 交给 executor 的 reject；reason = 码 + 文案）。
-    using RejectFn = std::function<void(const CRefusal& refusal)>;
+    /// 拒绝函数（对齐 JS `new Promise` 交给 executor 的 reject；reason 用错误码表达）。
+    using RejectFn = std::function<void(int nCode)>;
 
     /// executor：对齐 JS `new Promise((resolve, reject) => { ... })` 的入参。
     ///
-    /// 只应发起异步动作并注册回调，由回调调用 resolve() / reject(拒绝原因) 兑现或拒绝本
+    /// 只应发起异步动作并注册回调，由回调调用 resolve() / reject(码) 兑现或拒绝本
     /// promise —— 非阻塞，不占工作线程。
     using ChainStarter = std::function<void(const ResolveFn& fnResolve, const RejectFn& fnReject)>;
 
@@ -1050,7 +1043,7 @@ private:
     /// @param pState 本层状态。
     static void SettleStopped(const std::shared_ptr<detail::CPromiseState>& pState)
     {
-        pState->Settle(CPromiseResult::Reject(CRefusal::Stopped()));
+        pState->Settle(CPromiseResult::Reject(kStopped));
     }
 
     /// @brief 内部：阻塞等待的统一入口（`Await` / `AwaitFor` 共用）：先预警，再交给本层状态。
@@ -1065,14 +1058,14 @@ private:
 
     /// @brief 内部：把「子链落定 → 搬数据 → 收口」登记到子链上（`ThenBridge` 的唯一规则）。
     ///
-    /// 子链被拒绝 → `fnReject(拒绝原因)`；子链兑现 → `fnApply(本上下文, 子链上下文)` 后 `fnResolve()`；
-    /// 搬运抛异常 → `fnReject(CRefusal::Exception(what))`。子链上下文在本层线程上取好，避免搬运回调里再访子链。
+    /// 子链被拒绝 → `fnReject(拒绝码)`；子链兑现 → `fnApply(本上下文, 子链上下文)` 后 `fnResolve()`；
+    /// 搬运抛异常 → `fnReject(kException)`。子链上下文在本层线程上取好，避免搬运回调里再访子链。
     ///
     /// @param promiseChild 要等待的子链（上下文类型任意）。
     /// @param fnApply 数据搬运：入参为本流程上下文与子链上下文。
     /// @param spSelf 本流程共享上下文（交给 fnApply）。
     /// @param fnResolve 子链兑现后的收口动作。
-    /// @param fnReject 失败收口动作（子链的拒绝原因原样透传 / 搬运异常的 kException）。
+    /// @param fnReject 失败收口动作（子链拒绝码 / 搬运异常的 kException）。
     template <class TChildContext, class TFnApply>
     static void BindChildSettle(const CPromise<TChildContext>& promiseChild, TFnApply fnApply,
         const std::shared_ptr<TContext>& spSelf, const ResolveFn& fnResolve, const RejectFn& fnReject)
@@ -1083,22 +1076,16 @@ private:
             {
                 if (childResult.IsRejected())
                 {
-                    // 子链拒绝：整份拒绝原因（码 + 文案 + 来源）原样透传。
-                    fnReject(childResult.AsRefusal());
+                    fnReject(childResult.Code());  // 子链拒绝：拒绝码原样透传。
                     return;
                 }
                 try
                 {
                     fnApply(spSelf, spChildCtx);  // 搬数据（跑在子链结算线程上，见 ThenBridge 的 @warning）。
                 }
-                catch (const std::exception& e)
-                {
-                    fnReject(CRefusal::Exception(e.what()));  // 搬运抛异常 → 本层被拒绝（不向外抛）。
-                    return;
-                }
                 catch (...)
                 {
-                    fnReject(CRefusal::Exception(nullptr));
+                    fnReject(kException);  // 搬运抛异常 → 本层被拒绝（不向外抛）。
                     return;
                 }
                 fnResolve();
@@ -1165,14 +1152,9 @@ private:
                     pState->Settle(childResult);
                 });
         }
-        catch (const std::exception& e)
-        {
-            // 工厂内异常 / 子链构造失败 → 本层被拒绝（异常文案带走）。
-            pState->Settle(CPromiseResult::Reject(CRefusal::Exception(e.what())));
-        }
         catch (...)
         {
-            pState->Settle(CPromiseResult::Reject(CRefusal::Exception(nullptr)));
+            pState->Settle(CPromiseResult::Reject(kException));  // 工厂内异常 / 子链构造失败 → 本层被拒绝。
         }
     }
 
@@ -1186,9 +1168,9 @@ private:
         {
             pState->Settle(CPromiseResult::Resolve());
         };
-        RejectFn fnReject = [pState](const CRefusal& refusal)
+        RejectFn fnReject = [pState](int nCode)
         {
-            pState->Settle(CPromiseResult::Reject(refusal));
+            pState->Settle(CPromiseResult::Reject(nCode));
         };
         try
         {
@@ -1198,16 +1180,12 @@ private:
             }
             else
             {
-                fnReject(CRefusal::Rejected());  // 未给执行体：本 promise 直接被拒绝。
+                fnReject(kRejected);  // 未给执行体：本 promise 直接被拒绝。
             }
-        }
-        catch (const std::exception& e)
-        {
-            fnReject(CRefusal::Exception(e.what()));  // 起链回调内异常 → 本 promise 被拒绝（与层内异常一致）。
         }
         catch (...)
         {
-            fnReject(CRefusal::Exception(nullptr));
+            fnReject(kException);  // 起链回调内异常 → 本 promise 被拒绝（与层内异常一致）。
         }
     }
 

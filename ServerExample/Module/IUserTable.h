@@ -34,21 +34,21 @@ struct CUserTableOp
 {
     std::uint64_t nUserId;   ///< 目标用户 id（查询 / 删除用；插入时为 0 表示自增分配）。
     CUserRecord recRequest;  ///< 入参记录（插入 / 更新用；更新的 nVersion 为期望版本）。
-    CUserRecord recResult;   ///< 结果记录（查询命中 / 写入后回读；版本冲突时为库中最新行）。
-    bool bFound;             ///< 是否命中记录（读表层写入，供后续层判断）。
-    bool bSimulateDbError;   ///< 演示开关：true 时读表层抛出异常（模拟数据库驱动故障）。
-    std::string strTrace;    ///< 层执行轨迹（观察流程走向与排障用）。
+    CUserRecord recResult;  ///< 结果记录（查询命中 / 写入后回读；版本冲突时为库中最新行）。
+    bool bFound;            ///< 是否命中记录（读表层写入，供后续层判断）。
+    bool bSimulateDbError;  ///< 演示开关：true 时读表层抛出异常（模拟数据库驱动故障）。
+    std::string strTrace;   ///< 层执行轨迹（观察流程走向与排障用）。
 
     CUserTableOp() : nUserId(0), bFound(false), bSimulateDbError(false)
     {}
 };
 
-/// @brief 用户信息表错误码（**业务码取值自定**：框架不解释业务码，也不再保留任何区间）。
+/// @brief 用户信息表错误码（业务错误码从 kBusinessBase 起取）。
 enum UserTableCode
 {
-    kDbRowNotFound = 1,     ///< 记录不存在。
-    kDbDuplicateKey = 2,    ///< 主键冲突（重复插入）。
-    kDbVersionConflict = 3  ///< 乐观锁版本冲突。
+    kDbRowNotFound = common::async::kBusinessBase + 1,     ///< 记录不存在。
+    kDbDuplicateKey = common::async::kBusinessBase + 2,    ///< 主键冲突（重复插入）。
+    kDbVersionConflict = common::async::kBusinessBase + 3  ///< 乐观锁版本冲突。
 };
 
 /// @brief 用户信息表接口标识。

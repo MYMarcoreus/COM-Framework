@@ -5,12 +5,6 @@
 #include <string>
 #include <vector>
 
-/// @brief 测试用业务码起点。
-///
-/// 框架**不再规定业务码区间**（业务码可以是任意 int，兑现与否看 `IsFulfilled()`，不看码值）；
-/// 这里只是让测试码与框架码 0..3 一眼可分、便于阅读。
-const int kTestCodeBase = 100;
-
 namespace testfw {
 
 /// @brief 测试用例。

@@ -61,7 +61,6 @@ using common::async::CAsyncExecutor;
 using common::async::CCoroutine;
 using common::async::CPromise;
 using common::async::CPromiseResult;
-using common::async::CRefusal;
 #if defined(ASYNC_DEBUG_TRACE)
 using common::async::CLayerInfo;
 #endif
@@ -72,11 +71,11 @@ namespace {
 // 一、通用小工具
 // ====================================================================
 
-/// 示例业务错误码（**业务码取值自定**：框架不解释业务码，也不再保留任何区间）。
+/// 示例业务错误码（业务码从 kBusinessBase 起取）。
 enum CErrCode
 {
-    kErrBadParam = 1,  ///< 参数非法。
-    kErrNoStock = 2    ///< 库存不足。
+    kErrBadParam = common::async::kBusinessBase + 1,  ///< 参数非法。
+    kErrNoStock = common::async::kBusinessBase + 2    ///< 库存不足。
 };
 
 /// @brief 睡一会儿（模拟 IO；示例里不真的连数据库）。
@@ -310,7 +309,7 @@ CPromiseResult StepCheckStock(CPromiseResult upResult, const std::shared_ptr<COr
     spCtx->strTrace += "查库存;";
     if (spCtx->bFailStock)
     {
-        return CPromiseResult::Reject(CRefusal(kErrNoStock, "库存不足"));  // 失败即停：④…⑪ 都不执行
+        return CPromiseResult::Reject(kErrNoStock);  // 失败即停：④…⑪ 都不执行
     }
     spCtx->nStock = 5;
     return CPromiseResult::Resolve();
@@ -477,7 +476,7 @@ public:
     /// @brief 对外异步函数：写一条账单。
     ///
     /// 回调式起链：`fnStarter` 里发起异步动作（真实场景是 IO / RPC），完成时调
-    /// `fnResolve()` / `fnReject(common::async::CRefusal(码, "拒绝"))`；它只登记动作，绝不阻塞调用方线程。
+    /// `fnResolve()` / `fnReject(码)`；它只登记动作，绝不阻塞调用方线程。
     ///
     /// @param nOrderId 订单号。
     /// @param nTotal 金额。
@@ -502,7 +501,7 @@ public:
                 });
             if (!bPosted)
             {
-                fnReject(CRefusal::Stopped());  // 模块已停：别让子链永远挂着
+                fnReject(common::async::kStopped);  // 模块已停：别让子链永远挂着
             }
         };
 
@@ -612,7 +611,7 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
         TraceHere("② 校验参数（then = lambda）");
         if (spSelf->nQty <= 0)
         {
-            return CPromiseResult::Reject(CRefusal(kErrBadParam, "参数非法"));
+            return CPromiseResult::Reject(kErrBadParam);
         }
         spSelf->strTrace += "校验;";
         return CPromiseResult::Resolve();
@@ -732,7 +731,7 @@ CPromise<COrderCtx> MakeQuickChain(
         SleepMs(nSleepMs);
         if (bReject)
         {
-            return CPromiseResult::Reject(common::async::CRefusal(nCode, "组合器演示：拒绝"));
+            return CPromiseResult::Reject(nCode);
         }
         return CPromiseResult::Resolve();
     };

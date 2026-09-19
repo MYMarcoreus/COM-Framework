@@ -106,7 +106,7 @@ common::async::CPromiseResult StepValidateUserId(
     if (spCtx->nUserId == 0)
     {
         spCtx->strError = "用户 id 非法";
-        return common::async::CPromiseResult::Reject(common::async::CRefusal(kUserInvalidParam, "入参非法"));
+        return common::async::CPromiseResult::Reject(kUserInvalidParam);
     }
     return common::async::CPromiseResult::Resolve();
 }
@@ -125,17 +125,17 @@ common::async::CPromiseResult StepValidateRecord(
     if (!IsValidUserName(spCtx->recRequest.strName))
     {
         spCtx->strError = "用户名非法（1-" + std::to_string(kMaxNameLength) + " 个字母 / 数字 / 下划线 / 连字符）";
-        return common::async::CPromiseResult::Reject(common::async::CRefusal(kUserInvalidParam, "入参非法"));
+        return common::async::CPromiseResult::Reject(kUserInvalidParam);
     }
     if (spCtx->recRequest.strMail.find('@') == std::string::npos)
     {
         spCtx->strError = "邮箱格式非法";
-        return common::async::CPromiseResult::Reject(common::async::CRefusal(kUserInvalidParam, "入参非法"));
+        return common::async::CPromiseResult::Reject(kUserInvalidParam);
     }
     if (spCtx->recRequest.nLevel <= 0)
     {
         spCtx->strError = "用户等级非法";
-        return common::async::CPromiseResult::Reject(common::async::CRefusal(kUserInvalidParam, "入参非法"));
+        return common::async::CPromiseResult::Reject(kUserInvalidParam);
     }
     return common::async::CPromiseResult::Resolve();
 }
@@ -154,7 +154,7 @@ common::async::CPromiseResult StepRejectIfAbsent(
     {
         spCtx->strError = "用户不存在";
         spCtx->strTrace += "拒绝(用户不存在);";
-        return common::async::CPromiseResult::Reject(common::async::CRefusal(kUserNotFound, "用户不存在"));
+        return common::async::CPromiseResult::Reject(kUserNotFound);
     }
     return common::async::CPromiseResult::Resolve();
 }
@@ -173,7 +173,7 @@ common::async::CPromiseResult StepRejectIfExists(
     {
         spCtx->strError = "用户已存在";
         spCtx->strTrace += "拒绝(用户已存在);";
-        return common::async::CPromiseResult::Reject(common::async::CRefusal(kUserDuplicate, "用户已存在"));
+        return common::async::CPromiseResult::Reject(kUserDuplicate);
     }
     return common::async::CPromiseResult::Resolve();
 }
@@ -191,7 +191,7 @@ common::async::CPromiseResult StepPrepareRename(
     if (!spCtx->bExists)
     {
         spCtx->strError = "用户不存在";
-        return common::async::CPromiseResult::Reject(common::async::CRefusal(kUserNotFound, "用户不存在"));
+        return common::async::CPromiseResult::Reject(kUserNotFound);
     }
 
     CUserRecord recRequest = spCtx->recResult;  // 沿用库中其余字段。
@@ -268,7 +268,7 @@ CUserPromise BridgeQueryUser(const CFlowDeps& deps, const std::shared_ptr<CUserO
                     }
                     spCtx->strError = "查询失败：数据访问码=" + std::to_string(result.Code());
                     spCtx->strTrace += "失败(查询);";
-                    fnReject(common::async::CRefusal(kUserDbUnavailable, "数据访问不可用"));
+                    fnReject(kUserDbUnavailable);
                 });
     };
     return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -302,12 +302,12 @@ CUserPromise BridgeInsertUser(const CFlowDeps& deps, const std::shared_ptr<CUser
                     {
                         spCtx->strError = "用户已存在";
                         spCtx->strTrace += "写库冲突;";
-                        fnReject(common::async::CRefusal(kUserDuplicate, "用户已存在"));
+                        fnReject(kUserDuplicate);
                         return;
                     }
                     spCtx->strError = "插入失败：数据访问码=" + std::to_string(result.Code());
                     spCtx->strTrace += "失败(插入);";
-                    fnReject(common::async::CRefusal(kUserDbUnavailable, "数据访问不可用"));
+                    fnReject(kUserDbUnavailable);
                 });
     };
     return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -348,8 +348,7 @@ void UpdateUserAttempt(const CFlowDeps& deps, const std::shared_ptr<CUserOpConte
                     spCtx->strError =
                         bConflict ? "乐观锁冲突重试次数用尽" : ("更新失败：数据访问码=" + std::to_string(result.Code()));
                     spCtx->strTrace += "失败(更新);";
-                    fnReject(common::async::CRefusal(
-                        bConflict ? kUserVersionConflict : kUserDbUnavailable, bConflict ? "乐观锁冲突" : "数据访问不可用"));
+                    fnReject(bConflict ? kUserVersionConflict : kUserDbUnavailable);
                     return;
                 }
 
@@ -401,12 +400,12 @@ CUserPromise BridgeDeleteUser(const CFlowDeps& deps, const std::shared_ptr<CUser
                     if (result.Code() == kDbRowNotFound)
                     {
                         spCtx->strError = "用户不存在";
-                        fnReject(common::async::CRefusal(kUserNotFound, "用户不存在"));
+                        fnReject(kUserNotFound);
                         return;
                     }
                     spCtx->strError = "删除失败：数据访问码=" + std::to_string(result.Code());
                     spCtx->strTrace += "失败(删除);";
-                    fnReject(common::async::CRefusal(kUserDbUnavailable, "数据访问不可用"));
+                    fnReject(kUserDbUnavailable);
                 });
     };
     return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -894,7 +893,7 @@ static CUserPromise MakeRejectedPromise(const CFlowDeps& deps, const std::shared
     CUserPromise::ChainStarter fnStarter = [spCtx](const ResolveFn& /*fnResolve*/, const RejectFn& fnReject)
     {
         spCtx->strError = "数据访问模块不可用";
-        fnReject(common::async::CRefusal(kUserDbUnavailable, "数据访问不可用"));
+        fnReject(kUserDbUnavailable);
     };
     return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
 }

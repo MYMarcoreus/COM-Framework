@@ -335,7 +335,7 @@ enum GatherPolicy
 inline CPromiseResult ResolveEmptyGather(GatherPolicy ePolicy)
 {
     return (ePolicy == kGatherAll || ePolicy == kGatherAllSettled) ? CPromiseResult::Resolve()
-                                                                   : CPromiseResult::Reject(CRefusal::Rejected());
+                                                                   : CPromiseResult::Reject(kRejected);
 }
 
 /// @brief 组合器聚合状态（把 N 个子 promise 的落定折算成「一条聚合链」的落定）。
@@ -353,13 +353,13 @@ public:
     /// @param nTotal 子 promise 总数（> 0；空集合由调用方在收口前先处理）。
     /// @param fnResolve 兑现聚合链的当前层。
     /// @param fnReject 拒绝聚合链的当前层。
-    CGatherState(GatherPolicy ePolicy, int nTotal, const std::function<void()>& fnResolve,
-        const std::function<void(const CRefusal&)>& fnReject)
+    CGatherState(
+        GatherPolicy ePolicy, int nTotal, const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
         : m_ePolicy(ePolicy),
           m_nPending(nTotal),
           m_bRejectSeen(false),
           m_bDone(false),
-          m_firstRefusal(CRefusal::Rejected()),
+          m_nFirstRejectCode(kRejected),
           m_fnResolve(fnResolve),
           m_fnReject(fnReject)
     {}
@@ -371,7 +371,7 @@ public:
     {
         bool bResolve = false;
         bool bReject = false;
-        CRefusal refusal = CRefusal::Rejected();
+        int nCode = 0;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             if (m_bDone)
@@ -383,7 +383,7 @@ public:
             if (!result.IsFulfilled() && !m_bRejectSeen)
             {
                 m_bRejectSeen = true;
-                m_firstRefusal = result.AsRefusal();  // `any` / `race` 在收口时用它（整份拒绝原因）。
+                m_nFirstRejectCode = result.Code();  // `any` 在全部拒绝时用它收口。
             }
 
             switch (m_ePolicy)
@@ -399,7 +399,7 @@ public:
                     {
                         m_bDone = true;
                         bReject = true;
-                        refusal = result.AsRefusal();
+                        nCode = result.Code();
                     }
                     break;
                 case kGatherAllSettled:
@@ -412,7 +412,7 @@ public:
                     m_bDone = true;
                     bResolve = result.IsFulfilled();
                     bReject = !bResolve;
-                    refusal = bResolve ? refusal : result.AsRefusal();
+                    nCode = m_nFirstRejectCode;
                     break;
                 case kGatherAny:
                 default:
@@ -426,7 +426,7 @@ public:
                     {
                         m_bDone = true;
                         bReject = true;
-                        refusal = m_firstRefusal;
+                        nCode = m_nFirstRejectCode;
                     }
                     break;
             }
@@ -439,19 +439,19 @@ public:
         }
         if (bReject && m_fnReject)
         {
-            m_fnReject(refusal);
+            m_fnReject(nCode);
         }
     }
 
 private:
-    std::mutex m_mutex;                 ///< 保护下面的计数（子 promise 在不同线程上落定）。
-    GatherPolicy m_ePolicy;             ///< 策略（GatherPolicy 四档）。
-    int m_nPending;                     ///< 尚未落定的子 promise 数。
-    bool m_bRejectSeen;                 ///< 是否已见过拒绝（`any` / `race` 收口要用首个拒绝原因）。
-    bool m_bDone;                       ///< 聚合是否已收口（收口后忽略迟到的子 promise）。
-    CRefusal m_firstRefusal;            ///< 首个拒绝原因（m_bRejectSeen 为 true 时有效）。
-    std::function<void()> m_fnResolve;  ///< 兑现聚合链的当前层。
-    std::function<void(const CRefusal&)> m_fnReject;  ///< 拒绝聚合链的当前层。
+    std::mutex m_mutex;                   ///< 保护下面的计数（子 promise 在不同线程上落定）。
+    GatherPolicy m_ePolicy;               ///< 策略（GatherPolicy 四档）。
+    int m_nPending;                       ///< 尚未落定的子 promise 数。
+    bool m_bRejectSeen;                   ///< 是否已见过拒绝（`any` 收口要用首个拒绝码）。
+    bool m_bDone;                         ///< 聚合是否已收口（收口后忽略迟到的子 promise）。
+    int m_nFirstRejectCode;               ///< 首个拒绝码（m_bRejectSeen 为 true 时有效）。
+    std::function<void()> m_fnResolve;    ///< 兑现聚合链的当前层。
+    std::function<void(int)> m_fnReject;  ///< 拒绝聚合链的当前层。
 };
 
 /// @brief 把「子 promise 落定 → 聚合状态」登记到子 promise 上（组合器唯一的登记路径）。
@@ -539,31 +539,31 @@ CPromise<TContext> Gather(
     {
         // 一处子 promise 都没有：按策略直接收口（语义只有 `ResolveEmptyGather` 一处）。
         const CPromiseResult emptyResult = ResolveEmptyGather(ePolicy);
-        return executor.NewPromise(spContext,
-            typename CPromise<TContext>::ChainStarter(
-                [emptyResult](const std::function<void()>& fnResolve, const std::function<void(const CRefusal&)>& fnReject)
-                {
-                    if (emptyResult.IsFulfilled())
-                    {
-                        fnResolve();
-                        return;
-                    }
-                    fnReject(emptyResult.AsRefusal());
-                }));
+        return executor.NewPromise(
+            spContext, typename CPromise<TContext>::ChainStarter(
+                           [emptyResult](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
+                           {
+                               if (emptyResult.IsFulfilled())
+                               {
+                                   fnResolve();
+                                   return;
+                               }
+                               fnReject(emptyResult.Code());
+                           }));
     }
 
     const int nTotal = static_cast<int>(vecBindings.size());
-    return executor.NewPromise(spContext, typename CPromise<TContext>::ChainStarter(
-                                              [ePolicy, nTotal, vecBindings](const std::function<void()>& fnResolve,
-                                                  const std::function<void(const CRefusal&)>& fnReject)
-                                              {
-                                                  const std::shared_ptr<CGatherState> pGather =
-                                                      std::make_shared<CGatherState>(ePolicy, nTotal, fnResolve, fnReject);
-                                                  for (size_t i = 0; i < vecBindings.size(); ++i)
-                                                  {
-                                                      vecBindings[i](pGather);  // 登记动作恒非空。
-                                                  }
-                                              }));
+    return executor.NewPromise(spContext,
+        typename CPromise<TContext>::ChainStarter(
+            [ePolicy, nTotal, vecBindings](const std::function<void()>& fnResolve, const std::function<void(int)>& fnReject)
+            {
+                const std::shared_ptr<CGatherState> pGather =
+                    std::make_shared<CGatherState>(ePolicy, nTotal, fnResolve, fnReject);
+                for (size_t i = 0; i < vecBindings.size(); ++i)
+                {
+                    vecBindings[i](pGather);  // 登记动作恒非空。
+                }
+            }));
 }
 
 }  // namespace detail

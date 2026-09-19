@@ -36,12 +36,12 @@ sequenceDiagram
     Note over O: ① 建单（链根）
     Note over O: ② 计价子链 3 层：价目表 → 折扣 → 汇总<br/>用法③ 子 promise 链（外层当成一步）
     O->>S: ③ 预占库存（用法①：对方给的是 promise）
-    S-->>O: 兑现（预占号）／拒绝（码 1 库存不足）
+    S-->>O: 兑现（预占号）／拒绝（100 库存不足）
     O->>P: ④ 扣款（金额来自计价子链）
-    P-->>O: 兑现（支付号）／拒绝（码 2 支付被拒）
+    P-->>O: 兑现（支付号）／拒绝（101 支付被拒）
     O->>C: ⑤ 预约取件（用法②：对方只有回调）
-    C-->>O: 回调（取件单号 ／ 错误码 3：快递不可用）
-    Note over O: ⑥ 发货（本模块最后一步，失败码 4）
+    C-->>O: 回调（取件单号 ／ 错误码 102 快递不可用）
+    Note over O: ⑥ 发货（本模块最后一步，自己也可能失败 103）
     Note over O,C: ✗ 失败 → 补偿：反向操作（顺序与正向相反）
     O->>C: 取消取件（回调式 → 再包装一次）
     O->>S: 释放预占（promise 接口，幂等）
@@ -53,23 +53,23 @@ sequenceDiagram
 flowchart TD
     A["① 建单"] --> B["② 计价子链（3 层）"]
     B --> C{"③ 预占库存<br/>用法① 跨模块"}
-    C -->|"码 1：库存不足"| R0["✗ 还没有副作用<br/>不需要补偿"]
+    C -->|"拒绝 100 库存不足"| R0["✗ 还没有副作用<br/>不需要补偿"]
     C -->|"兑现"| D{"④ 扣款<br/>用法① 跨模块"}
-    D -->|"码 2：支付被拒"| R1["✗ 释放预占"]
+    D -->|"拒绝 101 支付被拒"| R1["✗ 释放预占"]
     D -->|"兑现"| E{"⑤ 预约取件<br/>用法② 回调式"}
-    E -->|"码 3：快递不可用"| R1
+    E -->|"错误码 102 快递不可用"| R1
     E -->|"回单号"| F{"⑥ 发货<br/>本模块最后一步"}
-    F -->|"码 4：发货失败"| R2["✗ 取消取件 → 释放预占"]
+    F -->|"拒绝 103 发货失败"| R2["✗ 取消取件 → 释放预占"]
     F -->|"兑现"| G["✓ 正常结束（预占 + 扣款 + 取件都保留）"]
 ```
 
 | 路径 | 失败在哪一步 | 已经发生的副作用 | 需要补偿什么 |
 | --- | --- | --- | --- |
 | 正常 | — | 预占 + 扣款 + 取件 | 不需要 |
-| 库存不足（码 1） | ③ | 无 | 不需要 |
-| 支付被拒（码 2） | ④ | 预占 | 释放预占 |
-| 快递不可用（码 3） | ⑤（回调里返回错误码） | 预占 + 扣款 | 释放预占 |
-| 发货失败（码 4） | ⑥ | 预占 + 扣款 + 取件 | 取消取件 + 释放预占 |
+| 库存不足（码 100） | ③ | 无 | 不需要 |
+| 支付被拒（码 101） | ④ | 预占 | 释放预占 |
+| 快递不可用（码 102） | ⑤（回调里返回错误码） | 预占 + 扣款 | 释放预占 |
+| 发货失败（码 103） | ⑥ | 预占 + 扣款 + 取件 | 取消取件 + 释放预占 |
 
 > 「扣款成功要退款」也是同形的第三个反向操作，本篇只演示机制，不再多写一个模块。
 
@@ -87,18 +87,39 @@ flowchart TD
 
 using common::async::CPromise;
 using common::async::CPromiseResult;
-using common::async::CRefusal;
 ```
 
 ```cpp
-/// 业务拒绝码（**取值自定**：框架不解释业务码，也不占用任何区间 —— 这里就用 1..4）。
+/// 业务拒绝码（从 `kBusinessBase` 起取；层间只传码，文案自己查表）。
 enum
 {
-    kStockShortage = 1,  ///< 库存不足
-    kPayDeclined,        ///< 支付被拒
-    kCourierUnavailable, ///< 快递不可用
-    kShipFailed          ///< 发货失败（仓库故障）
+    kStockShortage = common::async::kBusinessBase,  ///< 库存不足
+    kPayDeclined,                                   ///< 支付被拒
+    kCourierUnavailable,                            ///< 快递不可用
+    kShipFailed                                     ///< 发货失败（仓库故障）
 };
+
+/// 拒绝码 → 文案。
+static const char* CodeText(int nCode)
+{
+    switch (nCode)
+    {
+        case kStockShortage:
+            return "库存不足";
+        case kPayDeclined:
+            return "支付被拒";
+        case kCourierUnavailable:
+            return "快递不可用";
+        case kShipFailed:
+            return "发货失败";
+        case common::async::kStopped:
+            return "执行器已停";
+        case common::async::kException:
+            return "系统错误";
+        default:
+            return "未知错误";
+    }
+}
 ```
 
 ### 0.3 库存模块（用法① 的对象：**对方给 promise**）
@@ -159,7 +180,7 @@ public:
                 {
                     if (bShortage)
                     {
-                        fnReject(CRefusal(kStockShortage, "库存不足"));  // 业务拒绝：码 + 文案一起给
+                        fnReject(kStockShortage);  // 业务拒绝：只给码
                         return;
                     }
                     spCtx->nReserveNo = nReserveNo;
@@ -168,7 +189,7 @@ public:
                 });
             if (!bPosted)
             {
-                fnReject(CRefusal::Stopped());  // 本模块已停：别让对方的链永久挂着
+                fnReject(common::async::kStopped);  // 本模块已停：别让对方的链永久挂着
             }
         };
         return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -195,7 +216,7 @@ public:
                 });
             if (!bPosted)
             {
-                fnReject(CRefusal::Stopped());
+                fnReject(common::async::kStopped);
             }
         };
         return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -209,7 +230,7 @@ private:
 ```
 
 - 模块**自持执行器**（`("stock", 1)`）：跨模块只交换 promise + 上下文，不传执行器。
-- 对外接口自己决定什么时候 settle（这里是 `Post` 到本模块线程后 `fnResolve()` / `fnReject(CRefusal(码, "文案"))`）。
+- 对外接口自己决定什么时候 settle（这里是 `Post` 到本模块线程后 `fnResolve()` / `fnReject(码)`）。
 - `ReleaseAsync` 特意做成**幂等**：传 `0`（没预占过）就是空操作 —— 补偿层因此不必先判断有没有东西要撤。
 
 ### 0.4 支付模块（用法① 的另一个对象）
@@ -269,7 +290,7 @@ public:
                 {
                     if (bDecline)
                     {
-                        fnReject(CRefusal(kPayDeclined, "支付被拒"));
+                        fnReject(kPayDeclined);
                         return;
                     }
                     spCtx->nPayNo = nPayNo;
@@ -278,7 +299,7 @@ public:
                 });
             if (!bPosted)
             {
-                fnReject(CRefusal::Stopped());
+                fnReject(common::async::kStopped);
             }
         };
         return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -422,7 +443,7 @@ static CPromiseResult StepShip(CPromiseResult /*upResult*/, const std::shared_pt
     spCtx->strTrace += "发货;";
     if (g_bWarehouseDown)
     {
-        return CPromiseResult::Reject(CRefusal(kShipFailed, "发货失败"));
+        return CPromiseResult::Reject(kShipFailed);
     }
     std::printf("    本模块: 发货（预占号 %d / 支付号 %d / 取件单 %d）\n", spCtx->nReserveNo, spCtx->nPayNo, spCtx->nPickupNo);
     return CPromiseResult::Resolve();
@@ -432,7 +453,7 @@ static CPromiseResult StepShip(CPromiseResult /*upResult*/, const std::shared_pt
 static CPromiseResult StepReportReject(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)
 {
     spCtx->strTrace += "拒绝;";
-    std::printf("    兜底: 流程中断 [%d] %s\n", upResult.Code(), upResult.Message().c_str());
+    std::printf("    兜底: 流程中断 [%d] %s\n", upResult.Code(), CodeText(upResult.Code()));
     return upResult;
 }
 
@@ -499,7 +520,7 @@ static CPromise<COrderCtx> BuildQuoteChain(common::async::CAsyncExecutor& exec, 
 /// 把「预约取件」的回调式接口包成 promise。
 ///
 /// `NewPromise(spCtx, fnStarter)` 就是 JS 的 `new Promise((resolve, reject) => …)`；包装只做三件事：
-/// **发起调用** → 回调里**成功 `fnResolve()` / 失败 `fnReject(CRefusal(码, "文案"))`** → 把回调给的数据落进上下文。
+/// **发起调用** → 回调里**成功 `fnResolve()` / 失败 `fnReject(码)`** → 把回调给的数据落进上下文。
 static CPromise<COrderCtx> WrapCourierPickup(common::async::CAsyncExecutor& exec, const std::shared_ptr<COrderCtx>& spCtx)
 {
     const CPromise<COrderCtx>::ChainStarter fnStarter =
@@ -511,7 +532,7 @@ static CPromise<COrderCtx> WrapCourierPickup(common::async::CAsyncExecutor& exec
             {
                 if (nErrCode != 0)
                 {
-                    fnReject(CRefusal(nErrCode, "快递不可用"));  // 外部错误码 → 带文案的拒绝
+                    fnReject(nErrCode);  // 回调里的失败 → promise 拒绝
                     return;
                 }
                 spCtx->nPickupNo = nPickupNo;  // 回调里的数据 → 上下文
@@ -519,7 +540,7 @@ static CPromise<COrderCtx> WrapCourierPickup(common::async::CAsyncExecutor& exec
             });
         if (!bPosted)
         {
-            fnReject(CRefusal::Stopped());  // 发起就失败：别让链永久挂着
+            fnReject(common::async::kStopped);  // 发起就失败：别让链永久挂着
         }
     };
     return exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
@@ -529,8 +550,8 @@ static CPromise<COrderCtx> WrapCourierPickup(common::async::CAsyncExecutor& exec
 包装就三件事，缺一件都会留坑：
 
 1. **发起**：只在 starter 里发起调用 + 登记回调（starter 是**同步执行**的，别做重活）；
-2. **收口**：回调里成功 `fnResolve()`、失败 `fnReject(CRefusal(码, "文案"))`，回调给的数据落进上下文；
-3. **边界**：发起就失败（`Post` 返回 `false` / 执行器已停）必须 `fnReject(CRefusal::Stopped())`，否则链会**永久挂着**。
+2. **收口**：回调里成功 `fnResolve()`、失败 `fnReject(码)`，回调给的数据落进上下文；
+3. **边界**：发起就失败（`Post` 返回 `false` / 执行器已停）必须 `fnReject(kStopped)`，否则链会**永久挂着**。
 
 - 包装出来的 promise 建在**本模块执行器**上（`exec.NewPromise`），所以后续层自动回到本模块线程。
 - 建议抽成独立函数（`WrapCourierPickup(exec, spCtx)`）：协程写法与补偿路径都要用它。
@@ -612,8 +633,7 @@ static std::shared_ptr<COrderCtx> MakeOrderCtx(
 
 - 处理器签名固定 `CPromiseResult handler(CPromiseResult upResult, const std::shared_ptr<COrderCtx>& spCtx)`。
 - `then` 层不用判断 `upResult.IsRejected()`（上游被拒绝 → 框架直接跳过本层）；只有 `Catch` / `Finally` 要看它。
-- 拒绝的载荷是 `CRefusal`（**码 + 文案 + 来源**）：业务码取值自定，`Message()` 直接能打日志
-  （不必再维护码表）；是不是系统侧失败看 `IsFromFramework()`，不看数值区间。
+- 拒绝只有 `int` 码（业务码从 `kBusinessBase` 起取），文案自己查表（`CodeText`）。
 - 「层跑在哪条线程上」只需看**起链的执行器**：每层都在本链执行器线程上跑，跨模块返回后自动拉回。
 
 ## 1. 写法 1：then 链 + `ThenBridge` + `ThenPromise`（默认写法）
@@ -757,7 +777,7 @@ static CPromise<COrderCtx> BridgeReserveManually(common::async::CAsyncExecutor& 
             {
                 if (childResult.IsRejected())
                 {
-                    fnReject(childResult.AsRefusal());  // 对方的拒绝原因（码 + 文案 + 来源）原样透传
+                    fnReject(childResult.Code());  // 对方的拒绝码原样透传
                     return;
                 }
                 spCtx->nReserveNo = spChildCtx->nReserveNo;  // 搬数据（跑在对方线程上：只搬字段）
@@ -795,7 +815,7 @@ static void RunManualFlow(common::async::CAsyncExecutor& exec, CStockModule& sto
 
 - 留住子 promise 句柄（`shared_ptr` 装，才能 `GetContext()` 取对方数据）；
 - 在对方的 `OnSettled` 回调里**搬数据**；
-- 把对方的拒绝码**原样透传**（`fnReject(childResult.AsRefusal())`）；
+- 把对方的拒绝码**原样透传**（`fnReject(childResult.Code())`）；
 - 外加「对方已落定 / 执行器已停」这些收口 —— 这就是被收掉的样板。
 
 结论：默认用 `ThenBridge`；手写版只用于理解机制或需要完全自定义收口逻辑。
@@ -863,13 +883,13 @@ static CPromiseResult StepRecoverByCode(CPromiseResult upResult, const std::shar
 {
     spCtx->nFailCode = upResult.Code();  // 补偿层据此判断「要不要真的动手」
     spCtx->strTrace += "拒绝;";
-    if (!upResult.IsFromFramework())
+    if (upResult.Code() >= common::async::kBusinessBase)
     {
-        std::printf("    补偿: 业务拒绝 [%d] %s\n", upResult.Code(), upResult.Message().c_str());
+        std::printf("    补偿: 业务拒绝 [%d] %s\n", upResult.Code(), CodeText(upResult.Code()));
     }
     else
     {
-        std::printf("    补偿: 系统侧失败 [%d] %s\n", upResult.Code(), upResult.Message().c_str());
+        std::printf("    补偿: 系统错误 [%d] %s\n", upResult.Code(), CodeText(upResult.Code()));
     }
     return CPromiseResult::Resolve();  // 恢复：链继续（补偿层 / 审计层照常跑）
 }
@@ -910,7 +930,7 @@ static CPromise<COrderCtx> CreateCompensatePickup(common::async::CAsyncExecutor&
             });
         if (!bPosted)
         {
-            fnReject(CRefusal::Stopped());
+            fnReject(common::async::kStopped);
         }
     };
     return exec.NewPromise(spSelf, fnStarter, ASYNC_LOC);
@@ -1044,7 +1064,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 价目表 单价 100 元
     本模块: 会员 9 折
     本模块: 计价 270 元
-    兜底: 流程中断 [1] 库存不足
+    兜底: 流程中断 [100] 库存不足
     审计: 轨迹=建单;计价;预占;拒绝;
 
 [1. then 链 + ThenBridge（默认）] 场景=支付被拒
@@ -1053,7 +1073,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 会员 9 折
     本模块: 计价 270 元
       库存模块: 预占 3 件（预占号 5002）
-    兜底: 流程中断 [2] 支付被拒
+    兜底: 流程中断 [101] 支付被拒
     审计: 轨迹=建单;计价;预占;扣款;拒绝;
 
 [1. then 链 + ThenBridge（默认）] 场景=快递不可用
@@ -1063,7 +1083,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 计价 270 元
       库存模块: 预占 3 件（预占号 5003）
       支付模块: 扣款 270 元（支付号 9002）
-    兜底: 流程中断 [3] 快递不可用
+    兜底: 流程中断 [102] 快递不可用
     审计: 轨迹=建单;计价;预占;扣款;取件;拒绝;
 
 [1. then 链 + ThenBridge（默认）] 场景=发货失败
@@ -1074,7 +1094,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
       库存模块: 预占 3 件（预占号 5004）
       支付模块: 扣款 270 元（支付号 9003）
       快递模块: 取件单 7001（SO-1001）
-    兜底: 流程中断 [4] 发货失败
+    兜底: 流程中断 [103] 发货失败
     审计: 轨迹=建单;计价;预占;扣款;取件;发货;拒绝;
 
 [2. 协程（CO_AWAIT）] 场景=正常
@@ -1093,7 +1113,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 价目表 单价 100 元
     本模块: 会员 9 折
     本模块: 计价 270 元
-    兜底: 流程中断 [1] 库存不足
+    兜底: 流程中断 [100] 库存不足
     审计: 轨迹=建单;计价;预占;拒绝;
 
 [2. 协程（CO_AWAIT）] 场景=支付被拒
@@ -1102,7 +1122,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 会员 9 折
     本模块: 计价 270 元
       库存模块: 预占 3 件（预占号 5007）
-    兜底: 流程中断 [2] 支付被拒
+    兜底: 流程中断 [101] 支付被拒
     审计: 轨迹=建单;计价;预占;扣款;拒绝;
 
 [2. 协程（CO_AWAIT）] 场景=快递不可用
@@ -1112,7 +1132,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 计价 270 元
       库存模块: 预占 3 件（预占号 5008）
       支付模块: 扣款 270 元（支付号 9006）
-    兜底: 流程中断 [3] 快递不可用
+    兜底: 流程中断 [102] 快递不可用
     审计: 轨迹=建单;计价;预占;扣款;取件;拒绝;
 
 [2. 协程（CO_AWAIT）] 场景=发货失败
@@ -1123,7 +1143,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
       库存模块: 预占 3 件（预占号 5009）
       支付模块: 扣款 270 元（支付号 9007）
       快递模块: 取件单 7003（SO-1001）
-    兜底: 流程中断 [4] 发货失败
+    兜底: 流程中断 [103] 发货失败
     审计: 轨迹=建单;计价;预占;扣款;取件;发货;拒绝;
 
 [3. 手写桥接（不用 ThenBridge）] 场景=正常
@@ -1142,7 +1162,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 价目表 单价 100 元
     本模块: 会员 9 折
     本模块: 计价 270 元
-    兜底: 流程中断 [1] 库存不足
+    兜底: 流程中断 [100] 库存不足
     审计: 轨迹=建单;计价;预占;拒绝;
 
 [3. 手写桥接（不用 ThenBridge）] 场景=支付被拒
@@ -1151,7 +1171,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 会员 9 折
     本模块: 计价 270 元
       库存模块: 预占 3 件（预占号 5012）
-    兜底: 流程中断 [2] 支付被拒
+    兜底: 流程中断 [101] 支付被拒
     审计: 轨迹=建单;计价;预占;扣款;拒绝;
 
 [3. 手写桥接（不用 ThenBridge）] 场景=快递不可用
@@ -1161,7 +1181,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 计价 270 元
       库存模块: 预占 3 件（预占号 5013）
       支付模块: 扣款 270 元（支付号 9010）
-    兜底: 流程中断 [3] 快递不可用
+    兜底: 流程中断 [102] 快递不可用
     审计: 轨迹=建单;计价;预占;扣款;取件;拒绝;
 
 [3. 手写桥接（不用 ThenBridge）] 场景=发货失败
@@ -1172,7 +1192,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
       库存模块: 预占 3 件（预占号 5014）
       支付模块: 扣款 270 元（支付号 9011）
       快递模块: 取件单 7005（SO-1001）
-    兜底: 流程中断 [4] 发货失败
+    兜底: 流程中断 [103] 发货失败
     审计: 轨迹=建单;计价;预占;扣款;取件;发货;拒绝;
 
 [4. 两个模块并行（WhenAll）] 场景=正常
@@ -1192,7 +1212,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 会员 9 折
     本模块: 计价 270 元
       支付模块: 扣款 270 元（支付号 9013）
-    兜底: 流程中断 [1] 库存不足
+    兜底: 流程中断 [100] 库存不足
     审计: 轨迹=建单;计价;并行;预占;扣款;拒绝;
 
 [4. 两个模块并行（WhenAll）] 场景=支付被拒
@@ -1201,7 +1221,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 会员 9 折
     本模块: 计价 270 元
       库存模块: 预占 3 件（预占号 5017）
-    兜底: 流程中断 [2] 支付被拒
+    兜底: 流程中断 [101] 支付被拒
     审计: 轨迹=建单;计价;并行;预占;扣款;拒绝;
 
 [4. 两个模块并行（WhenAll）] 场景=快递不可用
@@ -1211,7 +1231,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 计价 270 元
       库存模块: 预占 3 件（预占号 5018）
       支付模块: 扣款 270 元（支付号 9015）
-    兜底: 流程中断 [3] 快递不可用
+    兜底: 流程中断 [102] 快递不可用
     审计: 轨迹=建单;计价;并行;预占;扣款;取件;拒绝;
 
 [4. 两个模块并行（WhenAll）] 场景=发货失败
@@ -1222,7 +1242,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
       库存模块: 预占 3 件（预占号 5019）
       支付模块: 扣款 270 元（支付号 9016）
       快递模块: 取件单 7007（SO-1001）
-    兜底: 流程中断 [4] 发货失败
+    兜底: 流程中断 [103] 发货失败
     审计: 轨迹=建单;计价;并行;预占;扣款;取件;发货;拒绝;
 
 [5. 失败补偿（Catch 分流 + 反向操作）] 场景=正常
@@ -1241,7 +1261,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 价目表 单价 100 元
     本模块: 会员 9 折
     本模块: 计价 270 元
-    补偿: 业务拒绝 [1] 库存不足
+    补偿: 业务拒绝 [100] 库存不足
     审计: 轨迹=建单;计价;预占;拒绝;
 
 [5. 失败补偿（Catch 分流 + 反向操作）] 场景=支付被拒
@@ -1250,7 +1270,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 会员 9 折
     本模块: 计价 270 元
       库存模块: 预占 3 件（预占号 5022）
-    补偿: 业务拒绝 [2] 支付被拒
+    补偿: 业务拒绝 [101] 支付被拒
       库存模块: 释放预占 5022
     审计: 轨迹=建单;计价;预占;扣款;拒绝;释放;
 
@@ -1261,7 +1281,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
     本模块: 计价 270 元
       库存模块: 预占 3 件（预占号 5023）
       支付模块: 扣款 270 元（支付号 9019）
-    补偿: 业务拒绝 [3] 快递不可用
+    补偿: 业务拒绝 [102] 快递不可用
       库存模块: 释放预占 5023
     审计: 轨迹=建单;计价;预占;扣款;取件;拒绝;释放;
 
@@ -1273,7 +1293,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
       库存模块: 预占 3 件（预占号 5024）
       支付模块: 扣款 270 元（支付号 9020）
       快递模块: 取件单 7009（SO-1001）
-    补偿: 业务拒绝 [4] 发货失败
+    补偿: 业务拒绝 [103] 发货失败
       快递模块: 取消取件单 7009
       库存模块: 释放预占 5024
     审计: 轨迹=建单;计价;预占;扣款;取件;发货;拒绝;取消取件;释放;
@@ -1298,7 +1318,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
 | ① 跨模块 | `ThenBridge(fnCreate, fnApply)` | `CO_AWAIT(子 promise)` + 手动搬数据 | `NewPromise(fnStarter)` + `OnSettled` + `ThenPromise` | 扇出 + `WhenAll` + `ThenBridge` 汇聚 | 反向再桥一次 |
 | ② 包装回调式接口 | `ThenPromise(包装函数)` | `CO_AWAIT(包装函数)` | 同写法 1 | 同写法 1 | 反向再包装一次（内联） |
 | ③ 子链 | `ThenPromise(子链工厂)` | `CO_AWAIT(子链)` | 同写法 1 | 同写法 1 | — |
-| 对方的拒绝怎么处理 | 同码拒绝本层（后续跳过） | 协程立即终止、码透传 | 手动 `fnReject(childResult.AsRefusal())` | 聚合立即拒绝（分支不取消） | `Catch` 分流后可**恢复** |
+| 对方的拒绝怎么处理 | 同码拒绝本层（后续跳过） | 协程立即终止、码透传 | 手动 `fnReject(childResult.Code())` | 聚合立即拒绝（分支不取消） | `Catch` 分流后可**恢复** |
 | 失败要做反向操作 | `Catch` + 反向层（写法 5） | 放外层 `Catch` | 同写法 1 | 同写法 1（注意并行的副作用） | 就是本法 |
 | 代码量 | 最少 | 中（跨 await 变量要变成员） | 多（自己收口边界） | 中（多一层扇出） | 中（多两个判空 + 反向层） |
 | 什么时候用 | **默认** | 步骤多 / 分支循环多 | 只为了理解 `ThenBridge` 内部 | 两个调用互不依赖、要压时延 | 有跨模块副作用要回滚 |

@@ -111,7 +111,7 @@ if (IsInExecutorThread(pCore->Handle()) && InlineDepth() < kMaxInlineDepth)
 }
 else if (!PostToHandle(pCore->Handle(), std::move(fnRun)))
 {
-    pState->Settle(CPromiseResult::Reject(CRefusal::Stopped()));  // 跨执行器：投递回本链执行器；不可用则拒绝
+    pState->Settle(CPromiseResult::Reject(kStopped));  // 跨执行器：投递回本链执行器；不可用则拒绝
 }
 
 // Common/Coroutine/Coroutine.h：协程续跑（ResumeInline）用同一判定
