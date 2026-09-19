@@ -102,6 +102,8 @@ TEST(LayerRules_FulfilledPath)
     common::async::CAsyncExecutor exec("layer-rules", 1);
     ASSERT_TRUE(exec.Start());
 
+
+    // ① 串链：把要验证的三态路径串起来（上游由首层层函数决定）。
     const std::shared_ptr<CLayerRuleCtx> spCtx = MakeCtx();
     const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFirst, ASYNC_LOC)
                                                 .Then(&StepThen, ASYNC_LOC)            // 上游兑现 → 执行
@@ -109,6 +111,8 @@ TEST(LayerRules_FulfilledPath)
                                                 .Finally(&StepFinallyFlip, ASYNC_LOC)  // 成败都执行
                                                 .Await();
 
+
+    // ② 断言：谁跑了 / 谁被跳过，以及最终结果是什么。
     ASSERT_TRUE(r.IsFulfilled());       // finally 里造的拒绝没有改变结果
     ASSERT_EQ(spCtx->nThenRuns, 1);     // then 执行了
     ASSERT_EQ(spCtx->nCatchRuns, 0);    // catch 被跳过
@@ -123,6 +127,8 @@ TEST(LayerRules_RejectedPathCatchRecovers)
     common::async::CAsyncExecutor exec("layer-rules", 1);
     ASSERT_TRUE(exec.Start());
 
+
+    // ① 串链：把要验证的三态路径串起来（上游由首层层函数决定）。
     const std::shared_ptr<CLayerRuleCtx> spCtx = MakeCtx();
     const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFirstReject, ASYNC_LOC)
                                                 .Then(&StepThen, ASYNC_LOC)           // 上游被拒绝 → 跳过
@@ -132,6 +138,8 @@ TEST(LayerRules_RejectedPathCatchRecovers)
                                                 .Finally(&StepFinallyFlip, ASYNC_LOC)
                                                 .Await();
 
+
+    // ② 断言：谁跑了 / 谁被跳过，以及最终结果是什么。
     ASSERT_TRUE(r.IsFulfilled());           // catch 恢复 → 最终兑现
     ASSERT_EQ(spCtx->nThenRuns, 1);         // 只有「恢复之后」那一层跑过
     ASSERT_EQ(spCtx->nCatchRuns, 1);        // catch 执行了一次
@@ -148,6 +156,8 @@ TEST(LayerRules_RejectedPathPassThrough)
     common::async::CAsyncExecutor exec("layer-rules", 1);
     ASSERT_TRUE(exec.Start());
 
+
+    // ① 串链：把要验证的三态路径串起来（上游由首层层函数决定）。
     const std::shared_ptr<CLayerRuleCtx> spCtx = MakeCtx();
     const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFirstReject, ASYNC_LOC)
                                                 .Then(&StepThen, ASYNC_LOC)  // 跳过
@@ -156,6 +166,8 @@ TEST(LayerRules_RejectedPathPassThrough)
                                                 .Finally(&StepFinallyFlip, ASYNC_LOC)
                                                 .Await();
 
+
+    // ② 断言：谁跑了 / 谁被跳过，以及最终结果是什么。
     ASSERT_TRUE(r.IsRejected());                              // catch 没恢复 → 仍是拒绝
     ASSERT_EQ(r.Message(), std::string("上游拒绝（用例）"));  // 且是**最原始**的拒绝（透传）
     ASSERT_EQ(spCtx->nThenRuns, 0);                           // 两个 then 都没跑

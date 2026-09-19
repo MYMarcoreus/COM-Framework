@@ -99,6 +99,8 @@ public:
     static typename std::enable_if<std::is_base_of<std::exception, TException>::value, CPromiseResult>::type Reject(
         const TException& exception)
     {
+        // 只做一件事：把异常按**静态类型** TException 拷进一份共享的不可变副本。
+        // 为什么不直接存引用 / 指针：结果要在层间按值传递、可跨线程，所以必须自持且只读。
         return CPromiseResult(std::make_shared<const TException>(exception));
     }
 
@@ -162,10 +164,13 @@ public:
     /// @return true 相等。
     bool operator==(const CPromiseResult& other) const
     {
+        // ① 先比成败：一兑现一失败 → 直接不等（连带把「两者都兑现」筛出来，不必比文案）。
         if (IsRejected() != other.IsRejected())
         {
             return false;
         }
+
+        // ② 再比异常描述（都兑现时 `What()` 都是空串，无需特判）。
         return IsFulfilled() || std::strcmp(What(), other.What()) == 0;
     }
 
