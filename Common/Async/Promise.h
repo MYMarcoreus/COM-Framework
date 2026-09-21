@@ -179,8 +179,8 @@ namespace detail {
 /// @brief 诊断文案（集中一处：测试断言常量，而不是去匹配子串）。
 constexpr const char* kDiagNoticeThrow = "OnSettled 通知里抛出了异常（已忽略；通知不是层，没有结果可落）";
 constexpr const char* kDiagAwaitRisk =
-    "Await(): 层内（或本链执行器线程上）阻塞等待未落定的层 → 极可能死锁；"
-    "请改用 ThenPromise / ThenBridge / OnSettled 回调续跑 / 协程 CO_AWAIT，或用 AwaitFor(ms) 兜底";
+    "Await(): 在层内 / 协程体内（或本执行器线程上）阻塞等待未落定的结果 → 极可能死锁；"
+    "请改用 ThenPromise / ThenBridge / OnSettled 回调续跑 / CO_AWAIT，或用 AwaitFor(ms) 兜底";
 
 /// @brief 执行 settled 通知（异常兜底：通知里抛异常只报告，不向外抛）。
 ///
@@ -378,8 +378,8 @@ public:
     /// @return 恒 true（通知绝不丢）。
     bool AddNotice(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler)
     {
-        // 类别只服务读写门，通知不过门：传写档占位（不使用）。
-        return AddHandler(pHandle, TaskKind::kWrite, fnHandler, /* bGuaranteedDelivery = */ true);
+        // 类别只服务读写门，通知不过门：传「簿记」档占位（不使用，也不会进门的队列）。
+        return AddHandler(pHandle, kKindBookkeeping, fnHandler, /* bGuaranteedDelivery = */ true);
     }
 
     /// @brief 阻塞等待本状态 settle（先短自旋，超时再阻塞等待）。

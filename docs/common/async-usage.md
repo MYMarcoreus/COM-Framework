@@ -498,6 +498,7 @@ common::async::SetDiagnosticHandler([](const char*)
 | 形态 | 为什么要报 |
 | --- | --- |
 | 通知里抛异常（`OnSettled` / `OnSettledOn`） | 以前会让异常逃出 worker → 整个进程 `std::terminate`；现在兜住并报告 |
+| 协程体里抛异常（未捕获） | 本协程以该异常收口（拒绝，文案带走 / 类型降级为 `runtime_error`）—— 兜在 `CCoroutine::Resume()` 一处 |
 | `exec.Post(类别, fn)` 投递的任务抛异常 | 同上（线程池 worker 本身不捕获异常） |
 | `exec.Post(类别, nullptr)` | 空任务：不提交 + 报告（不再「返回 true 却什么也不做」） |
 | 层内 / 本链执行器线程上 `Await()` 未落定的层 | 极可能死锁（占住 worker / 卡住本链）—— 改用 `ThenPromise` / 协程 / `AwaitFor(ms)` |
@@ -825,10 +826,10 @@ common::async::CPromise<Ctx> p =
 - 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
 - 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞；
   查询 = 读链可并发，注册 / 改名 / 删除 = 写链独占，模块内无需自己的锁）；
-- 单元测试（异步共 **149 例**，全量 **181 例**；release 174 例，差的 7 例是 debug 专属：
+- 单元测试（异步共 **150 例**，全量 **182 例**；release 175 例，差的 7 例是 debug 专属：
   trace 5 例 + 读写门 × trace 2 例）：
   `test_async_smoke.cpp`（17）对外用法逐条冒烟、
-  `test_async_chain.cpp`（40）promise 契约 + 协程、`test_async_combine.cpp`（12）组合器、
+  `test_async_chain.cpp`（41）promise 契约 + 协程（含协程体抛异常的收口）、`test_async_combine.cpp`（12）组合器、
   `test_async_modules.cpp`（6）+ `test_async_modules_stress.cpp`（8）跨模块与极限、
   `test_async_affinity.cpp`（5）跨模块线程亲和、
   `test_async_settled_delivery.cpp`（4）通知送达、

@@ -836,6 +836,21 @@ public:
     }
 };
 
+/// 协程：协程体里直接抛异常（未捕获）—— 框架应把它收口为「本协程拒绝」。
+class CThrowCoro : public common::async::CCoroutine<CTestContext>
+{
+public:
+    using common::async::CCoroutine<CTestContext>::CCoroutine;
+
+    void Run() override
+    {
+        CO_BEGIN();
+        throw std::runtime_error("协程体抛异常");
+        CO_RETURN_VOID();
+        CO_END();
+    }
+};
+
 /// 子协程：await 一条子链。
 class CChildCoro : public common::async::CCoroutine<CTestContext>
 {
@@ -938,6 +953,34 @@ TEST(Coro_ReturnRejected)
     ASSERT_TRUE(r.IsRejected());
     ASSERT_EQ(r.Message(), std::string("协程显式拒绝"));
     ASSERT_EQ(spCtx->nValue, 1);  // await 的子链已执行
+    exec.Stop();
+}
+
+/// @brief 协程体抛异常 → 本协程以该异常收口（拒绝）：`Await()` 不会永久挂住。
+///
+/// 为什么必须有这条：恢复路径的上游是线程池 worker（不捕获异常），而执行器的 guard 只会
+/// 记一条诊断、**不会 settle 协程** —— 不兜住就是「协程永久 pending + Await() 死等」
+/// （本用例带超时等落定，坏了只是失败，不会挂住）。
+TEST(Coro_BodyThrowSettlesRejected)
+{
+    common::async::CAsyncExecutor exec(2);
+    ASSERT_TRUE(exec.Start());
+
+    std::shared_ptr<CTestContext> spCtx = std::make_shared<CTestContext>();
+    std::shared_ptr<CThrowCoro> pCoro = exec.CoStart<CThrowCoro>(common::async::TaskKind::kWrite, spCtx);
+
+    // 落定通知先挂好（恒送达）：可能在本行之前就已落定 → 立即投递触发。
+    std::atomic<bool> bSettled(false);
+    pCoro->AsPromise().OnSettled(
+        [&bSettled](common::async::CPromiseResult /*result*/)
+        {
+            bSettled.store(true);
+        });
+
+    ASSERT_TRUE(asynctest::WaitFlag(bSettled, 1500));  // 带超时：实现坏了不会挂住用例
+    const common::async::CPromiseResult r = pCoro->Await();
+    ASSERT_TRUE(r.IsRejected());
+    ASSERT_TRUE(r.Message().find("协程体抛异常") != std::string::npos);  // 文案带走
     exec.Stop();
 }
 

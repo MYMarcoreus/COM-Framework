@@ -128,6 +128,8 @@ public:
           m_wpSelf(),
           m_hot()
     {
+        // 完成标记层只被 settle（不过门、不跑业务流程）：类别用簿记档（trace 里显示「直」）。
+        m_pSegment->SetKind(detail::kKindBookkeeping);
         // 上下文强制传入：把契约钉在唯一入口上（与 promise 一致）。
         ASSERT_MSG(spContext != nullptr, "协程的共享上下文必须由调用方传入（框架不做懒创建）");
     }
@@ -147,11 +149,16 @@ public:
 
     /// @brief await：阻塞获取协程最终结果（JS await 的阻塞版，不抛异常）。
     ///
+    /// @warning 与 promise 的 `Await()` 同为「阻塞等待」，会占住当前工作线程；在协程体内 /
+    ///          本协程执行器线程上调用它等自己 → 必死锁。预警与 promise 共用一处
+    ///          （`detail::kDiagAwaitRisk`，只报告、不改变行为）。
+    ///
     /// @return 最终结果：正常结束为兑现；await 到拒绝 / 执行器停止为对应拒绝码。
     CPromiseResult Await() const
     {
         // 未启动就没有执行器去跑协程 → 永远等不到结果（必挂死），属于用法错误。
         ASSERT_MSG(m_pExec != nullptr, "Await 须在 CoStart 启动之后调用（未启动的协程永远不会完成）");
+        ReportBlockingRisk();
         return m_pSegment->Await();
     }
 
@@ -256,7 +263,7 @@ protected:
         pGroup->nPending.store(static_cast<int>(sizeof...(TArgs)), std::memory_order_relaxed);
         if (sizeof...(TArgs) == 0)
         {
-            return;  // 空列表：无需等待（调用方紧接着 return 让出线程即可）。
+            return;  // 空列表到不了这里（C++11 的宏展开要求至少给一条 promise），留作防御。
         }
 
         AwaitEach(pGroup, eKind, std::forward<TArgs>(args)...);
@@ -298,6 +305,23 @@ private:
     //================ Internal ================
 
     friend class CAsyncExecutor;  // Start / SetSelf（CoStart 启动路径）。
+
+    /// @brief 阻塞等待前的「死锁预警」（与 promise 的 `ReportBlockingRisk` 同一判定，只报告）。
+    ///
+    /// 两种形态：① 在层内 / 协程体内阻塞（`InlineDepth() > 0`）—— 占住 worker；
+    /// ② 在本协程自己的执行器线程上等本协程 —— 后续恢复需要这条线程。要避免永久挂住
+    /// 请改用 `OnSettled` / 外层 `CO_AWAIT` / `AwaitFor`（promise 侧）。
+    void ReportBlockingRisk() const
+    {
+        if (m_pSegment->IsSettled())
+        {
+            return;  // 已经落定：不会阻塞。
+        }
+        if (detail::InlineDepth() > 0 || (m_pExec != nullptr && m_pExec->IsInExecutorThread()))
+        {
+            ReportDiagnostic(detail::kDiagAwaitRisk);
+        }
+    }
 
     /// @brief 在指定执行器上启动协程（绑定 + 复位 + 投递首次执行）。
     ///
@@ -358,6 +382,7 @@ private:
     void Reset()
     {
         m_pSegment = std::make_shared<detail::CPromiseState>();
+        m_pSegment->SetKind(detail::kKindBookkeeping);  // 完成标记层：只被 settle，不过门。
         m_hot.nStep.store(0, std::memory_order_relaxed);
         m_hot.bTerminated.store(false, std::memory_order_relaxed);
         m_hot.resultTerminate = CPromiseResult();  // 复位成「已兑现」占位（仅 bTerminated 为真时读）。
@@ -425,9 +450,26 @@ private:
     ///
     /// 终止判定由协程体宏完成（case 处 IsTerminated() → CompleteTerminated()），
     /// 此处不拦截，保证被终止的协程也能走到完成（Await() 不阻塞）。
+    ///
+    /// **协程体抛异常 → 本协程以该异常收口**（与 promise 的层一致：层里抛异常 = 本层拒绝）。
+    /// 兜在这里是必须的：恢复路径的上游是线程池 worker（`CThreadPool::WorkerLoop` 不捕获异常），
+    /// 而执行器的 guard 只会把它记成一条诊断、**不会 settle 协程** —— 协程会永久 pending，
+    /// `Await()` 死等。
     void Resume()
     {
-        Run();
+        try
+        {
+            Run();
+        }
+        catch (const std::exception& e)
+        {
+            // 文案带走（类型降级为 runtime_error，与层处理器的约定一致）。
+            Terminate(CPromiseResult::Reject(std::runtime_error(e.what())));
+        }
+        catch (...)
+        {
+            Terminate(CPromiseResult::Reject(std::runtime_error("处理器异常")));
+        }
     }
 
     /// @brief 标记终止（不 settle；等待协程体走到统一出口）。

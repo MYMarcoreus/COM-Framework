@@ -215,6 +215,10 @@ pCoro->AsPromise().OnSettled([](common::async::CPromiseResult r) { /* 协程跑�
 - await 的 promise 被拒绝 → 协程**终止**，拒绝（异常）透传；后续 await 不再执行；
 - `CO_RETURN(CPromiseResult::Reject(std::runtime_error("原因")))` → 主动以拒绝结束；
 - `CO_RETURN_VOID()` / `CO_END()` → 正常结束（兑现）；
+- **协程体里抛出异常（未捕获）→ 本协程以该异常收口（拒绝）**：与 promise 的层一致
+  （层里抛异常 = 本层拒绝），文案带走、类型降级为 `std::runtime_error` —— 框架必须兜住它
+  （恢复跑在线程池 worker 上，异常逃出去就是 `std::terminate`；若只是记条诊断而不落定，
+  `Await()` 会永久挂住）；
 - 执行器未启动 / 已停止 → 协程立即以「执行器已停」结束（`Await()` 不阻塞）。
 
 ```cpp

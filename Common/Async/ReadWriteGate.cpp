@@ -107,6 +107,7 @@ bool CReadWriteGate::Submit(TaskKind eKind, std::function<void()> fnTask)
 /// @return true 可以就地执行（调用方直接跑任务体即可，无需占位 / 归还）。
 bool CReadWriteGate::CanRunInline(TaskKind eKind) const
 {
+    ASSERT_MSG(eKind != TaskKind::kDirect, "kDirect 不过门（CanRunInline 对它无意义）");  // 与 Submit 同一契约。
     // ① 手上的槽位是不是「本门 + 同类」（不在任务里 / 别的门 / 别的类别 → 都不能就地）。
     const detail::CTaskFrame* pFrame = detail::TaskFrameTop();
     if (pFrame == nullptr || pFrame->pGate != this || pFrame->eKind != eKind)

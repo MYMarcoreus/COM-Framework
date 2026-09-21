@@ -587,7 +587,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
   - promise 22 例：签名契约、顺序与上下文、then 失败即停、catch 观察 / 恢复、finally 不改结果、
     then 与 catch 互补、构造即起链、异常、settled 通知、分叉、settled 后追加、未启动 / 停止 /
     重启、工作线程、析构后完成、并发 Await、多链条并行、深链 300 层、400 条压力、Post 行为；
-  - 协程 9 例（见 coroutine-impl.md）；
+  - 协程 11 例（含「协程体抛异常 → 本协程拒绝」的收口，见 coroutine-impl.md §4.1）；
 - **分配护栏**：`Tests/test_async_alloc.cpp`（3 例，见 §12）——每次改动异步热路径都应让它保持绿；
 - 基准：`Benchmark/cases/ChainCase.cpp`（层数 1/5/20/100、深链 256、失败即停）、
   `CoroutineCase.cpp`、`ResumableCase.cpp`、`StressCase.cpp`；

@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <functional>
 
-#include "Async/ReadWriteGate.h"  // TaskKind（读可并发 / 写独占）
+#include "Async/ReadWriteGate.h"  // TaskKind（读可并发 / 写独占 / 直投不过门）
 #include "Module/IUnknown.h"
 #include "Module/InterfaceDecl.h"
 

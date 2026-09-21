@@ -73,7 +73,7 @@ bool CAsyncExecutor::Start()
 ///
 /// 类别必填（没有默认写）： `kWrite` = 与模块内其它任务互斥，`kRead` = 可与其它读任务并发。
 ///
-/// @param eKind 任务类别（读可并发 / 写独占）。
+/// @param eKind 任务类别（读可并发 / 写独占 / 直投不过门）。
 /// @param fnTask 任务函数。
 /// @return true 已接受（已投递或在门口排队）；false 执行器已停止 / 未启动。
 bool CAsyncExecutor::Post(TaskKind eKind, std::function<void()> fnTask)

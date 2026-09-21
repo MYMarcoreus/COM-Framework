@@ -96,6 +96,31 @@ exec.CoStart<TCoroutine>(类别, args...)                   类别 = 首段（�
 
 `Reset()` 让同一协程对象可以重新 `Start`（重复使用）。
 
+## 4.1 Resume：协程体异常在这里收口
+
+```cpp
+void Resume()          // Start / PostResume / ResumeInline 都经它进入协程体
+{
+    try
+    {
+        Run();         // 状态机从恢复点继续
+    }
+    catch (const std::exception& e)
+    {
+        Terminate(CPromiseResult::Reject(std::runtime_error(e.what())));  // = 本协程拒绝
+    }
+    catch (...)
+    {
+        Terminate(CPromiseResult::Reject(std::runtime_error("处理器异常")));
+    }
+}
+```
+
+与 promise 的层处理器对称（`MakeLayerRunner` 的 try/catch）：**用户在协程体里抛出的异常
+不会逃出框架**。漏了这层兜底会很难查 —— 异常逃到线程池 worker 是 `std::terminate`；即使
+执行器的 guard 兜住了，它也只是记一条诊断，**协程仍永久 pending、`Await()` 死等**
+（`Tests/test_async_chain.cpp` 的 `Coro_BodyThrowSettlesRejected` 守着）。
+
 ## 5. 顺序 await（AwaitWait）
 
 ```cpp

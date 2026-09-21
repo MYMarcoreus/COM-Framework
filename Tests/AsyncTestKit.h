@@ -219,6 +219,30 @@ inline void SleepMs(int nMs)
     }
 }
 
+/// @brief 带超时等一个原子标志（工作线程只写原子，主线程等 + 断言）。
+///
+/// 「实现坏了也不会把用例挂住」的最小手段：要等「某件事会发生」时不要直接阻塞等结果，
+/// 先等这个标志（超时即失败），再读结果。
+///
+/// @param bFlag 被等的标志（只读）。
+/// @param nTimeoutMs 超时毫秒数。
+/// @return true = 超时前置位。
+inline bool WaitFlag(const std::atomic<bool>& bFlag, int nTimeoutMs)
+{
+    const std::chrono::steady_clock::time_point tStart = std::chrono::steady_clock::now();
+    while (!bFlag.load())
+    {
+        const long nElapsed =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - tStart).count();
+        if (nElapsed >= nTimeoutMs)
+        {
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
 /// @brief 被调模块上下文（两步：连库 → 读库）。
 struct CCalleeCtx
 {
@@ -258,7 +282,8 @@ public:
     /// @return 本层链的 promise。
     common::async::CPromise<CCalleeCtx> QueryStockAsync(const std::shared_ptr<CCalleeCtx>& spCtx)
     {
-        return m_exec.NewPromise(spCtx, &StepConnect, common::async::TaskKind::kWrite, ASYNC_LOC).Then(&StepRead, common::async::TaskKind::kWrite, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, &StepConnect, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Then(&StepRead, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
 private:
