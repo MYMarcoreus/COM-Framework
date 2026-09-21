@@ -8,6 +8,8 @@
 ///  - 逐层类别：同一链的层可读 / 写混排，每层按自己的类别过门；
 ///  - `kDirect`（直投）：不过门 —— 与在读 / 写任务并发，且不占槽位；
 ///  - 「等子链」层的工厂（`ThenPromise` / `ThenBridge`）：与层体一样按本层类别过门；
+///  - 起链回调（`NewPromise(spCtx, fnStarter, 类别)`）：门外 / 别的门起链也按类别过门
+///    （跨模块起链落在**被调模块自己**的门里），门内同类槽位则就地同步跑；
 ///  - 就地级联仍然保留：单线程执行器上一条链的各层跑在同一线程（无其它排队任务时）；
 ///  - 停止语义：`Stop()` 先关门的投递、再等已接受的任务跑完（不丢任务、不悬挂），
 ///    停止期间链的后续层以「执行器已停」收口。
@@ -737,21 +739,24 @@ TEST(AsyncRw_BridgeFactoryRunsGated)
     std::atomic<bool> bFactoryRan(false);
     std::atomic<bool> bFactoryHasSlot(false);
     std::atomic<bool> bSettled(false);
-    std::thread::id factoryTid;  // 只由工厂写，主线程在等完 bFactoryRan 之后读
-    std::thread::id settlerTid;  // 只由结算线程写，主线程 join 之后读
+    std::atomic<bool> bStarterRan(false);  // 起链回调已登记好 fnSettleLater
+    std::thread::id factoryTid;            // 只由工厂写，主线程在等完 bFactoryRan 之后读
+    std::thread::id settlerTid;            // 只由结算线程写，主线程 join 之后读
 
     std::function<void()> fnSettleLater;
     std::shared_ptr<SRwCtx> spCtx = std::make_shared<SRwCtx>();
     spCtx->nId = 1;
     CPromise<SRwCtx> chain = exec.NewPromise(
         spCtx,
-        [&fnSettleLater](const CPromise<SRwCtx>::ResolveFn& fnResolve, const CPromise<SRwCtx>::RejectFn& /*fnReject*/)
+        [&fnSettleLater, &bStarterRan](
+            const CPromise<SRwCtx>::ResolveFn& fnResolve, const CPromise<SRwCtx>::RejectFn& /*fnReject*/)
         {
             // 起链回调：只登记，稍后由外部线程 settle（模拟别的模块回调）。
             fnSettleLater = [fnResolve]()
             {
                 fnResolve();  // ResolveFn = void()
             };
+            bStarterRan.store(true);  // 登记完成：外部线程才能读 fnSettleLater
         },
         TaskKind::kRead);
 
@@ -770,6 +775,14 @@ TEST(AsyncRw_BridgeFactoryRunsGated)
                 TaskKind::kRead);
         },
         TaskKind::kWrite);
+
+    // 起链回调现在按类别过门投递（门外起链也不再在调用线程上同步跑）→ 等它登记完再开结算线程。
+    ASSERT_TRUE(WaitUntil(
+        [&bStarterRan]()
+        {
+            return bStarterRan.load();
+        },
+        2000));
 
     std::thread settler(
         [&fnSettleLater, &settlerTid, &bSettled]()
@@ -790,6 +803,131 @@ TEST(AsyncRw_BridgeFactoryRunsGated)
     ASSERT_TRUE(bFactoryHasSlot.load());    // 工厂过门：拿到本层 kWrite 的槽位
     ASSERT_TRUE(factoryTid != settlerTid);  // 且不在结算线程上（回到本链执行器线程）
     ASSERT_TRUE(bSettled.load());
+    exec.Stop();
+}
+
+/// @brief 跨模块起链：被调模块的起链回调跑在**它自己的门**里（不是调用方那扇门）。
+///
+/// 场景：调用方在自己的写槽位里调被调模块的公开异步函数（`NewPromise(spCtx, fnStarter, 类别)`）——
+/// 「门外（对 B 而言）/ 别的门」起链一律**按声明类别过门投递**后再跑，所以：
+///  - 起链回调拿到的是**被调模块自己**的槽位（碰它自己的状态是安全的）；
+///  - 类别 = 它声明的类别（不再是「继承调用方那扇门」）。
+TEST(AsyncRw_CrossModuleStarterLandsInCalleeGate)
+{
+    CAsyncExecutor execCaller(2);  // 调用方模块（自己的门）
+    CAsyncExecutor execCallee(2);  // 被调模块（自己的门）
+    ASSERT_TRUE(execCaller.Start());
+    ASSERT_TRUE(execCallee.Start());
+
+    // 取「被调模块的门」：在它的门内任务里读一次帧（帧里带着所属门）。
+    const void* pGateCallee = NULL;
+    std::atomic<bool> bGotGate(false);
+    ASSERT_TRUE(execCallee.Post(TaskKind::kWrite,
+        [&pGateCallee, &bGotGate]()
+        {
+            pGateCallee = common::async::detail::TaskFrameTop()->pGate;
+            bGotGate.store(true);
+        }));
+    ASSERT_TRUE(WaitUntil(
+        [&bGotGate]()
+        {
+            return bGotGate.load();
+        },
+        1000));
+
+    std::shared_ptr<SRwCtx> spCalleeCtx = std::make_shared<SRwCtx>();
+    spCalleeCtx->nId = 9;
+    std::atomic<bool> bStarterRan(false);
+    std::atomic<bool> bStarterInOwnGate(false);
+    std::atomic<bool> bStarterHasSlot(false);
+    std::atomic<int> nStarterKind(-1);
+    std::atomic<bool> bChildSettled(false);
+
+    // 调用方在自己的写槽位里调被调模块的异步函数（跨模块起链）
+    ASSERT_TRUE(execCaller.Post(TaskKind::kWrite,
+        [&execCallee, spCalleeCtx, &pGateCallee, &bStarterRan, &bStarterInOwnGate, &bStarterHasSlot, &nStarterKind,
+            &bChildSettled]()
+        {
+            CPromise<SRwCtx> promiseCallee = execCallee.NewPromise(
+                spCalleeCtx,
+                [&bStarterRan, &bStarterInOwnGate, &bStarterHasSlot, &nStarterKind, &pGateCallee](
+                    const CPromise<SRwCtx>::ResolveFn& fnResolve, const CPromise<SRwCtx>::RejectFn& /*fnReject*/)
+                {
+                    const common::async::detail::CTaskFrame* pFrame = common::async::detail::TaskFrameTop();
+                    bStarterHasSlot.store(pFrame != NULL);
+                    bStarterInOwnGate.store(pFrame != NULL && pFrame->pGate == pGateCallee);
+                    nStarterKind.store(pFrame != NULL ? static_cast<int>(pFrame->eKind) : -1);
+                    bStarterRan.store(true);
+                    fnResolve();
+                },
+                TaskKind::kWrite);
+            // 跨模块链照常可续接（本层由子链落定收口）
+            promiseCallee.OnSettled(
+                [&bChildSettled](common::async::CPromiseResult /*result*/)
+                {
+                    bChildSettled.store(true);
+                });
+        }));
+
+    ASSERT_TRUE(WaitUntil(
+        [&bStarterRan]()
+        {
+            return bStarterRan.load();
+        },
+        2000));
+    ASSERT_TRUE(bStarterHasSlot.load());
+    ASSERT_TRUE(bStarterInOwnGate.load());                               // 在被调模块自己的门里
+    ASSERT_EQ(nStarterKind.load(), static_cast<int>(TaskKind::kWrite));  // 类别 = 声明的类别
+    ASSERT_TRUE(WaitUntil(
+        [&bChildSettled]()
+        {
+            return bChildSettled.load();
+        },
+        2000));
+    execCaller.Stop();
+    execCallee.Stop();
+}
+
+/// @brief 起链回调的类别是**有效**的：它决定「起链回调以什么身份进模块」。
+///
+/// 场景：在**写槽位**里起一条**声明为读**的链 —— 换类别不能就地（那等于用写槽位跑读身份的活），
+/// 于是按读类别过门投递；起链回调跑起来时，帧上的类别就是它声明的「读」。
+TEST(AsyncRw_StarterRunsUnderDeclaredKind)
+{
+    CAsyncExecutor exec(2);
+    ASSERT_TRUE(exec.Start());
+
+    std::shared_ptr<SRwCtx> spCtx = std::make_shared<SRwCtx>();
+    spCtx->nId = 3;
+    std::atomic<bool> bDone(false);
+    std::atomic<bool> bHasSlot(false);
+    std::atomic<int> nKind(-1);
+
+    ASSERT_TRUE(exec.Post(TaskKind::kWrite,
+        [&exec, spCtx, &bDone, &bHasSlot, &nKind]()
+        {
+            exec.NewPromise(
+                spCtx,
+                [&bDone, &bHasSlot, &nKind](
+                    const CPromise<SRwCtx>::ResolveFn& fnResolve, const CPromise<SRwCtx>::RejectFn& /*fnReject*/)
+                {
+                    const common::async::detail::CTaskFrame* pFrame = common::async::detail::TaskFrameTop();
+                    bHasSlot.store(pFrame != NULL);
+                    nKind.store(pFrame != NULL ? static_cast<int>(pFrame->eKind) : -1);
+                    fnResolve();
+                    bDone.store(true);
+                },
+                TaskKind::kRead);  // 声明读：在写槽位里换类别 → 过门投递后再跑
+        }));
+
+    ASSERT_TRUE(WaitUntil(
+        [&bDone]()
+        {
+            return bDone.load();
+        },
+        2000));
+    ASSERT_TRUE(bHasSlot.load());
+    ASSERT_EQ(nKind.load(), static_cast<int>(TaskKind::kRead));
     exec.Stop();
 }
 
@@ -878,7 +1016,9 @@ TEST(AsyncRw_CoroutineSegmentKindGuarded)
         },
         1000));
 
-    // 门桩：一条当场兑现的 promise（只负责让协程走一次「挂起 → 恢复」）。
+    // 门桩：一条「当场兑现」的 promise（只负责让协程走一次「挂起 → 恢复」）。
+    // 门外起链按**声明类别过门**后再跑：桩要与上面那条长读任务并存，所以声明读
+    // （若声明 kWrite，它会等到读者排空 —— 那正是写类别的语义，桩会被长读任务挡住）。
     std::shared_ptr<SRwCtx> spCoroCtx = std::make_shared<SRwCtx>();
     spCoroCtx->nId = 2;
     CPromise<SRwCtx> promiseGate = exec.NewPromise(
@@ -887,7 +1027,7 @@ TEST(AsyncRw_CoroutineSegmentKindGuarded)
         {
             fnResolve();
         },
-        TaskKind::kWrite);
+        TaskKind::kRead);
 
     // 首段 = 读（CoStart 的类别）；恢复段 = 读（CO_AWAIT 的类别）。
     std::atomic<bool> bCoroDone(false);

@@ -537,7 +537,7 @@ static CPromise<COrderCtx> WrapCourierPickup(common::async::CAsyncExecutor& exec
 
 包装就三件事，缺一件都会留坑：
 
-1. **发起**：只在 starter 里发起调用 + 登记回调（starter 是**同步执行**的，别做重活）；
+1. **发起**：只在 starter 里发起调用 + 登记回调（starter 与层体同一套派发：本门同类槽位就地、否则按类别过门；别做重活）；
 2. **收口**：回调里成功 `fnResolve()`、失败 `fnReject(结果)`，回调给的数据落进上下文；
 3. **边界**：发起就失败（`Post` 返回 `false` / 执行器已停）必须拒绝本层
    （`fnReject(CPromiseResult::Reject(std::runtime_error("本模块执行器不可用")))`），否则链会**永久挂着**。

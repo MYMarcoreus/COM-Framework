@@ -56,6 +56,7 @@
 #include "Async/Promise.h"
 #include "Async/Trace.h"
 #include "Coroutine/Coroutine.h"
+#include "cases/CrossModuleGateCase.h"
 
 using common::async::CAsyncExecutor;
 using common::async::CCoroutine;
@@ -932,6 +933,14 @@ int main()
     ASSERT(HasChainLine(spCtxFail->vecAuditChain, linesFail.nCoroutine));  // ⑩ 在链上
     ASSERT(spCtxFail->strTrace.find("落库;") == std::string::npos);        // 但它确实没执行（轨迹为证）
 #endif
+
+    //==================== 跨模块起链：被调模块的状态由哪扇门保护 ====================
+    std::printf("\n==================== 跨模块起链（读写门） ====================\n");
+    {
+        // 先跑用例再断言（release 下 ASSERT 不执行，写在 ASSERT 里会「根本没跑」）。
+        const bool bCrossModuleOk = RunCrossModuleGateCase();
+        ASSERT(bCrossModuleOk);
+    }
 
     //==================== 其余常用用法 ====================
     DemoCombinators(execMain);

@@ -1325,8 +1325,19 @@ private:
 #else
         (void)loc;  // 注册点只服务 trace：发布构建没有 trace。
 #endif
-        // ③ 这里恒为「立即启动」：与 JS 的 `new Promise(executor)` 一样，起链回调当场同步执行。
-        RunChainStarter(pState, fnStarter);
+        // ② 启动起链回调：与层体同一套「就地 / 过门」判定（`DispatchInlineOrPost`）。
+        //    已在本门同类槽位里 → 就地同步跑（与 JS 的 `new Promise(executor)` 一致，零额外开销）；
+        //    否则（门外线程 / 别的模块的门 / 换类别）→ 按 eKind 过门投递后再跑 ——
+        //    「本层以什么身份进模块」在起链这一步也成立，跨模块调用不会把被调模块的状态晾在门外。
+        if (!detail::DispatchInlineOrPost(pHandle, eKind,
+                [pState, fnStarter]()
+                {
+                    RunChainStarter(pState, fnStarter);
+                }))
+        {
+            // ③ 执行器不可用（已停止 / 门已关）：本层以「执行器已停」收口（与层派发同款）。
+            SettleStopped(pState);
+        }
 
         return CPromise(std::make_shared<detail::CPromiseCore<TContext> >(pHandle, spContext), pState);
     }
@@ -1392,7 +1403,7 @@ private:
             // 起链回调给的整份结果：异常类型 + 文案，框架只搬运、不解释。
             pState->Settle(result);
         };
-        // ② 同步执行起链回调（它是同步的，只应做「发起 + 登记回调」，不要做重活）。
+        // ② 同步执行起链回调（就地分支：已在本门同类槽位里，只应做「发起 + 登记回调」，不要做重活）。
         try
         {
             if (fnStarter)
@@ -1581,7 +1592,11 @@ CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& s
 ///
 /// 用途：把「其他模块 / 回调式」的异步接进本流程 —— 起链回调里发起调用并登记回调，
 /// 由对方的完成回调调 `fnResolve()` 兑现或 `fnReject(std::runtime_error("原因"))` 收口（非阻塞，不占 worker）。
-/// 与 JS 一致：起链回调「立即（同步）执行」，因此只应做「发起 + 登记回调」，不要做重活。
+///
+/// 启动时机与层体**完全一致**（`DispatchInlineOrPost`）：已在本门同类槽位里 → 就地同步跑
+/// （JS 的 `new Promise(executor)` 语义）；否则（门外线程 / 别的模块的门 / 换类别）→
+/// 按 `eKind` 过门投递后再跑 —— 「本层以什么身份进模块」在起链这一步也成立，
+/// 跨模块调用不会把被调模块的状态晾在门外。故起链回调只应做「发起 + 登记回调」，不要做重活。
 ///
 /// @tparam TContext 上下文类型（由 spContext 推导）。
 /// @param spContext 共享上下文（本 promise 所有层共用该实例）。

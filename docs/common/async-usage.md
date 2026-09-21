@@ -336,7 +336,8 @@ p = exec.NewPromise(spCtx, &StepValidate, TaskKind::kRead, ASYNC_LOC)
   —— 被调模块 settle 本链时，这一层会被投递回本模块执行器（同执行器内仍然就地内联，不多花一次入队）。
   所以回调里可以直接改本模块状态，无需再显式 `exec.Post(...)`（想显式强制也仍然可用）；
   但 **`OnSettled` 通知不迁移**：它仍在结算线程（= 被调模块线程）上触发，只对「层」做亲和；
-  `exec.NewPromise(spCtx, fnStarter, 类别)` 的起链回调是「发起」语义，仍在调用线程上同步执行。
+  `exec.NewPromise(spCtx, fnStarter, 类别)` 的起链回调与层体同一套派发：本门同类槽位 → 就地同步跑，
+  否则按类别**过门投递**后再跑（跨模块调用因此落在**被调模块自己的门**里）—— 语义上仍是「发起 + 登记回调」。
   背景与实测：见 [async-cross-module-findings.md](async-cross-module-findings.md)；
 - **`OnSettled` 保证送达**（2026-09-11 框架修复）：子 promise 已 settled 且它的执行器不可用
   （被调模块已停止 / 拒绝投递）时，通知改为在**调用线程**上就地执行 —— `OnSettled` 现在**没有返回值**
@@ -348,7 +349,7 @@ p = exec.NewPromise(spCtx, &StepValidate, TaskKind::kRead, ASYNC_LOC)
   沿**外层链**透传（外层后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
 - `ThenPromise` 的语义与 `Then` 一致（上层被拒绝则本层不执行），差别是**本层等子 promise**：
   子 promise 兑现 → 本层兑现；子 promise 被拒绝 → 本层以**同一个异常**被拒绝（`Catch` / `Finally` 仍会执行）；
-- `exec.NewPromise(spCtx, fnStarter, 类别)` 的起链回调 **立即（同步）执行**（与 JS 一致），只应做「发起 + 登记回调」，
+- `exec.NewPromise(spCtx, fnStarter, 类别)` 的起链回调按类别**过门**（本门同类槽位 → 就地同步；门外 / 别的门 / 换类别 → 投递后再跑），只应做「发起 + 登记回调」，
   由回调调 `fnResolve()` / `fnReject(结果)`（要造业务拒绝就 `fnReject(CPromiseResult::Reject(std::runtime_error("原因")))`）；
 - 桥接处是**唯一**做「跨模块失败 → 本模块语义」转换的地方（例如把数据访问层的
   `CDbError(kRowNotFound)` 归一化成「兑现 + bFound=false」，把它的其他失败翻译成本模块的
@@ -621,6 +622,28 @@ exec.Post(common::async::TaskKind::kDirect, fnFlushMetrics);  // 直投：不过
 所以契约是：**不得访问受门保护的数据**（门对它完全不知情，写者可能正在同时跑）。用途：日志 / 指标 /
 上报 / 数据搬运这类自成一体的活（自身线程安全、不碰模块状态）。
 
+**哪些代码不在门里跑**（三处，刻意的 —— 记住它们就不必猜）：
+
+| 代码 | 在哪跑 | 契约 |
+| --- | --- | --- |
+| **起链之前的函数体**（模块公开异步函数里 `NewPromise(...)` 之前那几行） | **调用方线程**上（框架还没介入：调用方那扇门里，或者门外） | 只做「参数整理 + 起链」；模块状态放进门内首层 / 起链回调 |
+| **通知** `OnSettled` / `OnSettledOn`，以及 `ThenBridge` 的 `fnApply` | **子链的结算线程**（典型：别的模块的线程）上直投送达 | 只搬数据、不碰模块状态（通知不迁移） |
+| `kDirect` 任务本身 | 直投线程池 | 不得访问受门保护的数据 |
+
+其余用户代码都在门里，而且跨模块调用时**落在被调模块自己的门里**：
+
+| 代码 | 在哪跑 |
+| --- | --- |
+| **起链回调** `NewPromise(spCtx, fnStarter, 类别)` 的 `fnStarter` | 已在本门**同类**槽位里 → 就地同步跑（JS 的 `new Promise(executor)` 语义，零开销）；否则（门外 / 别的模块的线程 / 换类别）→ **按类别过门投递**后再跑 |
+| 首层（`NewPromise(spCtx, 处理器, 类别)`）与后续每一层（`Then` 一族） | 本链执行器 + 本层类别过门 |
+| 「等子链」层的工厂（`ThenPromise` / `ThenBridge` 的 `fnCreate`） | 本层类别过门（上游即使是外部线程 settle 的也一样） |
+| 协程每一段（`CoStart` 与每个 `CO_AWAIT`） | 本段类别过门 |
+
+所以「模块的异步函数被别的模块调用时，一定在被调模块里执行」的完整答案是：
+**从 `NewPromise(...)` 那一刻起（起链回调 + 每一层 + 工厂 + 协程每段）都在被调模块自己的门里；
+唯一例外是「起链之前」的那几行函数体**（它属于调用方线程），把状态访问放进首层或起链回调即可。
+
+
 业务侧完整落地（模块里不再需要自己的锁）：`ServerExample/Module/ExampleDbModule.cpp`（表不加锁：
 写独占使「读出来改回去」整段不被打断）与 `ServerExample/Module/ExampleAsyncModule.cpp`（查询 = 读链、
 注册 / 改名 / 删除 = 写链）；把 `example.ini` 的 `db.latency_ms` 调大（几十 ms）后，日志里能直接
@@ -822,11 +845,12 @@ common::async::CPromise<Ctx> p =
 
 ## 14. 测试与示例
 
-- 示例：`examples/main.cpp`（28 个演示：then / catch / finally / 分叉 / 深链 / 协程 / **嵌套** / **跨模块组合** / **多种 then 混用**）；
-- 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
+- 示例：`examples/main.cpp`（29 个演示：then / catch / finally / 分叉 / 深链 / 协程 / **嵌套** / **跨模块组合** / **多种 then 混用** / **跨模块起链的门归属**）；
+- 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）、
+  `examples/cases/CrossModuleGateCase.cpp`（跨模块起链落在**被调模块自己的门**里：两种写法对照 + 重叠进入自校验）；
 - 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞；
   查询 = 读链可并发，注册 / 改名 / 删除 = 写链独占，模块内无需自己的锁）；
-- 单元测试（异步共 **151 例**，全量 **183 例**；release 176 例，差的 7 例是 debug 专属：
+- 单元测试（异步共 **153 例**，全量 **185 例**；release 178 例，差的 7 例是 debug 专属：
   trace 5 例 + 读写门 × trace 2 例）：
   `test_async_smoke.cpp`（17）对外用法逐条冒烟、
   `test_async_chain.cpp`（41）promise 契约 + 协程（含协程体抛异常的收口）、`test_async_combine.cpp`（12）组合器、
@@ -836,13 +860,14 @@ common::async::CPromise<Ctx> p =
   `test_async_robustness.cpp`（6）健壮性与诊断、`test_async_layer_rules.cpp`（3）三态语义、
   `test_async_alloc.cpp`（3）每层分配预算护栏、
   `test_async_gate.cpp`（13）读写门本体（读并发 / 写独占 / 公平 FIFO / 多门与多生产者 / Drain）、
-  `test_async_rw.cpp`（19）读写门 × 执行器集成：投递与**逐层类别**（`AsyncRw_PerLayerReadInWriteChain` /
+  `test_async_rw.cpp`（21）读写门 × 执行器集成：投递与**逐层类别**（`AsyncRw_PerLayerReadInWriteChain` /
   `PerLayerWriteInReadChain` / `AllLayersMarkedReadConcurrent` / `PerLayerKindVisibleInTrace`）、
   读写不重叠、就地下沉、停止语义、**`kDirect` 直投不过门**（`AsyncRw_DirectPostBypassesGate` /
   `DirectChainBypassesGate` / `MixedKindsChainKeepsOrder` / `DirectKindVisibleInTrace`）、
   组合器聚合层不过门（`AsyncRw_GatherLayerBypassesGate`）、协程**逐段类别**（`AsyncRw_CoroutineSegmentKindGuarded`）、
   **等子链层的工厂也过门**（`AsyncRw_BridgeFactoryRunsGated`：上游由外部线程 settle 时，工厂仍拿到本层槽位、
-  跑在本链执行器线程上）、
+  跑在本链执行器线程上）、**起链回调也过门**（`AsyncRw_CrossModuleStarterLandsInCalleeGate`：跨模块起链落在被调
+  模块自己的门里；`AsyncRw_StarterRunsUnderDeclaredKind`：起链回调跑在「它声明的类别」的槽位里）、
   `test_async_module_threads.cpp`（8）**多线程模块的线程安全**（不加锁的模块状态：并发写不丢更新 /
   读不撕裂 / 写链层不重叠 / 层间让位（写链不原子）/ 乐观锁重试 / 停止 / 多客户端压力）、
   `test_async_trace.cpp`（6）调用链 trace（复杂主链看完整链 / 多层子链跨链祖先路径 /

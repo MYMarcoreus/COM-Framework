@@ -324,8 +324,9 @@ public:
 
     // 起 promise（对齐 JS `new Promise((resolve, reject) => ...)`）：由起链回调内部的 resolve / reject 兑现。
     //
-    // 注意这条起链的类别**只服务 trace**：该层由外部回调 settle，永远不过门（起链回调本身在调用线程
-    // 同步跑，也不过门）；真正过门的是它之后各层（各自在 `Then` 一族里给类别）与它等到的子链。
+    // 启动时机与层体一致（就地 / 过门）：已在本门同类槽位里 → 就地同步跑（JS 语义）；
+    // 否则（门外线程 / 别的模块的门 / 换类别）→ 按类别过门**投递后再跑** ——
+    // 这条起链的类别因此是有效的：它就是「起链回调以什么身份进模块」。
     template <typename TContext>
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
         const typename CPromise<TContext>::ChainStarter& fnStarter, TaskKind eKind, const CSourceLoc& loc = CSourceLoc());

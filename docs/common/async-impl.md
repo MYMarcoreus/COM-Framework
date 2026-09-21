@@ -162,7 +162,7 @@ else
 | 入口 | 首层何时投递 | 追加层 |
 | --- | --- | --- |
 | `exec.NewPromise(spCtx, 首层处理器, 类别)` | 调用即投递（与 JS 的 `new Promise(executor)` 一致） | 上游未 settle 时登记、已 settle 时投递回本链执行器 |
-| `exec.NewPromise(spCtx, fnStarter, 类别)` | 由起链回调里的 `resolve()` / `reject(码)` 决定（起链回调当场同步执行） | 同上 |
+| `exec.NewPromise(spCtx, fnStarter, 类别)` | 由起链回调里的 `resolve()` / `reject(码)` 决定（起链回调与层体同一套派发：本门同类槽位 → 就地；否则按类别过门投递） | 同上 |
 
 两个重载的类别都只定**首层**：后续每层各自在 `Then` 一族里给（共享核心不存类别 —— 同一条链的层
 可以读 / 写 / 直投混排）。
@@ -269,7 +269,7 @@ return MakeLayerRunner(pState, [spContext, fnHandler, upResult, eMode]()
 
 | API | JS 对照 | 实现要点 |
 | --- | --- | --- |
-| `exec.NewPromise(spCtx, fnStarter, 类别, loc)` | `new Promise((resolve, reject) => …)` | 直接建 `CPromiseState` 并交出 `ResolveFn` / `RejectFn`（内部就是 `pState->Settle(...)`）；起链回调同步执行（与 JS 一致），抛异常 → 异常原样成为本层拒绝；`Settle` 幂等，故重复 settle / settle 后异常都安全 |
+| `exec.NewPromise(spCtx, fnStarter, 类别, loc)` | `new Promise((resolve, reject) => …)` | 直接建 `CPromiseState` 并交出 `ResolveFn` / `RejectFn`（内部就是 `pState->Settle(...)`）；起链回调按类别过门（本门同类槽位就地、否则投递），抛异常 → 异常原样成为本层拒绝；`Settle` 幂等，故重复 settle / settle 后异常都安全 |
 | `CPromise<T>::ThenPromise(factory, 类别, loc)` | `then(处理器返回 promise)` 的 flatten | 建本层 state，在上游 state 上登记 handler：上游被拒 → 直接透传；上游兑现 → `Adopt()` |
 | `CPromise<T>::ThenBridge(fnCreate, fnApply, 类别, loc)` | `then` 里「等别的模块 + 取回数据」 | **上面两个原语的语法糖**：内部就是 `Adopt()` + `New`（改走句柄版 `NewFromHandle`）+ `OnSettled`，多出的只是「子链兑现时先 `fnApply` 搬数据」 |
 
@@ -283,7 +283,7 @@ return MakeLayerRunner(pState, [spContext, fnHandler, upResult, eMode]()
   子 promise 的拒绝**原样**成为本层拒绝（后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
 - **保活**：子 promise 的最后一段由「上一段 handler 捕获下一段」链保活，本层 state 被子 promise
   的 `OnSettled` handler 捕获 —— 即使句柄被丢弃，在途的整条链仍安全跑完；
-- **`New` 恒为「立即启动」**：它建的是独立新链，起链回调当场同步执行；
+- **`New` 恒为「立即启动」**：它建的是独立新链，起链回调与层体同一套「就地 / 过门」派发（本门同类槽位 → 就地同步；否则按类别投递）；
   到本层的时机由「轮到该层」保证（它挂在哪一层上，就在哪一层 settle 后才执行）。
 
 `ThenBridge` 与手写版的**等价关系**（也是它的实现）：
@@ -398,7 +398,7 @@ if (!DispatchInlineOrPost(Handle(), std::move(fnRun)))
 - **代价**：每次跨执行器的续接多一次入队 + 唤醒（微秒级）；同执行器内仍完全内联；
   内联深度只在同一执行器线程内累加，跨模块不涨栈；
 - **边界**：只作用于「层」——`OnSettled` 通知按登记时的选择在**结算线程**或 `OnSettledOn`
-  指定的执行器上送达；`New(...)` 的起链回调是「发起」语义，仍在调用线程上同步执行；
+  指定的执行器上送达；`New(...)` 的起链回调是「发起」语义，与层体同一套派发（本门同类槽位就地、否则按类别过门）；
   `Await()` 仍占住调用线程；
 - **验收**：`Tests/test_async_affinity.cpp`（5 例，跨模块恒回本模块线程）+ `Tests/test_async_modules*.cpp`
   （当初发现问题的极限用例，现断言 200 条并发链 100% 落回本模块线程）；
@@ -476,7 +476,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 | 路径 | 说法 |
 | --- | --- |
 | `exec.Post(类别, fn)` | 包一层异常兜底（`kDiagPostThrow`）后按类别过门（`kDirect` 不过门，见下行） |
-| 层派发 `PostToHandle(handle, kind, fn)` | `StartChain` 首层、`AddHandler` 的「已落定 → 投递」、`DispatchInlineOrPost` 的投递分支、「等子链」层的动作体（`CPromiseCore::DispatchAction`）—— 按**本层**的类别过门（核心不存类别：同一条链的层可以不同；`NewPromise` 的类别只管首层） |
+| 层派发 `PostToHandle(handle, kind, fn)` | `StartChain` 首层、**起链回调**（`NewFromHandle`）、`AddHandler` 的「已落定 → 投递」、`DispatchInlineOrPost` 的投递分支、「等子链」层的动作体（`CPromiseCore::DispatchAction`）—— 按**本层**的类别过门（核心不存类别：同一条链的层可以不同；`NewPromise` 的类别只管首层） |
 | 直投层 / `Post(kDirect, fn)` | **直投线程池**（`PostToHandle` 的直投重载）：不入队、不占槽位、不查门 |
 | 通知（`OnSettled` / `OnSettledOn`） | **直投**（`PostToHandle(handle, fn)` 的直投重载）：保证送达优先，不去排队等槽位 |
 | 就地（`CanRunInline`） | 不过门：槽位已在外层任务手里（同类），只要求「无人在排队」；**直投层不查门**（它不占槽位）—— 在本执行器线程上就接着跑 |
@@ -495,20 +495,26 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
   因此也**不受公平性保护**（写任务扎堆时它照样能插进去跑）。契约：不得访问受门保护的数据
   （门对它完全不知情，写者可能正在同时跑）；用途 = 日志 / 指标 / 上报 / 搬运这类自成一体的活。
 
-**哪些用户代码不在门里跑**（三处，刻意的；其余用户代码都在门里）：
+**哪些用户代码不在门里跑**（三处，刻意的）：
 
-- **起链回调**（`NewPromise(spCtx, fnStarter, 类别)` 的 `fnStarter`）：**同步在调用线程**上跑、**无槽位**
-  （`TaskFrameTop() == NULL`）—— 这是「立即投递首层 / JS 对齐的同步执行」的代价，类别在那儿只服务 trace。
-  契约：只做发起 + 登记回调；要碰模块状态就用 `exec.Post(类别, …)` 起链（类别在那儿才有效）；
+- **起链之前的函数体**（模块公开异步函数里 `NewPromise(...)` 之前那几行）：它是**调用方的代码**、跑在调用方线程上
+  （框架还没介入：调用方那扇门里，或者门外）—— 所以公开异步函数体只应做「参数整理 + 起链」，状态访问放进门内首层 / 起链回调；
 - **通知**（`OnSettled` / `OnSettledOn`）与 `ThenBridge` 的 `fnApply`：在**子链结算线程**上直投送达
   （通知不迁移），只搬数据；
 - **`kDirect` 任务**：直投线程池（见下行）。
 
-而「等子链」层（`ThenPromise` / `ThenBridge`）的**工厂 `fnCreate` 在门里**：它走 `CPromiseCore::DispatchAction`
-（就地 / 按本层类别投递），所以**永远跑在本链执行器线程上**。这一条是修出来的：之前登记路径直接调 `Adopt()`
-跑工厂，上游若由**外部线程** settle（起链回调交给别的线程、桥接子链、定时器回调），工厂就会在那个线程上、
-**无槽位**地跑（实测：`TaskFrameTop() == NULL` + 在结算线程上）—— 声明的类别形同虚设，而工厂恰恰是用户
-写的「起子链」代码。`Tests/test_async_rw.cpp::AsyncRw_BridgeFactoryRunsGated` 钉住它（去掉过门那一跳即失败）。
+其余用户代码**都在门里**，而且跨模块调用时**落在被调模块自己的门里**：
+
+- **起链回调**（`NewPromise(spCtx, fnStarter, 类别)`）：与层体同一套派发（`DispatchInlineOrPost`）——
+  本门同类槽位 → 就地同步；门外 / 别的门 / 换类别 → 按类别过门投递。这一条是修出来的：此前起链回调
+  恒在调用线程上同步跑，继承的是**调用方那扇门**（跨模块时对**被调模块**的状态零保护；TSan 实测 2 处
+  data race）→ `AsyncRw_CrossModuleStarterLandsInCalleeGate` 与 `AsyncRw_StarterRunsUnderDeclaredKind`
+  钉住它，`examples/cases/CrossModuleGateCase.cpp` 是可运行的两种写法对照；
+- 「等子链」层（`ThenPromise` / `ThenBridge`）的**工厂 `fnCreate`**：走 `CPromiseCore::DispatchAction`
+  （就地 / 按本层类别投递），**永远跑在本链执行器线程上**。这一条也是修出来的：之前登记路径直接调
+  `Adopt()` 跑工厂，上游若由**外部线程** settle，工厂就在那个线程上、**无槽位**地跑（`TaskFrameTop() == NULL`）
+  —— `AsyncRw_BridgeFactoryRunsGated` 钉住它（去掉过门那一跳即失败）；
+- 协程每一段（`CoStart` / 每个 `CO_AWAIT`）与本链的每一层：各自按本段 / 本层类别过门。
 
 开销（`Tests/test_async_alloc.cpp` 守着）：
 
@@ -537,10 +543,12 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 测试：`Tests/test_async_gate.cpp`（门本体 13 例：读并发 / 写独占 / 三种 FIFO 顺序 / 同门重入 /
 多门链式 / 16 门压力 / 排空 / 拒绝路径 / 异常仍归还槽位）+ `Tests/test_async_rw.cpp`
-（执行器集成 19 例：写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / **逐层类别**
+（执行器集成 21 例：写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / **逐层类别**
 （写链里的读层、读链里的写层、各层各自标读、类别在 trace 里可见）/ **`kDirect` 直投不过门**
 （写者占门时直投任务与直投链照跑、混排保持链序）/ 组合器聚合层不过门 / 协程逐段类别
-（首段与恢复段的任务帧类别各自正确）/ 等子链层的工厂过门（`AsyncRw_BridgeFactoryRunsGated`）/ 就地级联同线程 /
+（首段与恢复段的任务帧类别各自正确）/ 等子链层的工厂过门（`AsyncRw_BridgeFactoryRunsGated`）/
+**起链回调过门**（`AsyncRw_CrossModuleStarterLandsInCalleeGate` 跨模块落在被调模块自己的门里 /
+`AsyncRw_StarterRunsUnderDeclaredKind` 换类别时按声明类别进模块）/ 就地级联同线程 /
 `Stop` 排空不丢任务 / 停止中链以「执行器已停」收口）+ `Tests/test_async_module_threads.cpp`
 （多线程模块 8 例：并发写不丢更新 / 读不撕裂 / 写链层不重叠 / 层间让位 / 乐观锁重试 / 混合流量
 与 `Stop` 后状态自洽 —— 模块状态是**普通成员**，安全全部来自读写门）。
