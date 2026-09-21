@@ -530,10 +530,10 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&StepCheckCoupon, TaskKind::kWrite, ASYNC_LOC));  // 顺序 await
-        CO_AWAIT_ALL(                                       //
-            NewPromise(&StepCheckGift, TaskKind::kWrite, ASYNC_LOC),          //
-            NewPromise(&StepCheckPoints, TaskKind::kWrite, ASYNC_LOC));       // 并行 await
+        CO_AWAIT(TaskKind::kWrite, NewPromise(&StepCheckCoupon, TaskKind::kWrite, ASYNC_LOC));  // 顺序 await
+        CO_AWAIT_ALL(TaskKind::kWrite,                                                          //
+            NewPromise(&StepCheckGift, TaskKind::kWrite, ASYNC_LOC),                            //
+            NewPromise(&StepCheckPoints, TaskKind::kWrite, ASYNC_LOC));                         // 并行 await
         CO_RETURN_VOID();
         CO_END();
     }
@@ -663,8 +663,9 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
 
     //---------------- 父链本体：一行一层，行尾注释就是步骤号 ----------------
 
+    // ① 起链（具名 handler）
     lines.nReadOrder = __LINE__ + 1;
-    CPromise<COrderCtx> pChain = execMain.NewPromise(spCtx, &StepReadOrder, TaskKind::kWrite, ASYNC_LOC);  // ① 起链（具名 handler）
+    CPromise<COrderCtx> pChain = execMain.NewPromise(spCtx, &StepReadOrder, TaskKind::kWrite, ASYNC_LOC);
     lines.nValidate = __LINE__ + 1;
     pChain = pChain.Then(fnValidate, TaskKind::kWrite, ASYNC_LOC);  // ② then = lambda
     lines.nCheckStock = __LINE__ + 1;
@@ -734,7 +735,7 @@ void DemoCombinators(CAsyncExecutor& execMain)
     {
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
         const CPromiseResult r = execMain
-                                     .WhenAll(spCtx, TaskKind::kWrite, MakeQuickChain(execMain, spCtx, false, nullptr, 5),
+                                     .WhenAll(spCtx, MakeQuickChain(execMain, spCtx, false, nullptr, 5),
                                          MakeQuickChain(execMain, spCtx, false, nullptr, 5))
                                      .Await();
         ASSERT(r.IsFulfilled());
@@ -746,7 +747,7 @@ void DemoCombinators(CAsyncExecutor& execMain)
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
         const CPromiseResult r =  //
             execMain
-                .WhenAllSettled(spCtx, TaskKind::kWrite,                                   //
+                .WhenAllSettled(spCtx,                                   //
                     MakeQuickChain(execMain, spCtx, false, nullptr, 5),  //
                     MakeQuickChain(execMain, spCtx, true, kErrNoStockText, 5))
                 .Await();
@@ -759,7 +760,7 @@ void DemoCombinators(CAsyncExecutor& execMain)
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
         const CPromiseResult r =  //
             execMain
-                .WhenRace(spCtx, TaskKind::kWrite,                                                //
+                .WhenRace(spCtx,                                                //
                     MakeQuickChain(execMain, spCtx, true, kErrNoStockText, 0),  //
                     MakeQuickChain(execMain, spCtx, false, nullptr, 60))        //
                 .Await();
@@ -772,7 +773,7 @@ void DemoCombinators(CAsyncExecutor& execMain)
     {
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
         const CPromiseResult r = execMain
-                                     .WhenAny(spCtx, TaskKind::kWrite, MakeQuickChain(execMain, spCtx, true, kErrNoStockText, 0),
+                                     .WhenAny(spCtx, MakeQuickChain(execMain, spCtx, true, kErrNoStockText, 0),
                                          MakeQuickChain(execMain, spCtx, false, nullptr, 60))
                                      .Await();
         ASSERT(r.IsFulfilled());  // 先到的是拒绝 → 不算，继续等兑现

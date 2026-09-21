@@ -121,7 +121,7 @@ if (detail::ShouldInline(m_pExec->Handle(), true))
 }
 else
 {
-    PostResume();
+    PostResume(类别);
 }
 ```
 

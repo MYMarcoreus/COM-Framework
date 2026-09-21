@@ -24,8 +24,8 @@ promise ：一层做完做下一层（then 失败即停）
 
 | JS / C# | 本框架 |
 | --- | --- |
-| `await promise` | `CO_AWAIT(promise)` |
-| `await Promise.all([a, b])` | `CO_AWAIT_ALL(a, b)` |
+| `await promise` | `CO_AWAIT(类别, promise)` |
+| `await Promise.all([a, b])` | `CO_AWAIT_ALL(类别, a, b)` |
 | `return;` | `CO_RETURN_VOID();` / `CO_END();` |
 | `return result;` | `CO_RETURN(CPromiseResult::Reject(std::runtime_error("原因")));` |
 | 局部变量跨 await | 必须写成派生类成员（无栈约束） |
@@ -64,8 +64,8 @@ class CMyCoroutine : public common::async::CCoroutine<CMyContext>
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(StepLoad, TaskKind::kRead));  // 起一条子 promise 并等待（被拒绝则终止）
-        CO_AWAIT(NewPromise(StepSave, TaskKind::kWrite));
+        CO_AWAIT(TaskKind::kWrite, NewPromise(StepLoad, TaskKind::kRead));  // 起一条子 promise 并等待（被拒绝则终止）
+        CO_AWAIT(TaskKind::kWrite, NewPromise(StepSave, TaskKind::kWrite));
         CO_RETURN_VOID();  // 正常结束（兑现）
         CO_END();          // 兜底：正常结束
     }
@@ -92,11 +92,42 @@ if (r.IsFulfilled())
 | 宏 | 语义 |
 | --- | --- |
 | `CO_BEGIN()` | 协程体开始（展开 Duff's device 的 switch 骨架） |
-| `CO_AWAIT(expr)` | 等待一条 promise（expr 须可绑定到 `const CPromise<TContext>&`） |
-| `CO_AWAIT_ALL(a, b, ...)` | 并行等待多条 promise，全部 settled 后恢复 |
+| `CO_AWAIT(类别, expr)` | 等待一条 promise（expr 须可绑定到 `const CPromise<TContext>&`）；类别 = **恢复后那一段**的读写类别 |
+| `CO_AWAIT_ALL(类别, a, b, ...)` | 并行等待多条 promise，全部 settled 后恢复；类别同上 |
 | `CO_RETURN(result)` | 以指定结果结束协程（可兑现可拒绝） |
 | `CO_RETURN_VOID()` | 正常结束（兑现） |
 | `CO_END()` | 协程体收尾（兜底，正常结束） |
+
+### 4.1 类别的粒度：`CoStart` 给首段，每个 await 给「恢复后那一段」
+
+协程体「挂起 → 恢复」每次都**是一次独立的任务进入**（挂起期间不占门槽位），所以类别跟段走：
+
+| 位置 | 管哪一段的类别 |
+| --- | --- |
+| `exec.CoStart<C>(类别, ...)` | **首段**：第一个 await 之前那段（含首次 Resume 本身） |
+| `CO_AWAIT(类别, p)` / `CO_AWAIT_ALL(类别, ...)` | **恢复后那一段**：本 await 返回到下一个 await 之间的代码 |
+
+协程对象本身**不存类别**（与 promise 的核心不存类别同理：类别写在声明它的那个入口上，
+由恢复闭包带给执行器）：
+
+```cpp
+void Run() override
+{
+    CO_BEGIN();
+    // 首段：只读校验（类别来自 CoStart<CFlow>(TaskKind::kRead, ...)）
+    m_pCtx->nStock = ReadStockFromCache();  // 只读缓存，不碰模块状态
+    // 恢复后这一段要改模块状态 → 声明 kWrite（与前一段的读并发无关了）
+    CO_AWAIT(TaskKind::kWrite, NewPromise(&StepReserve, TaskKind::kWrite));
+    m_pCtx->strTrace += "预占;";
+    CO_RETURN_VOID();
+    CO_END();
+}
+```
+
+- 只读的段用 `kRead`（可与别的读任务并发）；改模块状态的段用 `kWrite`（独占）；
+  纯搬运、且**不碰模块状态**的段可以用 `kDirect`（不过门）；
+- 段与段之间会**让出槽位**（挂起时门槽位已归还）：所以「读段 → 写段」不会自死锁，
+  写段老老实实排队。
 
 规则：
 
@@ -112,9 +143,9 @@ await **不传递数据**，只表示「等到了 / 被拒绝了」。数据走�
 void Run() override
 {
     CO_BEGIN();
-    CO_AWAIT(NewPromise(StepLoad, TaskKind::kRead));    // 子 promise 把数据写进 GetContext()
+    CO_AWAIT(TaskKind::kWrite, NewPromise(StepLoad, TaskKind::kRead));    // 子 promise 把数据写进 GetContext()
     GetContext()->strData += "-done";  // 恢复后直接读写（同一实例）
-    CO_AWAIT(NewPromise(StepSave, TaskKind::kWrite));
+    CO_AWAIT(TaskKind::kWrite, NewPromise(StepSave, TaskKind::kWrite));
     CO_RETURN_VOID();
     CO_END();
 }
@@ -135,9 +166,9 @@ class CRetryCoroutine : public common::async::CCoroutine<CMyContext>
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(StepLoad, TaskKind::kRead));
+        CO_AWAIT(TaskKind::kWrite, NewPromise(StepLoad, TaskKind::kRead));
         --m_nRetry;  // 成员变量：可安全跨 await
-        CO_AWAIT(NewPromise(StepSave, TaskKind::kWrite));
+        CO_AWAIT(TaskKind::kWrite, NewPromise(StepSave, TaskKind::kWrite));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -151,20 +182,20 @@ class CRetryCoroutine : public common::async::CCoroutine<CMyContext>
 
 ```cpp
 // 子 promise（复用协程的执行器与上下文）
-CO_AWAIT(NewPromise(StepLoad, TaskKind::kRead));
-CO_AWAIT(NewPromise(StepLoad, TaskKind::kRead).Then(StepSave, TaskKind::kWrite));  // 多步子 promise
+CO_AWAIT(TaskKind::kWrite, NewPromise(StepLoad, TaskKind::kRead));
+CO_AWAIT(TaskKind::kWrite, NewPromise(StepLoad, TaskKind::kRead).Then(StepSave, TaskKind::kWrite));  // 多步子 promise
 
 // 跨上下文：await 另一套 TContext 的子流程（跨流程 / 跨模块组合）
 m_spSub = std::make_shared<CSubContext>();  // 跨 await → 成员变量
-CO_AWAIT(m_pExec->NewPromise(m_spSub, &StepQueryRows, TaskKind::kRead, ASYNC_LOC));
+CO_AWAIT(TaskKind::kWrite, m_pExec->NewPromise(m_spSub, &StepQueryRows, TaskKind::kRead, ASYNC_LOC));
 
 // 并行 await（列表里可以混合不同上下文类型的 promise）
-CO_AWAIT_ALL(NewPromise(&StepA, TaskKind::kWrite), m_pExec->NewPromise(m_spSubA, &StepQueryRows, TaskKind::kRead, ASYNC_LOC),
+CO_AWAIT_ALL(TaskKind::kWrite, NewPromise(&StepA, TaskKind::kWrite), m_pExec->NewPromise(m_spSubA, &StepQueryRows, TaskKind::kRead, ASYNC_LOC),
              m_pExec->NewPromise(m_spSubB, &StepQueryRows, TaskKind::kRead, ASYNC_LOC));
 
 // 子协程（先启动，再把它的完成状态当 promise await）
 m_pChild = m_pExec->CoStart<CChildCoro>(TaskKind::kWrite, GetContext());  // 跨 await → 成员变量
-CO_AWAIT(m_pChild->AsPromise());
+CO_AWAIT(TaskKind::kWrite, m_pChild->AsPromise());
 ```
 
 `AsPromise()` 把协程的完成状态暴露成 promise 句柄，因此：

@@ -4,7 +4,7 @@
 
 | 用法 | 对方给你的东西 | 本框架里怎么接 |
 | --- | --- | --- |
-| ① 跨模块异步调用 | 一条 promise（对方在自己的执行器上跑） | `ThenBridge(fnCreate, fnApply)`，或协程里 `CO_AWAIT(子 promise)` |
+| ① 跨模块异步调用 | 一条 promise（对方在自己的执行器上跑） | `ThenBridge(fnCreate, fnApply)`，或协程里 `CO_AWAIT(类别, 子 promise)` |
 | ② 包装非 Promise 的异步调用 | 只有回调（外部 SDK / 老代码 / C 接口） | `exec.NewPromise(spCtx, fnStarter, 类别)` —— 就是 JS 的 `new Promise((resolve, reject) => …)` |
 | ③ 子 Promise 链 | 本模块自己的多步过程，想当成**一步**用 | `ThenPromise(工厂)`（同上下文直接 adopt） |
 
@@ -15,7 +15,7 @@
 | # | 写法 | ① 跨模块 | ② 包装回调式接口 | ③ 子链 |
 | --- | --- | --- | --- | --- |
 | 1 | then 链（默认） | `ThenBridge` 一行 | `ThenPromise(包装函数)` | `ThenPromise(子链工厂)` |
-| 2 | 协程 | `CO_AWAIT(子 promise)` + 搬数据 | `CO_AWAIT(包装函数)` | `CO_AWAIT(子链)` |
+| 2 | 协程 | `CO_AWAIT(类别, 子 promise)` + 搬数据 | `CO_AWAIT(类别, 包装函数)` | `CO_AWAIT(类别, 子链)` |
 | 3 | 手写桥接 | `NewPromise(fnStarter, TaskKind::kWrite)` + `OnSettled` | 同写法 1 | 同写法 1 |
 | 4 | 并行汇聚 | 扇出 + `WhenAll` | 同写法 1 | 同写法 1 |
 | 5 | 失败补偿 | 反向再桥一次 | 反向再包装一次 | —（补偿不属于这三类） |
@@ -663,7 +663,11 @@ static void RunBridgeFlow(common::async::CAsyncExecutor& exec, CStockModule& sto
 子链被拒绝 / 回调报错 / 对方模块拒绝，都会**以同一个拒绝（异常）**拒绝本层：后续 `Then` 跳过，
 `Catch` 与 `Finally` 照常执行。两段跨模块调用是**串行**的（预占成功才扣款），要并行见写法 4。
 
-## 2. 写法 2：协程（`CO_AWAIT` 直线书写）
+## 2. 写法 2：协程（`CO_AWAIT(类别, …)` 直线书写）
+
+> 类别**逐段给**：`exec.CoStart<C>(类别, ...)` 管首段（第一个 await 之前那段），每个
+> `CO_AWAIT(类别, p)` / `CO_AWAIT_ALL(类别, ...)` 管**恢复后那一段**。挂起期间不占门槽位，
+> 所以「读段 → 写段」不会自死锁；本例整条流程都在改本模块状态，因此逐段都写 `TaskKind::kWrite`。
 
 ```cpp
 //================ 写法 2：协程（`CO_AWAIT` 直线书写） ================
@@ -689,29 +693,30 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(StepCreateOrder, TaskKind::kWrite));  // 本模块步骤：协程内起一条子 promise 等它
+        // 每个 await 的第一个参数 = 「恢复后那一段」的类别（这里整条协程都在改状态 → 写档）
+        CO_AWAIT(TaskKind::kWrite, NewPromise(StepCreateOrder, TaskKind::kWrite));  // 本模块步骤：协程内起一条子 promise 等它
 
         // ③ 子链：本模块的三步计价（同上下文 → 直接 await，不需要桥接）
         m_pQuote = std::make_shared<CPromise<COrderCtx> >(BuildQuoteChain(m_exec, GetContext()));
-        CO_AWAIT(*m_pQuote);
+        CO_AWAIT(TaskKind::kWrite, *m_pQuote);
 
         // ① 跨模块：库存模块（对方上下文类型不同，也能 await）
         GetContext()->strTrace += "预占;";
         m_pReserve = std::make_shared<CPromise<CStockCtx> >(m_stock.ReserveAsync(GetContext()->strOrderId, GetContext()->nQty));
-        CO_AWAIT(*m_pReserve);
+        CO_AWAIT(TaskKind::kWrite, *m_pReserve);
         GetContext()->nReserveNo = m_pReserve->GetContext()->nReserveNo;  // 搬数据（一行）
 
         // ① 跨模块：支付模块
         GetContext()->strTrace += "扣款;";
         m_pCharge = std::make_shared<CPromise<CPayCtx> >(m_pay.ChargeAsync(GetContext()->strOrderId, GetContext()->nAmount));
-        CO_AWAIT(*m_pCharge);
+        CO_AWAIT(TaskKind::kWrite, *m_pCharge);
         GetContext()->nPayNo = m_pCharge->GetContext()->nPayNo;
 
         // ② 包装回调式 SDK：await 一条「由回调兑现」的 promise
         m_pPickup = std::make_shared<CPromise<COrderCtx> >(WrapCourierPickup(m_exec, GetContext()));
-        CO_AWAIT(*m_pPickup);
+        CO_AWAIT(TaskKind::kWrite, *m_pPickup);
 
-        CO_AWAIT(NewPromise(StepShip, TaskKind::kWrite));
+        CO_AWAIT(TaskKind::kWrite, NewPromise(StepShip, TaskKind::kWrite));
         CO_RETURN(CPromiseResult::Resolve());
         CO_END();
     }
@@ -834,7 +839,7 @@ static CPromiseResult StepFanOutModules(const std::shared_ptr<COrderCtx>& spCtx)
 /// 汇聚桥接的 `fnCreate`：等两条都落定（`WhenAll`：全部兑现才兑现，任一拒绝立即以该码拒绝）。
 static CPromise<COrderCtx> CreateAggregateModules(const std::shared_ptr<COrderCtx>& spSelf)
 {
-    return spSelf->pExec->WhenAll(spSelf, TaskKind::kWrite, *spSelf->spReserve, *spSelf->spCharge);
+    return spSelf->pExec->WhenAll(spSelf, *spSelf->spReserve, *spSelf->spCharge);
 }
 
 /// 汇聚桥接的 `fnApply`：把两边的数据搬回本上下文。
@@ -862,7 +867,7 @@ static void RunParallelFlow(common::async::CAsyncExecutor& exec, CStockModule& s
 ```
 
 - 预占与扣款互不依赖时可以**同时发起**：扇出层把两条跨模块调用都发出去，句柄记进上下文。
-- `exec.WhenAll(spCtx, TaskKind::kWrite, *spReserve, *spCharge)` 对齐 JS `Promise.all`：**全部兑现才兑现，任一拒绝立即以该码拒绝**；
+- `exec.WhenAll(spCtx, *spReserve, *spCharge)` 对齐 JS `Promise.all`：**全部兑现才兑现，任一拒绝立即以该码拒绝**；
   另外还有 `WhenAllSettled`（全部落定即继续，不看成败）/ `WhenRace`（首个落定）/ `WhenAny`（首个兑现）。
 - 两个子 promise **上下文类型可以不同**（聚合只关心成败），所以汇聚后要用 `fnApply` 一次性搬两边的数据。
 - **并行分支互不取消**：看「库存不足」那条路径 —— 库存拒绝的同时，支付模块那条链照样跑完，
@@ -1308,9 +1313,9 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
 
 | | 1. then 链（默认） | 2. 协程 | 3. 手写桥接 | 4. 并行汇聚 | 5. 失败补偿 |
 | --- | --- | --- | --- | --- | --- |
-| ① 跨模块 | `ThenBridge(fnCreate, fnApply)` | `CO_AWAIT(子 promise)` + 手动搬数据 | `NewPromise(fnStarter, TaskKind::kWrite)` + `OnSettled` + `ThenPromise` | 扇出 + `WhenAll` + `ThenBridge` 汇聚 | 反向再桥一次 |
-| ② 包装回调式接口 | `ThenPromise(包装函数)` | `CO_AWAIT(包装函数)` | 同写法 1 | 同写法 1 | 反向再包装一次（内联） |
-| ③ 子链 | `ThenPromise(子链工厂)` | `CO_AWAIT(子链)` | 同写法 1 | 同写法 1 | — |
+| ① 跨模块 | `ThenBridge(fnCreate, fnApply)` | `CO_AWAIT(类别, 子 promise)` + 手动搬数据 | `NewPromise(fnStarter, TaskKind::kWrite)` + `OnSettled` + `ThenPromise` | 扇出 + `WhenAll` + `ThenBridge` 汇聚 | 反向再桥一次 |
+| ② 包装回调式接口 | `ThenPromise(包装函数)` | `CO_AWAIT(类别, 包装函数)` | 同写法 1 | 同写法 1 | 反向再包装一次（内联） |
+| ③ 子链 | `ThenPromise(子链工厂)` | `CO_AWAIT(类别, 子链)` | 同写法 1 | 同写法 1 | — |
 | 对方的拒绝怎么处理 | 同拒绝（异常）拒绝本层（后续跳过） | 协程立即终止、异常透传 | 手动 `fnReject(childResult)` | 聚合立即拒绝（分支不取消） | `Catch` 分流后可**恢复** |
 | 失败要做反向操作 | `Catch` + 反向层（写法 5） | 放外层 `Catch` | 同写法 1 | 同写法 1（注意并行的副作用） | 就是本法 |
 | 代码量 | 最少 | 中（跨 await 变量要变成员） | 多（自己收口边界） | 中（多一层扇出） | 中（多两个判空 + 反向层） |

@@ -978,7 +978,7 @@ public:
         typedef decltype(std::declval<TFnCreate>()(std::declval<const std::shared_ptr<TContext>&>())) TChildPromise;
         const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = m_pCore;
 
-        PromiseFactory fnFactory = [fnCreate, fnApply, pCore, eKind, loc](const std::shared_ptr<TContext>& spSelf) -> CPromise
+        PromiseFactory fnFactory = [fnCreate, fnApply, pCore, loc](const std::shared_ptr<TContext>& spSelf) -> CPromise
         {
             TChildPromise promiseChild = fnCreate(spSelf);  // 起子链（抛异常 → Adopt 兜底为 Exception）
 
@@ -987,9 +987,9 @@ public:
                 BindChildSettle(promiseChild, fnApply, spSelf, fnResolve, fnReject);  // 规则只有一份。
             };
             // 父层 = 桥接层（工厂跑在它下面的作用域里）：这一层（以及它等到的子链）都能追回本链。
-            // 这条「等子链」的内部链不是本模块任务（只被 settle、不过门）：类别同本层（仅作记录）。
+            // 这条「等子链」的内部链是**框架簿记层**：只被 settle、不跑业务代码 → 不过门（kDirect）。
             // 子链自己的类别由它的起链入口决定。
-            return NewFromHandle(pCore->Handle(), spSelf, fnStarter, loc, eKind);
+            return NewFromHandle(pCore->Handle(), spSelf, fnStarter, loc, detail::kKindBookkeeping);
         };
         return ThenPromise(fnFactory, eKind, loc);
     }
@@ -1279,7 +1279,7 @@ private:
     /// @param spContext 共享上下文（本 promise 所有层共用该实例）。
     /// @param fnStarter 起链回调（拿到 resolve / reject 句柄）。
     /// @param loc 注册点源码位置。
-    /// @param eKind 本层读写类别（读可并发 / 写独占 / 直投不过门；本条由外部 settle 的层用）。
+    /// @param eKind 本条（由外部 settle 的层）的类别；内部簿记链传 `kKindBookkeeping`（不过门）。
     /// @return 指向本 promise 的句柄（pending；由 fnStarter 触发 settle）。
     static CPromise NewFromHandle(const std::shared_ptr<detail::CExecutorHandle>& pHandle,
         const std::shared_ptr<TContext>& spContext, const ChainStarter& fnStarter, const CSourceLoc& loc, TaskKind eKind)
@@ -1392,8 +1392,7 @@ private:
     /// @param eKind 本层类别（调用方已解析好：每层各自生效）。
     /// @return 新层状态（pending）。
     static std::shared_ptr<detail::CPromiseState> NewNextLayer(
-        const std::shared_ptr<detail::CPromiseState>& pUpState, const CSourceLoc& loc, detail::HandlerMode eMode,
-        TaskKind eKind)
+        const std::shared_ptr<detail::CPromiseState>& pUpState, const CSourceLoc& loc, detail::HandlerMode eMode, TaskKind eKind)
     {
         // ① 建新层状态（层号在这里分配；类别随层走）。
         const std::shared_ptr<detail::CPromiseState> pNextState = NewLayerState(loc, eKind);
@@ -1555,7 +1554,7 @@ CPromise<TContext> CAsyncExecutor::NewPromise(const std::shared_ptr<TContext>& s
 /// @tparam TContext 上下文类型（由 spContext 推导）。
 /// @param spContext 共享上下文（本 promise 所有层共用该实例）。
 /// @param fnStarter 起链回调（对齐 JS executor：拿到 resolve / reject 句柄）。
-/// @param eKind 本层（本条由外部 settle 的层）类别（**必填**：读可并发 / 写独占 / 直投不过门）。
+/// @param eKind 本条（由外部 settle 的层）的类别（**必填**：读可并发 / 写独占 / 直投不过门）。
 /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
 /// @return 指向本 promise 的句柄（pending；由 fnStarter 触发 settle）。
 template <typename TContext>

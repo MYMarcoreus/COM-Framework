@@ -114,10 +114,13 @@ TEST(Combine_AllWaitsForEveryBranch)
     std::shared_ptr<CCombineCtx> spCtx = std::make_shared<CCombineCtx>();
     spCtx->spTrace = std::make_shared<asynctest::CTraceSink>();
 
-    const common::async::CPromise<CCombineCtx> pA = execA.NewPromise(spCtx, MakeBranchStep("A", 30), common::async::TaskKind::kWrite, ASYNC_LOC);
-    const common::async::CPromise<CCombineCtx> pB = execB.NewPromise(spCtx, MakeBranchStep("B"), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pA =
+        execA.NewPromise(spCtx, MakeBranchStep("A", 30), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pB =
+        execB.NewPromise(spCtx, MakeBranchStep("B"), common::async::TaskKind::kWrite, ASYNC_LOC);
 
-    const common::async::CPromise<CCombineCtx> pDone = execAgg.WhenAll(spCtx, common::async::TaskKind::kWrite, pA, pB).Then(StepGather, common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pDone =
+        execAgg.WhenAll(spCtx, pA, pB).Then(StepGather, common::async::TaskKind::kWrite, ASYNC_LOC);
     ASSERT_TRUE(pDone.AwaitFor(3000).IsFulfilled());
 
     ASSERT_EQ(spCtx->nDone.load(), 2);          // 两条分支都跑过
@@ -142,9 +145,10 @@ TEST(Combine_AllFailFastDoesNotWaitOtherBranches)
     // A：立即拒绝；B：卡在门上（什么时候跑完由测试决定）。
     const common::async::CPromise<CCombineCtx> pA =
         execReject.NewPromise(spCtx, MakeBranchStep("A", 0, false, kBranchRejectA), common::async::TaskKind::kWrite, ASYNC_LOC);
-    const common::async::CPromise<CCombineCtx> pB = execSlow.NewPromise(spCtx, MakeBranchStep("B", 0, true), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pB =
+        execSlow.NewPromise(spCtx, MakeBranchStep("B", 0, true), common::async::TaskKind::kWrite, ASYNC_LOC);
 
-    const common::async::CPromise<CCombineCtx> pAll = execAgg.WhenAll(spCtx, common::async::TaskKind::kWrite, pA, pB);
+    const common::async::CPromise<CCombineCtx> pAll = execAgg.WhenAll(spCtx, pA, pB);
     const common::async::CPromiseResult resultAll = pAll.AwaitFor(3000);
 
     ASSERT_TRUE(resultAll.IsRejected());
@@ -168,12 +172,14 @@ TEST(Combine_AllCountsAlreadySettledChild)
 
     std::shared_ptr<CCombineCtx> spCtx = std::make_shared<CCombineCtx>();
 
-    const common::async::CPromise<CCombineCtx> pA = exec.NewPromise(spCtx, MakeBranchStep("A"), common::async::TaskKind::kWrite, ASYNC_LOC);
-    const common::async::CPromise<CCombineCtx> pB = exec.NewPromise(spCtx, MakeBranchStep("B"), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pA =
+        exec.NewPromise(spCtx, MakeBranchStep("A"), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pB =
+        exec.NewPromise(spCtx, MakeBranchStep("B"), common::async::TaskKind::kWrite, ASYNC_LOC);
     ASSERT_TRUE(pA.AwaitFor(3000).IsFulfilled());  // 先落定，再汇聚（走「已 settled」路径）
     ASSERT_TRUE(pB.AwaitFor(3000).IsFulfilled());
 
-    const common::async::CPromise<CCombineCtx> pAll = execAgg.WhenAll(spCtx, common::async::TaskKind::kWrite, pA, pB);
+    const common::async::CPromise<CCombineCtx> pAll = execAgg.WhenAll(spCtx, pA, pB);
     ASSERT_TRUE(pAll.AwaitFor(3000).IsFulfilled());
     ASSERT_EQ(spCtx->nDone.load(), 2);
 
@@ -195,9 +201,11 @@ TEST(Combine_AllSettledIgnoresRejects)
 
     const common::async::CPromise<CCombineCtx> pA =
         execA.NewPromise(spCtx, MakeBranchStep("A", 0, false, kBranchRejectA), common::async::TaskKind::kWrite, ASYNC_LOC);
-    const common::async::CPromise<CCombineCtx> pB = execB.NewPromise(spCtx, MakeBranchStep("B"), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pB =
+        execB.NewPromise(spCtx, MakeBranchStep("B"), common::async::TaskKind::kWrite, ASYNC_LOC);
 
-    const common::async::CPromise<CCombineCtx> pDone = execAgg.WhenAllSettled(spCtx, common::async::TaskKind::kWrite, pA, pB).Then(StepGather, common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pDone =
+        execAgg.WhenAllSettled(spCtx, pA, pB).Then(StepGather, common::async::TaskKind::kWrite, ASYNC_LOC);
     ASSERT_TRUE(pDone.AwaitFor(3000).IsFulfilled());  // 有分支拒绝，但聚合仍然兑现
 
     ASSERT_EQ(spCtx->nDone.load(), 2);
@@ -226,11 +234,12 @@ TEST(Combine_RaceFirstSettledWins)
     std::shared_ptr<CCombineCtx> spCtx = std::make_shared<CCombineCtx>();
 
     // A：卡在门上（慢）；B：立即拒绝 → race 以「首个落定」的 B 收口（拒绝也算结论）。
-    const common::async::CPromise<CCombineCtx> pA = execSlow.NewPromise(spCtx, MakeBranchStep("A", 0, true), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pA =
+        execSlow.NewPromise(spCtx, MakeBranchStep("A", 0, true), common::async::TaskKind::kWrite, ASYNC_LOC);
     const common::async::CPromise<CCombineCtx> pB =
         execFast.NewPromise(spCtx, MakeBranchStep("B", 0, false, kBranchRejectB), common::async::TaskKind::kWrite, ASYNC_LOC);
 
-    const common::async::CPromiseResult resultRace = execAgg.WhenRace(spCtx, common::async::TaskKind::kWrite, pA, pB).AwaitFor(3000);
+    const common::async::CPromiseResult resultRace = execAgg.WhenRace(spCtx, pA, pB).AwaitFor(3000);
     ASSERT_TRUE(resultRace.IsRejected());
     ASSERT_EQ(resultRace.Message(), std::string(kBranchRejectB));
 
@@ -251,10 +260,12 @@ TEST(Combine_RaceFirstFulfilledWins)
 
     std::shared_ptr<CCombineCtx> spCtx = std::make_shared<CCombineCtx>();
 
-    const common::async::CPromise<CCombineCtx> pA = execSlow.NewPromise(spCtx, MakeBranchStep("A", 0, true), common::async::TaskKind::kWrite, ASYNC_LOC);
-    const common::async::CPromise<CCombineCtx> pB = execFast.NewPromise(spCtx, MakeBranchStep("B"), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pA =
+        execSlow.NewPromise(spCtx, MakeBranchStep("A", 0, true), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pB =
+        execFast.NewPromise(spCtx, MakeBranchStep("B"), common::async::TaskKind::kWrite, ASYNC_LOC);
 
-    ASSERT_TRUE(execAgg.WhenRace(spCtx, common::async::TaskKind::kWrite, pA, pB).AwaitFor(3000).IsFulfilled());
+    ASSERT_TRUE(execAgg.WhenRace(spCtx, pA, pB).AwaitFor(3000).IsFulfilled());
 
     spCtx->nGate.store(1);
     ASSERT_TRUE(pA.AwaitFor(3000).IsFulfilled());
@@ -278,9 +289,10 @@ TEST(Combine_AnyIgnoresEarlierReject)
     // A：立即拒绝（不算结论）；B：稍后兑现 → any 以 B 的兑现收口（与 race 的关键差别）。
     const common::async::CPromise<CCombineCtx> pA =
         execReject.NewPromise(spCtx, MakeBranchStep("A", 0, false, kBranchRejectA), common::async::TaskKind::kWrite, ASYNC_LOC);
-    const common::async::CPromise<CCombineCtx> pB = execSlow.NewPromise(spCtx, MakeBranchStep("B", 30), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pB =
+        execSlow.NewPromise(spCtx, MakeBranchStep("B", 30), common::async::TaskKind::kWrite, ASYNC_LOC);
 
-    const common::async::CPromiseResult resultAny = execAgg.WhenAny(spCtx, common::async::TaskKind::kWrite, pA, pB).AwaitFor(3000);
+    const common::async::CPromiseResult resultAny = execAgg.WhenAny(spCtx, pA, pB).AwaitFor(3000);
     ASSERT_TRUE(resultAny.IsFulfilled());
     ASSERT_EQ(spCtx->nDone.load(), 2);  // 两条分支都跑过（拒绝的那条不被取消）
 
@@ -305,7 +317,7 @@ TEST(Combine_AnyAllRejectedUsesFirstCode)
     ASSERT_TRUE(pA.AwaitFor(3000).IsRejected());
     ASSERT_TRUE(pB.AwaitFor(3000).IsRejected());
 
-    const common::async::CPromiseResult resultAny = execAgg.WhenAny(spCtx, common::async::TaskKind::kWrite, pB, pA).AwaitFor(3000);
+    const common::async::CPromiseResult resultAny = execAgg.WhenAny(spCtx, pB, pA).AwaitFor(3000);
     ASSERT_TRUE(resultAny.IsRejected());
     ASSERT_EQ(resultAny.Message(), std::string(kBranchRejectB));  // 首个拒绝 = 先登记的那个
 
@@ -314,7 +326,7 @@ TEST(Combine_AnyAllRejectedUsesFirstCode)
         exec.NewPromise(spCtx, MakeBranchStep("C", 0, false, kBranchRejectC), common::async::TaskKind::kWrite, ASYNC_LOC);
     const common::async::CPromise<CCombineCtx> pD =
         exec.NewPromise(spCtx, MakeBranchStep("D", 0, false, kBranchRejectD), common::async::TaskKind::kWrite, ASYNC_LOC);
-    const common::async::CPromiseResult resultAny2 = execAgg.WhenAny(spCtx, common::async::TaskKind::kWrite, pC, pD).AwaitFor(3000);
+    const common::async::CPromiseResult resultAny2 = execAgg.WhenAny(spCtx, pC, pD).AwaitFor(3000);
     ASSERT_TRUE(resultAny2.IsRejected());
     ASSERT_TRUE(resultAny2.Message() == kBranchRejectC || resultAny2.Message() == kBranchRejectD);
 
@@ -332,15 +344,15 @@ TEST(Combine_EmptyChildSetSettlesImmediately)
     std::shared_ptr<CCombineCtx> spCtx = std::make_shared<CCombineCtx>();
 
     // 没有要等的东西：all / allSettled 视为成功。
-    ASSERT_TRUE(execAgg.WhenAll(spCtx, common::async::TaskKind::kWrite).AwaitFor(3000).IsFulfilled());
-    ASSERT_TRUE(execAgg.WhenAllSettled(spCtx, common::async::TaskKind::kWrite).AwaitFor(3000).IsFulfilled());
+    ASSERT_TRUE(execAgg.WhenAll(spCtx).AwaitFor(3000).IsFulfilled());
+    ASSERT_TRUE(execAgg.WhenAllSettled(spCtx).AwaitFor(3000).IsFulfilled());
 
     // race / any 不可能有结果 → 立即以框架侧拒绝收口（绝不永久 pending）。
-    const common::async::CPromiseResult resultRace = execAgg.WhenRace(spCtx, common::async::TaskKind::kWrite).AwaitFor(3000);
+    const common::async::CPromiseResult resultRace = execAgg.WhenRace(spCtx).AwaitFor(3000);
     ASSERT_TRUE(resultRace.IsRejected());
     ASSERT_TRUE(asynctest::IsUnspecifiedFailure(resultRace));  // 框架侧拒绝（预建固定文案）
     ASSERT_EQ(resultRace.Message(), std::string("未指定原因"));
-    ASSERT_TRUE(execAgg.WhenAny(spCtx, common::async::TaskKind::kWrite).AwaitFor(3000).IsRejected());
+    ASSERT_TRUE(execAgg.WhenAny(spCtx).AwaitFor(3000).IsRejected());
 
     execAgg.Stop();
 }
@@ -359,9 +371,10 @@ TEST(Combine_CrossContextAndCrossModuleBranches)
 
     // 两条分支的上下文类型不同（被调模块的 CCalleeCtx + 本模块的 CCombineCtx）也能汇到一起。
     const common::async::CPromise<asynctest::CCalleeCtx> pStock = callee.QueryStockAsync(spCallee);
-    const common::async::CPromise<CCombineCtx> pLocal = execLocal.NewPromise(spCtx, MakeBranchStep("A"), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pLocal =
+        execLocal.NewPromise(spCtx, MakeBranchStep("A"), common::async::TaskKind::kWrite, ASYNC_LOC);
 
-    const common::async::CPromise<CCombineCtx> pAll = execAgg.WhenAll(spCtx, common::async::TaskKind::kWrite, pStock, pLocal);
+    const common::async::CPromise<CCombineCtx> pAll = execAgg.WhenAll(spCtx, pStock, pLocal);
     ASSERT_TRUE(pAll.AwaitFor(3000).IsFulfilled());
     ASSERT_EQ(spCallee->nAvail, 5);  // 跨模块分支确实跑完了（数据在它自己的上下文里）
     ASSERT_EQ(spCtx->nDone.load(), 1);
@@ -370,8 +383,9 @@ TEST(Combine_CrossContextAndCrossModuleBranches)
     spCallee->bReject = true;
     spCallee->strRejectText = kCalleeRejectText;
     const common::async::CPromise<asynctest::CCalleeCtx> pStockFail = callee.QueryStockAsync(spCallee);
-    const common::async::CPromise<CCombineCtx> pLocal2 = execLocal.NewPromise(spCtx, MakeBranchStep("B"), common::async::TaskKind::kWrite, ASYNC_LOC);
-    const common::async::CPromiseResult resultAll = execAgg.WhenAll(spCtx, common::async::TaskKind::kWrite, pStockFail, pLocal2).AwaitFor(3000);
+    const common::async::CPromise<CCombineCtx> pLocal2 =
+        execLocal.NewPromise(spCtx, MakeBranchStep("B"), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromiseResult resultAll = execAgg.WhenAll(spCtx, pStockFail, pLocal2).AwaitFor(3000);
     ASSERT_TRUE(resultAll.IsRejected());
     ASSERT_EQ(resultAll.Message(), std::string(kCalleeRejectText));
 
@@ -388,10 +402,13 @@ TEST(Combine_AggregateLayersRunOnItsExecutor)
     std::shared_ptr<CCombineCtx> spCtx = std::make_shared<CCombineCtx>();
     spCtx->spTrace = std::make_shared<asynctest::CTraceSink>();  // 分支步骤的线程从轨迹里读
 
-    const common::async::CPromise<CCombineCtx> pA = execBranch.NewPromise(spCtx, MakeBranchStep("A"), common::async::TaskKind::kWrite, ASYNC_LOC);
-    const common::async::CPromise<CCombineCtx> pB = execBranch.NewPromise(spCtx, MakeBranchStep("B"), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pA =
+        execBranch.NewPromise(spCtx, MakeBranchStep("A"), common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromise<CCombineCtx> pB =
+        execBranch.NewPromise(spCtx, MakeBranchStep("B"), common::async::TaskKind::kWrite, ASYNC_LOC);
 
-    common::async::CPromise<CCombineCtx> pDone = execAgg.WhenAll(spCtx, common::async::TaskKind::kWrite, pA, pB).Then(StepGather, common::async::TaskKind::kWrite, ASYNC_LOC);
+    common::async::CPromise<CCombineCtx> pDone =
+        execAgg.WhenAll(spCtx, pA, pB).Then(StepGather, common::async::TaskKind::kWrite, ASYNC_LOC);
     ASSERT_TRUE(pDone.AwaitFor(3000).IsFulfilled());
 
     ASSERT_TRUE(spCtx->idGather != std::this_thread::get_id());  // 不在测试主线程上
@@ -422,13 +439,15 @@ TEST(Combine_ManyBranchesConcurrent)
         std::vector<common::async::CPromise<CCombineCtx> > vecBranches;
         for (int i = 0; i < 32; ++i)
         {
-            vecBranches.push_back(execBranches.NewPromise(spCtx, MakeBranchStep("A"), common::async::TaskKind::kWrite, ASYNC_LOC));
+            vecBranches.push_back(
+                execBranches.NewPromise(spCtx, MakeBranchStep("A"), common::async::TaskKind::kWrite, ASYNC_LOC));
         }
 
         // 并发分支多 → 聚合计数必须在锁内判（否则会漏唤醒 / 提前收口）。
         // 同时验证「标量 + 列表混用」：vecBranches 之外再挂一条单句柄分支。
-        const common::async::CPromise<CCombineCtx> pExtra = execBranches.NewPromise(spCtx, MakeBranchStep("X"), common::async::TaskKind::kWrite, ASYNC_LOC);
-        const common::async::CPromise<CCombineCtx> pAll = execAgg.WhenAll(spCtx, common::async::TaskKind::kWrite, vecBranches, pExtra);
+        const common::async::CPromise<CCombineCtx> pExtra =
+            execBranches.NewPromise(spCtx, MakeBranchStep("X"), common::async::TaskKind::kWrite, ASYNC_LOC);
+        const common::async::CPromise<CCombineCtx> pAll = execAgg.WhenAll(spCtx, vecBranches, pExtra);
         ASSERT_TRUE(pAll.AwaitFor(5000).IsFulfilled());
         ASSERT_EQ(spCtx->nDone.load(), 33);
     }

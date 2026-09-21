@@ -316,7 +316,8 @@ ThenBridge(fnCreate, fnApply, loc)
 ### 6.2 组合器（`WhenAll` 一族）的实现
 
 四个入口（`WhenAll` / `WhenAllSettled` / `WhenRace` / `WhenAny`）**只差一个策略位**，共用
-`detail::Gather(executor, spContext, nPolicy, child...)`：
+`detail::Gather(executor, spContext, ePolicy, child...)`（**没有类别参数**：聚合层是框架簿记层，
+固定用 `detail::kKindBookkeeping`（= `kDirect`，不过门）—— 它只被 settle、不跑业务代码）：
 
 - **聚合状态是纯状态**：`detail::CGatherState` 不碰上下文类型（只关心子 promise 的成败），
   所以**跨模块 / 跨上下文类型**的分支能汇到同一个聚合上，无需额外机制；
@@ -520,9 +521,10 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 测试：`Tests/test_async_gate.cpp`（门本体 13 例：读并发 / 写独占 / 三种 FIFO 顺序 / 同门重入 /
 多门链式 / 16 门压力 / 排空 / 拒绝路径 / 异常仍归还槽位）+ `Tests/test_async_rw.cpp`
-（执行器集成 16 例：写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / **逐层类别**
+（执行器集成 18 例：写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / **逐层类别**
 （写链里的读层、读链里的写层、各层各自标读、类别在 trace 里可见）/ **`kDirect` 直投不过门**
-（写者占门时直投任务与直投链照跑、混排保持链序）/ 就地级联同线程 /
+（写者占门时直投任务与直投链照跑、混排保持链序）/ 组合器聚合层不过门 / 协程逐段类别
+（首段与恢复段的任务帧类别各自正确）/ 就地级联同线程 /
 `Stop` 排空不丢任务 / 停止中链以「执行器已停」收口）+ `Tests/test_async_module_threads.cpp`
 （多线程模块 8 例：并发写不丢更新 / 读不撕裂 / 写链层不重叠 / 层间让位 / 乐观锁重试 / 混合流量
 与 `Stop` 后状态自洽 —— 模块状态是**普通成员**，安全全部来自读写门）。

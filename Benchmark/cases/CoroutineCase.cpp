@@ -20,7 +20,7 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -35,16 +35,16 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -59,9 +59,16 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT_ALL(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite),
-            NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite),
-            NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT_ALL(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite),
+            NewPromise(&bench::StepInc, common::async::TaskKind::kWrite),
+            NewPromise(&bench::StepInc, common::async::TaskKind::kWrite),
+            NewPromise(&bench::StepInc, common::async::TaskKind::kWrite),
+            NewPromise(&bench::StepInc, common::async::TaskKind::kWrite),
+            NewPromise(&bench::StepInc, common::async::TaskKind::kWrite),
+            NewPromise(&bench::StepInc, common::async::TaskKind::kWrite),
+            NewPromise(&bench::StepInc, common::async::TaskKind::kWrite),
+            NewPromise(&bench::StepInc, common::async::TaskKind::kWrite),
+            NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -108,7 +115,9 @@ void RunCoroutineCases()
         [&exec]()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-            volatile long long s = exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite).Await().IsFulfilled() ? spCtx->nValue : -1;
+            volatile long long s = exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite).Await().IsFulfilled()
+                                       ? spCtx->nValue
+                                       : -1;
             (void)s;
         },
         7, "起 promise + 单层执行 + Await");
@@ -131,7 +140,8 @@ void RunCoroutineCases()
         [&exec]()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-            common::async::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite);
+            common::async::CPromise<bench::CChainContext> tail =
+                exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite);
             for (int k = 1; k < 10; ++k)
             {
                 tail = tail.Then(&bench::StepInc, common::async::TaskKind::kWrite);

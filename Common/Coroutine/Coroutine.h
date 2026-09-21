@@ -26,11 +26,15 @@
 //   - 协程持有一个共享上下文（std::shared_ptr<TContext>，与它起的子 promise 同一实例）；
 //   - await 的对象是「promise」（含子协程 AsPromise() 暴露的 promise）；
 //   - await 只告知兑现 / 拒绝，数据一律走共享上下文；
-//   - 被等待的 promise 被拒绝 → 协程以该拒绝码终止（透传，与 then 的失败即停一致）。
+//   - 被等待的 promise 被拒绝 → 协程以该拒绝码终止（透传，与 then 的失败即停一致）；
+//   - 类别（读可并发 / 写独占 / 直投不过门）：`CoStart(eKind, ...)` 给**首段**（第一个
+//     await 之前那段），之后每一段由它前面那个 `CO_AWAIT` / `CO_AWAIT_ALL` 给 ——
+//     协程体「挂起 → 恢复」每次都是一次独立的任务进入（挂起期间不占槽位），
+//     所以类别跟段走；协程对象本身不存类别。
 //
 // JS / C# 对照：
-//   await p;                     →  CO_AWAIT(p);              // 等待一条 promise
-//   await Promise.all([a, b]);   →  CO_AWAIT_ALL(a, b);       // 并行等待多条 promise
+//   await p;                     →  CO_AWAIT(类别, p);         // 等待一条 promise（类别 = 恢复后那一段）
+//   await Promise.all([a, b]);   →  CO_AWAIT_ALL(类别, a, b);  // 并行等待多条 promise
 //   return;                      →  CO_RETURN_VOID(); / CO_END();
 //   return result;               →  CO_RETURN(CPromiseResult::Reject(std::runtime_error("原因")));
 //   局部变量跨 await             →  必须写成派生类成员（无栈约束）
@@ -48,8 +52,9 @@
 //     void Run() override
 //     {
 //         CO_BEGIN();
-//         CO_AWAIT(NewPromise(StepLoad, common::async::TaskKind::kWrite));     // 起一条子 promise 并等待（被拒绝则终止）
-//         CO_AWAIT_ALL(NewPromise(StepSave, common::async::TaskKind::kWrite),
+//         // 每个 await 都给「恢复后那一段」的类别（这里整条协程都只读写本上下文 → 写档）
+//         CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(StepLoad, common::async::TaskKind::kWrite));
+//         CO_AWAIT_ALL(common::async::TaskKind::kWrite, NewPromise(StepSave, common::async::TaskKind::kWrite),
 //                      NewPromise(StepNotify, common::async::TaskKind::kWrite));   // 并行等待
 //         CO_RETURN_VOID();                   // 正常结束（兑现）
 //         CO_END();
@@ -117,10 +122,8 @@ public:
     ///
     /// @param spContext 共享上下文（「必传」：与 promise 一致，框架不做懒创建）。
     explicit CCoroutine(const std::shared_ptr<TContext>& spContext)
-        : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(
-              std::shared_ptr<detail::CExecutorHandle>(), spContext)),
+        : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(std::shared_ptr<detail::CExecutorHandle>(), spContext)),
           m_pSegment(std::make_shared<detail::CPromiseState>()),
-          m_eKind(TaskKind::kWrite),
           m_pExec(nullptr),
           m_wpSelf(),
           m_hot()
@@ -173,7 +176,7 @@ public:
 
     /// @brief 起一条子 promise（复用本协程的执行器与共享上下文）。
     ///
-    /// 供协程体内 await 使用：CO_AWAIT(NewPromise(StepLoad))。
+    /// 供协程体内 await 使用：CO_AWAIT(类别, NewPromise(StepLoad, 类别))。
     /// 与 `exec.NewPromise(spCtx, handler)` 走同一条起链路径（建首层 + 强制投递首层）；
     /// 未启动（`m_pExec == nullptr`，句柄还是空）时首层投递失败 → 该 promise 以系统侧失败 `Stopped()` 收口。
     ///
@@ -189,8 +192,8 @@ public:
         const detail::CChainAdopterScope scope(m_spOwnerLayer);
 #endif
         // 子链用指定类别（类别逐层自负：一条链的层可以各不相同）。
-        const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = std::make_shared<detail::CPromiseCore<TContext> >(
-            m_pCore->Handle(), m_pCore->Context());
+        const std::shared_ptr<detail::CPromiseCore<TContext> > pCore =
+            std::make_shared<detail::CPromiseCore<TContext> >(m_pCore->Handle(), m_pCore->Context());
         return CPromise<TContext>::StartChain(pCore, eKind, fnHandler, loc);
     }
 
@@ -209,25 +212,30 @@ protected:
     /// 数据不经返回值传递：协程与被等待的 promise 共用共享上下文。
     ///
     /// @param nLine 恢复点标签（宏自动传 __LINE__）。
+    /// @param eKind **恢复后那一段**的类别（**必填**：读可并发 / 写独占 / 直投不过门）——
+    ///        协程体的每一段都是一次独立的任务进入（挂起期间不占槽位），所以类别随段给：
+    ///        只做只读校验的那段写 `kRead`，要改模块状态的那段写 `kWrite`。
     /// @tparam TOtherContext 被等待 promise 的上下文类型（「可与本协程不同」 —— 支持把
     ///         别的子流程（另一套 TContext）当作一个异步步骤等进来）。
     /// @param promise 被等待的 promise（含子协程 AsPromise()）。
     template <typename TOtherContext>
-    void AwaitWait(int nLine, const CPromise<TOtherContext>& promise)
+    void AwaitWait(int nLine, TaskKind eKind, const CPromise<TOtherContext>& promise)
     {
         ASSERT_MSG(m_pExec != nullptr, "await 只能在 CoStart 启动之后（协程体 Run() 内）调用");
         m_hot.nStep.store(nLine, std::memory_order_release);
 
         // 回调捕获自持强引用：保证协程对象存活到回调执行完毕。
+        // 「恢复后那一段以什么身份过门」也由这个闭包带走（eKind）—— 类别不存协程身上：
+        // 触发恢复的闭包就在这里登记，顺手带上比「先写成员、等别的线程来读」更直接（也不涉及可见性）。
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
         promise.OnSettled(
-            [spSelf, this](CPromiseResult result)
+            [spSelf, this, eKind](CPromiseResult result)
             {
                 if (result.IsRejected())
                 {
                     MarkTerminated(result);  // 被等待的 promise 被拒绝 → 协程终止（码透传）。
                 }
-                ResumeInline();  // 就地续跑 / 投递回本执行器（负载感知）。
+                ResumeInline(eKind);  // 就地续跑 / 投递回本执行器（负载感知）。
             });
     }
 
@@ -236,10 +244,11 @@ protected:
     /// 任一条被拒绝 → 协程以首个拒绝码终止（仍等全部结束，避免对象提前释放）。
     ///
     /// @param nLine 恢复点标签（宏自动传 __LINE__）。
+    /// @param eKind **全部落定后那一段**的类别（**必填**：读可并发 / 写独占 / 直投不过门）。
     /// @param args 被等待的 promise 列表（可为 NewPromise(...) 表达式、AsPromise() 句柄，
     ///             或「其它上下文类型」的子流程 promise）。
     template <typename... TArgs>
-    void AwaitAll(int nLine, TArgs&&... args)
+    void AwaitAll(int nLine, TaskKind eKind, TArgs&&... args)
     {
         m_hot.nStep.store(nLine, std::memory_order_release);
 
@@ -250,7 +259,7 @@ protected:
             return;  // 空列表：无需等待（调用方紧接着 return 让出线程即可）。
         }
 
-        AwaitEach(pGroup, std::forward<TArgs>(args)...);
+        AwaitEach(pGroup, eKind, std::forward<TArgs>(args)...);
     }
 
     /// @brief 本协程是否已终止（await 到拒绝）。
@@ -296,14 +305,16 @@ private:
     /// （未启动 / 已停止时协程立即以系统侧失败 `Stopped()` 结束）。
     ///
     /// @param pExec 执行器指针。
-    void Start(CAsyncExecutor* pExec)
+    /// @param eKind 首段的类别（**必填**：读可并发 / 写独占 / 直投不过门）—— 首段 =
+    ///        协程体里**第一个 await 之前**那段代码（含这次 Resume 本身）；之后每段各自声明。
+    void Start(CAsyncExecutor* pExec, TaskKind eKind)
     {
         BindExecutor(pExec);
         Reset();
 #if defined(ASYNC_DEBUG_TRACE)
         m_spOwnerLayer = detail::CurrentLayerState();  // trace：记下「启动协程的那一层」
 #endif
-        PostResume();
+        PostResume(eKind);
     }
 
     /// @brief 注入自持弱引用（CoStart 调用；Resume / 回调生命周期加固）。
@@ -315,19 +326,6 @@ private:
     void SetSelf(const std::shared_ptr<void>& sp)
     {
         m_wpSelf = sp;
-    }
-
-    /// @brief 设置本协程的读写类别（`CoStart(eKind, ...)` 调用；之后只读）。
-    ///
-    /// 用途：投递 Resume / 就地判定 / 协程内起的子 promise，都以它过读写门。
-    ///
-    /// 存在协程自己身上（不在共享核心上）：它是「本协程这一个任务」的属性，
-    /// 而核心是「一条链的上下文 + 执行器」—— 协程体内起的子 promise 每层各自给类别。
-    ///
-    /// @param eKind 类别（读可并发 / 写独占 / 直投不过门）。
-    void SetKind(TaskKind eKind)
-    {
-        m_eKind = eKind;
     }
 
     /// @brief 协程热状态：步号 / 终止标志 / 终止结果（紧邻打包，减少跨线程迁移的 cache line 数）。
@@ -369,7 +367,9 @@ private:
     ///
     /// 投递的 Resume 捕获自持强引用：调用方提前释放 shared_ptr 后，协程对象
     /// 仍存活到 Resume 执行完毕。
-    void PostResume()
+    ///
+    /// @param eKind 本次恢复那一段的类别（过门用）。
+    void PostResume(TaskKind eKind)
     {
         if (m_pExec == nullptr)
         {
@@ -382,7 +382,7 @@ private:
             Terminate(CPromiseResult::Reject(std::runtime_error("执行器已停")));  // 无强引用（理论不应发生）。
             return;
         }
-        if (!m_pExec->Post(m_eKind,
+        if (!m_pExec->Post(eKind,
                 [spSelf, this]()
                 {
                     Resume();
@@ -398,7 +398,9 @@ private:
     ///        积压则投递 —— 保证协程体始终跑在自己的执行器线程上。
     ///
     /// 与 promise 的级联共用线程局部深度计数，限制连续内联层数防爆栈。
-    void ResumeInline()
+    ///
+    /// @param eKind 本次恢复那一段的类别（过门 / 就地判定用）。
+    void ResumeInline(TaskKind eKind)
     {
         if (m_pExec == nullptr || m_pExec->IsStopped())
         {
@@ -406,17 +408,17 @@ private:
             return;
         }
         // 就地判定与 promise 层派发共用一处（多一条「线程池无积压」的负载感知条件）：
-        // 类别按**本协程的类别**判（`CoStart(eKind, ...)` 指定，见 `SetKind`）：
+        // 类别按**本次恢复那一段**判（恢复闭包带过来的，见 AwaitWait / Start）：
         // 只有当前线程正持着本门同类的槽位时才就地 —— 否则恢复要排队
-        //（读任务里等到的协程恢复不能就地跑写代码，反之亦然）。
-        if (detail::ShouldInline(m_pExec->Handle(), m_eKind, /* bRequireIdle = */ true))
+        //（读段里等到的协程恢复不能就地跑写代码，反之亦然）。
+        if (detail::ShouldInline(m_pExec->Handle(), eKind, /* bRequireIdle = */ true))
         {
             detail::CInlineGuard guard;  // 深度 +1 / -1 成对。
             Resume();
             return;
         }
 
-        PostResume();  // 跨执行器 / 有积压 / 深度超限：投递，回本执行器线程 / 保并行度 / 防爆栈。
+        PostResume(eKind);  // 跨执行器 / 有积压 / 深度超限：投递，回本执行器线程 / 保并行度 / 防爆栈。
     }
 
     /// @brief 在当前线程继续执行协程体（状态机从恢复点继续）。
@@ -444,8 +446,8 @@ private:
         m_pSegment->Settle(result);
     }
 
-    /// @brief 并行 await：递归展开等待列表。
-    void AwaitEach(const std::shared_ptr<detail::CAwaitAllGroup>& /*pGroup*/)
+    /// @brief 并行 await：递归展开等待列表（终止重载）。
+    void AwaitEach(const std::shared_ptr<detail::CAwaitAllGroup>& /*pGroup*/, TaskKind /*eKind*/)
     {}
 
     /// @brief 并行 await：递归展开等待列表（注册一条 promise 的 settled 通知）。
@@ -453,23 +455,29 @@ private:
     /// @tparam TOtherContext 被等待 promise 的上下文类型（允许与协程不同）。
     /// @tparam TRest 其余被等待的 promise。
     /// @param pGroup 并行组状态。
+    /// @param eKind 全部落定后那一段的类别（原样带到恢复闭包里）。
     /// @param promise 当前注册的 promise。
     /// @param rest 其余 promise。
     template <typename TOtherContext, typename... TRest>
-    void AwaitEach(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup, const CPromise<TOtherContext>& promise, TRest&&... rest)
+    void AwaitEach(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup, TaskKind eKind, const CPromise<TOtherContext>& promise,
+        TRest&&... rest)
     {
         ASSERT_MSG(m_pExec != nullptr, "await 只能在 CoStart 启动之后（协程体 Run() 内）调用");
         std::shared_ptr<void> spSelf = m_wpSelf.lock();
         promise.OnSettled(
-            [pGroup, spSelf, this](CPromiseResult result)
+            [pGroup, spSelf, this, eKind](CPromiseResult result)
             {
-                OnAwaitDone(pGroup, result);
+                OnAwaitDone(pGroup, eKind, result);
             });
-        AwaitEach(pGroup, std::forward<TRest>(rest)...);
+        AwaitEach(pGroup, eKind, std::forward<TRest>(rest)...);
     }
 
     /// @brief 并行 await：一条 promise settled（记首个拒绝结果；全部结束时恢复 / 终止）。
-    void OnAwaitDone(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup, const CPromiseResult& result)
+    ///
+    /// @param pGroup 并行组状态。
+    /// @param eKind 全部落定后那一段的类别（过门用）。
+    /// @param result 本条子 promise 的结果。
+    void OnAwaitDone(const std::shared_ptr<detail::CAwaitAllGroup>& pGroup, TaskKind eKind, const CPromiseResult& result)
     {
         if (result.IsRejected())
         {
@@ -485,13 +493,12 @@ private:
             {
                 MarkTerminated(pGroup->resultFirst);  // 以首个拒绝的整份结果终止（含文案）。
             }
-            ResumeInline();  // 就地续跑或投递回本执行器（负载感知）。
+            ResumeInline(eKind);  // 就地续跑或投递回本执行器（负载感知）。
         }
     }
 
     std::shared_ptr<detail::CPromiseCore<TContext> > m_pCore;  ///< 共享核心（上下文 + 执行器句柄）。
     std::shared_ptr<detail::CPromiseState> m_pSegment;         ///< 协程完成状态（AsPromise 暴露）。
-    TaskKind m_eKind;                                          ///< 本协程的类别（Resume 过门用；CoStart 注入）。
     CAsyncExecutor* m_pExec;                                   ///< 执行器指针（Resume 调度 + 子 promise 投递）。
     std::weak_ptr<void> m_wpSelf;                              ///< 自持弱引用（生命周期加固）。
     CHotState m_hot;                                           ///< 热状态（步号 / 终止标志 / 拒绝码）。
@@ -504,15 +511,16 @@ private:
 ///
 /// @tparam TCoroutine 协程类型（继承 CCoroutine<TContext> 并实现 Run()）。
 /// @tparam TArgs 协程构造参数类型。
+/// @param eKind **首段**的类别（**必填**：读可并发 / 写独占 / 直投不过门）—— 首段 =
+///        第一个 await 之前那段（含首次 Resume）；之后每段由 `CO_AWAIT` / `CO_AWAIT_ALL` 给。
 /// @param args 转发给 TCoroutine 构造函数的参数。
 /// @return 协程对象；调用方须持有直到完成（Await() 取结果），勿丢弃。
 template <typename TCoroutine, typename... TArgs>
 std::shared_ptr<TCoroutine> CAsyncExecutor::CoStart(TaskKind eKind, TArgs&&... args)
 {
     std::shared_ptr<TCoroutine> pCoro = std::make_shared<TCoroutine>(std::forward<TArgs>(args)...);
-    pCoro->SetSelf(pCoro);  // 自持弱引用：Resume / 回调生命周期加固。
-    pCoro->SetKind(eKind);  // 本协程（及其子 promise）的读写类别：投递 Resume / 过门都用它。
-    pCoro->Start(this);     // 绑定 + 复位 + 投递首次执行（未启动 / 已停止 → 立即被拒绝）。
+    pCoro->SetSelf(pCoro);      // 自持弱引用：Resume / 回调生命周期加固。
+    pCoro->Start(this, eKind);  // 绑定 + 复位 + 投递首次执行（未启动 / 已停止 → 立即被拒绝）。
     return pCoro;
 }
 
@@ -526,39 +534,43 @@ std::shared_ptr<TCoroutine> CAsyncExecutor::CoStart(TaskKind eKind, TArgs&&... a
 //   void Run() override
 //   {
 //       CO_BEGIN();
-//       CO_AWAIT(NewPromise(StepLoad));                  // 等待子 promise（被拒绝则终止）
-//       CO_AWAIT(pChild->AsPromise());                   // 等待子协程
-//       CO_AWAIT_ALL(NewPromise(StepA), NewPromise(StepB));  // 并行等待多条 promise
-//       CO_RETURN_VOID();                                // 正常结束（兑现）
-//       CO_END();                                        // 兜底：正常结束
+//       CO_AWAIT(TaskKind::kRead, NewPromise(StepLoad, TaskKind::kRead));       // 等待子 promise（被拒绝则终止）
+//       CO_AWAIT(TaskKind::kWrite, pChild->AsPromise());                        // 等待子协程；恢复后这段要改状态
+//       CO_AWAIT_ALL(TaskKind::kWrite, NewPromise(StepA, TaskKind::kRead),
+//                    NewPromise(StepB, TaskKind::kWrite));                       // 并行等待多条 promise
+//       CO_RETURN_VOID();                                                       // 正常结束（兑现）
+//       CO_END();                                                               // 兜底：正常结束
 //   }
 //
-// 说明：await 不传递数据（层与层、协程与 promise 之间只传兑现 / 拒绝），
-//       数据读写一律通过 GetContext() 得到的共享上下文。
+// 说明：① await 不传递数据（层与层、协程与 promise 之间只传兑现 / 拒绝），
+//         数据读写一律通过 GetContext() 得到的共享上下文；
+//       ② 每个 await 的第一个参数是**恢复后那一段**的类别（必填，与其它异步入口一致）：
+//         这段代码以读身份还是写身份过读写门，由它决定 —— 只读的段用 `kRead`（可与别的读并发），
+//         改模块状态的段用 `kWrite`，纯搬运且不碰模块状态的段可以用 `kDirect`。
 // ====================================================================
 #define CO_BEGIN()  \
     switch (Step()) \
     {               \
         case 0:;
 
-#define CO_AWAIT(expr)            \
-    AwaitWait(__LINE__, (expr));  \
-    return;                       \
-    case __LINE__:                \
-        if (IsTerminated())       \
-        {                         \
-            CompleteTerminated(); \
-            return;               \
+#define CO_AWAIT(eKind, expr)             \
+    AwaitWait(__LINE__, (eKind), (expr)); \
+    return;                               \
+    case __LINE__:                        \
+        if (IsTerminated())               \
+        {                                 \
+            CompleteTerminated();         \
+            return;                       \
         }
 
-#define CO_AWAIT_ALL(...)            \
-    AwaitAll(__LINE__, __VA_ARGS__); \
-    return;                          \
-    case __LINE__:                   \
-        if (IsTerminated())          \
-        {                            \
-            CompleteTerminated();    \
-            return;                  \
+#define CO_AWAIT_ALL(eKind, ...)              \
+    AwaitAll(__LINE__, (eKind), __VA_ARGS__); \
+    return;                                   \
+    case __LINE__:                            \
+        if (IsTerminated())                   \
+        {                                     \
+            CompleteTerminated();             \
+            return;                           \
         }
 
 #define CO_RETURN(result)     \

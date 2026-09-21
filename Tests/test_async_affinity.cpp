@@ -93,7 +93,8 @@ public:
     common::async::CPromise<CAffinityOrderCtx> RunRoundsAsync(
         const std::shared_ptr<CAffinityOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule, int nRounds)
     {
-        common::async::CPromise<CAffinityOrderCtx> promise = m_exec.NewPromise(spCtx, &StepOrderLoad, common::async::TaskKind::kWrite, ASYNC_LOC);
+        common::async::CPromise<CAffinityOrderCtx> promise =
+            m_exec.NewPromise(spCtx, &StepOrderLoad, common::async::TaskKind::kWrite, ASYNC_LOC);
         for (int i = 0; i < nRounds; ++i)
         {
             promise = promise.ThenPromise(MakeQueryFactory(spStockModule), common::async::TaskKind::kWrite, ASYNC_LOC)
@@ -147,9 +148,11 @@ public:
         void Run() override
         {
             CO_BEGIN();
-            CO_AWAIT(NewPromise(StepOrderLoad, common::async::TaskKind::kWrite));         // 本模块执行器线程
-            CO_AWAIT(m_pStock);                          // 跨模块：等库存模块的 promise（另一套上下文）
-            CO_AWAIT(NewPromise(StepOrderAfterBridge, common::async::TaskKind::kWrite));  // 应回到本模块执行器线程
+            CO_AWAIT(
+                common::async::TaskKind::kWrite, NewPromise(StepOrderLoad, common::async::TaskKind::kWrite));  // 本模块执行器线程
+            CO_AWAIT(common::async::TaskKind::kWrite, m_pStock);  // 跨模块：等库存模块的 promise（另一套上下文）
+            CO_AWAIT(common::async::TaskKind::kWrite,
+                NewPromise(StepOrderAfterBridge, common::async::TaskKind::kWrite));  // 应回到本模块执行器线程
             CO_RETURN(common::async::CPromiseResult::Resolve());
             CO_END();
         }

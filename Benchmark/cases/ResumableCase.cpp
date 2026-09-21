@@ -22,9 +22,9 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -39,26 +39,26 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
         CO_RETURN_VOID();
         CO_END();
     }

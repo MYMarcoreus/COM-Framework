@@ -64,14 +64,14 @@ const char* KindText(TaskKind eKind)
 {
     switch (eKind)
     {
-    case TaskKind::kRead:
-        return "读";
+        case TaskKind::kRead:
+            return "读";
 
-    case TaskKind::kWrite:
-        return "写";
+        case TaskKind::kWrite:
+            return "写";
 
-    default:
-        return "直";  // kDirect：不过门（不经读写门）。
+        default:
+            return "直";  // kDirect：不过门（不经读写门）。
     }
 }
 

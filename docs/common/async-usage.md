@@ -23,10 +23,10 @@
 | `resolve()` / `reject(reason)` | `CPromiseResult::Resolve()` / `CPromiseResult::Reject(异常对象)`（拒绝 = 标准异常） |
 | `fulfilled` / `rejected` | `result.IsFulfilled()` / `result.IsRejected()` |
 | 状态 pending → settled | 每个 then/catch/finally 都返回「指向新一层的 promise」 |
-| `Promise.all([a, b])` | `exec.WhenAll(spCtx, TaskKind::kWrite, a, b)`（详见 §10）；协程内并行也可用 `CO_AWAIT_ALL(a, b)` ⁽*⁾ |
-| `Promise.allSettled([a, b])` | `exec.WhenAllSettled(spCtx, TaskKind::kWrite, a, b)` ⁽*⁾ |
-| `Promise.race([a, b])` | `exec.WhenRace(spCtx, TaskKind::kWrite, a, b)` ⁽*⁾ |
-| `Promise.any([a, b])` | `exec.WhenAny(spCtx, TaskKind::kWrite, a, b)` ⁽*⁾ |
+| `Promise.all([a, b])` | `exec.WhenAll(spCtx, a, b)`（详见 §10）；协程内并行也可用 `CO_AWAIT_ALL(a, b)` ⁽*⁾ |
+| `Promise.allSettled([a, b])` | `exec.WhenAllSettled(spCtx, a, b)` ⁽*⁾ |
+| `Promise.race([a, b])` | `exec.WhenRace(spCtx, a, b)` ⁽*⁾ |
+| `Promise.any([a, b])` | `exec.WhenAny(spCtx, a, b)` ⁽*⁾ |
 
 > ⁽*⁾ **结构差异**：JS 的 `new Promise` 是构造函数、`Promise.all` 一族是构造函数上的**静态方法**；
 > 本框架挂在**执行器实例**上（`exec.*`），而且多一个 `spCtx` 参数与一个 `TaskKind` 参数 —— 因为 C++ 里
@@ -182,7 +182,7 @@ common::async::CPromise<CMyContext> p = exec.NewPromise(spCtx, StepA, common::as
 
 | 形态 | 写法 | 阻塞？ | 适用 |
 | --- | --- | --- | --- |
-| 协程内 await（**推荐**） | `CO_AWAIT(NewPromise(StepSub, TaskKind::kWrite))`、`CO_AWAIT(pChild->AsPromise())`、`CO_AWAIT(exec.NewPromise(spOther, StepX))` | 否（挂起让出线程） | 任何「等一段异步再往下走」的场合 |
+| 协程内 await（**推荐**） | `CO_AWAIT(类别, NewPromise(StepSub, TaskKind::kWrite))`、`CO_AWAIT(类别, pChild->AsPromise())`、`CO_AWAIT(类别, exec.NewPromise(spOther, StepX, 类别))` —— 类别 = **恢复后那一段**的读写类别 | 否（挂起让出线程） | 任何「等一段异步再往下走」的场合 |
 | 协程内并行 await | `CO_AWAIT_ALL(a, b, c)` | 否 | 多段异步并行 + 汇聚 |
 | **跨模块组合**（不用协程） | `p.ThenPromise(工厂, TaskKind)` + `exec.NewPromise(spCtx, fnStarter, TaskKind)` | 否 | 调用**其他模块 / 另一套上下文**的异步函数，且要拿到完整结果 |
 | 层内非阻塞嵌套 | 层里起子 promise，由它的 `OnSettled` 回调接着写上下文 / 起后续 | 否 | 层里「顺手起一段异步」，不关心何时回来 |
@@ -202,11 +202,11 @@ class CFlow : public common::async::CCoroutine<CDemoContext>
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&StepReadParam, TaskKind::kRead));                               // 同上下文子 promise
+        CO_AWAIT(TaskKind::kWrite, NewPromise(&StepReadParam, TaskKind::kRead));                               // 同上下文子 promise
         m_spSub = std::make_shared<CSubContext>();                          // 跨 await → 成员变量
-        CO_AWAIT(m_pExec->NewPromise(m_spSub, &StepQueryRows, TaskKind::kRead, ASYNC_LOC));  // **跨上下文** await
-        CO_AWAIT(NewPromise(&StepScale, TaskKind::kWrite).Then(&StepStore, TaskKind::kWrite));                  // 多步子 promise
-        CO_AWAIT_ALL(NewPromise(&StepA, TaskKind::kWrite), NewPromise(&StepB, TaskKind::kWrite));               // 并行
+        CO_AWAIT(TaskKind::kWrite, m_pExec->NewPromise(m_spSub, &StepQueryRows, TaskKind::kRead, ASYNC_LOC));  // **跨上下文** await
+        CO_AWAIT(TaskKind::kWrite, NewPromise(&StepScale, TaskKind::kWrite).Then(&StepStore, TaskKind::kWrite));                  // 多步子 promise
+        CO_AWAIT_ALL(TaskKind::kWrite, NewPromise(&StepA, TaskKind::kWrite), NewPromise(&StepB, TaskKind::kWrite));               // 并行
         GetContext()->nScaled += m_spSub->nRows;                            // 恢复后并入
         CO_RETURN_VOID();
         CO_END();
@@ -642,8 +642,10 @@ exec.Post(common::async::TaskKind::kDirect, fnFlushMetrics);  // 直投：不过
   （没有竞争的一条链依旧连续跑完）；换类别或有人在排队 → 入队（换类别会自死锁、插队会破坏公平）；
   **直投层不查门**（它不占槽位）：已在本执行器线程上就接着跑，没有「同类槽位」这一条件；
 - **`Promise.race` 那类「快者先到」的写法必须用读链**：写链互相串行，先提交者先落定，与耗时无关；
-- 协程（`exec.CoStart<T>`）的类别**必填**（= 本协程这个任务的类别：投递 Resume / 就地判定都用它，
-  存在协程自身，不是「链的类别」）；`OnSettled` 通知**不走门**（「保证送达」优先），
+- 协程（`exec.CoStart<T>`）的类别也是**必填**，而且**逐段给**：`CoStart` 的类别管**首段**
+  （第一个 await 之前那段），每个 `CO_AWAIT(类别, ...)` / `CO_AWAIT_ALL(类别, ...)` 管**恢复后那一段** ——
+  协程体「挂起 → 恢复」每次都是一次独立的任务进入（挂起时槽位已归还），所以「读段 → 写段」不会自死锁；
+  协程对象本身**不存类别**（类别随恢复闭包带给执行器）；`OnSettled` 通知**不走门**（「保证送达」优先），
   所以通知里只做轻量搬运 / 收尾，不要长时间占用模块；
 - `Stop()` 的顺序是「关门（拒新）→ 等已接受的跑完 → 停池」，所以「停止后不再跑新层」对**需要过门**
   的层成立（已在跑的任务里的同类层仍可就地跑完）。
@@ -720,21 +722,23 @@ exec.Post(common::async::TaskKind::kWrite, [&exec, spCtx]()
 - 聚合只关心分支**成败、不传值** —— 数据写各自的共享上下文（同上下文时共用一个实例）；
 - 全程只登记回调、**不占工作线程**（单线程执行器也安全）；
 - 已落定的子 promise 直接计入（**子 promise 恒有效**：句柄只能由起链入口产出）；
+- **组合器没有类别参数**：聚合层是「框架簿记层」（只被 settle，不跑业务代码、不碰模块状态），
+  本就不该占门槽位 —— 子链各自的类别由它们自己的起链入口定，聚合链后续层也各自给类别；
 - 框架**不取消**分支：收口后落败 / 剩余分支继续跑完（结果被忽略）。
 
 ```cpp
 // ① 全部兑现才继续（任一拒绝 → 立即失败）
-common::async::CPromise<COrderCtx> p = exec.WhenAll(spCtx, common::async::TaskKind::kWrite, pStock, pBilling).Then(StepGather, common::async::TaskKind::kWrite, ASYNC_LOC);
+common::async::CPromise<COrderCtx> p = exec.WhenAll(spCtx, pStock, pBilling).Then(StepGather, common::async::TaskKind::kWrite, ASYNC_LOC);
 
 // ② 数量运行时确定：标量 + 列表可混用
 std::vector<common::async::CPromise<COrderCtx> > vecChild = BuildChildren(spCtx);
-common::async::CPromiseResult r = exec.WhenAllSettled(spCtx, common::async::TaskKind::kWrite, pHead, vecChild).AwaitFor(1000);
+common::async::CPromiseResult r = exec.WhenAllSettled(spCtx, pHead, vecChild).AwaitFor(1000);
 
 // ③ 多副本取「第一个成功的」
-common::async::CPromise<COrderCtx> pAny = exec.WhenAny(spCtx, common::async::TaskKind::kWrite, pReplicaA, pReplicaB);
+common::async::CPromise<COrderCtx> pAny = exec.WhenAny(spCtx, pReplicaA, pReplicaB);
 
 // ④ 主链路 + 备用链路，谁先有结论用谁（拒绝也算结论）
-common::async::CPromise<COrderCtx> pRace = exec.WhenRace(spCtx, common::async::TaskKind::kWrite, pPrimary, pBackup);
+common::async::CPromise<COrderCtx> pRace = exec.WhenRace(spCtx, pPrimary, pBackup);
 ```
 
 各分支的成败从**子句柄**读：组合器收口时子句柄都已落定，`child.Await()` 立即返回（不阻塞），
@@ -784,8 +788,8 @@ common::async::CPromise<Ctx> b1 = head.Then(StepB, common::async::TaskKind::kWri
 common::async::CPromise<Ctx> b2 = head.Then(StepC, common::async::TaskKind::kWrite, ASYNC_LOC);
 
 // 并行汇聚（详见 §10）：全部兑现 / 全部落定 / 首个落定 / 首个兑现
-common::async::CPromise<Ctx> tAll = exec.WhenAll(spCtx, common::async::TaskKind::kWrite, b1, b2).Then(StepGather, common::async::TaskKind::kWrite, ASYNC_LOC);
-common::async::CPromiseResult rAll = exec.WhenAllSettled(spCtx, common::async::TaskKind::kWrite, b1, b2).AwaitFor(500);
+common::async::CPromise<Ctx> tAll = exec.WhenAll(spCtx, b1, b2).Then(StepGather, common::async::TaskKind::kWrite, ASYNC_LOC);
+common::async::CPromiseResult rAll = exec.WhenAllSettled(spCtx, b1, b2).AwaitFor(500);
 
 // 起链（上下文必传）：先备好数据，再 NewPromise；想「构链期不跑业务代码」用 exec.Post 包一段（§9.2）
 common::async::CPromise<Ctx> c1 = exec.NewPromise(spCtx, StepA, common::async::TaskKind::kWrite, ASYNC_LOC);
@@ -821,7 +825,7 @@ common::async::CPromise<Ctx> p =
 - 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
 - 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞；
   查询 = 读链可并发，注册 / 改名 / 删除 = 写链独占，模块内无需自己的锁）；
-- 单元测试（异步共 **147 例**，全量 **179 例**；release 172 例，差的 7 例是 debug 专属：
+- 单元测试（异步共 **149 例**，全量 **181 例**；release 174 例，差的 7 例是 debug 专属：
   trace 5 例 + 读写门 × trace 2 例）：
   `test_async_smoke.cpp`（17）对外用法逐条冒烟、
   `test_async_chain.cpp`（40）promise 契约 + 协程、`test_async_combine.cpp`（12）组合器、
@@ -831,10 +835,11 @@ common::async::CPromise<Ctx> p =
   `test_async_robustness.cpp`（6）健壮性与诊断、`test_async_layer_rules.cpp`（3）三态语义、
   `test_async_alloc.cpp`（3）每层分配预算护栏、
   `test_async_gate.cpp`（13）读写门本体（读并发 / 写独占 / 公平 FIFO / 多门与多生产者 / Drain）、
-  `test_async_rw.cpp`（16）读写门 × 执行器集成：投递与**逐层类别**（`AsyncRw_PerLayerReadInWriteChain` /
+  `test_async_rw.cpp`（18）读写门 × 执行器集成：投递与**逐层类别**（`AsyncRw_PerLayerReadInWriteChain` /
   `PerLayerWriteInReadChain` / `AllLayersMarkedReadConcurrent` / `PerLayerKindVisibleInTrace`）、
   读写不重叠、就地下沉、停止语义、**`kDirect` 直投不过门**（`AsyncRw_DirectPostBypassesGate` /
   `DirectChainBypassesGate` / `MixedKindsChainKeepsOrder` / `DirectKindVisibleInTrace`）、
+  组合器聚合层不过门（`AsyncRw_GatherLayerBypassesGate`）、协程**逐段类别**（`AsyncRw_CoroutineSegmentKindGuarded`）、
   `test_async_module_threads.cpp`（8）**多线程模块的线程安全**（不加锁的模块状态：并发写不丢更新 /
   读不撕裂 / 写链层不重叠 / 层间让位（写链不原子）/ 乐观锁重试 / 停止 / 多客户端压力）、
   `test_async_trace.cpp`（6）调用链 trace（复杂主链看完整链 / 多层子链跨链祖先路径 /

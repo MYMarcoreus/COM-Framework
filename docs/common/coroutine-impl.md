@@ -14,8 +14,8 @@
     {               \
         case 0:;
 
-#define CO_AWAIT(expr)           \
-    AwaitWait(__LINE__, (expr)); \
+#define CO_AWAIT(TaskKind::kWrite, expr)           \
+    AwaitWait(__LINE__, (eKind), (expr)); \
     \  // 注册 settled 通知（挂起）
 return;
 \  // 让出线程
@@ -85,13 +85,13 @@ Resume / await 回调执行完毕（不悬垂）。
 ## 4. 启动流程
 
 ```text
-exec.CoStart<TCoroutine>(TaskKind::kWrite, args...)
+exec.CoStart<TCoroutine>(类别, args...)                   类别 = 首段（第一个 await 之前那段）
     ├── make_shared<TCoroutine>(args...)     创建（构造时建 m_pCore 与初始 m_pSegment）
     ├── pCoro->SetSelf(pCoro)                注入自持弱引用
-    └── pCoro->Start(this)
+    └── pCoro->Start(this, eKind)            首段类别随参数进（协程不存类别）
              ├── BindExecutor(pExec)         m_pExec = pExec；把执行器句柄写入 m_pCore
              ├── Reset()                     新建 m_pSegment；步号 / 终止标志复位
-             └── PostResume()                投递首次 Resume（执行器不可用 → 立即以「执行器已停」结束）
+             └── PostResume(eKind)           投递首次 Resume（执行器不可用 → 立即以「执行器已停」结束）
 ```
 
 `Reset()` 让同一协程对象可以重新 `Start`（重复使用）。
@@ -99,41 +99,42 @@ exec.CoStart<TCoroutine>(TaskKind::kWrite, args...)
 ## 5. 顺序 await（AwaitWait）
 
 ```cpp
-void AwaitWait(int nLine, const CPromise<TContext>& promise)
+void AwaitWait(int nLine, TaskKind eKind, const CPromise<TContext>& promise)
 {
     m_hot.nStep.store(nLine);  // 记恢复点
     std::shared_ptr<void> spSelf = m_wpSelf.lock();
-    bool bOk = promise.OnSettled([spSelf, this](CPromiseResult r)
+    promise.OnSettled([spSelf, this, eKind](CPromiseResult r)
     {
         if (r.IsRejected())
         {
-            MarkTerminated(r);
-        }                // 被等待的 promise 被拒绝 → 标记终止
-        ResumeInline();  // 线程亲和 + 负载感知：内联或投递
+            MarkTerminated(r);  // 被等待的 promise 被拒绝 → 标记终止
+        }
+        ResumeInline(eKind);  // 线程亲和 + 负载感知：内联或投递（类别随闭包带过去）
     });
-    if (!bOk)
-    {
-        Terminate(CPromiseResult::Reject(std::runtime_error("执行器已停")));
-    }  // 注册失败：同步终止并 settle
 }
 ```
 
 - 注册成功后宏 `return`，协程让出线程；
 - promise settled（可能很快，也可能是已 settled 的 promise 走投递）→ 回调恢复协程；
-- 恢复时若 `IsTerminated()`，宏在恢复点统一 `CompleteTerminated()` 结束。
+- 恢复时若 `IsTerminated()`，宏在恢复点统一 `CompleteTerminated()` 结束；
+- **类别随恢复闭包走**：`eKind`（`CO_AWAIT` 的第一个参数 = 「恢复后那一段」的类别）按值捕获进
+  通知闭包，恢复时原样交给 `ResumeInline` / `PostResume` —— 协程对象**不存类别**，所以
+  「这一段以什么身份过门」不依赖任何跨线程共享状态（对比 promise：层的类别存在层状态上，
+  因为派发是在「上游 settle」那条别的路径上触发的）。
 
 ### ResumeInline：线程亲和 + 负载感知的内联续接
 
 ```cpp
-if (m_pExec->IsInExecutorThread()                            // ① 线程亲和：必须在本协程自己的执行器线程上
-    && detail::ShouldInline(m_pExec->Handle(), /* bRequireIdle = */ true)  // ② 无积压 + 深度未超限
+// eKind = 本次恢复那一段的类别（由 AwaitWait / CO_AWAIT_ALL / Start 传入）
+if (m_pExec->IsInExecutorThread()
+    && detail::ShouldInline(m_pExec->Handle(), eKind, /* bRequireIdle = */ true))
 {
-    ++detail::InlineDepth();
+    // 就地条件还含「本线程正持着本门同类槽位 + 无人在排队」（见 AsyncExecutor.h 的 ShouldInline）
+    detail::CInlineGuard guard;
     Resume();  // 在当前线程直接继续（省一次入队 + 唤醒）
-    --detail::InlineDepth();
     return;
 }
-PostResume();                 // 跨执行器 / 队列有积压 / 深度超限：投递，回本执行器 / 保并行度 / 防爆栈
+PostResume(eKind);            // 跨执行器 / 队列有积压 / 深度超限 / 换类别：投递，回本执行器 / 保并行度 / 防爆栈
 ```
 
 ① 是 2026-09-11 的线程亲和（改进 A）：`CO_AWAIT` 等别的模块的 promise 时，回调在被调模块线程上跑，
@@ -154,11 +155,11 @@ struct CAwaitAllGroup
 };
 ```
 
-`AwaitAll(nLine, promises...)` → `AwaitEach(pGroup, promises...)` 递归展开：
+`AwaitAll(nLine, eKind, promises...)` → `AwaitEach(pGroup, eKind, promises...)` 递归展开：
 
 1. 每条 promise 注册 settled 通知（回调捕获组状态与自持强引用）；
 2. `OnAwaitDone`：被拒绝时用 CAS 记录**首个拒绝结果**，`nPending` 减 1；
-3. `nPending` 归零 → 若组内有拒绝则标记终止 → `ResumeInline()` 恢复协程。
+3. `nPending` 归零 → 若组内有拒绝则标记终止 → `ResumeInline(eKind)` 恢复协程（类别由 `CO_AWAIT_ALL` 的第一个参数带过来）。
 
 设计取舍：**等全部结束再恢复**（而不是首个拒绝立即恢复），避免提前释放仍在等待的对象，
 也让终止原因确定（首个）。

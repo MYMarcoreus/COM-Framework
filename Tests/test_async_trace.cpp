@@ -430,7 +430,7 @@ public:
     {
         CO_BEGIN();
         TRACE_LINE(GetContext()->nLineCoroStep = __LINE__ + 1);  // 下一行（CO_AWAIT）才是注册点
-        CO_AWAIT(NewPromise(&StepCoroutineStep, common::async::TaskKind::kWrite, ASYNC_LOC));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&StepCoroutineStep, common::async::TaskKind::kWrite, ASYNC_LOC));
 #if defined(ASYNC_DEBUG_TRACE)
         CaptureNow(GetContext()->capCoroAfter);  // 恢复点：看还在不在层里
 #endif
@@ -465,16 +465,19 @@ TEST(Trace_CompleteChainInComplexFlow)
 
     lines.nRoot = __LINE__ + 1;
     CPromise<CTraceCtx> pRoot = execMain.NewPromise(spCtx, &StepRoot, common::async::TaskKind::kWrite, ASYNC_LOC);  // ① 链根
+    // ② then（本链线程上就地级联）
     lines.nSecond = __LINE__ + 1;
-    CPromise<CTraceCtx> pSecond = pRoot.Then(&StepSecond, common::async::TaskKind::kWrite, ASYNC_LOC);  // ② then（本链线程上就地级联）
+    CPromise<CTraceCtx> pSecond = pRoot.Then(&StepSecond, common::async::TaskKind::kWrite, ASYNC_LOC);
     lines.nThird = __LINE__ + 1;
     CPromise<CTraceCtx> pThird = pSecond.Then(&StepThird, common::async::TaskKind::kWrite, ASYNC_LOC);  // ③ then（同一执行器）
+    // ④ 被跳过（仍在链上）
     lines.nCatch = __LINE__ + 1;
-    CPromise<CTraceCtx> pCatch = pThird.Catch(&StepCatchSkipped, common::async::TaskKind::kWrite, ASYNC_LOC);  // ④ 被跳过（仍在链上）
+    CPromise<CTraceCtx> pCatch = pThird.Catch(&StepCatchSkipped, common::async::TaskKind::kWrite, ASYNC_LOC);
     lines.nFinally = __LINE__ + 1;
     CPromise<CTraceCtx> pFinally = pCatch.Finally(&StepFinally, common::async::TaskKind::kWrite, ASYNC_LOC);  // ⑤ 收尾
+    // ⑥ 内层链（等它）
     lines.nBridge = __LINE__ + 1;
-    CPromise<CTraceCtx> pBridge = pFinally.ThenPromise(fnInnerChain, common::async::TaskKind::kWrite, ASYNC_LOC);  // ⑥ 内层链（等它）
+    CPromise<CTraceCtx> pBridge = pFinally.ThenPromise(fnInnerChain, common::async::TaskKind::kWrite, ASYNC_LOC);
     lines.nBase = __LINE__ + 1;
     CPromise<CTraceCtx> pBase = pBridge.Then(&StepForkBase, common::async::TaskKind::kWrite, ASYNC_LOC);  // ⑦ 分叉基座
     lines.nBranchA = __LINE__ + 1;

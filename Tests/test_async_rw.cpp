@@ -24,6 +24,7 @@
 #include "Async/AsyncExecutor.h"
 #include "Async/Promise.h"
 #include "Async/ReadWriteGate.h"
+#include "Coroutine/Coroutine.h"
 #include "TestFramework.h"
 
 namespace {
@@ -126,7 +127,8 @@ TEST(AsyncRw_DefaultChainsExclusive)
     {
         std::shared_ptr<SRwCtx> spCtx = std::make_shared<SRwCtx>();
         spCtx->nId = i;
-        vecChains.push_back(exec.NewPromise(spCtx,
+        vecChains.push_back(exec.NewPromise(
+            spCtx,
             [&state, &nDone](const std::shared_ptr<SRwCtx>& /*spCtx*/)
             {
                 RunWriteWork(&state);
@@ -311,13 +313,15 @@ TEST(AsyncRw_InlineCascadeKeepsSingleThread)
 
     std::shared_ptr<CInlineCtx> spCtx = std::make_shared<CInlineCtx>();
     spCtx->nSteps = 0;
-    common::async::CPromise<CInlineCtx> tail = exec.NewPromise(spCtx,
+    common::async::CPromise<CInlineCtx> tail = exec.NewPromise(
+        spCtx,
         [spCtx](const std::shared_ptr<CInlineCtx>& /*spCtx*/)
         {
             spCtx->idFirst = std::this_thread::get_id();
             spCtx->nSteps += 1;
             return CPromiseResult::Resolve();
-        }, TaskKind::kWrite);
+        },
+        TaskKind::kWrite);
     for (int i = 1; i < kLayers; ++i)
     {
         tail = tail.Then(
@@ -326,7 +330,8 @@ TEST(AsyncRw_InlineCascadeKeepsSingleThread)
                 spCtx->idLast = std::this_thread::get_id();
                 spCtx->nSteps += 1;
                 return CPromiseResult::Resolve();
-            }, TaskKind::kWrite);
+            },
+            TaskKind::kWrite);
     }
 
     ASSERT_TRUE(tail.Await().IsFulfilled());
@@ -395,7 +400,8 @@ TEST(AsyncRw_StopMidChainSettlesStopped)
     spCtx->nId = 1;
 
     // 首层先等「Stop 已生效」再返回（那时门必然已关）。
-    CPromise<SRwCtx> chain = exec.NewPromise(spCtx,
+    CPromise<SRwCtx> chain = exec.NewPromise(
+        spCtx,
         [&exec](const std::shared_ptr<SRwCtx>& /*spCtx*/) -> CPromiseResult
         {
             while (!exec.IsStopped())
@@ -403,12 +409,14 @@ TEST(AsyncRw_StopMidChainSettlesStopped)
                 std::this_thread::yield();
             }
             return CPromiseResult::Resolve();
-        }, TaskKind::kWrite);
+        },
+        TaskKind::kWrite);
     chain = chain.Then(
         [](const std::shared_ptr<SRwCtx>& /*spCtx*/)
         {
             return CPromiseResult::Resolve();
-        }, TaskKind::kWrite);
+        },
+        TaskKind::kWrite);
 
     // 排一个任务在门口（首层占着写槽位 → 它进不来）→ 后续层的就地判定不成立。
     std::atomic<int> nQueued(0);
@@ -473,6 +481,59 @@ struct SLayerKindObs
     }
 };
 
+/// @brief 逐段类别用例的协程：首段 + 一个「等待 → 恢复」段（类别各自声明）。
+///
+/// 段内自检「任务帧的类别」并记进原子（主线程断言）——任务帧是读写门过门的凭据，
+/// 它比「跑起来没有」更能说明这一段是以什么身份进入模块的。
+class CSegmentKindCoro : public common::async::CCoroutine<SRwCtx>
+{
+public:
+    /// @param spCtx 共享上下文。
+    /// @param pObsIn 读并发观测。
+    /// @param promiseGateIn 被等待的 promise（由外部 settle；段类别与它无关）。
+    /// @param pDoneIn 恢复段跑完置位（主线程带超时等它，实现坏了也不会挂住用例）。
+    CSegmentKindCoro(const std::shared_ptr<SRwCtx>& spCtx, SLayerKindObs* pObsIn, const CPromise<SRwCtx>& promiseGateIn,
+        std::atomic<bool>* pDoneIn)
+        : common::async::CCoroutine<SRwCtx>(spCtx),
+          pObs(pObsIn),
+          promiseGate(promiseGateIn),
+          pDone(pDoneIn),
+          nFirstKind(-1),
+          nResumeKind(-1)
+    {}
+
+    void Run() override
+    {
+        CO_BEGIN();
+        {
+            const common::async::detail::CTaskFrame* pFrame = common::async::detail::TaskFrameTop();
+            nFirstKind.store(pFrame != NULL ? static_cast<int>(pFrame->eKind) : -1);
+        }
+        // 恢复后那一段显式声明为读（本段只读上下文 / 观测计数，不碰模块状态）。
+        CO_AWAIT(common::async::TaskKind::kRead, promiseGate);
+        {
+            const common::async::detail::CTaskFrame* pFrame = common::async::detail::TaskFrameTop();
+            nResumeKind.store(pFrame != NULL ? static_cast<int>(pFrame->eKind) : -1);
+        }
+        pObs->EnterRead();
+        std::this_thread::sleep_for(std::chrono::milliseconds(kWorkMs * 2));
+        pObs->LeaveRead();
+        if (pDone != NULL)
+        {
+            pDone->store(true);
+        }
+        CO_RETURN_VOID();
+        CO_END();
+    }
+
+    SLayerKindObs* pObs;           ///< 读并发观测。
+    CPromise<SRwCtx> promiseGate;  ///< 被等待的 promise。
+    std::atomic<bool>* pDone;      ///< 恢复段跑完置位。
+    std::atomic<int> nFirstKind;   ///< 首段跑在什么类别的任务帧里（-1 = 没有帧）。
+    std::atomic<int> nResumeKind;  ///< 恢复段跑在什么类别的任务帧里（-1 = 没有帧）。
+};
+
+
 /// @brief 写链里的「读层」（显式 `kRead`）：可与别的读任务并发。
 ///
 /// 构造是确定的：先起写链并等它跑起来，再把一个纯读任务排在它后面 ——
@@ -492,14 +553,16 @@ TEST(AsyncRw_PerLayerReadInWriteChain)
     std::shared_ptr<SRwCtx> spChainCtx = std::make_shared<SRwCtx>();
     spChainCtx->nId = 1;
     // 链级 = 写（默认）；首层写、第二层显式标读。
-    CPromise<SRwCtx> chain = exec.NewPromise(spChainCtx,
+    CPromise<SRwCtx> chain = exec.NewPromise(
+        spChainCtx,
         [&obs, &bWriteLayerRunning](const std::shared_ptr<SRwCtx>& /*spCtx*/)
         {
             bWriteLayerRunning.store(true);  // 让主线程知道写层已占住门
             std::this_thread::sleep_for(std::chrono::milliseconds(kWorkMs));
             obs.EnterWrite();
             return CPromiseResult::Resolve();
-        }, TaskKind::kWrite);
+        },
+        TaskKind::kWrite);
 
     ASSERT_TRUE(WaitUntil(
         [&bWriteLayerRunning]()
@@ -672,7 +735,8 @@ TEST(AsyncRw_PerLayerKindVisibleInTrace)
     std::atomic<int> nReadLayerKind(0);
     std::atomic<int> nWriteLayerKind(0);
 
-    CPromise<SRwCtx> chain = exec.NewPromise(spCtx,
+    CPromise<SRwCtx> chain = exec.NewPromise(
+        spCtx,
         [&nWriteLayerKind](const std::shared_ptr<SRwCtx>& /*spCtx*/)
         {
             const common::async::CLayerInfo* pInfo = common::async::CurrentLayer();
@@ -702,6 +766,81 @@ TEST(AsyncRw_PerLayerKindVisibleInTrace)
     ASSERT_EQ(nReadLayerKind.load(), 1);   // 本层显式读
 }
 #endif  // defined(ASYNC_DEBUG_TRACE)
+
+// ====================================================================
+// 协程的类别逐段给：CoStart = 首段，每个 CO_AWAIT = 恢复后那一段
+// ====================================================================
+
+/// @brief 协程「逐段类别」：`CoStart` 定首段、`CO_AWAIT` 定恢复段，两段都真的按该类别过门。
+///
+/// 构造是确定的：一个长读任务占住读槽位不放（等主线程放行），协程首段与恢复段都声明为读 →
+/// 两段都能与它并发（读峰值 ≥ 2），且段内读到的任务帧类别就是 `kRead`。
+/// 若恢复段被当成写（要等读者排空 → 本用例超时）或直投（帧为空），断言即失败。
+TEST(AsyncRw_CoroutineSegmentKindGuarded)
+{
+    const int kThreads = 4;
+
+    CAsyncExecutor exec(kThreads);
+    ASSERT_TRUE(exec.Start());
+
+    SLayerKindObs obs;
+    std::atomic<bool> bLongReadInside(false);
+    std::atomic<bool> bReleaseLongRead(false);
+
+    // 长读任务：占住一个读槽位，直到主线程放行（协程两段都应能与它并发）。
+    ASSERT_TRUE(exec.Post(TaskKind::kRead,
+        [&obs, &bLongReadInside, &bReleaseLongRead]()
+        {
+            obs.EnterRead();
+            bLongReadInside.store(true);
+            WaitUntil(
+                [&bReleaseLongRead]()
+                {
+                    return bReleaseLongRead.load();
+                },
+                2000);
+            obs.LeaveRead();
+        }));
+    ASSERT_TRUE(WaitUntil(
+        [&bLongReadInside]()
+        {
+            return bLongReadInside.load();
+        },
+        1000));
+
+    // 门桩：一条当场兑现的 promise（只负责让协程走一次「挂起 → 恢复」）。
+    std::shared_ptr<SRwCtx> spCoroCtx = std::make_shared<SRwCtx>();
+    spCoroCtx->nId = 2;
+    CPromise<SRwCtx> promiseGate = exec.NewPromise(
+        spCoroCtx,
+        [](const CPromise<SRwCtx>::ResolveFn& fnResolve, const CPromise<SRwCtx>::RejectFn& /*fnReject*/)
+        {
+            fnResolve();
+        },
+        TaskKind::kWrite);
+
+    // 首段 = 读（CoStart 的类别）；恢复段 = 读（CO_AWAIT 的类别）。
+    std::atomic<bool> bCoroDone(false);
+    std::shared_ptr<CSegmentKindCoro> pCoro =
+        exec.CoStart<CSegmentKindCoro>(TaskKind::kRead, spCoroCtx, &obs, promiseGate, &bCoroDone);
+
+    // 带超时等协程跑完：实现坏了（恢复段被卡住）也只是用例失败，不会挂住。
+    ASSERT_TRUE(WaitUntil(
+        [&bCoroDone]()
+        {
+            return bCoroDone.load();
+        },
+        1500));
+
+    const CPromiseResult result = pCoro->Await();
+    bReleaseLongRead.store(true);
+    exec.Stop();
+
+    ASSERT_TRUE(result.IsFulfilled());
+    ASSERT_TRUE(obs.nPeakReaders.load() >= 2);                                // 恢复段与长读任务真的重叠了
+    ASSERT_EQ(pCoro->nFirstKind.load(), static_cast<int>(TaskKind::kRead));   // 首段：读帧
+    ASSERT_EQ(pCoro->nResumeKind.load(), static_cast<int>(TaskKind::kRead));  // 恢复段：读帧
+}
 
 // ====================================================================
 // kDirect（直投）：不入队、不占槽位、不过门
@@ -775,8 +914,7 @@ TEST(AsyncRw_DirectPostBypassesGate)
         1000));
 
     // 直投任务：写者正占着门 —— 它不过门，所以在另一条线程上立刻跑起来。
-    ASSERT_TRUE(exec.Post(
-        TaskKind::kDirect,
+    ASSERT_TRUE(exec.Post(TaskKind::kDirect,
         [&bWriterHolds, &bDirectRan, &nDirectOverlap]()
         {
             if (bWriterHolds.load())
@@ -915,6 +1053,56 @@ TEST(AsyncRw_MixedKindsChainKeepsOrder)
     ASSERT_EQ(state.nViolations.load(), 0);  // 写层独占、读层不发违例
 }
 
+/// @brief 组合器的聚合层**不过门**：写者占着门时，空集合 `WhenAll` 照样当场落定。
+///
+/// 聚合层是「框架簿记层」（只被 settle、不跑业务代码）→ 用 `kKindBookkeeping`（不过门）。
+/// 若它去占一个槽位（例如按写者排队），下面 `AwaitFor` 只等 300ms 就会超时 → 本用例失败。
+TEST(AsyncRw_GatherLayerBypassesGate)
+{
+    CAsyncExecutor exec(2);
+    ASSERT_TRUE(exec.Start());
+
+    SRwState state;
+    std::atomic<bool> bWriterHolds(false);
+    std::atomic<bool> bRelease(false);
+
+    std::shared_ptr<SRwCtx> spWriteCtx = std::make_shared<SRwCtx>();
+    spWriteCtx->nId = 1;
+    CPromise<SRwCtx> writer = exec.NewPromise(
+        spWriteCtx,
+        [&state, &bWriterHolds, &bRelease](const std::shared_ptr<SRwCtx>& /*spCtx*/)
+        {
+            bWriterHolds.store(true);
+            RunWriteWork(&state);  // 写者：独占进入模块
+            WaitUntil(
+                [&bRelease]()
+                {
+                    return bRelease.load();
+                },
+                2000);  // 保持门直到主线程验完
+            bWriterHolds.store(false);
+            return CPromiseResult::Resolve();
+        },
+        TaskKind::kWrite);
+
+    ASSERT_TRUE(WaitUntil(
+        [&bWriterHolds]()
+        {
+            return bWriterHolds.load();
+        },
+        1000));
+
+    // 空集合：聚合层是簿记层 → 不排队、当场收口（all / allSettled 视为成功）。
+    ASSERT_TRUE(exec.WhenAll(spWriteCtx).AwaitFor(300).IsFulfilled());
+    ASSERT_TRUE(exec.WhenAllSettled(spWriteCtx).AwaitFor(300).IsFulfilled());
+
+    bRelease.store(true);
+    ASSERT_TRUE(writer.Await().IsFulfilled());
+    exec.Stop();
+
+    ASSERT_EQ(state.nViolations.load(), 0);
+}
+
 #if defined(ASYNC_DEBUG_TRACE)
 /// @brief 直投层在 trace 里看得到：`CLayerInfo::eKind == kDirect`，单层描述里带「直」。
 TEST(AsyncRw_DirectKindVisibleInTrace)
@@ -958,7 +1146,7 @@ TEST(AsyncRw_DirectKindVisibleInTrace)
     ASSERT_TRUE(chain.Await().IsFulfilled());
     exec.Stop();
 
-    ASSERT_EQ(nDirectLayers.load(), 2);                              // 两层都是直投
-    ASSERT_TRUE(strDescribe.find("直") != std::string::npos);        // 描述里的类别列写「直」
+    ASSERT_EQ(nDirectLayers.load(), 2);                        // 两层都是直投
+    ASSERT_TRUE(strDescribe.find("直") != std::string::npos);  // 描述里的类别列写「直」
 }
 #endif  // defined(ASYNC_DEBUG_TRACE)

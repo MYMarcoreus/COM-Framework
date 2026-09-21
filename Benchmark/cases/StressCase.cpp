@@ -46,7 +46,8 @@ inline void RunChainStress(
     std::function<void()> startOne = [&exec, &done, nLayers]()
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-        common::async::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite);
+        common::async::CPromise<bench::CChainContext> tail =
+            exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite);
         for (int k = 1; k < nLayers; ++k)
         {
             tail = tail.Then(&bench::StepInc, common::async::TaskKind::kWrite);
@@ -70,8 +71,8 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
-        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(common::async::TaskKind::kWrite, NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
         CO_RETURN_VOID();
         CO_END();
     }

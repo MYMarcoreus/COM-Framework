@@ -35,8 +35,10 @@
 //   执行器内部组合一个读写门，每条投递都带「类别」：读任务（kRead）可并发、写任务（kWrite）独占。
 //   于是「一个模块 = 一个执行器」时，模块数据在「读任务只读、写任务写完」的规约下不再需要自己的锁
 //   （锁在异步里跨不了挂起点，按任务粒度各自加锁又会占住工作线程且没有公平性）。
-//   类别：**所有异步入口都要显式给出**（`Post` / `NewPromise` / `Then` 一族 / `CoStart` / 组合器），
+//   类别：**所有异步入口都要显式给出**（`Post` / `NewPromise` / `Then` 一族 / `CoStart`），
 //   本框架不提供「默认读 / 默认写」—— 默认值会让「忘记声明的读」变成静默并发问题。
+//   唯一的例外是组合器（`WhenAll` 一族）：它们**没有类别参数** —— 聚合层是「框架簿记层」
+//   （只被 settle，不跑业务代码、不碰模块状态），本就不该占槽位；子链 / 后续层各自带自己的类别。
 //   第三类 `kDirect`（直投）：不入队、不占槽位、不过门 —— 代码里必须看得见“这不需要门”，
 //   于是它才是显式的少数派，而不是“忘了写”的默认值（契约：不得访问受门保护的数据）。
 //   就地级联同样受门约束（判定在 `detail::ShouldInline` → `CReadWriteGate::CanRunInline`）：
@@ -91,6 +93,13 @@ struct CExecutorHandle
     CExecutorHandle() : m_bStopped(false)
     {}
 };
+
+/// @brief 框架「簿记层」的类别：组合器的聚合层、`ThenBridge` 内部那条「等子链」的链。
+///
+/// 这些层**只被 settle**（有的根本不投递）：不跑业务代码、不碰模块状态 ——
+/// 所以用 `kDirect`（不过门）：不占槽位、不受公平性约束（占一个读 / 写槽位反而会
+/// 无意义地阻塞模块里的真任务）。trace 的类别列会把它显示为「直」。
+constexpr TaskKind kKindBookkeeping = TaskKind::kDirect;
 
 /// @brief 向执行器句柄「直投」任务（不过读写门）—— 只给「通知」这类必须送达的轻量任务用。
 ///
@@ -310,20 +319,22 @@ public:
     //================ Combine ================
 
     // 组合器（对齐 JS `Promise.all`）：全部兑现才兑现；任一拒绝立即以该拒绝码拒绝。
+    //
+    // 组合器**没有类别参数**：聚合层不跑业务代码（只被 settle），子链与后续层各自带自己的类别。
     template <typename TContext, typename... TChild>
-    CPromise<TContext> WhenAll(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child);
+    CPromise<TContext> WhenAll(const std::shared_ptr<TContext>& spContext, const TChild&... child);
 
     // 组合器（对齐 JS `Promise.allSettled`）：全部落定即兑现（恒兑现）。
     template <typename TContext, typename... TChild>
-    CPromise<TContext> WhenAllSettled(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child);
+    CPromise<TContext> WhenAllSettled(const std::shared_ptr<TContext>& spContext, const TChild&... child);
 
     // 组合器（对齐 JS `Promise.race`）：首个落定者定结果（兑现 / 拒绝皆可）。
     template <typename TContext, typename... TChild>
-    CPromise<TContext> WhenRace(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child);
+    CPromise<TContext> WhenRace(const std::shared_ptr<TContext>& spContext, const TChild&... child);
 
     // 组合器（对齐 JS `Promise.any`）：首个兑现者定结果；全部拒绝才失败。
     template <typename TContext, typename... TChild>
-    CPromise<TContext> WhenAny(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child);
+    CPromise<TContext> WhenAny(const std::shared_ptr<TContext>& spContext, const TChild&... child);
 
     //================ Coroutine ================
 
@@ -580,8 +591,11 @@ void AppendGatherBindings(std::vector<std::function<void(const std::shared_ptr<C
 /// 参数可为单个子 promise（`CPromise<任意上下文>`），也可为 `std::vector<CPromise<同上下文>>`
 /// （数量运行时确定时用），两者可混用 —— 展开后按参数顺序登记。
 ///
-/// 聚合链的当前层用 `exec.NewPromise(spCtx, fnStarter)` 造（由外部 settle）：起链回调里只做「逐个登记子 promise」，
+/// 聚合链的当前层用 `exec.NewPromise(spCtx, fnStarter, 簿记类别)` 造（由外部 settle）：起链回调里只做「逐个登记子 promise」，
 /// 不做重活、不阻塞 —— 子 promise 落在哪个线程都不会占住聚合链的线程。
+///
+/// 聚合层**没有类别可给**（它是框架簿记层）：固定用 `kKindBookkeeping`（不过门）——
+/// 它不跑业务代码、不碰模块状态，占一个读 / 写槽位只会无意义地阻塞模块里的真任务。
 ///
 /// 一处子 promise 都没有时直接在此收口（对齐 JS）：`all` / `allSettled` 立即兑现；
 /// `race` / `any` 不可能有结果 → 立即以系统侧失败 `Refused()` 拒绝（否则永久 pending，死等）。
@@ -593,13 +607,12 @@ void AppendGatherBindings(std::vector<std::function<void(const std::shared_ptr<C
 /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
 /// @param executor 聚合链的执行器。
 /// @param spContext 聚合 promise 的共享上下文。
-/// @param eKind 聚合链的读写类别（**必填**：读可并发 / 写独占）。
 /// @param ePolicy 策略（GatherPolicy 四档）。
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`。
 /// @return 聚合 promise 句柄（pending；由子 promise 的落定驱动）。
 template <typename TContext, typename... TChild>
-CPromise<TContext> Gather(CAsyncExecutor& executor, const std::shared_ptr<TContext>& spContext, TaskKind eKind,
-    GatherPolicy ePolicy, const TChild&... child)
+CPromise<TContext> Gather(
+    CAsyncExecutor& executor, const std::shared_ptr<TContext>& spContext, GatherPolicy ePolicy, const TChild&... child)
 {
     std::vector<std::function<void(const std::shared_ptr<CGatherState>&)> > vecBindings;
     const int nUnused[] = {0, (AppendGatherBindings(vecBindings, child), 0)...};
@@ -609,27 +622,29 @@ CPromise<TContext> Gather(CAsyncExecutor& executor, const std::shared_ptr<TConte
     {
         // 一处子 promise 都没有：按策略直接收口（语义只有 `ResolveEmptyGather` 一处）。
         // 用「一层 handler」而不是起链回调：handler 直接返回整份结果，语义最直白。
-        return executor.NewPromise(spContext, typename CPromise<TContext>::ThenHandler(
-                                                  [ePolicy](const std::shared_ptr<TContext>& /*spContext*/)
-                                                  {
-                                                      return ResolveEmptyGather(ePolicy);
-                                                  }),
-            eKind);
+        return executor.NewPromise(spContext,
+            typename CPromise<TContext>::ThenHandler(
+                [ePolicy](const std::shared_ptr<TContext>& /*spContext*/)
+                {
+                    return ResolveEmptyGather(ePolicy);
+                }),
+            kKindBookkeeping);
     }
 
     const int nTotal = static_cast<int>(vecBindings.size());
-    return executor.NewPromise(spContext, typename CPromise<TContext>::ChainStarter(
-                                              [ePolicy, nTotal, vecBindings](const std::function<void()>& fnResolve,
-                                                  const std::function<void(CPromiseResult)>& fnReject)
-                                              {
-                                                  const std::shared_ptr<CGatherState> pGather =
-                                                      std::make_shared<CGatherState>(ePolicy, nTotal, fnResolve, fnReject);
-                                                  for (size_t i = 0; i < vecBindings.size(); ++i)
-                                                  {
-                                                      vecBindings[i](pGather);  // 登记动作恒非空。
-                                                  }
-                                              }),
-        eKind);
+    return executor.NewPromise(spContext,
+        typename CPromise<TContext>::ChainStarter(
+            [ePolicy, nTotal, vecBindings](
+                const std::function<void()>& fnResolve, const std::function<void(CPromiseResult)>& fnReject)
+            {
+                const std::shared_ptr<CGatherState> pGather =
+                    std::make_shared<CGatherState>(ePolicy, nTotal, fnResolve, fnReject);
+                for (size_t i = 0; i < vecBindings.size(); ++i)
+                {
+                    vecBindings[i](pGather);  // 登记动作恒非空。
+                }
+            }),
+        kKindBookkeeping);
 }
 
 }  // namespace detail
@@ -656,9 +671,9 @@ CPromise<TContext> Gather(CAsyncExecutor& executor, const std::shared_ptr<TConte
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
 /// @return 聚合 promise 句柄（pending；由子 promise 的落定驱动）。
 template <typename TContext, typename... TChild>
-CPromise<TContext> CAsyncExecutor::WhenAll(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child)
+CPromise<TContext> CAsyncExecutor::WhenAll(const std::shared_ptr<TContext>& spContext, const TChild&... child)
 {
-    return detail::Gather(*this, spContext, eKind, detail::kGatherAll, child...);
+    return detail::Gather(*this, spContext, detail::kGatherAll, child...);
 }
 
 /// @brief 组合器（对齐 JS `Promise.allSettled`）：等一组子 promise 「全部落定」后兑现（恒兑现）。
@@ -677,10 +692,9 @@ CPromise<TContext> CAsyncExecutor::WhenAll(const std::shared_ptr<TContext>& spCo
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
 /// @return 聚合 promise 句柄（恒兑现；由子 promise 的落定驱动）。
 template <typename TContext, typename... TChild>
-CPromise<TContext> CAsyncExecutor::WhenAllSettled(
-    const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child)
+CPromise<TContext> CAsyncExecutor::WhenAllSettled(const std::shared_ptr<TContext>& spContext, const TChild&... child)
 {
-    return detail::Gather(*this, spContext, eKind, detail::kGatherAllSettled, child...);
+    return detail::Gather(*this, spContext, detail::kGatherAllSettled, child...);
 }
 
 /// @brief 组合器（对齐 JS `Promise.race`）：「首个落定」的子 promise 定结果（兑现 / 拒绝皆可）。
@@ -699,9 +713,9 @@ CPromise<TContext> CAsyncExecutor::WhenAllSettled(
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
 /// @return 聚合 promise 句柄（由首个落定的子 promise 驱动）。
 template <typename TContext, typename... TChild>
-CPromise<TContext> CAsyncExecutor::WhenRace(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child)
+CPromise<TContext> CAsyncExecutor::WhenRace(const std::shared_ptr<TContext>& spContext, const TChild&... child)
 {
-    return detail::Gather(*this, spContext, eKind, detail::kGatherRace, child...);
+    return detail::Gather(*this, spContext, detail::kGatherRace, child...);
 }
 
 /// @brief 组合器（对齐 JS `Promise.any`）：「首个兑现」的子 promise 定结果；全部拒绝才失败。
@@ -717,9 +731,9 @@ CPromise<TContext> CAsyncExecutor::WhenRace(const std::shared_ptr<TContext>& spC
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
 /// @return 聚合 promise 句柄（由首个兑现的子 promise 驱动）。
 template <typename TContext, typename... TChild>
-CPromise<TContext> CAsyncExecutor::WhenAny(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child)
+CPromise<TContext> CAsyncExecutor::WhenAny(const std::shared_ptr<TContext>& spContext, const TChild&... child)
 {
-    return detail::Gather(*this, spContext, eKind, detail::kGatherAny, child...);
+    return detail::Gather(*this, spContext, detail::kGatherAny, child...);
 }
 
 }  // namespace async
