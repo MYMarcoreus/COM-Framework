@@ -7,6 +7,7 @@
 ///  - 混合读写：读不越过写、写等到读者排空（无违例）；
 ///  - 逐层类别：同一链的层可读 / 写混排，每层按自己的类别过门；
 ///  - `kDirect`（直投）：不过门 —— 与在读 / 写任务并发，且不占槽位；
+///  - 「等子链」层的工厂（`ThenPromise` / `ThenBridge`）：与层体一样按本层类别过门；
 ///  - 就地级联仍然保留：单线程执行器上一条链的各层跑在同一线程（无其它排队任务时）；
 ///  - 停止语义：`Stop()` 先关门的投递、再等已接受的任务跑完（不丢任务、不悬挂），
 ///    停止期间链的后续层以「执行器已停」收口。
@@ -721,6 +722,75 @@ TEST(AsyncRw_AllLayersMarkedReadConcurrent)
 
     ASSERT_EQ(nDone.load(), kChains * kLayers);
     ASSERT_TRUE(obs.nPeakReaders.load() >= 2);  // 读层之间真的重叠了
+}
+
+/// @brief 「等子链」那一层（`ThenPromise` / `ThenBridge`）的工厂也要过门。
+///
+/// 场景：上游是**外部线程 settle** 的（起链回调把兑现函数交给别的线程）—— 登记路径若直接调工厂，
+/// 工厂就会在那个外部线程上、**无槽位**地跑（声明的类别形同虚设）。本测试钉住：工厂拿到本层
+/// `kWrite` 的槽位，且**不在**结算线程上跑。
+TEST(AsyncRw_BridgeFactoryRunsGated)
+{
+    CAsyncExecutor exec(2);
+    ASSERT_TRUE(exec.Start());
+
+    std::atomic<bool> bFactoryRan(false);
+    std::atomic<bool> bFactoryHasSlot(false);
+    std::atomic<bool> bSettled(false);
+    std::thread::id factoryTid;  // 只由工厂写，主线程在等完 bFactoryRan 之后读
+    std::thread::id settlerTid;  // 只由结算线程写，主线程 join 之后读
+
+    std::function<void()> fnSettleLater;
+    std::shared_ptr<SRwCtx> spCtx = std::make_shared<SRwCtx>();
+    spCtx->nId = 1;
+    CPromise<SRwCtx> chain = exec.NewPromise(
+        spCtx,
+        [&fnSettleLater](const CPromise<SRwCtx>::ResolveFn& fnResolve, const CPromise<SRwCtx>::RejectFn& /*fnReject*/)
+        {
+            // 起链回调：只登记，稍后由外部线程 settle（模拟别的模块回调）。
+            fnSettleLater = [fnResolve]()
+            {
+                fnResolve();  // ResolveFn = void()
+            };
+        },
+        TaskKind::kRead);
+
+    chain = chain.ThenPromise(
+        [&exec, &bFactoryRan, &bFactoryHasSlot, &factoryTid](const std::shared_ptr<SRwCtx>& spSelf) -> CPromise<SRwCtx>
+        {
+            bFactoryHasSlot.store(common::async::detail::TaskFrameTop() != NULL);
+            factoryTid = std::this_thread::get_id();
+            bFactoryRan.store(true);
+            return exec.NewPromise(
+                spSelf,
+                [](const std::shared_ptr<SRwCtx>& /*spCtx*/)
+                {
+                    return CPromiseResult::Resolve();
+                },
+                TaskKind::kRead);
+        },
+        TaskKind::kWrite);
+
+    std::thread settler(
+        [&fnSettleLater, &settlerTid, &bSettled]()
+        {
+            settlerTid = std::this_thread::get_id();
+            fnSettleLater();
+            bSettled.store(true);  // 结算已提交（工厂可能还没跑）
+        });
+
+    ASSERT_TRUE(WaitUntil(
+        [&bFactoryRan]()
+        {
+            return bFactoryRan.load();
+        },
+        2000));
+    settler.join();
+
+    ASSERT_TRUE(bFactoryHasSlot.load());    // 工厂过门：拿到本层 kWrite 的槽位
+    ASSERT_TRUE(factoryTid != settlerTid);  // 且不在结算线程上（回到本链执行器线程）
+    ASSERT_TRUE(bSettled.load());
+    exec.Stop();
 }
 
 #if defined(ASYNC_DEBUG_TRACE)

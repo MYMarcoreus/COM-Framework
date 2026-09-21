@@ -577,7 +577,7 @@ static void ApplyCharge(const std::shared_ptr<COrderCtx>& spSelf, const std::sha
 }
 ```
 
-- `fnCreate` 跑在**本链线程**上（只做「起对方的链 + 登记」）；
+- `fnCreate` 跑在**本链线程**上（按本层类别过门，即使上游由外部线程 settle；只做「起对方的链 + 登记」）；
 - `fnApply` 跑在**对方线程**上（子链结算线程）—— 所以只搬字段，别碰本模块的其它状态；
 - 两者合成一层，就是 `ThenBridge` 的全部语义。
 

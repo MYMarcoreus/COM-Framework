@@ -280,7 +280,7 @@ p = exec.NewPromise(spCtx, &StepValidate, TaskKind::kRead, ASYNC_LOC)
 | `fnApply` **抛异常** | 本层以该异常被拒绝（异常不会窜出通知回调） |
 | 上层被拒绝 | 本层不执行，拒绝原因原样透传 |
 
-- `fnCreate` 在**本链执行器线程**上执行（只做「发起 + 登记回调」）；`fnApply` 在**子链的结算线程**
+- `fnCreate` 在**本链执行器线程**上执行（本层类别**过门** —— 上游即使是外部线程 settle 的，也回到本链执行器线程；仍只做「发起 + 登记回调」）；`fnApply` 在**子链的结算线程**
   （典型：模块 B 的线程）上执行 —— 通知不迁移，所以它只应搬数据；
   需因业务规则拒绝（如「库存不足」）时，请在**桥接之后的层**里
   `return CPromiseResult::Reject(std::runtime_error("库存不足：…"))`，
@@ -826,7 +826,7 @@ common::async::CPromise<Ctx> p =
 - 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
 - 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞；
   查询 = 读链可并发，注册 / 改名 / 删除 = 写链独占，模块内无需自己的锁）；
-- 单元测试（异步共 **150 例**，全量 **182 例**；release 175 例，差的 7 例是 debug 专属：
+- 单元测试（异步共 **151 例**，全量 **183 例**；release 176 例，差的 7 例是 debug 专属：
   trace 5 例 + 读写门 × trace 2 例）：
   `test_async_smoke.cpp`（17）对外用法逐条冒烟、
   `test_async_chain.cpp`（41）promise 契约 + 协程（含协程体抛异常的收口）、`test_async_combine.cpp`（12）组合器、
@@ -836,11 +836,13 @@ common::async::CPromise<Ctx> p =
   `test_async_robustness.cpp`（6）健壮性与诊断、`test_async_layer_rules.cpp`（3）三态语义、
   `test_async_alloc.cpp`（3）每层分配预算护栏、
   `test_async_gate.cpp`（13）读写门本体（读并发 / 写独占 / 公平 FIFO / 多门与多生产者 / Drain）、
-  `test_async_rw.cpp`（18）读写门 × 执行器集成：投递与**逐层类别**（`AsyncRw_PerLayerReadInWriteChain` /
+  `test_async_rw.cpp`（19）读写门 × 执行器集成：投递与**逐层类别**（`AsyncRw_PerLayerReadInWriteChain` /
   `PerLayerWriteInReadChain` / `AllLayersMarkedReadConcurrent` / `PerLayerKindVisibleInTrace`）、
   读写不重叠、就地下沉、停止语义、**`kDirect` 直投不过门**（`AsyncRw_DirectPostBypassesGate` /
   `DirectChainBypassesGate` / `MixedKindsChainKeepsOrder` / `DirectKindVisibleInTrace`）、
   组合器聚合层不过门（`AsyncRw_GatherLayerBypassesGate`）、协程**逐段类别**（`AsyncRw_CoroutineSegmentKindGuarded`）、
+  **等子链层的工厂也过门**（`AsyncRw_BridgeFactoryRunsGated`：上游由外部线程 settle 时，工厂仍拿到本层槽位、
+  跑在本链执行器线程上）、
   `test_async_module_threads.cpp`（8）**多线程模块的线程安全**（不加锁的模块状态：并发写不丢更新 /
   读不撕裂 / 写链层不重叠 / 层间让位（写链不原子）/ 乐观锁重试 / 停止 / 多客户端压力）、
   `test_async_trace.cpp`（6）调用链 trace（复杂主链看完整链 / 多层子链跨链祖先路径 /

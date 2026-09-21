@@ -786,6 +786,21 @@ public:
         Dispatch(pState, MakeResultRunner(Context(), pState, fnHandler, upResult, eMode));
     }
 
+    /// @brief 派发「本层的动作体」——「等子链」那一层（`ThenPromise` / `ThenBridge`）用。
+    ///
+    /// 那一层没有普通 handler，它的动作是「起子链 + 登记回调」（`Adopt`）。它与层体一样会跑
+    /// **用户代码**（子链工厂 `fnCreate`），所以必须走同一套调度（就地 / 按本层类别过门投递）：
+    /// 上游若由**外部线程** settle（starter 链 / 桥接子链 / 定时器回调），登记路径直接调工厂就会在
+    /// 那个线程上、**无槽位**地跑（声明的类别形同虚设）；过门后「本层以什么身份进模块」恒成立，
+    /// 工厂也永远跑在本链执行器线程上（与 `ThenBridge` 的文档一致）。
+    ///
+    /// @param pState 本层状态（类别取自它）。
+    /// @param fnRun 本层动作体。
+    void DispatchAction(const std::shared_ptr<CPromiseState>& pState, std::function<void()> fnRun) const
+    {
+        Dispatch(pState, std::move(fnRun));
+    }
+
 private:
     /// @brief 派发已造好的任务体：就地内联 / 投递回本链执行器；执行器不可用 → 本层以框架侧失败收口。
     ///
@@ -951,7 +966,13 @@ public:
                 }
 
                 // 上游兑现 → 执行工厂拿子链，等它落定后收口本层。
-                Adopt(pCore, pNextState, fnFactory);
+                //    工厂会碰用户代码 → 与层体一样**按本层类别过门**（就地 / 投递）：
+                //    上游由外部线程 settle 时，直接调就会在那个线程上、无槽位地跑（见 DispatchAction）。
+                pCore->DispatchAction(pNextState,
+                    [pCore, pNextState, fnFactory]()
+                    {
+                        Adopt(pCore, pNextState, fnFactory);
+                    });
             });
 
         // ③ 上游早已落定、且执行器不可用（停了的执行器不再跑新层）→ 本层收口为框架侧失败。
@@ -967,7 +988,8 @@ public:
     ///        再继续本链（= 手写 `New` + `OnSettled` 桥接的简写版，样板由框架收口）。
     ///
     /// 这是「跨模块 / 跨上下文调用」的推荐写法，等价 `ThenPromise` + 「子链落定后搬数据」两件事合一：
-    ///  - `fnCreate(spSelf)` 在「本链执行器线程」上执行（只做「起子链 + 登记回调」，不要做重活）；
+    ///  - `fnCreate(spSelf)` 在「本链执行器线程」上执行（**按本层类别过门**：所以它碰模块状态是安全的，
+    ///    但仍应只做「起子链 + 登记回调」这类轻活）；
     ///  - 子链被拒绝 → 本层以「同一拒绝码」被拒绝（后续 Then 不执行，Catch / Finally 仍执行）；
     ///  - 子链兑现 → 先 `fnApply(spSelf, spChildCtx)` 把数据搬进本上下文，再兑现本层；
     ///  - 上层被拒绝 → 本层不执行，拒绝原因原样透传（与 Then / ThenPromise 一致）；

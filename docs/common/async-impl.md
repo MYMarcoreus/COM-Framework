@@ -291,7 +291,8 @@ return MakeLayerRunner(pState, [spContext, fnHandler, upResult, eMode]()
 ```text
 ThenBridge(fnCreate, fnApply, loc)
   = ThenPromise([=](spSelf) {
-        child = fnCreate(spSelf);                    // ① 工厂：在轮到本层时起子链（必须给出子链）
+        child = fnCreate(spSelf);                    // ① 工厂：在轮到本层时起子链（必须给出子链）；
+                                                    //    按本层类别过门 → 恒在本链执行器线程上
         return NewFromHandle(本链执行器句柄, spSelf, // ② 造一条「由外部 settle」的本上下文 promise
             [=](fnResolve, fnReject) {
                 child.OnSettled([=](r) {             // ③ 子链落定 → 搬数据 → 收口（OnSettled 保证送达）
@@ -475,7 +476,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 | 路径 | 说法 |
 | --- | --- |
 | `exec.Post(类别, fn)` | 包一层异常兜底（`kDiagPostThrow`）后按类别过门（`kDirect` 不过门，见下行） |
-| 层派发 `PostToHandle(handle, kind, fn)` | `StartChain` 首层、`AddHandler` 的「已落定 → 投递」、`DispatchInlineOrPost` 的投递分支 —— 按**本层**的类别过门（核心不存类别：同一条链的层可以不同；`NewPromise` 的类别只管首层） |
+| 层派发 `PostToHandle(handle, kind, fn)` | `StartChain` 首层、`AddHandler` 的「已落定 → 投递」、`DispatchInlineOrPost` 的投递分支、「等子链」层的动作体（`CPromiseCore::DispatchAction`）—— 按**本层**的类别过门（核心不存类别：同一条链的层可以不同；`NewPromise` 的类别只管首层） |
 | 直投层 / `Post(kDirect, fn)` | **直投线程池**（`PostToHandle` 的直投重载）：不入队、不占槽位、不查门 |
 | 通知（`OnSettled` / `OnSettledOn`） | **直投**（`PostToHandle(handle, fn)` 的直投重载）：保证送达优先，不去排队等槽位 |
 | 就地（`CanRunInline`） | 不过门：槽位已在外层任务手里（同类），只要求「无人在排队」；**直投层不查门**（它不占槽位）—— 在本执行器线程上就接着跑 |
@@ -493,6 +494,21 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 - **`kDirect` 不走这条队列**：直投任务直接投线程池 —— 不占槽位、不受「同类槽位 + 队列空」约束，
   因此也**不受公平性保护**（写任务扎堆时它照样能插进去跑）。契约：不得访问受门保护的数据
   （门对它完全不知情，写者可能正在同时跑）；用途 = 日志 / 指标 / 上报 / 搬运这类自成一体的活。
+
+**哪些用户代码不在门里跑**（三处，刻意的；其余用户代码都在门里）：
+
+- **起链回调**（`NewPromise(spCtx, fnStarter, 类别)` 的 `fnStarter`）：**同步在调用线程**上跑、**无槽位**
+  （`TaskFrameTop() == NULL`）—— 这是「立即投递首层 / JS 对齐的同步执行」的代价，类别在那儿只服务 trace。
+  契约：只做发起 + 登记回调；要碰模块状态就用 `exec.Post(类别, …)` 起链（类别在那儿才有效）；
+- **通知**（`OnSettled` / `OnSettledOn`）与 `ThenBridge` 的 `fnApply`：在**子链结算线程**上直投送达
+  （通知不迁移），只搬数据；
+- **`kDirect` 任务**：直投线程池（见下行）。
+
+而「等子链」层（`ThenPromise` / `ThenBridge`）的**工厂 `fnCreate` 在门里**：它走 `CPromiseCore::DispatchAction`
+（就地 / 按本层类别投递），所以**永远跑在本链执行器线程上**。这一条是修出来的：之前登记路径直接调 `Adopt()`
+跑工厂，上游若由**外部线程** settle（起链回调交给别的线程、桥接子链、定时器回调），工厂就会在那个线程上、
+**无槽位**地跑（实测：`TaskFrameTop() == NULL` + 在结算线程上）—— 声明的类别形同虚设，而工厂恰恰是用户
+写的「起子链」代码。`Tests/test_async_rw.cpp::AsyncRw_BridgeFactoryRunsGated` 钉住它（去掉过门那一跳即失败）。
 
 开销（`Tests/test_async_alloc.cpp` 守着）：
 
@@ -521,10 +537,10 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 测试：`Tests/test_async_gate.cpp`（门本体 13 例：读并发 / 写独占 / 三种 FIFO 顺序 / 同门重入 /
 多门链式 / 16 门压力 / 排空 / 拒绝路径 / 异常仍归还槽位）+ `Tests/test_async_rw.cpp`
-（执行器集成 18 例：写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / **逐层类别**
+（执行器集成 19 例：写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / **逐层类别**
 （写链里的读层、读链里的写层、各层各自标读、类别在 trace 里可见）/ **`kDirect` 直投不过门**
 （写者占门时直投任务与直投链照跑、混排保持链序）/ 组合器聚合层不过门 / 协程逐段类别
-（首段与恢复段的任务帧类别各自正确）/ 就地级联同线程 /
+（首段与恢复段的任务帧类别各自正确）/ 等子链层的工厂过门（`AsyncRw_BridgeFactoryRunsGated`）/ 就地级联同线程 /
 `Stop` 排空不丢任务 / 停止中链以「执行器已停」收口）+ `Tests/test_async_module_threads.cpp`
 （多线程模块 8 例：并发写不丢更新 / 读不撕裂 / 写链层不重叠 / 层间让位 / 乐观锁重试 / 混合流量
 与 `Stop` 后状态自洽 —— 模块状态是**普通成员**，安全全部来自读写门）。
