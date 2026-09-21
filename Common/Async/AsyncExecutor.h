@@ -94,11 +94,16 @@ struct CExecutorHandle
     {}
 };
 
-/// @brief 框架「簿记层」的类别：组合器的聚合层、`ThenBridge` 内部那条「等子链」的链。
+/// @brief 框架「簿记层」的类别（**= `kDirect`**）：组合器的聚合层、`ThenBridge` 内部那条「等子链」的链、
+///        协程的完成标记层。
 ///
-/// 这些层**只被 settle**（有的根本不投递）：不跑业务代码、不碰模块状态 ——
-/// 所以用 `kDirect`（不过门）：不占槽位、不受公平性约束（占一个读 / 写槽位反而会
-/// 无意义地阻塞模块里的真任务）。trace 的类别列会把它显示为「直」。
+/// 这些层**只被 settle**（大多根本不投递）：不跑业务代码、不碰模块状态 —— 于是用 `kDirect`（不过门）是
+/// 唯一诚实的选择：不占槽位、不受公平性约束（占一个读 / 写槽位只会无意义地阻塞模块里的真任务）。
+///
+/// **行为效果只有一处**：组合器「空集合」那条路径真的会投递一次 settle 任务（`StartChain` 的
+/// 「起链即投递」），用簿记类别 = 它**不等门**（写者占着模块时也当场收口；`AsyncRw_GatherLayerBypassesGate`
+/// 钉住）。其余用途（非空聚合层 / 内部簿记链 / 协程完成标记层）都不过门，那里的类别**只服务 trace**
+/// （类别列显示「直」）。
 constexpr TaskKind kKindBookkeeping = TaskKind::kDirect;
 
 /// @brief 向执行器句柄「直投」任务（不过读写门）—— 只给「通知」这类必须送达的轻量任务用。
@@ -318,6 +323,9 @@ public:
         TaskKind eKind, const CSourceLoc& loc = CSourceLoc());
 
     // 起 promise（对齐 JS `new Promise((resolve, reject) => ...)`）：由起链回调内部的 resolve / reject 兑现。
+    //
+    // 注意这条起链的类别**只服务 trace**：该层由外部回调 settle，永远不过门（起链回调本身在调用线程
+    // 同步跑，也不过门）；真正过门的是它之后各层（各自在 `Then` 一族里给类别）与它等到的子链。
     template <typename TContext>
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
         const typename CPromise<TContext>::ChainStarter& fnStarter, TaskKind eKind, const CSourceLoc& loc = CSourceLoc());

@@ -293,23 +293,46 @@ public:
         }
     }
 
-    /// @brief 登记「层处理器」（已 settled 时按类别投递：读 / 写过门，直投直投线程池）。
+    /// @brief 登记「层处理器」（then / catch / finally / thenPromise）：已 settled 时**按本层类别过读写门**投递。
     ///
-    /// 两种送达策略：
-    ///  - 「层处理器」（then / catch / finally / thenPromise，`bGuaranteedDelivery == false`）：
-    ///    执行器不可用时返回 `false`，由调用方以 `Stopped()` 收口本层（“停了的执行器不再跑新层”）；
-    ///  - 「通知」（`OnSettled`，`bGuaranteedDelivery == true`）：「保证送达」 —— 执行器不可用时
-    ///    在调用线程上就地执行，绝不丢弃（否则手写桥接漏检返回值就会让本层永久 pending、
-    ///    上层 `Await()` 死等）。就地执行不会递归加深：通知里通常只是 settle 本层，
-    ///    而本层后续处理器走 `Dispatch`，执行器不可用时以 `Stopped()` 收口，链会立即结束。
+    /// 「停了的执行器不再跑新层」：执行器不可用时返回 `false`，由调用方以 `Stopped()` 收口本层。
     ///
     /// @param pHandle 执行器句柄（已 settled 时投递用）。
-    /// @param eKind 本层类别（读 / 写 / 直投）。
+    /// @param eKind 本层类别（读 / 写 / 直投）——决定这次投递怎么过门。
     /// @param fnHandler 处理器（按值接收，登记时移动存储避免拷贝）。
-    /// @param bGuaranteedDelivery 是否要求「送达保证」（通知用 true；层恒为 false）。
-    /// @return true 已登记 / 已投递 / 已就地送达；false 仅当层处理器已 settled 且执行器不可用。
-    bool AddHandler(
-        const std::shared_ptr<CExecutorHandle>& pHandle, TaskKind eKind, Handler fnHandler, bool bGuaranteedDelivery = false)
+    /// @return true 已登记 / 已投递；false 仅当本层已 settled 且执行器不可用。
+    bool AddHandler(const std::shared_ptr<CExecutorHandle>& pHandle, TaskKind eKind, Handler fnHandler)
+    {
+        return Register(pHandle, &eKind, std::move(fnHandler), /* bGuaranteedDelivery = */ false);
+    }
+
+    /// @brief 登记「通知」（`OnSettled` / `OnSettledOn`）：**不过读写门**、执行器不可用时就地送达。
+    ///
+    /// 通知不是层、没有结果可落，也不该占门槽位 —— 所以这里**没有类别参数**（它不进门的队列）；
+    /// 也正因如此，通知里只应做轻量搬运 / 收尾，别长时间占着模块（那会把排队中的任务一起拖住）。
+    ///
+    /// @param pHandle 执行器句柄（已 settled 时投递用）。
+    /// @param fnHandler 通知处理器。
+    /// @return 恒 true（通知绝不丢）。
+    bool AddNotice(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler)
+    {
+        return Register(pHandle, NULL, std::move(fnHandler), /* bGuaranteedDelivery = */ true);
+    }
+
+private:
+    /// @brief 处理器登记的唯一实现（两条路径只差「按不按类别过门」与「投不出去怎么办」）。
+    ///
+    /// 未落定 → 只登记（settle 时在结算线程上触发）；已落定 → 立刻投递：
+    ///  - `ptKind != NULL`（层处理器）：`PostToHandle(handle, 类别, fn)` —— **过读写门**，投不出去返回 false；
+    ///  - `ptKind == NULL`（通知）：`PostToHandle(handle, fn)` —— **直投**（不过门），投不出去就地送达。
+    ///
+    /// @param pHandle 执行器句柄。
+    /// @param ptKind 层类别（**通知传 NULL**：通知不过门，没有类别可给）。
+    /// @param fnHandler 处理器（按值接收，登记时移动存储避免拷贝）。
+    /// @param bGuaranteedDelivery 投递失败时是否就地送达（通知 true；层 false）。
+    /// @return 见 `AddHandler` / `AddNotice`。
+    bool Register(
+        const std::shared_ptr<CExecutorHandle>& pHandle, const TaskKind* ptKind, Handler fnHandler, bool bGuaranteedDelivery)
     {
         bool bFireNow = false;
         CPromiseResult result;
@@ -348,7 +371,7 @@ public:
             fnHandler(result);
         };
         // 层：按类别过读写门（可能排一小会儿队，但不会丢）；通知：直投（不过门，保证送达）。
-        const bool bPosted = bGuaranteedDelivery ? PostToHandle(pHandle, fnRun) : PostToHandle(pHandle, eKind, fnRun);
+        const bool bPosted = (ptKind != NULL) ? PostToHandle(pHandle, *ptKind, fnRun) : PostToHandle(pHandle, fnRun);
         if (bPosted)
         {
             return true;
@@ -368,20 +391,7 @@ public:
         return true;
     }
 
-    /// @brief 登记「通知」（不过读写门）：执行器不可用时在调用线程就地送达，绝不丢弃。
-    ///
-    /// 与 `AddHandler` 的唯一差别：通知「保证送达」—— 不过读写门（不能去排队等槽位），
-    /// 所以通知里只应做轻量搬运 / 收尾，不要长时间占用模块（那会把排队中的任务一起拖住）。
-    ///
-    /// @param pHandle 执行器句柄（已 settled 时投递用）。
-    /// @param fnHandler 通知处理器。
-    /// @return 恒 true（通知绝不丢）。
-    bool AddNotice(const std::shared_ptr<CExecutorHandle>& pHandle, Handler fnHandler)
-    {
-        // 类别只服务读写门，通知不过门：传「簿记」档占位（不使用，也不会进门的队列）。
-        return AddHandler(pHandle, kKindBookkeeping, fnHandler, /* bGuaranteedDelivery = */ true);
-    }
-
+public:
     /// @brief 阻塞等待本状态 settle（先短自旋，超时再阻塞等待）。
     ///
     /// @return 本层最终结果（已兑现 / 已拒绝）。
