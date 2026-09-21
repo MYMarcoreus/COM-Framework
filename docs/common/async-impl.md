@@ -494,6 +494,19 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 - 合计：每次「过门投递」≈1 次额外分配，就地层 0 次。实测跑链 200 层 213 次、800 层 841 次
   （≈1.05 次/层；一条链约每 `kMaxInlineDepth`(64) 层才投递一次）。
 
+**语义边界（必须记住）**：门保证的是「**单个任务**互斥」，不是「**整条链**独占」—— 一条写链的层
+与层之间，别的任务（包括别的写）会被放行（队首是谁谁上）。于是：
+
+- 「一个任务内」的读-改-写是安全的（模块状态不需要自己的锁）；
+- 「跨层」的读-改-写**不**安全（可能被插队后拿着陈旧数据写回）→ 要么把读改写收进同一个任务，
+  要么用乐观锁（读版本 → 带版本写 → 冲突重读重试，`ServerExample` 的数据访问层就是这么做的）。
+
+两条都由 `Tests/test_async_module_threads.cpp` 钉住：前者 = 并发写不丢更新 / 读不撕裂
+（`ModuleThreads_ConcurrentWritesKeepExactCount`、`ModuleThreads_ReadersNeverSeeTornState`）；
+后者 = `ModuleThreads_WriteChainYieldsBetweenLayers`（两条写链互相等对方的层标记，**确定性**地
+证明层间让位：若整链独占，等待就只会超时）+ `ModuleThreads_OptimisticLockKeepsUpdatesExact`
+（正确写法：重试到一致，不丢更新）。
+
 停止顺序（`CAsyncExecutor::Stop`）：**关读写门 → 标记停止 → `Drain`（等已接受的跑完）→ 停池**。
 先关门再标记，是为了让「看到 `IsStopped()` 为真」的调用方确定「门也已经关了」（门是唯一权威的
 准入点，标记只是快速路径）。
@@ -501,7 +514,9 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 测试：`Tests/test_async_gate.cpp`（门本体 13 例：读并发 / 写独占 / 三种 FIFO 顺序 / 同门重入 /
 多门链式 / 16 门压力 / 排空 / 拒绝路径 / 异常仍归还槽位）+ `Tests/test_async_rw.cpp`
 （执行器集成 8 例：默认写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / 就地级联同线程 /
-`Stop` 排空不丢任务 / 停止中链以「执行器已停」收口）。
+`Stop` 排空不丢任务 / 停止中链以「执行器已停」收口）+ `Tests/test_async_module_threads.cpp`
+（多线程模块 8 例：并发写不丢更新 / 读不撕裂 / 写链层不重叠 / 层间让位 / 乐观锁重试 / 混合流量
+与 `Stop` 后状态自洽 —— 模块状态是**普通成员**，安全全部来自读写门）。
 
 ## 9. 源码位置调试（ASYNC_LOC）
 

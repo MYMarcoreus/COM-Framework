@@ -158,7 +158,7 @@ class COrderModule
                 // 本回调在库存模块的线程上：只做语义转换 + 改上下文 + settle
                 if (result.IsRejected())
                 {
-                    fnReject(result);  // 跟模块拒绝 → 本流程拒绝（原样透传）
+                    fnReject(result);  // 跨模块拒绝 → 本流程拒绝（原样透传）
                     return;
                 }
                 sp->nStock = spStockCtx->nAvail;

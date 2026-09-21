@@ -348,7 +348,7 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
   子 promise 兑现 → 本层兑现；子 promise 被拒绝 → 本层以**同一个异常**被拒绝（`Catch` / `Finally` 仍会执行）；
 - `exec.NewPromise(spCtx, fnStarter)` 的起链回调 **立即（同步）执行**（与 JS 一致），只应做「发起 + 登记回调」，
   由回调调 `fnResolve()` / `fnReject(结果)`（要造业务拒绝就 `fnReject(CPromiseResult::Reject(std::runtime_error("原因")))`）；
-- 桥接处是**唯一**做「跟模块失败 → 本模块语义」转换的地方（例如把数据访问层的
+- 桥接处是**唯一**做「跨模块失败 → 本模块语义」转换的地方（例如把数据访问层的
   `CDbError(kRowNotFound)` 归一化成「兑现 + bFound=false」，把它的其他失败翻译成本模块的
   `CUserError`；框架侧失败则原样透传）；
 - 工厂 / 回调请**按值捕获依赖**（执行器 `shared_ptr`、接口 `ScopedInterfacePtr`）与上下文，
@@ -807,14 +807,19 @@ common::async::CPromise<Ctx> p =
 - 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
 - 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞；
   查询 = 读链可并发，注册 / 改名 / 删除 = 写链独占，模块内无需自己的锁）；
-- 单元测试（异步共 **105 例**，全量 151 例）：`test_async_smoke.cpp`（17）对外用法逐条冒烟、
-  `test_async_chain.cpp`（37）promise 契约 + 协程、`test_async_combine.cpp`（12）组合器、
+- 单元测试（异步共 **139 例**，全量 **171 例**；release 166 例，差的 5 例是 trace 专属）：
+  `test_async_smoke.cpp`（17）对外用法逐条冒烟、
+  `test_async_chain.cpp`（40）promise 契约 + 协程、`test_async_combine.cpp`（12）组合器、
   `test_async_modules.cpp`（6）+ `test_async_modules_stress.cpp`（8）跨模块与极限、
-  `test_async_affinity.cpp`（5）跨模块线程亲和，
+  `test_async_affinity.cpp`（5）跨模块线程亲和、
   `test_async_settled_delivery.cpp`（4）通知送达、
-  `test_async_robustness.cpp`（6）健壮性与诊断、`test_async_layer_rules.cpp`（2）三态语义白盒、
-  `test_async_alloc.cpp`（2）每层分配预算护栏、
+  `test_async_robustness.cpp`（6）健壮性与诊断、`test_async_layer_rules.cpp`（3）三态语义、
+  `test_async_alloc.cpp`（3）每层分配预算护栏、
+  `test_async_gate.cpp`（13）读写门本体（读并发 / 写独占 / 公平 FIFO / 多门与多生产者 / Drain）、
+  `test_async_rw.cpp`（8）读写门 × 执行器集成（投递与链的类别、读写不重叠、停止语义）、
+  `test_async_module_threads.cpp`（8）**多线程模块的线程安全**（不加锁的模块状态：并发写不丢更新 /
+  读不撕裂 / 写链层不重叠 / 层间让位（写链不原子）/ 乐观锁重试 / 停止 / 多客户端压力）、
   `test_async_trace.cpp`（6）调用链 trace（复杂主链看完整链 / 多层子链跨链祖先路径 /
-  并发多链互不串 / 深链与帧栈无残留 / 层里起链的父层 / 层外空操作契约，见 [async-impl.md](async-impl.md) §14）；
+  并发多链互不串 / 深链与帧栈无残留 / 层里起链的父层 / 层外空操作契约，见 [async-impl.md](async-impl.md) §14）。
 - 基准：`Benchmark/cases/ChainCase.cpp`、`CoroutineCase.cpp`、`ResumableCase.cpp`、`StressCase.cpp`；
 - 运行：`./build.sh --tests`、`./build/debug/examples`。
