@@ -137,7 +137,7 @@ TEST(Robust_NoticeThrowIsContained)
     ASSERT_TRUE(exec.Start());
 
     auto spCtx = std::make_shared<CRobustCtx>();
-    common::async::CPromise<CRobustCtx> p = exec.NewPromise(spCtx, &StepBump, ASYNC_LOC);
+    common::async::CPromise<CRobustCtx> p = exec.NewPromise(spCtx, &StepBump, common::async::TaskKind::kWrite, ASYNC_LOC);
 
     std::atomic<bool> bNoticeRan(false);
     p.OnSettled(
@@ -173,7 +173,7 @@ TEST(Robust_NoticeThrowOnGuaranteedDeliveryPath)
     auto spCtx = std::make_shared<CRobustCtx>();
     common::async::CAsyncExecutor exec(1);
     ASSERT_TRUE(exec.Start());
-    common::async::CPromise<CRobustCtx> p = exec.NewPromise(spCtx, &StepBump, ASYNC_LOC);
+    common::async::CPromise<CRobustCtx> p = exec.NewPromise(spCtx, &StepBump, common::async::TaskKind::kWrite, ASYNC_LOC);
     ASSERT_TRUE(p.Await().IsFulfilled());
     exec.Stop();  // 执行器已停 → 通知只能就地送达。
 
@@ -245,7 +245,7 @@ TEST(Robust_AwaitForTimesOut)
         {
             // 故意不 settle：模拟「对端永远不回」。
         },
-        ASYNC_LOC);
+        common::async::TaskKind::kWrite, ASYNC_LOC);
 
     const auto tBegin = std::chrono::steady_clock::now();
     const common::async::CPromiseResult result = promisePending.AwaitFor(50);
@@ -261,7 +261,7 @@ TEST(Robust_AwaitForTimesOut)
 
     // 负超时 = 无限等待；已落定的层再 AwaitFor 立即拿结果。
     auto spDone = std::make_shared<CRobustCtx>();
-    common::async::CPromise<CRobustCtx> promiseDone = exec.NewPromise(spDone, &StepBump, ASYNC_LOC);
+    common::async::CPromise<CRobustCtx> promiseDone = exec.NewPromise(spDone, &StepBump, common::async::TaskKind::kWrite, ASYNC_LOC);
     ASSERT_TRUE(promiseDone.AwaitFor(-1).IsFulfilled());
     ASSERT_TRUE(promiseDone.AwaitFor(0).IsFulfilled());
     exec.Stop();
@@ -290,7 +290,7 @@ TEST(Robust_AwaitInsideLayerReportsRisk)
     };
 
     const common::async::CPromiseResult result =
-        exec.NewPromise(spCtx, &StepBump, ASYNC_LOC).Then(fnWaitInsideLayer, ASYNC_LOC).Await();
+        exec.NewPromise(spCtx, &StepBump, common::async::TaskKind::kWrite, ASYNC_LOC).Then(fnWaitInsideLayer, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
 
     ASSERT_TRUE(result.IsFulfilled());
     ASSERT_TRUE(spCtx->bCaught);

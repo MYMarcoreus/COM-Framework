@@ -115,12 +115,12 @@ public:
     common::async::CPromise<CStressOrderCtx> RunOnceAsync(
         const std::shared_ptr<CStressOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule)
     {
-        return m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
-            .ThenPromise(MakeQueryStockFactory(spStockModule), ASYNC_LOC)
-            .Then(&StepOrderAfterBridge, ASYNC_LOC)
-            .ThenPromise(MakeBackHomeFactory(), ASYNC_LOC)
-            .Then(&StepOrderBackHome, ASYNC_LOC)
-            .Catch(&StepOrderCatch, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, &StepOrderLoad, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .ThenPromise(MakeQueryStockFactory(spStockModule), common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Then(&StepOrderAfterBridge, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .ThenPromise(MakeBackHomeFactory(), common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Then(&StepOrderBackHome, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Catch(&StepOrderCatch, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// @brief 多轮往返：单条链里 A↔B 往返 nRounds 次。
@@ -133,15 +133,15 @@ public:
     common::async::CPromise<CStressOrderCtx> RunRoundsAsync(
         const std::shared_ptr<CStressOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule, int nRounds)
     {
-        common::async::CPromise<CStressOrderCtx> promise = m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC);
+        common::async::CPromise<CStressOrderCtx> promise = m_exec.NewPromise(spCtx, &StepOrderLoad, common::async::TaskKind::kWrite, ASYNC_LOC);
         for (int i = 0; i < nRounds; ++i)
         {
-            promise = promise.ThenPromise(MakeQueryStockFactory(spStockModule), ASYNC_LOC)
-                          .Then(&StepOrderAfterBridge, ASYNC_LOC)
-                          .ThenPromise(MakeBackHomeFactory(), ASYNC_LOC)
-                          .Then(&StepOrderRound, ASYNC_LOC);
+            promise = promise.ThenPromise(MakeQueryStockFactory(spStockModule), common::async::TaskKind::kWrite, ASYNC_LOC)
+                          .Then(&StepOrderAfterBridge, common::async::TaskKind::kWrite, ASYNC_LOC)
+                          .ThenPromise(MakeBackHomeFactory(), common::async::TaskKind::kWrite, ASYNC_LOC)
+                          .Then(&StepOrderRound, common::async::TaskKind::kWrite, ASYNC_LOC);
         }
-        return promise.Catch(&StepOrderCatch, ASYNC_LOC);
+        return promise.Catch(&StepOrderCatch, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// @brief 深链：单模块单线程，一条链 nLayers 层（压内联级联深度限制）。
@@ -152,10 +152,10 @@ public:
     /// @return 指向最后一层的 promise。
     common::async::CPromise<CStressOrderCtx> RunDeepAsync(const std::shared_ptr<CStressOrderCtx>& spCtx, int nLayers)
     {
-        common::async::CPromise<CStressOrderCtx> promise = m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC);
+        common::async::CPromise<CStressOrderCtx> promise = m_exec.NewPromise(spCtx, &StepOrderLoad, common::async::TaskKind::kWrite, ASYNC_LOC);
         for (int i = 1; i < nLayers; ++i)
         {
-            promise = promise.Then(&StepOrderLeaf, ASYNC_LOC);
+            promise = promise.Then(&StepOrderLeaf, common::async::TaskKind::kWrite, ASYNC_LOC);
         }
         return promise;
     }
@@ -167,7 +167,7 @@ public:
     /// @return 新层的 promise。
     common::async::CPromise<CStressOrderCtx> AppendLateAsync(common::async::CPromise<CStressOrderCtx> promise)
     {
-        return promise.Then(&StepOrderLeaf, ASYNC_LOC);
+        return promise.Then(&StepOrderLeaf, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// @brief 分叉 + 汇聚：一层里发起 nBranches 个跨模块调用，全部完成才继续（手写 when_all）。
@@ -180,10 +180,10 @@ public:
     common::async::CPromise<CStressOrderCtx> RunFanOutAsync(
         const std::shared_ptr<CStressOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule, int nBranches)
     {
-        return m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
-            .ThenPromise(MakeJoinFactory(spStockModule, nBranches), ASYNC_LOC)
-            .Then(&StepOrderAfterBridge, ASYNC_LOC)
-            .Catch(&StepOrderCatch, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, &StepOrderLoad, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .ThenPromise(MakeJoinFactory(spStockModule, nBranches), common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Then(&StepOrderAfterBridge, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Catch(&StepOrderCatch, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// @brief 半路停掉被调模块：A1 → 停库存模块 → 再调它（应退化为 kStopped 拒绝）。
@@ -206,11 +206,11 @@ public:
             return common::async::CPromiseResult::Resolve();
         };
 
-        return m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
-            .Then(fnStopStockModule, ASYNC_LOC)
-            .ThenPromise(MakeQueryStockFactory(spStockModule), ASYNC_LOC)
-            .Then(&StepOrderAfterBridge, ASYNC_LOC)
-            .Catch(&StepOrderCatch, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, &StepOrderLoad, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Then(fnStopStockModule, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .ThenPromise(MakeQueryStockFactory(spStockModule), common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Then(&StepOrderAfterBridge, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Catch(&StepOrderCatch, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
 private:
@@ -361,7 +361,7 @@ private:
                     fnResolve();
                 });
         };
-        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// 回到本模块线程：跨模块回调里显式投递到本模块执行器再 settle。
@@ -382,7 +382,7 @@ private:
                 fnReject(common::async::CPromiseResult::Reject(std::runtime_error(kExecUnavailableText)));
             }
         };
-        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// 分叉 + 汇聚：发起 nBranches 条跨模块分支，全部 settle 后 settle 本层（手写 when_all）。
@@ -428,7 +428,7 @@ private:
                     });
             }
         };
-        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。

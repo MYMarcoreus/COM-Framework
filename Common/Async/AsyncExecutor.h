@@ -35,15 +35,18 @@
 //   执行器内部组合一个读写门，每条投递都带「类别」：读任务（kRead）可并发、写任务（kWrite）独占。
 //   于是「一个模块 = 一个执行器」时，模块数据在「读任务只读、写任务写完」的规约下不再需要自己的锁
 //   （锁在异步里跨不了挂起点，按任务粒度各自加锁又会占住工作线程且没有公平性）。
-//   类别：`NewPromise` 默认「写」（与旧行为一致：要并发显式声明读）；`Post` 的类别**必填**
-//   （`Post(TaskKind::kWrite, fn)` / `Post(TaskKind::kRead, fn)`）。
+//   类别：**所有异步入口都要显式给出**（`Post` / `NewPromise` / `Then` 一族 / `CoStart` / 组合器），
+//   本框架不提供「默认读 / 默认写」—— 默认值会让「忘记声明的读」变成静默并发问题。
+//   第三类 `kDirect`（直投）：不入队、不占槽位、不过门 —— 代码里必须看得见“这不需要门”，
+//   于是它才是显式的少数派，而不是“忘了写”的默认值（契约：不得访问受门保护的数据）。
 //   就地级联同样受门约束（判定在 `detail::ShouldInline` → `CReadWriteGate::CanRunInline`）：
-//   只有「本线程正跑着本门同类任务 + 无人在排队」才就地，否则入队 —— 前者保互斥，后者保公平。
+//   只有「本线程正跑着本门同类任务 + 无人在排队」才就地，否则入队 —— 前者保互斥，后者保公平；
+//   直投层不查门（它不占槽位），在本执行器线程上就接着跑。
 //
 // 调度对照（各自生态里的同类物）：
 //   CAsyncExecutor  ≈ Java `Executor` / C# `TaskScheduler` / Asio `io_context` / dispatch_queue
 //   exec.Post(fn)   ≈ Asio `io_context::post` / Java `Executor.execute`
-//     （本框架的 Post 多一个必填的类别参数：读可并发 / 写独占。）
+//     （本框架的 Post 多一个必填的类别参数：读可并发 / 写独占 / 直投不过门。）
 //   exec.CoStart<T> ≈ C# `Task.Run`（续跑线程由调度器决定）
 //   而 JS 这边：`setTimeout(fn, 0)` 是「宿主 API」（不在 Promise 里），`queueMicrotask(fn)`
 //   才是微任务投递 —— 两者都不可控线程，因此不能与 `Post` 画等号。
@@ -52,7 +55,7 @@
 //   common::async::CAsyncExecutor exec(4);
 //   exec.Start();
 //   exec.Post(TaskKind::kWrite, []() { /* 无返回值任务 */ });
-//   auto p = exec.NewPromise(spCtx, StepLoad).Then(StepSave);   // 起 promise
+//   auto p = exec.NewPromise(spCtx, StepLoad, TaskKind::kWrite).Then(StepSave, TaskKind::kWrite);
 //   exec.Stop();
 //
 // 生命周期：执行器析构会停止线程池并等待已投递任务完成；promise / 协程通过
@@ -106,14 +109,23 @@ inline bool PostToHandle(const std::shared_ptr<CExecutorHandle>& pHandle, std::f
     return pHandle->m_pPool->Submit(std::move(fnTask));
 }
 
-/// @brief 向执行器句柄「按类别过门」投递任务 —— 业务任务（层派发 / Post）走这条。
+/// @brief 向执行器句柄「按类别投递」任务 —— 业务任务（层派发 / Post）走这条。
+///
+/// 两个分支：
+///  - `kRead` / `kWrite`：过读写门（排队等槽位）；
+///  - `kDirect`：直投线程池（不过门，随时可跑）。
 ///
 /// @param pHandle 执行器句柄。
-/// @param eKind 任务类别（读可并发 / 写独占）。
+/// @param eKind 任务类别（读可并发 / 写独占 / 直投不过门）。
 /// @param fnTask 任务函数（移动投递）。
 /// @return true 已接受（可能已投递，也可能在门口排队）；false 句柄不可用（空 / 已停止 / 门已关闭）。
 inline bool PostToHandle(const std::shared_ptr<CExecutorHandle>& pHandle, TaskKind eKind, std::function<void()> fnTask)
 {
+    if (eKind == TaskKind::kDirect)
+    {
+        return PostToHandle(pHandle, std::move(fnTask));  // 直投：与读写门无关。
+    }
+
     if (pHandle == nullptr || pHandle->m_pGate == nullptr || pHandle->m_bStopped)
     {
         return false;
@@ -170,12 +182,13 @@ struct CInlineGuard
 /// 「就地还是投递」的唯一判定处（promise 的层派发与协程的续跑共用）：
 ///  - 已在本链执行器线程上：就地（省一次入队 + 保序）；
 ///  - 连续内联已达 `kMaxInlineDepth`：投递（防超长链爆栈）；
+///  - `kDirect` 层：不查门（它不占槽位）—— 已在本执行器线程上就接着跑；
 ///  - 读写门放行（`CanRunInline`）：本线程须持着本门「同类」槽位（读任务里的读层 / 写任务里的写层），
 ///    且无人在排队 —— 换类别会自死锁（读里等写 = 等自己退出），插队会破坏公平；
 ///  - `bRequireIdle`：还要求线程池无积压（协程续跑用 —— 有积压时投递，保住并行度）。
 ///
 /// @param pExec 本链执行器句柄。
-/// @param eKind 本层类别（读 / 写）。
+/// @param eKind 本层类别（读 / 写 / 直投）。
 /// @param bRequireIdle 是否要求线程池无积压才内联。
 /// @return true = 调用方应当直接执行任务体；false = 应当投递。
 inline bool ShouldInline(const std::shared_ptr<CExecutorHandle>& pExec, TaskKind eKind, bool bRequireIdle = false)
@@ -186,8 +199,8 @@ inline bool ShouldInline(const std::shared_ptr<CExecutorHandle>& pExec, TaskKind
         return false;
     }
 
-    // ② 读写门放行（同类 + 无人排队）。
-    if (pExec->m_pGate == nullptr || !pExec->m_pGate->CanRunInline(eKind))
+    // ② 直投层不过门：没有槽位要查，也没有排队要顾。
+    if (eKind != TaskKind::kDirect && (pExec->m_pGate == nullptr || !pExec->m_pGate->CanRunInline(eKind)))
     {
         return false;
     }
@@ -202,7 +215,7 @@ inline bool ShouldInline(const std::shared_ptr<CExecutorHandle>& pExec, TaskKind
 /// （不占位、不归还），投递则按类别过读写门排队。
 ///
 /// @param pExec 本链执行器句柄。
-/// @param eKind 本层类别（读 / 写）。
+/// @param eKind 本层类别（读 / 写 / 直投）。
 /// @param fnTask 任务体（按值接收：就地执行或移动投递）。
 /// @return true 已就地执行 / 已投递；false 执行器不可用（调用方以 `Stopped()` 收口本层）。
 inline bool DispatchInlineOrPost(const std::shared_ptr<CExecutorHandle>& pExec, TaskKind eKind, std::function<void()> fnTask)
@@ -270,48 +283,53 @@ public:
 
     //================ Post ================
 
-    // 投递无返回值任务（fire-and-forget）：类别必填 —— 读可并发 / 写独占。
+    // 投递无返回值任务（fire-and-forget）：类别必填 —— 读可并发 / 写独占 / 直投不过门。
     //
     // 为什么没有默认值：类别决定模块内的互斥语义（“这条任务能不能和别的任务同时跑”），
     // 是行为契约而不是可选参数 —— 默认值会让“忘记声明的读”变成静默的并发问题。
+    //
+    // `kDirect` 适用于「自成一体的活」（自身线程安全、不碰模块状态）：它不排队、不占槽位，
+    // 因而不受公平性保护（写任务扎堆时它照样能插进去跑）。
     bool Post(TaskKind eKind, std::function<void()> fnTask);
 
     //================ Chain ================
 
     // 起 promise（等价 JS `new Promise(executor)`）：创建 promise 并投递首层。
+    //
+    // 类别决定首层的投递路径（后续每层各自在 `Then` 一族里给类别）：
+    // 读 / 写过门；`kDirect` 直投（不过门 —— 整链都不碰模块状态时用）。
     template <typename TContext>
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext, typename CPromise<TContext>::ThenHandler fnHandler,
-        const CSourceLoc& loc = CSourceLoc(), TaskKind eKind = TaskKind::kWrite);
+        TaskKind eKind, const CSourceLoc& loc = CSourceLoc());
 
     // 起 promise（对齐 JS `new Promise((resolve, reject) => ...)`）：由起链回调内部的 resolve / reject 兑现。
     template <typename TContext>
     CPromise<TContext> NewPromise(const std::shared_ptr<TContext>& spContext,
-        const typename CPromise<TContext>::ChainStarter& fnStarter, const CSourceLoc& loc = CSourceLoc(),
-        TaskKind eKind = TaskKind::kWrite);
+        const typename CPromise<TContext>::ChainStarter& fnStarter, TaskKind eKind, const CSourceLoc& loc = CSourceLoc());
 
     //================ Combine ================
 
     // 组合器（对齐 JS `Promise.all`）：全部兑现才兑现；任一拒绝立即以该拒绝码拒绝。
     template <typename TContext, typename... TChild>
-    CPromise<TContext> WhenAll(const std::shared_ptr<TContext>& spContext, const TChild&... child);
+    CPromise<TContext> WhenAll(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child);
 
     // 组合器（对齐 JS `Promise.allSettled`）：全部落定即兑现（恒兑现）。
     template <typename TContext, typename... TChild>
-    CPromise<TContext> WhenAllSettled(const std::shared_ptr<TContext>& spContext, const TChild&... child);
+    CPromise<TContext> WhenAllSettled(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child);
 
     // 组合器（对齐 JS `Promise.race`）：首个落定者定结果（兑现 / 拒绝皆可）。
     template <typename TContext, typename... TChild>
-    CPromise<TContext> WhenRace(const std::shared_ptr<TContext>& spContext, const TChild&... child);
+    CPromise<TContext> WhenRace(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child);
 
     // 组合器（对齐 JS `Promise.any`）：首个兑现者定结果；全部拒绝才失败。
     template <typename TContext, typename... TChild>
-    CPromise<TContext> WhenAny(const std::shared_ptr<TContext>& spContext, const TChild&... child);
+    CPromise<TContext> WhenAny(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child);
 
     //================ Coroutine ================
 
-    // 创建并启动协程（投递首次 Resume；返回 shared_ptr 管理生命周期）。
+    // 创建并启动协程（类别必填：读可并发 / 写独占；投递首次 Resume）。
     template <typename TCoroutine, typename... TArgs>
-    std::shared_ptr<TCoroutine> CoStart(TArgs&&... args);
+    std::shared_ptr<TCoroutine> CoStart(TaskKind eKind, TArgs&&... args);
 
 private:
     //================ Internal ================
@@ -575,12 +593,13 @@ void AppendGatherBindings(std::vector<std::function<void(const std::shared_ptr<C
 /// @tparam TChild 子 promise 类型 / 子 promise 列表类型。
 /// @param executor 聚合链的执行器。
 /// @param spContext 聚合 promise 的共享上下文。
+/// @param eKind 聚合链的读写类别（**必填**：读可并发 / 写独占）。
 /// @param ePolicy 策略（GatherPolicy 四档）。
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`。
 /// @return 聚合 promise 句柄（pending；由子 promise 的落定驱动）。
 template <typename TContext, typename... TChild>
-CPromise<TContext> Gather(
-    CAsyncExecutor& executor, const std::shared_ptr<TContext>& spContext, GatherPolicy ePolicy, const TChild&... child)
+CPromise<TContext> Gather(CAsyncExecutor& executor, const std::shared_ptr<TContext>& spContext, TaskKind eKind,
+    GatherPolicy ePolicy, const TChild&... child)
 {
     std::vector<std::function<void(const std::shared_ptr<CGatherState>&)> > vecBindings;
     const int nUnused[] = {0, (AppendGatherBindings(vecBindings, child), 0)...};
@@ -594,7 +613,8 @@ CPromise<TContext> Gather(
                                                   [ePolicy](const std::shared_ptr<TContext>& /*spContext*/)
                                                   {
                                                       return ResolveEmptyGather(ePolicy);
-                                                  }));
+                                                  }),
+            eKind);
     }
 
     const int nTotal = static_cast<int>(vecBindings.size());
@@ -608,7 +628,8 @@ CPromise<TContext> Gather(
                                                   {
                                                       vecBindings[i](pGather);  // 登记动作恒非空。
                                                   }
-                                              }));
+                                              }),
+        eKind);
 }
 
 }  // namespace detail
@@ -635,9 +656,9 @@ CPromise<TContext> Gather(
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
 /// @return 聚合 promise 句柄（pending；由子 promise 的落定驱动）。
 template <typename TContext, typename... TChild>
-CPromise<TContext> CAsyncExecutor::WhenAll(const std::shared_ptr<TContext>& spContext, const TChild&... child)
+CPromise<TContext> CAsyncExecutor::WhenAll(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child)
 {
-    return detail::Gather(*this, spContext, detail::kGatherAll, child...);
+    return detail::Gather(*this, spContext, eKind, detail::kGatherAll, child...);
 }
 
 /// @brief 组合器（对齐 JS `Promise.allSettled`）：等一组子 promise 「全部落定」后兑现（恒兑现）。
@@ -656,9 +677,10 @@ CPromise<TContext> CAsyncExecutor::WhenAll(const std::shared_ptr<TContext>& spCo
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
 /// @return 聚合 promise 句柄（恒兑现；由子 promise 的落定驱动）。
 template <typename TContext, typename... TChild>
-CPromise<TContext> CAsyncExecutor::WhenAllSettled(const std::shared_ptr<TContext>& spContext, const TChild&... child)
+CPromise<TContext> CAsyncExecutor::WhenAllSettled(
+    const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child)
 {
-    return detail::Gather(*this, spContext, detail::kGatherAllSettled, child...);
+    return detail::Gather(*this, spContext, eKind, detail::kGatherAllSettled, child...);
 }
 
 /// @brief 组合器（对齐 JS `Promise.race`）：「首个落定」的子 promise 定结果（兑现 / 拒绝皆可）。
@@ -677,9 +699,9 @@ CPromise<TContext> CAsyncExecutor::WhenAllSettled(const std::shared_ptr<TContext
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
 /// @return 聚合 promise 句柄（由首个落定的子 promise 驱动）。
 template <typename TContext, typename... TChild>
-CPromise<TContext> CAsyncExecutor::WhenRace(const std::shared_ptr<TContext>& spContext, const TChild&... child)
+CPromise<TContext> CAsyncExecutor::WhenRace(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child)
 {
-    return detail::Gather(*this, spContext, detail::kGatherRace, child...);
+    return detail::Gather(*this, spContext, eKind, detail::kGatherRace, child...);
 }
 
 /// @brief 组合器（对齐 JS `Promise.any`）：「首个兑现」的子 promise 定结果；全部拒绝才失败。
@@ -695,9 +717,9 @@ CPromise<TContext> CAsyncExecutor::WhenRace(const std::shared_ptr<TContext>& spC
 /// @param child 子 promise，或 `std::vector<CPromise<同上下文>>`（数量运行时确定）；两者可混用。
 /// @return 聚合 promise 句柄（由首个兑现的子 promise 驱动）。
 template <typename TContext, typename... TChild>
-CPromise<TContext> CAsyncExecutor::WhenAny(const std::shared_ptr<TContext>& spContext, const TChild&... child)
+CPromise<TContext> CAsyncExecutor::WhenAny(const std::shared_ptr<TContext>& spContext, TaskKind eKind, const TChild&... child)
 {
-    return detail::Gather(*this, spContext, detail::kGatherAny, child...);
+    return detail::Gather(*this, spContext, eKind, detail::kGatherAny, child...);
 }
 
 }  // namespace async

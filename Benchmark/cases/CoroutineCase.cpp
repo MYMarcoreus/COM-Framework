@@ -20,7 +20,7 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -35,16 +35,16 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -59,9 +59,9 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT_ALL(NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc),
-            NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc),
-            NewPromise(&bench::StepInc), NewPromise(&bench::StepInc), NewPromise(&bench::StepInc));
+        CO_AWAIT_ALL(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite),
+            NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite),
+            NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite), NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -78,17 +78,17 @@ void RunCoroutineCases()
     // 正确性校验：协程与子链共享上下文，结果一致。
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-        std::shared_ptr<BenchCoroOnce> pCoro = exec.CoStart<BenchCoroOnce>(spCtx);
+        std::shared_ptr<BenchCoroOnce> pCoro = exec.CoStart<BenchCoroOnce>(common::async::TaskKind::kWrite, spCtx);
         benchmark::SanityCheck(group, "协程 1 次 await 结果=1", pCoro->Await().IsFulfilled() && spCtx->nValue == 1);
     }
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-        std::shared_ptr<BenchCoroSeq10> pCoro = exec.CoStart<BenchCoroSeq10>(spCtx);
+        std::shared_ptr<BenchCoroSeq10> pCoro = exec.CoStart<BenchCoroSeq10>(common::async::TaskKind::kWrite, spCtx);
         benchmark::SanityCheck(group, "协程 10 次 await 结果=10", pCoro->Await().IsFulfilled() && spCtx->nValue == 10);
     }
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-        std::shared_ptr<BenchCoroAll10> pCoro = exec.CoStart<BenchCoroAll10>(spCtx);
+        std::shared_ptr<BenchCoroAll10> pCoro = exec.CoStart<BenchCoroAll10>(common::async::TaskKind::kWrite, spCtx);
         benchmark::SanityCheck(group, "协程并行 await ×10 结果=10", pCoro->Await().IsFulfilled() && spCtx->nValue == 10);
     }
 
@@ -108,7 +108,7 @@ void RunCoroutineCases()
         [&exec]()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-            volatile long long s = exec.NewPromise(spCtx, &bench::StepInc).Await().IsFulfilled() ? spCtx->nValue : -1;
+            volatile long long s = exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite).Await().IsFulfilled() ? spCtx->nValue : -1;
             (void)s;
         },
         7, "起 promise + 单层执行 + Await");
@@ -119,7 +119,7 @@ void RunCoroutineCases()
         [&exec]()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-            std::shared_ptr<BenchCoroOnce> pCoro = exec.CoStart<BenchCoroOnce>(spCtx);
+            std::shared_ptr<BenchCoroOnce> pCoro = exec.CoStart<BenchCoroOnce>(common::async::TaskKind::kWrite, spCtx);
             volatile int s = pCoro->Await().IsRejected() ? 1 : 0;  // 防优化：读回结果
             (void)s;
         },
@@ -131,10 +131,10 @@ void RunCoroutineCases()
         [&exec]()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-            common::async::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc);
+            common::async::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite);
             for (int k = 1; k < 10; ++k)
             {
-                tail = tail.Then(&bench::StepInc);
+                tail = tail.Then(&bench::StepInc, common::async::TaskKind::kWrite);
             }
             volatile long long s = tail.Await().IsFulfilled() ? spCtx->nValue : -1;
             (void)s;
@@ -147,7 +147,7 @@ void RunCoroutineCases()
         [&exec]()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-            std::shared_ptr<BenchCoroSeq10> pCoro = exec.CoStart<BenchCoroSeq10>(spCtx);
+            std::shared_ptr<BenchCoroSeq10> pCoro = exec.CoStart<BenchCoroSeq10>(common::async::TaskKind::kWrite, spCtx);
             volatile int s = pCoro->Await().IsRejected() ? 1 : 0;  // 防优化：读回结果
             (void)s;
         },
@@ -159,7 +159,7 @@ void RunCoroutineCases()
         [&exec]()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-            std::shared_ptr<BenchCoroAll10> pCoro = exec.CoStart<BenchCoroAll10>(spCtx);
+            std::shared_ptr<BenchCoroAll10> pCoro = exec.CoStart<BenchCoroAll10>(common::async::TaskKind::kWrite, spCtx);
             volatile int s = pCoro->Await().IsRejected() ? 1 : 0;  // 防优化：读回结果
             (void)s;
         },

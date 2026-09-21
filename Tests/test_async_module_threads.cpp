@@ -293,7 +293,7 @@ public:
             {
                 return StepAdd(spCtxSelf);
             },
-            ASYNC_LOC);
+            common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// @brief 读：校验模块状态自洽（撕裂读检测）。
@@ -309,7 +309,7 @@ public:
             {
                 return StepCheck(spCtxSelf);
             },
-            ASYNC_LOC, TaskKind::kRead);
+            TaskKind::kRead, ASYNC_LOC);
     }
 
     /// @brief 写：三层链（层内互斥、层间让位；只做互斥观测与标记，不改状态）。
@@ -326,19 +326,19 @@ public:
                 {
                     return StepChain1(spCtxSelf);
                 },
-                ASYNC_LOC)
+                common::async::TaskKind::kWrite, ASYNC_LOC)
             .Then(
                 [this](const std::shared_ptr<SModuleCtx>& spCtxSelf)
                 {
                     return StepChain2(spCtxSelf);
                 },
-                ASYNC_LOC)
+                common::async::TaskKind::kWrite, ASYNC_LOC)
             .Then(
                 [this](const std::shared_ptr<SModuleCtx>& spCtxSelf)
                 {
                     return StepChain3(spCtxSelf);
                 },
-                ASYNC_LOC);
+                common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// @brief 读：读快照与版本（乐观锁的「读」半边）。
@@ -354,7 +354,7 @@ public:
             {
                 return StepReadVersion(spCtxSelf);
             },
-            ASYNC_LOC, TaskKind::kRead);
+            TaskKind::kRead, ASYNC_LOC);
     }
 
     /// @brief 写：带版本校验的写（冲突即拒绝 `版本冲突`，由调用方重试）。
@@ -370,7 +370,7 @@ public:
             {
                 return StepTryIncrement(spCtxSelf);
             },
-            ASYNC_LOC);
+            common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
 private:

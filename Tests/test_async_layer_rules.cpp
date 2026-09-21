@@ -105,10 +105,10 @@ TEST(LayerRules_FulfilledPath)
 
     // ① 串链：把要验证的三态路径串起来（上游由首层层函数决定）。
     const std::shared_ptr<CLayerRuleCtx> spCtx = MakeCtx();
-    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFirst, ASYNC_LOC)
-                                                .Then(&StepThen, ASYNC_LOC)            // 上游兑现 → 执行
-                                                .Catch(&StepCatchRecover, ASYNC_LOC)   // 上游兑现 → 跳过
-                                                .Finally(&StepFinallyFlip, ASYNC_LOC)  // 成败都执行
+    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFirst, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Then(&StepThen, common::async::TaskKind::kWrite, ASYNC_LOC)            // 上游兑现 → 执行
+                                                .Catch(&StepCatchRecover, common::async::TaskKind::kWrite, ASYNC_LOC)   // 上游兑现 → 跳过
+                                                .Finally(&StepFinallyFlip, common::async::TaskKind::kWrite, ASYNC_LOC)  // 成败都执行
                                                 .Await();
 
 
@@ -130,12 +130,12 @@ TEST(LayerRules_RejectedPathCatchRecovers)
 
     // ① 串链：把要验证的三态路径串起来（上游由首层层函数决定）。
     const std::shared_ptr<CLayerRuleCtx> spCtx = MakeCtx();
-    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFirstReject, ASYNC_LOC)
-                                                .Then(&StepThen, ASYNC_LOC)           // 上游被拒绝 → 跳过
-                                                .Then(&StepThen, ASYNC_LOC)           // 同上（失败即停）
-                                                .Catch(&StepCatchRecover, ASYNC_LOC)  // 只在被拒绝时执行并恢复
-                                                .Then(&StepThen, ASYNC_LOC)           // 已恢复 → 执行
-                                                .Finally(&StepFinallyFlip, ASYNC_LOC)
+    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFirstReject, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Then(&StepThen, common::async::TaskKind::kWrite, ASYNC_LOC)           // 上游被拒绝 → 跳过
+                                                .Then(&StepThen, common::async::TaskKind::kWrite, ASYNC_LOC)           // 同上（失败即停）
+                                                .Catch(&StepCatchRecover, common::async::TaskKind::kWrite, ASYNC_LOC)  // 只在被拒绝时执行并恢复
+                                                .Then(&StepThen, common::async::TaskKind::kWrite, ASYNC_LOC)           // 已恢复 → 执行
+                                                .Finally(&StepFinallyFlip, common::async::TaskKind::kWrite, ASYNC_LOC)
                                                 .Await();
 
 
@@ -159,11 +159,11 @@ TEST(LayerRules_RejectedPathPassThrough)
 
     // ① 串链：把要验证的三态路径串起来（上游由首层层函数决定）。
     const std::shared_ptr<CLayerRuleCtx> spCtx = MakeCtx();
-    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFirstReject, ASYNC_LOC)
-                                                .Then(&StepThen, ASYNC_LOC)  // 跳过
-                                                .Catch(&StepCatchPassThrough, ASYNC_LOC)
-                                                .Then(&StepThen, ASYNC_LOC)  // 仍是拒绝状态 → 跳过
-                                                .Finally(&StepFinallyFlip, ASYNC_LOC)
+    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFirstReject, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Then(&StepThen, common::async::TaskKind::kWrite, ASYNC_LOC)  // 跳过
+                                                .Catch(&StepCatchPassThrough, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Then(&StepThen, common::async::TaskKind::kWrite, ASYNC_LOC)  // 仍是拒绝状态 → 跳过
+                                                .Finally(&StepFinallyFlip, common::async::TaskKind::kWrite, ASYNC_LOC)
                                                 .Await();
 
 

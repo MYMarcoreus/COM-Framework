@@ -285,7 +285,7 @@ CUserPromise BridgeQueryUser(const CFlowDeps& deps, const std::shared_ptr<CUserO
                     fnReject(CPromiseResult::Reject(CUserError(CUserError::kDbUnavailable, spCtx->strError)));
                 });
     };
-    return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnStarter, common::async::TaskKind::kRead, ASYNC_LOC);
 }
 
 /// @brief 桥接：插入用户（数据访问模块异步插入）。
@@ -333,7 +333,7 @@ CUserPromise BridgeInsertUser(const CFlowDeps& deps, const std::shared_ptr<CUser
                     fnReject(CPromiseResult::Reject(CUserError(CUserError::kDbUnavailable, spCtx->strError)));
                 });
     };
-    return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
 }
 
 /// @brief 更新尝试（乐观锁冲突时在回调里重试 —— 回调驱动，不阻塞、不占线程）。
@@ -407,7 +407,7 @@ CUserPromise BridgeUpdateUser(const CFlowDeps& deps, const std::shared_ptr<CUser
     {
         UpdateUserAttempt(deps, spCtx, fnResolve, fnReject, 1);
     };
-    return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
 }
 
 /// @brief 桥接：删除用户（数据访问模块异步删除）。
@@ -452,7 +452,7 @@ CUserPromise BridgeDeleteUser(const CFlowDeps& deps, const std::shared_ptr<CUser
                     fnReject(CPromiseResult::Reject(CUserError(CUserError::kDbUnavailable, spCtx->strError)));
                 });
     };
-    return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
 }
 
 // ====================================================================
@@ -474,13 +474,13 @@ CUserPromise BridgeDeleteUser(const CFlowDeps& deps, const std::shared_ptr<CUser
 /// @return 本流程的 promise。
 CUserPromise LoadUserAsync(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx, common::async::TaskKind eKind)
 {
-    return deps.spExec->NewPromise(spCtx, &StepValidateUserId, ASYNC_LOC, eKind)
+    return deps.spExec->NewPromise(spCtx, &StepValidateUserId, eKind, ASYNC_LOC)
         .ThenPromise(
             [deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
             {
                 return BridgeQueryUser(deps, spCtxSelf);
             },
-            ASYNC_LOC);
+            eKind, ASYNC_LOC);
 }
 
 /// @brief 流程：查询用户（读）。
@@ -495,8 +495,8 @@ CUserPromise LoadUserAsync(const CFlowDeps& deps, const std::shared_ptr<CUserOpC
 CUserPromise BuildQueryFlow(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     return LoadUserAsync(deps, spCtx, common::async::TaskKind::kRead)
-        .Then(&StepRejectIfAbsent, ASYNC_LOC)
-        .Finally(&StepAudit, ASYNC_LOC);
+        .Then(&StepRejectIfAbsent, common::async::TaskKind::kRead, ASYNC_LOC)
+        .Finally(&StepAudit, common::async::TaskKind::kRead, ASYNC_LOC);
 }
 
 /// @brief 流程：注册用户（写）。
@@ -509,21 +509,21 @@ CUserPromise BuildQueryFlow(const CFlowDeps& deps, const std::shared_ptr<CUserOp
 /// @return 本流程的 promise（成功时 nUserId / recResult 为分配结果）。
 CUserPromise BuildRegisterFlow(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
-    return deps.spExec->NewPromise(spCtx, &StepValidateRecord, ASYNC_LOC)
+    return deps.spExec->NewPromise(spCtx, &StepValidateRecord, common::async::TaskKind::kWrite, ASYNC_LOC)
         .ThenPromise(
             [deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
             {
                 return BridgeQueryUser(deps, spCtxSelf);
             },
-            ASYNC_LOC)
-        .Then(&StepRejectIfExists, ASYNC_LOC)  // 查重：已存在则拒绝（失败即停）
+            common::async::TaskKind::kWrite, ASYNC_LOC)
+        .Then(&StepRejectIfExists, common::async::TaskKind::kWrite, ASYNC_LOC)  // 查重：已存在则拒绝（失败即停）
         .ThenPromise(
             [deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
             {
                 return BridgeInsertUser(deps, spCtxSelf);
             },
-            ASYNC_LOC)
-        .Finally(&StepAudit, ASYNC_LOC);
+            common::async::TaskKind::kWrite, ASYNC_LOC)
+        .Finally(&StepAudit, common::async::TaskKind::kWrite, ASYNC_LOC);
 }
 
 /// @brief 流程：修改用户名（改）。
@@ -537,15 +537,15 @@ CUserPromise BuildRegisterFlow(const CFlowDeps& deps, const std::shared_ptr<CUse
 CUserPromise BuildRenameFlow(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     return LoadUserAsync(deps, spCtx, common::async::TaskKind::kWrite)
-        .Then(&StepRejectIfAbsent, ASYNC_LOC)
-        .Then(&StepPrepareRename, ASYNC_LOC)
+        .Then(&StepRejectIfAbsent, common::async::TaskKind::kWrite, ASYNC_LOC)
+        .Then(&StepPrepareRename, common::async::TaskKind::kWrite, ASYNC_LOC)
         .ThenPromise(
             [deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
             {
                 return BridgeUpdateUser(deps, spCtxSelf);
             },
-            ASYNC_LOC)
-        .Finally(&StepAudit, ASYNC_LOC);
+            common::async::TaskKind::kWrite, ASYNC_LOC)
+        .Finally(&StepAudit, common::async::TaskKind::kWrite, ASYNC_LOC);
 }
 
 /// @brief 流程：删除用户（删）。
@@ -559,14 +559,14 @@ CUserPromise BuildRenameFlow(const CFlowDeps& deps, const std::shared_ptr<CUserO
 CUserPromise BuildRemoveFlow(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
 {
     return LoadUserAsync(deps, spCtx, common::async::TaskKind::kWrite)
-        .Then(&StepRejectIfAbsent, ASYNC_LOC)
+        .Then(&StepRejectIfAbsent, common::async::TaskKind::kWrite, ASYNC_LOC)
         .ThenPromise(
             [deps](const std::shared_ptr<CUserOpContext>& spCtxSelf)
             {
                 return BridgeDeleteUser(deps, spCtxSelf);
             },
-            ASYNC_LOC)
-        .Finally(&StepAudit, ASYNC_LOC);
+            common::async::TaskKind::kWrite, ASYNC_LOC)
+        .Finally(&StepAudit, common::async::TaskKind::kWrite, ASYNC_LOC);
 }
 
 // ====================================================================
@@ -999,16 +999,18 @@ static CFlowDeps MakeFlowDeps(
 ///
 /// @param deps 流程依赖（执行器须非空）。
 /// @param spCtx 业务上下文。
+/// @param eKind 本链类别（**必填**：读可并发 / 写独占）。
 ///
 /// @return 立即以 `CUserError(kDbUnavailable)` 被拒绝的 promise。
-static CUserPromise MakeRejectedPromise(const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx)
+static CUserPromise MakeRejectedPromise(
+    const CFlowDeps& deps, const std::shared_ptr<CUserOpContext>& spCtx, common::async::TaskKind eKind)
 {
     CUserPromise::ChainStarter fnStarter = [spCtx](const ResolveFn& /*fnResolve*/, const RejectFn& fnReject)
     {
         spCtx->strError = "数据访问模块不可用";
         fnReject(CPromiseResult::Reject(CUserError(CUserError::kDbUnavailable, spCtx->strError)));
     };
-    return deps.spExec->NewPromise(spCtx, fnStarter, ASYNC_LOC);
+    return deps.spExec->NewPromise(spCtx, fnStarter, eKind, ASYNC_LOC);
 }
 
 /// @brief 异步查询用户信息（读）。
@@ -1027,7 +1029,7 @@ common::async::CPromise<CUserOpContext> CExampleAsyncModule::QueryUserAsync(std:
     ASSERT_MSG(deps.spExec != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     if (deps.spTable == nullptr)
     {
-        return MakeRejectedPromise(deps, spCtx);
+        return MakeRejectedPromise(deps, spCtx, common::async::TaskKind::kRead);
     }
     return BuildQueryFlow(deps, spCtx);
 }
@@ -1048,7 +1050,7 @@ common::async::CPromise<CUserOpContext> CExampleAsyncModule::RegisterUserAsync(c
     ASSERT_MSG(deps.spExec != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     if (deps.spTable == nullptr)
     {
-        return MakeRejectedPromise(deps, spCtx);
+        return MakeRejectedPromise(deps, spCtx, common::async::TaskKind::kWrite);
     }
     return BuildRegisterFlow(deps, spCtx);
 }
@@ -1070,7 +1072,7 @@ common::async::CPromise<CUserOpContext> CExampleAsyncModule::RenameUserAsync(std
     ASSERT_MSG(deps.spExec != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     if (deps.spTable == nullptr)
     {
-        return MakeRejectedPromise(deps, spCtx);
+        return MakeRejectedPromise(deps, spCtx, common::async::TaskKind::kWrite);
     }
     return BuildRenameFlow(deps, spCtx);
 }
@@ -1090,7 +1092,7 @@ common::async::CPromise<CUserOpContext> CExampleAsyncModule::RemoveUserAsync(std
     ASSERT_MSG(deps.spExec != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     if (deps.spTable == nullptr)
     {
-        return MakeRejectedPromise(deps, spCtx);
+        return MakeRejectedPromise(deps, spCtx, common::async::TaskKind::kWrite);
     }
     return BuildRemoveFlow(deps, spCtx);
 }

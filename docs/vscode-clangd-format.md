@@ -54,10 +54,10 @@ COrderPromise::ThenHandler fnValidate = [](const std::shared_ptr<COrderContext>&
 };
 
 return exec
-    .NewPromise(spCtx, &StepLoadOrder, ASYNC_LOC)  // ① 具名异步函数
-    .Then(fnValidate, ASYNC_LOC)                   // ② lambda
-    .ThenPromise(fnQueryStock, ASYNC_LOC)          // ③ 内部执行其他异步函数（等它）
-    .Finally(&StepAudit, ASYNC_LOC);
+    .NewPromise(spCtx, &StepLoadOrder, TaskKind::kRead, ASYNC_LOC)  // ① 具名异步函数
+    .Then(fnValidate, TaskKind::kRead, ASYNC_LOC)                   // ② lambda
+    .ThenPromise(fnQueryStock, TaskKind::kRead, ASYNC_LOC)          // ③ 内部执行其他异步函数（等它）
+    .Finally(&StepAudit, TaskKind::kWrite, ASYNC_LOC);
 ```
 
 ```cpp
@@ -108,13 +108,13 @@ COrderP::PromiseFactory fnQueryStock = [&exec](const std::shared_ptr<COrderCtx>&
 
 ```cpp
 return exec
-    .NewPromise(sp, &StepLoad, ASYNC_LOC)  // ① 具名异步函数
-    .Then(fnValidate, ASYNC_LOC)           // ② lambda：校验
-    .ThenPromise(fnQueryStock, ASYNC_LOC)  // ③ 调库存模块（等它）
-    .ThenPromise(fnReserve, ASYNC_LOC)     // ④ 内层链（等它）
-    .Then(fnBilling, ASYNC_LOC)            // ⑤ 旁支（不等它）
-    .Catch(fnCompensate, ASYNC_LOC)        // catch：仅被拒绝时执行
-    .Finally(fnAudit, ASYNC_LOC);          // finally：成败都跑
+    .NewPromise(sp, &StepLoad, TaskKind::kRead, ASYNC_LOC)  // ① 具名异步函数
+    .Then(fnValidate, TaskKind::kRead, ASYNC_LOC)           // ② lambda：校验
+    .ThenPromise(fnQueryStock, TaskKind::kRead, ASYNC_LOC)  // ③ 调库存模块（等它）
+    .ThenPromise(fnReserve, TaskKind::kWrite, ASYNC_LOC)     // ④ 内层链（等它）
+    .Then(fnBilling, TaskKind::kWrite, ASYNC_LOC)            // ⑤ 旁支（不等它）
+    .Catch(fnCompensate, TaskKind::kWrite, ASYNC_LOC)        // catch：仅被拒绝时执行
+    .Finally(fnAudit, TaskKind::kWrite, ASYNC_LOC);          // finally：成败都跑
 ```
 
 完整示例见 `examples/cases/ThenMixCase.cpp`（一条链里混用具名 handler / lambda / lambda 内执行其他异步函数），

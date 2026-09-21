@@ -430,7 +430,7 @@ public:
     {
         CO_BEGIN();
         TRACE_LINE(GetContext()->nLineCoroStep = __LINE__ + 1);  // 下一行（CO_AWAIT）才是注册点
-        CO_AWAIT(NewPromise(&StepCoroutineStep, ASYNC_LOC));
+        CO_AWAIT(NewPromise(&StepCoroutineStep, common::async::TaskKind::kWrite, ASYNC_LOC));
 #if defined(ASYNC_DEBUG_TRACE)
         CaptureNow(GetContext()->capCoroAfter);  // 恢复点：看还在不在层里
 #endif
@@ -456,31 +456,31 @@ TEST(Trace_CompleteChainInComplexFlow)
     CPromise<CTraceCtx>::PromiseFactory fnInnerChain = [&execSide, spCtx](const std::shared_ptr<CTraceCtx>& spInnerCtx)
     {
         TRACE_LINE(spCtx->nLineInnerFirst = __LINE__ + 1);
-        CPromise<CTraceCtx> pInner = execSide.NewPromise(spInnerCtx, &StepInnerFirst, ASYNC_LOC);
+        CPromise<CTraceCtx> pInner = execSide.NewPromise(spInnerCtx, &StepInnerFirst, common::async::TaskKind::kWrite, ASYNC_LOC);
         TRACE_LINE(spCtx->nLineInnerSecond = __LINE__ + 1);
-        return pInner.Then(&StepInnerSecond, ASYNC_LOC);
+        return pInner.Then(&StepInnerSecond, common::async::TaskKind::kWrite, ASYNC_LOC);
     };
 
     //---------------- 主链：一条「下单」流程，把层形态混起来 ----------------
 
     lines.nRoot = __LINE__ + 1;
-    CPromise<CTraceCtx> pRoot = execMain.NewPromise(spCtx, &StepRoot, ASYNC_LOC);  // ① 链根
+    CPromise<CTraceCtx> pRoot = execMain.NewPromise(spCtx, &StepRoot, common::async::TaskKind::kWrite, ASYNC_LOC);  // ① 链根
     lines.nSecond = __LINE__ + 1;
-    CPromise<CTraceCtx> pSecond = pRoot.Then(&StepSecond, ASYNC_LOC);  // ② then（本链线程上就地级联）
+    CPromise<CTraceCtx> pSecond = pRoot.Then(&StepSecond, common::async::TaskKind::kWrite, ASYNC_LOC);  // ② then（本链线程上就地级联）
     lines.nThird = __LINE__ + 1;
-    CPromise<CTraceCtx> pThird = pSecond.Then(&StepThird, ASYNC_LOC);  // ③ then（同一执行器）
+    CPromise<CTraceCtx> pThird = pSecond.Then(&StepThird, common::async::TaskKind::kWrite, ASYNC_LOC);  // ③ then（同一执行器）
     lines.nCatch = __LINE__ + 1;
-    CPromise<CTraceCtx> pCatch = pThird.Catch(&StepCatchSkipped, ASYNC_LOC);  // ④ 被跳过（仍在链上）
+    CPromise<CTraceCtx> pCatch = pThird.Catch(&StepCatchSkipped, common::async::TaskKind::kWrite, ASYNC_LOC);  // ④ 被跳过（仍在链上）
     lines.nFinally = __LINE__ + 1;
-    CPromise<CTraceCtx> pFinally = pCatch.Finally(&StepFinally, ASYNC_LOC);  // ⑤ 收尾
+    CPromise<CTraceCtx> pFinally = pCatch.Finally(&StepFinally, common::async::TaskKind::kWrite, ASYNC_LOC);  // ⑤ 收尾
     lines.nBridge = __LINE__ + 1;
-    CPromise<CTraceCtx> pBridge = pFinally.ThenPromise(fnInnerChain, ASYNC_LOC);  // ⑥ 内层链（等它）
+    CPromise<CTraceCtx> pBridge = pFinally.ThenPromise(fnInnerChain, common::async::TaskKind::kWrite, ASYNC_LOC);  // ⑥ 内层链（等它）
     lines.nBase = __LINE__ + 1;
-    CPromise<CTraceCtx> pBase = pBridge.Then(&StepForkBase, ASYNC_LOC);  // ⑦ 分叉基座
+    CPromise<CTraceCtx> pBase = pBridge.Then(&StepForkBase, common::async::TaskKind::kWrite, ASYNC_LOC);  // ⑦ 分叉基座
     lines.nBranchA = __LINE__ + 1;
-    CPromise<CTraceCtx> pBranchA = pBase.Then(&StepBranchA, ASYNC_LOC);  // ⑧ 分支 A
+    CPromise<CTraceCtx> pBranchA = pBase.Then(&StepBranchA, common::async::TaskKind::kWrite, ASYNC_LOC);  // ⑧ 分支 A
     lines.nBranchB = __LINE__ + 1;
-    CPromise<CTraceCtx> pBranchB = pBase.Then(&StepBranchB, ASYNC_LOC);  // ⑨ 分支 B（最深）
+    CPromise<CTraceCtx> pBranchB = pBase.Then(&StepBranchB, common::async::TaskKind::kWrite, ASYNC_LOC);  // ⑨ 分支 B（最深）
 
     ASSERT_TRUE(pBranchA.Await().IsFulfilled());
     ASSERT_TRUE(pBranchB.Await().IsFulfilled());
@@ -492,7 +492,7 @@ TEST(Trace_CompleteChainInComplexFlow)
 
     std::shared_ptr<CTraceCtx> spGateCtx = std::make_shared<CTraceCtx>();
     const int nLineGated = __LINE__ + 1;
-    CPromise<CTraceCtx> pGated = execMain.NewPromise(spGateCtx, &StepGated, ASYNC_LOC);
+    CPromise<CTraceCtx> pGated = execMain.NewPromise(spGateCtx, &StepGated, common::async::TaskKind::kWrite, ASYNC_LOC);
     pGated.OnSettled(
         [spGateCtx](CPromiseResult)
         {
@@ -519,14 +519,14 @@ TEST(Trace_CompleteChainInComplexFlow)
 
     //---------------- 协程：CO_AWAIT 等自己起的子链 ----------------
 
-    std::shared_ptr<CProbeCoroutine> pCoro = execMain.CoStart<CProbeCoroutine>(spCtx);
+    std::shared_ptr<CProbeCoroutine> pCoro = execMain.CoStart<CProbeCoroutine>(common::async::TaskKind::kWrite, spCtx);
     ASSERT_TRUE(pCoro->Await().IsFulfilled());
 
     //---------------- 异常路径：层内抛异常 → 异常原样成为拒绝，帧栈照样弹回 ----------------
 
     lines.nThrow = __LINE__ + 1;
-    CPromise<CTraceCtx> pThrow = execMain.NewPromise(spCtx, &StepCaptureThenThrow, ASYNC_LOC);
-    const CPromiseResult rThrow = pThrow.Catch(&StepPassThrough, ASYNC_LOC).Await();
+    CPromise<CTraceCtx> pThrow = execMain.NewPromise(spCtx, &StepCaptureThenThrow, common::async::TaskKind::kWrite, ASYNC_LOC);
+    const CPromiseResult rThrow = pThrow.Catch(&StepPassThrough, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
     ASSERT_TRUE(rThrow.IsRejected());
     ASSERT_EQ(rThrow.Message(), std::string("trace 用例：层内故意抛异常"));
 
@@ -681,7 +681,7 @@ TEST(Trace_NotInsideLayer)
 
     std::shared_ptr<CTraceCtx> spCtx = std::make_shared<CTraceCtx>();
     spCtx->nLineStart = __LINE__ + 1;
-    ASSERT_TRUE(exec.NewPromise(spCtx, &StepRoot, ASYNC_LOC).Await().IsFulfilled());
+    ASSERT_TRUE(exec.NewPromise(spCtx, &StepRoot, common::async::TaskKind::kWrite, ASYNC_LOC).Await().IsFulfilled());
 
     // 层外起的链没有「父层」—— 链根就是链根（它的上游要等有人 adopt / 或它在层里起链时才挂上）。
     const CExpect vecExpectAlone[1] = {{"then", spCtx->nLineStart, "trace-main"}};
@@ -791,27 +791,27 @@ TEST(Trace_NestedSubChainsThreeLevels)
     const CPromise<CNestCtx>::PromiseFactory fnSub2 = [&exec, spCtx](const std::shared_ptr<CNestCtx>& spSelf)
     {
         spCtx->nLineSub2Root = __LINE__ + 1;
-        CPromise<CNestCtx> pSub2 = exec.NewPromise(spSelf, &NestStepNoop, ASYNC_LOC);
+        CPromise<CNestCtx> pSub2 = exec.NewPromise(spSelf, &NestStepNoop, common::async::TaskKind::kWrite, ASYNC_LOC);
         spCtx->nLineSub2Deep = __LINE__ + 1;
-        return pSub2.Then(&NestStepSub2Deep, ASYNC_LOC);
+        return pSub2.Then(&NestStepSub2Deep, common::async::TaskKind::kWrite, ASYNC_LOC);
     };
 
     // sub1 的工厂：链根 + 一层（这一层里去起 sub2 —— 子链套子链）。
     const CPromise<CNestCtx>::PromiseFactory fnSub1 = [&exec, spCtx, fnSub2](const std::shared_ptr<CNestCtx>& spSelf)
     {
         spCtx->nLineSub1Root = __LINE__ + 1;
-        CPromise<CNestCtx> pSub1 = exec.NewPromise(spSelf, &NestStepNoop, ASYNC_LOC);
+        CPromise<CNestCtx> pSub1 = exec.NewPromise(spSelf, &NestStepNoop, common::async::TaskKind::kWrite, ASYNC_LOC);
         spCtx->nLineAwait2 = __LINE__ + 1;
-        return pSub1.ThenPromise(fnSub2, ASYNC_LOC);
+        return pSub1.ThenPromise(fnSub2, common::async::TaskKind::kWrite, ASYNC_LOC);
     };
 
     // 主链：root → pre → 等 sub1。
     spCtx->nLineRoot = __LINE__ + 1;
-    CPromise<CNestCtx> pRoot = exec.NewPromise(spCtx, &NestStepRoot, ASYNC_LOC);
+    CPromise<CNestCtx> pRoot = exec.NewPromise(spCtx, &NestStepRoot, common::async::TaskKind::kWrite, ASYNC_LOC);
     spCtx->nLinePre = __LINE__ + 1;
-    CPromise<CNestCtx> pPre = pRoot.Then(&NestStepNoop, ASYNC_LOC);
+    CPromise<CNestCtx> pPre = pRoot.Then(&NestStepNoop, common::async::TaskKind::kWrite, ASYNC_LOC);
     spCtx->nLineAwait1 = __LINE__ + 1;
-    CPromise<CNestCtx> pTail = pPre.ThenPromise(fnSub1, ASYNC_LOC);
+    CPromise<CNestCtx> pTail = pPre.ThenPromise(fnSub1, common::async::TaskKind::kWrite, ASYNC_LOC);
 
     ASSERT_TRUE(pTail.Await().IsFulfilled());
     ASSERT_EQ(spCtx->nValue, 1);
@@ -952,19 +952,19 @@ TEST(Trace_ConcurrentChainsDoNotMix)
                 const CPromise<CMixCtx>::PromiseFactory fnSub = [&exec, spCtx](const std::shared_ptr<CMixCtx>& spSelf)
                 {
                     spCtx->nLineSubRoot = __LINE__ + 1;
-                    CPromise<CMixCtx> pSub = exec.NewPromise(spSelf, &MixStepNoop, ASYNC_LOC);
+                    CPromise<CMixCtx> pSub = exec.NewPromise(spSelf, &MixStepNoop, common::async::TaskKind::kWrite, ASYNC_LOC);
                     spCtx->nLineSubDeep = __LINE__ + 1;
-                    return pSub.Then(&MixStepSubDeep, ASYNC_LOC);
+                    return pSub.Then(&MixStepSubDeep, common::async::TaskKind::kWrite, ASYNC_LOC);
                 };
 
                 spCtx->nLineRoot = __LINE__ + 1;
-                CPromise<CMixCtx> p = exec.NewPromise(spCtx, &MixStepNoop, ASYNC_LOC);
+                CPromise<CMixCtx> p = exec.NewPromise(spCtx, &MixStepNoop, common::async::TaskKind::kWrite, ASYNC_LOC);
                 for (int k = 0; k < spCtx->nExtra; ++k)
                 {
-                    p = p.Then(&MixStepNoop, ASYNC_LOC);  // 前缀层：都注册在「同一行」
+                    p = p.Then(&MixStepNoop, common::async::TaskKind::kWrite, ASYNC_LOC);  // 前缀层：都注册在「同一行」
                 }
                 spCtx->nLineAwait = __LINE__ + 1;
-                p = p.ThenPromise(fnSub, ASYNC_LOC);
+                p = p.ThenPromise(fnSub, common::async::TaskKind::kWrite, ASYNC_LOC);
                 const bool bOk = p.Await().IsFulfilled();
                 spCtx->bOk.store(bOk);  // 工作线程只记结果（断言会抛异常，只能在主线程用）
             }));
@@ -1110,13 +1110,13 @@ TEST(Trace_DeepChainAndFrameStackResidue)
 
     // ---- ① 深链：深度 / 链号 / 层号逐项对得上 ----
     spCtx->nLineRoot = __LINE__ + 1;
-    CPromise<CResidueCtx> pDeep = exec.NewPromise(spCtx, &ResidueStepNoop, ASYNC_LOC);
+    CPromise<CResidueCtx> pDeep = exec.NewPromise(spCtx, &ResidueStepNoop, common::async::TaskKind::kWrite, ASYNC_LOC);
     for (int i = 0; i < kExtraLayers - 1; ++i)
     {
-        pDeep = pDeep.Then(&ResidueStepNoop, ASYNC_LOC);  // 同一行注册其余各层
+        pDeep = pDeep.Then(&ResidueStepNoop, common::async::TaskKind::kWrite, ASYNC_LOC);  // 同一行注册其余各层
     }
     spCtx->nLineDeep = __LINE__ + 1;
-    pDeep = pDeep.Then(&ResidueStepDeep, ASYNC_LOC);
+    pDeep = pDeep.Then(&ResidueStepDeep, common::async::TaskKind::kWrite, ASYNC_LOC);
     ASSERT_TRUE(pDeep.Await().IsFulfilled());
 
     const std::vector<CLayerInfo>& vec = spCtx->capDeep.vecChain;
@@ -1150,10 +1150,10 @@ TEST(Trace_DeepChainAndFrameStackResidue)
 
     // ---- ③ 异常路径：层内抛异常，帧同样必须弹干净 ----
     spCtx->nLineRoot = __LINE__ + 1;
-    CPromise<CResidueCtx> pThrow = exec.NewPromise(spCtx, &ResidueStepNoop, ASYNC_LOC);
-    pThrow = pThrow.Then(&ResidueStepNoop, ASYNC_LOC);
-    pThrow = pThrow.Then(&ResidueStepThrow, ASYNC_LOC);
-    const CPromiseResult rThrow = pThrow.Catch(&ResidueStepPassThrough, ASYNC_LOC).Await();
+    CPromise<CResidueCtx> pThrow = exec.NewPromise(spCtx, &ResidueStepNoop, common::async::TaskKind::kWrite, ASYNC_LOC);
+    pThrow = pThrow.Then(&ResidueStepNoop, common::async::TaskKind::kWrite, ASYNC_LOC);
+    pThrow = pThrow.Then(&ResidueStepThrow, common::async::TaskKind::kWrite, ASYNC_LOC);
+    const CPromiseResult rThrow = pThrow.Catch(&ResidueStepPassThrough, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
     ASSERT_TRUE(rThrow.IsRejected());
     ASSERT_EQ(rThrow.Message(), std::string("trace：层内抛异常"));
     PostResidueProbe(exec, spCtx);
@@ -1161,7 +1161,7 @@ TEST(Trace_DeepChainAndFrameStackResidue)
     // ---- ④ 上一条链的帧不影响下一条链：新链的链根只应看到自己 1 层 ----
     const std::shared_ptr<CResidueCtx> spAlone = std::make_shared<CResidueCtx>();
     spAlone->nLineRoot = __LINE__ + 1;
-    CPromise<CResidueCtx> pAlone = exec.NewPromise(spAlone, &ResidueStepDeep, ASYNC_LOC);
+    CPromise<CResidueCtx> pAlone = exec.NewPromise(spAlone, &ResidueStepDeep, common::async::TaskKind::kWrite, ASYNC_LOC);
     ASSERT_TRUE(pAlone.Await().IsFulfilled());
     const CExpect vecExpectAlone[1] = {{"then", spAlone->nLineRoot, "trace-main"}};
     AssertChain(spAlone->capDeep, vecExpectAlone, 1);
@@ -1235,7 +1235,7 @@ CPromiseResult InLayerStepStarter(const std::shared_ptr<CInLayerCtx>& spCtx)
     // 存进上下文反而会成环（见 `CInLayerCtx::bSideDone` 的说明）。
     // 注意下面两行必须紧挨着（`__LINE__ + 1` 就是给紧接着的挂层语句用的）。
     spCtx->nLineSide = __LINE__ + 1;
-    spCtx->pExec->NewPromise(spCtx, &InLayerStepSideRoot, ASYNC_LOC);
+    spCtx->pExec->NewPromise(spCtx, &InLayerStepSideRoot, common::async::TaskKind::kWrite, ASYNC_LOC);
     return CPromiseResult::Resolve();
 }
 
@@ -1250,15 +1250,15 @@ TEST(Trace_StartedInsideLayerBindsToCurrentLayer)
     const CPromise<CInLayerCtx>::PromiseFactory fnSub = [&exec, spCtx](const std::shared_ptr<CInLayerCtx>& spSelf)
     {
         spCtx->nLineSubRoot = __LINE__ + 1;
-        return exec.NewPromise(spSelf, &InLayerStepNoop, ASYNC_LOC);
+        return exec.NewPromise(spSelf, &InLayerStepNoop, common::async::TaskKind::kWrite, ASYNC_LOC);
     };
 
     spCtx->nLineRoot = __LINE__ + 1;
-    CPromise<CInLayerCtx> pRoot = exec.NewPromise(spCtx, &InLayerStepNoop, ASYNC_LOC);
+    CPromise<CInLayerCtx> pRoot = exec.NewPromise(spCtx, &InLayerStepNoop, common::async::TaskKind::kWrite, ASYNC_LOC);
     spCtx->nLineAwait = __LINE__ + 1;
-    CPromise<CInLayerCtx> pAwait = pRoot.ThenPromise(fnSub, ASYNC_LOC);
+    CPromise<CInLayerCtx> pAwait = pRoot.ThenPromise(fnSub, common::async::TaskKind::kWrite, ASYNC_LOC);
     spCtx->nLineStarter = __LINE__ + 1;
-    CPromise<CInLayerCtx> pStarter = pAwait.Then(&InLayerStepStarter, ASYNC_LOC);
+    CPromise<CInLayerCtx> pStarter = pAwait.Then(&InLayerStepStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
 
     ASSERT_TRUE(pStarter.Await().IsFulfilled());
 

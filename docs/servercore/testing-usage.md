@@ -27,7 +27,6 @@ make -C Tests/Linux run   # 或通过 Makefile
 | 文件 | 覆盖 |
 |---|---|
 | `test_common.cpp` | Common 基础库（缓冲、线程池、定时器、配置） |
-| `test_exec.cpp` | Exec 并发调度框架（读写调度、公平 FIFO、压力、负载模拟） |
 | `test_servercore.cpp` | 模块生命周期 / 管理器编排 / 事件 / 消息路由 / 自持引用 |
 | `test_infra.cpp` | 拓扑排序 / 多实例注册 / 配置热加载 / 指标 / 连接上下文 / 异步事件 |
 | `test_async_chain.cpp` | 异步 promise 与协程（then/catch/finally、失败语义、生命周期、并发、深链） |

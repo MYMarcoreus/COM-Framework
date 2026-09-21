@@ -41,7 +41,7 @@ class CStockModule
     common::async::CPromise<CStockCtx> QueryAsync()
     {
         auto spStock = std::make_shared<CStockCtx>();
-        return m_exec.NewPromise(spStock, &StepConnect, ASYNC_LOC).Then(&StepRead, ASYNC_LOC);
+        return m_exec.NewPromise(spStock, &StepConnect, TaskKind::kWrite, ASYNC_LOC).Then(&StepRead, TaskKind::kRead, ASYNC_LOC);
     }
 
    private:
@@ -103,17 +103,17 @@ class COrderModule
         // ④ 工厂：现搭一条内层链，让它参与当前链（同上下文，直接 adopt）
         common::async::CPromise<COrderCtx>::PromiseFactory fnReserve = [this](const std::shared_ptr<COrderCtx>& spSelf)
         {
-            return m_exec.NewPromise(spSelf, &StepReserve, ASYNC_LOC);
+            return m_exec.NewPromise(spSelf, &StepReserve, TaskKind::kWrite, ASYNC_LOC);
         };
 
         return m_exec
-            .NewPromise(sp, &StepLoad, ASYNC_LOC)  // ① 读订单
-            .Then(&StepValidate, ASYNC_LOC)        // ② 校验
-            .ThenPromise(fnQueryStock, ASYNC_LOC)  // ③ 查库存（等它）
-            .ThenPromise(fnReserve, ASYNC_LOC)     // ④ 预占（等它）
-            .Then(&StepBilling, ASYNC_LOC)         // ⑤ 记账旁支（不等它）
-            .Catch(&StepCompensate, ASYNC_LOC)     // catch：仅被拒绝时执行
-            .Finally(&StepAudit, ASYNC_LOC);       // finally：成败都跑
+            .NewPromise(sp, &StepLoad, TaskKind::kRead, ASYNC_LOC)  // ① 读订单
+            .Then(&StepValidate, TaskKind::kRead, ASYNC_LOC)        // ② 校验
+            .ThenPromise(fnQueryStock, TaskKind::kRead, ASYNC_LOC)  // ③ 查库存（等它）
+            .ThenPromise(fnReserve, TaskKind::kWrite, ASYNC_LOC)     // ④ 预占（等它）
+            .Then(&StepBilling, TaskKind::kWrite, ASYNC_LOC)         // ⑤ 记账旁支（不等它）
+            .Catch(&StepCompensate, TaskKind::kWrite, ASYNC_LOC)     // catch：仅被拒绝时执行
+            .Finally(&StepAudit, TaskKind::kWrite, ASYNC_LOC);       // finally：成败都跑
     }
 
    private:
@@ -166,7 +166,7 @@ class COrderModule
                 fnResolve();
             });
         };
-        return m_exec.NewPromise(sp, fnStarter, ASYNC_LOC);
+        return m_exec.NewPromise(sp, fnStarter, TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// ④ 预占（内层链的一步）
@@ -230,6 +230,6 @@ int main()
 
 - ③ 的链跑在库存模块自己的线程池上，先后顺序靠 `OnSettled → fnResolve → 本层 settle → 下一层`
   这条依赖边保证，不靠共享线程；唯一不保证先后的是旁支 ⑤。
-- 执行器是模块私有资源，不跨模块传；调用方只拿对方的 promise（跨上下文用 `exec.NewPromise(spCtx, fnStarter)` 桥接）。
+- 执行器是模块私有资源，不跨模块传；调用方只拿对方的 promise（跨上下文用 `exec.NewPromise(spCtx, fnStarter, 类别)` 桥接）。
 - then 里不用判断上一层：上游被拒绝时框架直接跳过本层。要看拒绝用 `Catch`，成败都收尾用 `Finally`。
 - 要「等」子链就返回它（`ThenPromise`）；普通 `Then` 的处理器只能返回 `CPromiseResult`，里面起的链主链一概不等。

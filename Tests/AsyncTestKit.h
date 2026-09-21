@@ -258,7 +258,7 @@ public:
     /// @return 本层链的 promise。
     common::async::CPromise<CCalleeCtx> QueryStockAsync(const std::shared_ptr<CCalleeCtx>& spCtx)
     {
-        return m_exec.NewPromise(spCtx, &StepConnect, ASYNC_LOC).Then(&StepRead, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, &StepConnect, common::async::TaskKind::kWrite, ASYNC_LOC).Then(&StepRead, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
 private:

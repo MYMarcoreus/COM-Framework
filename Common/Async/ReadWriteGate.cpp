@@ -64,7 +64,8 @@ void CReadWriteGate::Drain()
 ///     false 未接受（门已关闭 / 线程池未运行）。
 bool CReadWriteGate::Submit(TaskKind eKind, std::function<void()> fnTask)
 {
-    ASSERT(fnTask);  // 空任务：调用方不该提交（执行器侧已在入口拦下）。
+    ASSERT(fnTask);                                                            // 空任务：调用方不该提交（执行器侧已在入口拦下）。
+    ASSERT_MSG(eKind != TaskKind::kDirect, "kDirect 不过门（由执行器直投线程池）");  // 门对直投任务完全不知情。
 
     // ① 拒绝路径：门已关闭 / 线程池不可用 → 未接受（调用方按「执行器不可用」收口）。
     if (m_bClosed.load() || !m_pPool->IsRunning())

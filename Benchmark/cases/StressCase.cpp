@@ -46,10 +46,10 @@ inline void RunChainStress(
     std::function<void()> startOne = [&exec, &done, nLayers]()
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-        common::async::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc);
+        common::async::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite);
         for (int k = 1; k < nLayers; ++k)
         {
-            tail = tail.Then(&bench::StepInc);
+            tail = tail.Then(&bench::StepInc, common::async::TaskKind::kWrite);
         }
         tail.OnSettled(
             [&done](common::async::CPromiseResult)
@@ -70,8 +70,8 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -88,7 +88,7 @@ inline void RunCoroStress(
     std::function<void()> startOne = [&exec, &done]()
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-        std::shared_ptr<StressCoro> pCoro = exec.CoStart<StressCoro>(spCtx);
+        std::shared_ptr<StressCoro> pCoro = exec.CoStart<StressCoro>(common::async::TaskKind::kWrite, spCtx);
         // 协程对象由框架自持弱引用保活；这里只挂完成通知用于计数。
         pCoro->AsPromise().OnSettled(
             [&done](common::async::CPromiseResult)
@@ -114,8 +114,8 @@ inline void RunMixedLoad(const std::string& group, const std::string& name, int 
         for (int i = 0; i < 500; ++i)
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-            exec.NewPromise(spCtx, &bench::StepInc)
-                .Then(&bench::StepInc)
+            exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite)
+                .Then(&bench::StepInc, common::async::TaskKind::kWrite)
                 .OnSettled(
                     [&done](common::async::CPromiseResult)
                     {
@@ -139,8 +139,8 @@ inline void RunMixedLoad(const std::string& group, const std::string& name, int 
                     {
                         // 链
                         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-                        exec.NewPromise(spCtx, &bench::StepInc)
-                            .Then(&bench::StepInc)
+                        exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite)
+                            .Then(&bench::StepInc, common::async::TaskKind::kWrite)
                             .OnSettled(
                                 [&done](common::async::CPromiseResult)
                                 {
@@ -151,7 +151,7 @@ inline void RunMixedLoad(const std::string& group, const std::string& name, int 
                     {
                         // 协程
                         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-                        std::shared_ptr<StressCoro> pCoro = exec.CoStart<StressCoro>(spCtx);
+                        std::shared_ptr<StressCoro> pCoro = exec.CoStart<StressCoro>(common::async::TaskKind::kWrite, spCtx);
                         pCoro->AsPromise().OnSettled(
                             [&done](common::async::CPromiseResult)
                             {

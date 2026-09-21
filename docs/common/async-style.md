@@ -5,7 +5,7 @@
 | 用法 | 对方给你的东西 | 本框架里怎么接 |
 | --- | --- | --- |
 | ① 跨模块异步调用 | 一条 promise（对方在自己的执行器上跑） | `ThenBridge(fnCreate, fnApply)`，或协程里 `CO_AWAIT(子 promise)` |
-| ② 包装非 Promise 的异步调用 | 只有回调（外部 SDK / 老代码 / C 接口） | `exec.NewPromise(spCtx, fnStarter)` —— 就是 JS 的 `new Promise((resolve, reject) => …)` |
+| ② 包装非 Promise 的异步调用 | 只有回调（外部 SDK / 老代码 / C 接口） | `exec.NewPromise(spCtx, fnStarter, 类别)` —— 就是 JS 的 `new Promise((resolve, reject) => …)` |
 | ③ 子 Promise 链 | 本模块自己的多步过程，想当成**一步**用 | `ThenPromise(工厂)`（同上下文直接 adopt） |
 
 业务流是「下单服务 → 库存模块预占 → 支付模块扣款 → 快递 SDK 预约取件 → 发货」，失败要补偿。
@@ -16,7 +16,7 @@
 | --- | --- | --- | --- | --- |
 | 1 | then 链（默认） | `ThenBridge` 一行 | `ThenPromise(包装函数)` | `ThenPromise(子链工厂)` |
 | 2 | 协程 | `CO_AWAIT(子 promise)` + 搬数据 | `CO_AWAIT(包装函数)` | `CO_AWAIT(子链)` |
-| 3 | 手写桥接 | `NewPromise(fnStarter)` + `OnSettled` | 同写法 1 | 同写法 1 |
+| 3 | 手写桥接 | `NewPromise(fnStarter, TaskKind::kWrite)` + `OnSettled` | 同写法 1 | 同写法 1 |
 | 4 | 并行汇聚 | 扇出 + `WhenAll` | 同写法 1 | 同写法 1 |
 | 5 | 失败补偿 | 反向再桥一次 | 反向再包装一次 | —（补偿不属于这三类） |
 
@@ -176,7 +176,7 @@ public:
                 fnReject(CPromiseResult::Reject(std::runtime_error(kExecutorUnavailableText)));  // 本模块已停：别让对方的链永久挂着
             }
         };
-        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// 对外异步接口②：释放预占（补偿用）。**幂等**：传 0（没预占过）就是空操作。
@@ -203,7 +203,7 @@ public:
                 fnReject(CPromiseResult::Reject(std::runtime_error(kExecutorUnavailableText)));
             }
         };
-        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, TaskKind::kWrite, ASYNC_LOC);
     }
 
 private:
@@ -286,7 +286,7 @@ public:
                 fnReject(CPromiseResult::Reject(std::runtime_error(kExecutorUnavailableText)));
             }
         };
-        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, TaskKind::kWrite, ASYNC_LOC);
     }
 
 private:
@@ -487,7 +487,7 @@ static CPromiseResult StepQuoteSum(const std::shared_ptr<COrderCtx>& spCtx)
 /// 造计价子链：**三步一条链**（首层由执行器投递，对调用方是真异步），跑完才轮到外层的下一层。
 static CPromise<COrderCtx> BuildQuoteChain(common::async::CAsyncExecutor& exec, const std::shared_ptr<COrderCtx>& spCtx)
 {
-    return exec.NewPromise(spCtx, &StepQuotePrice, ASYNC_LOC).Then(&StepQuoteDiscount, ASYNC_LOC).Then(&StepQuoteSum, ASYNC_LOC);
+    return exec.NewPromise(spCtx, &StepQuotePrice, TaskKind::kRead, ASYNC_LOC).Then(&StepQuoteDiscount, TaskKind::kRead, ASYNC_LOC).Then(&StepQuoteSum, TaskKind::kRead, ASYNC_LOC);
 }
 ```
 
@@ -505,7 +505,7 @@ static CPromise<COrderCtx> BuildQuoteChain(common::async::CAsyncExecutor& exec, 
 
 /// 把「预约取件」的回调式接口包成 promise。
 ///
-/// `NewPromise(spCtx, fnStarter)` 就是 JS 的 `new Promise((resolve, reject) => …)`；包装只做三件事：
+/// `NewPromise(spCtx, fnStarter, 类别)` 就是 JS 的 `new Promise((resolve, reject) => …)`；包装只做三件事：
 /// **发起调用** → 回调里**成功 `fnResolve()` / 失败 `fnReject(结果)`** → 把回调给的数据落进上下文。
 static CPromise<COrderCtx> WrapCourierPickup(common::async::CAsyncExecutor& exec, const std::shared_ptr<COrderCtx>& spCtx)
 {
@@ -531,7 +531,7 @@ static CPromise<COrderCtx> WrapCourierPickup(common::async::CAsyncExecutor& exec
             fnReject(CPromiseResult::Reject(std::runtime_error(kExecutorUnavailableText)));  // 发起就失败：别让链永久挂着
         }
     };
-    return exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+    return exec.NewPromise(spCtx, fnStarter, TaskKind::kWrite, ASYNC_LOC);
 }
 ```
 
@@ -642,23 +642,23 @@ static void RunBridgeFlow(common::async::CAsyncExecutor& exec, CStockModule& sto
 {
     const std::shared_ptr<COrderCtx> spCtx = MakeOrderCtx(exec, stock, pay, courier);
 
-    exec.NewPromise(spCtx, &StepCreateOrder, ASYNC_LOC)
-        .ThenPromise(MakeQuoteFactory(exec), ASYNC_LOC)        // ③ 子链：同上下文 → 直接 adopt
-        .ThenBridge(&CreateReserve, &ApplyReserve, ASYNC_LOC)  // ① 跨模块：预占库存
-        .ThenBridge(&CreateCharge, &ApplyCharge, ASYNC_LOC)    // ① 跨模块：扣款
-        .ThenPromise(MakePickupFactory(exec), ASYNC_LOC)       // ② 包装回调式 SDK：等它回调
-        .Then(&StepShip, ASYNC_LOC)
-        .Catch(&StepReportReject, ASYNC_LOC)
-        .Finally(&StepAudit, ASYNC_LOC)
+    exec.NewPromise(spCtx, &StepCreateOrder, TaskKind::kWrite, ASYNC_LOC)
+        .ThenPromise(MakeQuoteFactory(exec), TaskKind::kRead, ASYNC_LOC)        // ③ 子链：同上下文 → 直接 adopt
+        .ThenBridge(&CreateReserve, &ApplyReserve, TaskKind::kWrite, ASYNC_LOC)  // ① 跨模块：预占库存
+        .ThenBridge(&CreateCharge, &ApplyCharge, TaskKind::kWrite, ASYNC_LOC)    // ① 跨模块：扣款
+        .ThenPromise(MakePickupFactory(exec), TaskKind::kWrite, ASYNC_LOC)       // ② 包装回调式 SDK：等它回调
+        .Then(&StepShip, TaskKind::kWrite, ASYNC_LOC)
+        .Catch(&StepReportReject, TaskKind::kWrite, ASYNC_LOC)
+        .Finally(&StepAudit, TaskKind::kWrite, ASYNC_LOC)
         .Await();
 }
 ```
 
 三类用法各占一行，一眼能对上：
 
-- ③ 子链 → `.ThenPromise(MakeQuoteFactory(exec))`（同上下文直接 adopt）
-- ① 跨模块 → `.ThenBridge(&CreateReserve, &ApplyReserve)`（起子链 + 搬数据合成一层）
-- ② 包装 → `.ThenPromise(MakePickupFactory(exec))`（等回调兑现的那条 promise）
+- ③ 子链 → `.ThenPromise(MakeQuoteFactory(exec), 类别)`（同上下文直接 adopt）
+- ① 跨模块 → `.ThenBridge(&CreateReserve, &ApplyReserve, 类别)`（起子链 + 搬数据合成一层）
+- ② 包装 → `.ThenPromise(MakePickupFactory(exec), 类别)`（等回调兑现的那条 promise）
 
 子链被拒绝 / 回调报错 / 对方模块拒绝，都会**以同一个拒绝（异常）**拒绝本层：后续 `Then` 跳过，
 `Catch` 与 `Finally` 照常执行。两段跨模块调用是**串行**的（预占成功才扣款），要并行见写法 4。
@@ -689,7 +689,7 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(StepCreateOrder));  // 本模块步骤：协程内起一条子 promise 等它
+        CO_AWAIT(NewPromise(StepCreateOrder, TaskKind::kWrite));  // 本模块步骤：协程内起一条子 promise 等它
 
         // ③ 子链：本模块的三步计价（同上下文 → 直接 await，不需要桥接）
         m_pQuote = std::make_shared<CPromise<COrderCtx> >(BuildQuoteChain(m_exec, GetContext()));
@@ -711,7 +711,7 @@ public:
         m_pPickup = std::make_shared<CPromise<COrderCtx> >(WrapCourierPickup(m_exec, GetContext()));
         CO_AWAIT(*m_pPickup);
 
-        CO_AWAIT(NewPromise(StepShip));
+        CO_AWAIT(NewPromise(StepShip, TaskKind::kWrite));
         CO_RETURN(CPromiseResult::Resolve());
         CO_END();
     }
@@ -734,10 +734,10 @@ static void RunCoroutineFlow(common::async::CAsyncExecutor& exec, CStockModule& 
 {
     const std::shared_ptr<COrderCtx> spCtx = MakeOrderCtx(exec, stock, pay, courier);
 
-    exec.CoStart<COrderCoroutine>(exec, spCtx, stock, pay, courier)
+    exec.CoStart<COrderCoroutine>(TaskKind::kWrite, exec, spCtx, stock, pay, courier)
         ->AsPromise()
-        .Catch(&StepReportReject, ASYNC_LOC)
-        .Finally(&StepAudit, ASYNC_LOC)
+        .Catch(&StepReportReject, TaskKind::kWrite, ASYNC_LOC)
+        .Finally(&StepAudit, TaskKind::kWrite, ASYNC_LOC)
         .Await();
 }
 ```
@@ -782,7 +782,7 @@ static CPromise<COrderCtx> BridgeReserveManually(common::async::CAsyncExecutor& 
     };
 
     // ③ 这条链就是「等对方」的桥接链：外层用 ThenPromise 接住它即可
-    return exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+    return exec.NewPromise(spCtx, fnStarter, TaskKind::kWrite, ASYNC_LOC);
 }
 
 /// 写法 3：只把写法 1 的第一段跨模块换成手写桥接，其余（子链 / 包装 / 第二段跨模块）原样 —— 对照着看它省了什么。
@@ -795,14 +795,14 @@ static void RunManualFlow(common::async::CAsyncExecutor& exec, CStockModule& sto
         return BridgeReserveManually(exec, spSelf);
     };
 
-    exec.NewPromise(spCtx, &StepCreateOrder, ASYNC_LOC)
-        .ThenPromise(MakeQuoteFactory(exec), ASYNC_LOC)      // ③ 子链
-        .ThenPromise(fnReserveBridge, ASYNC_LOC)             // ① 跨模块：手写桥接（写法 1 是一行 ThenBridge）
-        .ThenBridge(&CreateCharge, &ApplyCharge, ASYNC_LOC)  // ① 跨模块：第二段仍用 ThenBridge（对照）
-        .ThenPromise(MakePickupFactory(exec), ASYNC_LOC)     // ② 包装回调式 SDK
-        .Then(&StepShip, ASYNC_LOC)
-        .Catch(&StepReportReject, ASYNC_LOC)
-        .Finally(&StepAudit, ASYNC_LOC)
+    exec.NewPromise(spCtx, &StepCreateOrder, TaskKind::kWrite, ASYNC_LOC)
+        .ThenPromise(MakeQuoteFactory(exec), TaskKind::kRead, ASYNC_LOC)      // ③ 子链
+        .ThenPromise(fnReserveBridge, TaskKind::kWrite, ASYNC_LOC)             // ① 跨模块：手写桥接（写法 1 是一行 ThenBridge）
+        .ThenBridge(&CreateCharge, &ApplyCharge, TaskKind::kWrite, ASYNC_LOC)  // ① 跨模块：第二段仍用 ThenBridge（对照）
+        .ThenPromise(MakePickupFactory(exec), TaskKind::kWrite, ASYNC_LOC)     // ② 包装回调式 SDK
+        .Then(&StepShip, TaskKind::kWrite, ASYNC_LOC)
+        .Catch(&StepReportReject, TaskKind::kWrite, ASYNC_LOC)
+        .Finally(&StepAudit, TaskKind::kWrite, ASYNC_LOC)
         .Await();
 }
 ```
@@ -834,7 +834,7 @@ static CPromiseResult StepFanOutModules(const std::shared_ptr<COrderCtx>& spCtx)
 /// 汇聚桥接的 `fnCreate`：等两条都落定（`WhenAll`：全部兑现才兑现，任一拒绝立即以该码拒绝）。
 static CPromise<COrderCtx> CreateAggregateModules(const std::shared_ptr<COrderCtx>& spSelf)
 {
-    return spSelf->pExec->WhenAll(spSelf, *spSelf->spReserve, *spSelf->spCharge);
+    return spSelf->pExec->WhenAll(spSelf, TaskKind::kWrite, *spSelf->spReserve, *spSelf->spCharge);
 }
 
 /// 汇聚桥接的 `fnApply`：把两边的数据搬回本上下文。
@@ -849,20 +849,20 @@ static void RunParallelFlow(common::async::CAsyncExecutor& exec, CStockModule& s
 {
     const std::shared_ptr<COrderCtx> spCtx = MakeOrderCtx(exec, stock, pay, courier);
 
-    exec.NewPromise(spCtx, &StepCreateOrder, ASYNC_LOC)
-        .ThenPromise(MakeQuoteFactory(exec), ASYNC_LOC)                          // ③ 子链（金额要先算出来）
-        .Then(&StepFanOutModules, ASYNC_LOC)                                     // ① 两条跨模块调用同时发起
-        .ThenBridge(&CreateAggregateModules, &ApplyAggregateModules, ASYNC_LOC)  // 等两条都落定 + 搬数据
-        .ThenPromise(MakePickupFactory(exec), ASYNC_LOC)                         // ② 包装回调式 SDK
-        .Then(&StepShip, ASYNC_LOC)
-        .Catch(&StepReportReject, ASYNC_LOC)
-        .Finally(&StepAudit, ASYNC_LOC)
+    exec.NewPromise(spCtx, &StepCreateOrder, TaskKind::kWrite, ASYNC_LOC)
+        .ThenPromise(MakeQuoteFactory(exec), TaskKind::kRead, ASYNC_LOC)                          // ③ 子链（金额要先算出来）
+        .Then(&StepFanOutModules, TaskKind::kWrite, ASYNC_LOC)                                     // ① 两条跨模块调用同时发起
+        .ThenBridge(&CreateAggregateModules, &ApplyAggregateModules, TaskKind::kWrite, ASYNC_LOC)  // 等两条都落定 + 搬数据
+        .ThenPromise(MakePickupFactory(exec), TaskKind::kWrite, ASYNC_LOC)                         // ② 包装回调式 SDK
+        .Then(&StepShip, TaskKind::kWrite, ASYNC_LOC)
+        .Catch(&StepReportReject, TaskKind::kWrite, ASYNC_LOC)
+        .Finally(&StepAudit, TaskKind::kWrite, ASYNC_LOC)
         .Await();
 }
 ```
 
 - 预占与扣款互不依赖时可以**同时发起**：扇出层把两条跨模块调用都发出去，句柄记进上下文。
-- `exec.WhenAll(spCtx, *spReserve, *spCharge)` 对齐 JS `Promise.all`：**全部兑现才兑现，任一拒绝立即以该码拒绝**；
+- `exec.WhenAll(spCtx, TaskKind::kWrite, *spReserve, *spCharge)` 对齐 JS `Promise.all`：**全部兑现才兑现，任一拒绝立即以该码拒绝**；
   另外还有 `WhenAllSettled`（全部落定即继续，不看成败）/ `WhenRace`（首个落定）/ `WhenAny`（首个兑现）。
 - 两个子 promise **上下文类型可以不同**（聚合只关心成败），所以汇聚后要用 `fnApply` 一次性搬两边的数据。
 - **并行分支互不取消**：看「库存不足」那条路径 —— 库存拒绝的同时，支付模块那条链照样跑完，
@@ -925,7 +925,7 @@ static CPromise<COrderCtx> CreateCompensatePickup(common::async::CAsyncExecutor&
             fnReject(CPromiseResult::Reject(std::runtime_error(kExecutorUnavailableText)));
         }
     };
-    return exec.NewPromise(spSelf, fnStarter, ASYNC_LOC);
+    return exec.NewPromise(spSelf, fnStarter, TaskKind::kWrite, ASYNC_LOC);
 }
 
 /// 写法 5：同一条链，但兜底层「恢复」，后面接两层反向操作（顺序与正向相反：先撤取件，再撤预占）。
@@ -938,16 +938,16 @@ static void RunCompensatingFlow(common::async::CAsyncExecutor& exec, CStockModul
         return CreateCompensatePickup(exec, spSelf);
     };
 
-    exec.NewPromise(spCtx, &StepCreateOrder, ASYNC_LOC)
-        .ThenPromise(MakeQuoteFactory(exec), ASYNC_LOC)        // ③ 子链
-        .ThenBridge(&CreateReserve, &ApplyReserve, ASYNC_LOC)  // ① 跨模块：预占
-        .ThenBridge(&CreateCharge, &ApplyCharge, ASYNC_LOC)    // ① 跨模块：扣款
-        .ThenPromise(MakePickupFactory(exec), ASYNC_LOC)       // ② 包装回调式 SDK
-        .Then(&StepShip, ASYNC_LOC)
-        .Catch(&StepRecoverByCode, ASYNC_LOC)                          // 分流 + 恢复
-        .ThenPromise(fnCompensatePickup, ASYNC_LOC)                    // 反向操作①：取消取件（又是包装）
-        .ThenBridge(&CreateCompensateStock, &ApplyReserve, ASYNC_LOC)  // 反向操作②：释放预占
-        .Finally(&StepAudit, ASYNC_LOC)
+    exec.NewPromise(spCtx, &StepCreateOrder, TaskKind::kWrite, ASYNC_LOC)
+        .ThenPromise(MakeQuoteFactory(exec), TaskKind::kRead, ASYNC_LOC)        // ③ 子链
+        .ThenBridge(&CreateReserve, &ApplyReserve, TaskKind::kWrite, ASYNC_LOC)  // ① 跨模块：预占
+        .ThenBridge(&CreateCharge, &ApplyCharge, TaskKind::kWrite, ASYNC_LOC)    // ① 跨模块：扣款
+        .ThenPromise(MakePickupFactory(exec), TaskKind::kWrite, ASYNC_LOC)       // ② 包装回调式 SDK
+        .Then(&StepShip, TaskKind::kWrite, ASYNC_LOC)
+        .Catch(&StepRecoverByCode, TaskKind::kWrite, ASYNC_LOC)                          // 分流 + 恢复
+        .ThenPromise(fnCompensatePickup, TaskKind::kWrite, ASYNC_LOC)                    // 反向操作①：取消取件（又是包装）
+        .ThenBridge(&CreateCompensateStock, &ApplyReserve, TaskKind::kWrite, ASYNC_LOC)  // 反向操作②：释放预占
+        .Finally(&StepAudit, TaskKind::kWrite, ASYNC_LOC)
         .Await();
 }
 ```
@@ -1308,7 +1308,7 @@ g++ -std=c++11 -Wall -Wextra -O0 -g -pthread -ICommon async_style.cpp build/debu
 
 | | 1. then 链（默认） | 2. 协程 | 3. 手写桥接 | 4. 并行汇聚 | 5. 失败补偿 |
 | --- | --- | --- | --- | --- | --- |
-| ① 跨模块 | `ThenBridge(fnCreate, fnApply)` | `CO_AWAIT(子 promise)` + 手动搬数据 | `NewPromise(fnStarter)` + `OnSettled` + `ThenPromise` | 扇出 + `WhenAll` + `ThenBridge` 汇聚 | 反向再桥一次 |
+| ① 跨模块 | `ThenBridge(fnCreate, fnApply)` | `CO_AWAIT(子 promise)` + 手动搬数据 | `NewPromise(fnStarter, TaskKind::kWrite)` + `OnSettled` + `ThenPromise` | 扇出 + `WhenAll` + `ThenBridge` 汇聚 | 反向再桥一次 |
 | ② 包装回调式接口 | `ThenPromise(包装函数)` | `CO_AWAIT(包装函数)` | 同写法 1 | 同写法 1 | 反向再包装一次（内联） |
 | ③ 子链 | `ThenPromise(子链工厂)` | `CO_AWAIT(子链)` | 同写法 1 | 同写法 1 | — |
 | 对方的拒绝怎么处理 | 同拒绝（异常）拒绝本层（后续跳过） | 协程立即终止、异常透传 | 手动 `fnReject(childResult)` | 聚合立即拒绝（分支不取消） | `Catch` 分流后可**恢复** |

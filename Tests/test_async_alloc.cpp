@@ -237,10 +237,10 @@ static common::async::CPromiseResult StepBump(const std::shared_ptr<CAllocCtx>& 
 static common::async::CPromiseResult StepMeasureBuild(const std::shared_ptr<CAllocCtx>& spCtx)
 {
     CAllocCounter counter;
-    common::async::CPromise<CAllocCtx> tail = spCtx->pExec->NewPromise(spCtx->spOther, &StepBump, ASYNC_LOC);
+    common::async::CPromise<CAllocCtx> tail = spCtx->pExec->NewPromise(spCtx->spOther, &StepBump, common::async::TaskKind::kWrite, ASYNC_LOC);
     for (int i = 0; i < spCtx->nMeasureLayers; ++i)
     {
-        tail = tail.Then(&StepBump, ASYNC_LOC);
+        tail = tail.Then(&StepBump, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
     counter.Stop();
 
@@ -266,12 +266,12 @@ TEST(AsyncAlloc_BuildBudget)
 
     // 每次测量都在「被测量的层内」进行（单线程执行器被本层占着 → 新建链不会立即开跑）。
     spCtx->nMeasureLayers = kSmallLayers;
-    ASSERT_TRUE(exec.NewPromise(spCtx, &StepMeasureBuild, ASYNC_LOC).Await().IsFulfilled());
+    ASSERT_TRUE(exec.NewPromise(spCtx, &StepMeasureBuild, common::async::TaskKind::kWrite, ASYNC_LOC).Await().IsFulfilled());
     const long long nSmallCounts = spCtx->nMeasuredCounts;
     const long long nSmallBytes = spCtx->nMeasuredBytes;
 
     spCtx->nMeasureLayers = kBigLayers;
-    ASSERT_TRUE(exec.NewPromise(spCtx, &StepMeasureBuild, ASYNC_LOC).Await().IsFulfilled());
+    ASSERT_TRUE(exec.NewPromise(spCtx, &StepMeasureBuild, common::async::TaskKind::kWrite, ASYNC_LOC).Await().IsFulfilled());
     const long long nBigCounts = spCtx->nMeasuredCounts;
     const long long nBigBytes = spCtx->nMeasuredBytes;
 
@@ -329,10 +329,10 @@ TEST(AsyncAlloc_RunBudget)
 
     // 窗口外：建一条 N 层链（worker 被占住 → 首层只入队，不执行）。
     std::shared_ptr<CAllocCtx> spCtx = std::make_shared<CAllocCtx>();
-    common::async::CPromise<CAllocCtx> chain = exec.NewPromise(spCtx, &StepBump, ASYNC_LOC);
+    common::async::CPromise<CAllocCtx> chain = exec.NewPromise(spCtx, &StepBump, common::async::TaskKind::kWrite, ASYNC_LOC);
     for (int i = 0; i < kLayers; ++i)
     {
-        chain = chain.Then(&StepBump, ASYNC_LOC);
+        chain = chain.Then(&StepBump, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     // 窗口内：放行 worker 并等链跑完 → 统计到的就是「跑链」的分配。

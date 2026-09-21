@@ -3,7 +3,7 @@
 //
 // 父链本体在 BuildOrderChain() 里，一行一层、一眼看完：
 //
-//   ① 起链（具名 handler）   exec.NewPromise(spCtx, &StepReadOrder, ASYNC_LOC)
+//   ① 起链（具名 handler）   exec.NewPromise(spCtx, &StepReadOrder, TaskKind::kWrite, ASYNC_LOC)
 //   ② then = lambda          只此一处用的小逻辑就写成 lambda
 //   ③ then                   本链执行器线程上就地级联（已在本链线程 → 不投递）
 //   ④ 子链跑在别的执行器上    ThenPromise：数据访问模块「自持」 execDb，它的链在 execDb 上跑
@@ -504,8 +504,8 @@ public:
             return CPromiseResult::Resolve();
         };
         return m_exec
-            .NewPromise(spCtx, fnStarter, ASYNC_LOC)  //
-            .Then(fnBillAudit, ASYNC_LOC);
+            .NewPromise(spCtx, fnStarter, TaskKind::kWrite, ASYNC_LOC)  //
+            .Then(fnBillAudit, TaskKind::kWrite, ASYNC_LOC);
     }
 
 private:
@@ -530,10 +530,10 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&StepCheckCoupon, ASYNC_LOC));  // 顺序 await
+        CO_AWAIT(NewPromise(&StepCheckCoupon, TaskKind::kWrite, ASYNC_LOC));  // 顺序 await
         CO_AWAIT_ALL(                                       //
-            NewPromise(&StepCheckGift, ASYNC_LOC),          //
-            NewPromise(&StepCheckPoints, ASYNC_LOC));       // 并行 await
+            NewPromise(&StepCheckGift, TaskKind::kWrite, ASYNC_LOC),          //
+            NewPromise(&StepCheckPoints, TaskKind::kWrite, ASYNC_LOC));       // 并行 await
         CO_RETURN_VOID();
         CO_END();
     }
@@ -609,15 +609,15 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
     /// 这就是「想把某件事放到别的执行器上做」的标准写法：执行器是模块私有资源，不传给别人。
     const CPromise<COrderCtx>::PromiseFactory fnLoadUser = [&execDb](const std::shared_ptr<COrderCtx>& spSelf)
     {
-        return execDb.NewPromise(spSelf, &StepLoadUser, ASYNC_LOC);
+        return execDb.NewPromise(spSelf, &StepLoadUser, TaskKind::kWrite, ASYNC_LOC);
     };
 
     /// ⑤ 内层链工厂：返回一条「自己搭的子链」（同上下文 → 直接 adopt 进当前链）。
     const CPromise<COrderCtx>::PromiseFactory fnPricingChain = [&execMain](const std::shared_ptr<COrderCtx>& spSelf)
     {
         return execMain
-            .NewPromise(spSelf, &StepCalcDiscount, ASYNC_LOC)  // ⑤-1 算折扣
-            .Then(&StepApplyDiscount, ASYNC_LOC);              // ⑤-2 算总额
+            .NewPromise(spSelf, &StepCalcDiscount, TaskKind::kWrite, ASYNC_LOC)  // ⑤-1 算折扣
+            .Then(&StepApplyDiscount, TaskKind::kWrite, ASYNC_LOC);              // ⑤-2 算总额
     };
 
     /// ⑥ 跨模块「起子链」：在别的模块的执行器上跑，另一套上下文。
@@ -656,7 +656,7 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
     ///     协程对象要活到完成 → 挂在上下文里（`spCoroHold` 是 `std::shared_ptr<void>`）。
     const CPromise<COrderCtx>::PromiseFactory fnCoroutineStep = [&execMain](const std::shared_ptr<COrderCtx>& spSelf)
     {
-        const std::shared_ptr<CStepCoroutine> pCoro = execMain.CoStart<CStepCoroutine>(spSelf);
+        const std::shared_ptr<CStepCoroutine> pCoro = execMain.CoStart<CStepCoroutine>(TaskKind::kWrite, spSelf);
         spSelf->spCoroHold = pCoro;
         return pCoro->AsPromise();
     };
@@ -664,31 +664,31 @@ CPromise<COrderCtx> BuildOrderChain(CAsyncExecutor& execMain, CAsyncExecutor& ex
     //---------------- 父链本体：一行一层，行尾注释就是步骤号 ----------------
 
     lines.nReadOrder = __LINE__ + 1;
-    CPromise<COrderCtx> pChain = execMain.NewPromise(spCtx, &StepReadOrder, ASYNC_LOC);  // ① 起链（具名 handler）
+    CPromise<COrderCtx> pChain = execMain.NewPromise(spCtx, &StepReadOrder, TaskKind::kWrite, ASYNC_LOC);  // ① 起链（具名 handler）
     lines.nValidate = __LINE__ + 1;
-    pChain = pChain.Then(fnValidate, ASYNC_LOC);  // ② then = lambda
+    pChain = pChain.Then(fnValidate, TaskKind::kWrite, ASYNC_LOC);  // ② then = lambda
     lines.nCheckStock = __LINE__ + 1;
-    pChain = pChain.Then(&StepCheckStock, ASYNC_LOC);  // ③ then（本链线程上就地）
+    pChain = pChain.Then(&StepCheckStock, TaskKind::kWrite, ASYNC_LOC);  // ③ then（本链线程上就地）
     lines.nLoadUser = __LINE__ + 1;
-    pChain = pChain.ThenPromise(fnLoadUser, ASYNC_LOC);  // ④ 子链（数据访问模块自己的执行器）
+    pChain = pChain.ThenPromise(fnLoadUser, TaskKind::kWrite, ASYNC_LOC);  // ④ 子链（数据访问模块自己的执行器）
     lines.nPricing = __LINE__ + 1;
-    pChain = pChain.ThenPromise(fnPricingChain, ASYNC_LOC);  // ⑤ 内层链（等它）
+    pChain = pChain.ThenPromise(fnPricingChain, TaskKind::kWrite, ASYNC_LOC);  // ⑤ 内层链（等它）
     lines.nBilling = __LINE__ + 1;
-    pChain = pChain.ThenBridge(fnCreateBill, fnApplyBill, ASYNC_LOC);  // ⑥ 跨模块 / 跨上下文
+    pChain = pChain.ThenBridge(fnCreateBill, fnApplyBill, TaskKind::kWrite, ASYNC_LOC);  // ⑥ 跨模块 / 跨上下文
     lines.nForkBase = __LINE__ + 1;
-    CPromise<COrderCtx> pBase = pChain.Then(&StepForkBase, ASYNC_LOC);  // ⑦ 分叉基座
+    CPromise<COrderCtx> pBase = pChain.Then(&StepForkBase, TaskKind::kWrite, ASYNC_LOC);  // ⑦ 分叉基座
     lines.nSide = __LINE__ + 1;
-    const CPromise<COrderCtx> pSide = pBase.Then(fnLogistics, ASYNC_LOC);  // ⑧ 分叉支（旁支，单独等它）
+    const CPromise<COrderCtx> pSide = pBase.Then(fnLogistics, TaskKind::kWrite, ASYNC_LOC);  // ⑧ 分叉支（旁支，单独等它）
     lines.nCoupon = __LINE__ + 1;
-    pChain = pBase.Then(&StepCoupon, ASYNC_LOC);  // ⑨ 分叉的另一支（主线继续）
+    pChain = pBase.Then(&StepCoupon, TaskKind::kWrite, ASYNC_LOC);  // ⑨ 分叉的另一支（主线继续）
     lines.nCoroutine = __LINE__ + 1;
-    pChain = pChain.ThenPromise(fnCoroutineStep, ASYNC_LOC);  // ⑩ 协程当一步
+    pChain = pChain.ThenPromise(fnCoroutineStep, TaskKind::kWrite, ASYNC_LOC);  // ⑩ 协程当一步
     lines.nSettle = __LINE__ + 1;
-    pChain = pChain.Then(&StepSettle, ASYNC_LOC);  // ⑪ then 收尾
+    pChain = pChain.Then(&StepSettle, TaskKind::kWrite, ASYNC_LOC);  // ⑪ then 收尾
     lines.nCompensate = __LINE__ + 1;
-    pChain = pChain.Catch(&StepCompensate, ASYNC_LOC);  // ⑫ catch 补偿（成功路径被跳过）
+    pChain = pChain.Catch(&StepCompensate, TaskKind::kWrite, ASYNC_LOC);  // ⑫ catch 补偿（成功路径被跳过）
     lines.nAudit = __LINE__ + 1;
-    pChain = pChain.Finally(&StepAudit, ASYNC_LOC);  // ⑬ finally 审计（最深）
+    pChain = pChain.Finally(&StepAudit, TaskKind::kWrite, ASYNC_LOC);  // ⑬ finally 审计（最深）
 
     // 旁支也得有人持有并等它（否则断言物流结果时它可能还没跑完）。
     spCtx->spSideHold = std::make_shared<CPromise<COrderCtx> >(pSide);
@@ -722,7 +722,7 @@ CPromise<COrderCtx> MakeQuickChain(
         }
         return CPromiseResult::Resolve();
     };
-    return exec.NewPromise(spCtx, fnStep, ASYNC_LOC, TaskKind::kRead);
+    return exec.NewPromise(spCtx, fnStep, TaskKind::kRead, ASYNC_LOC);
 }
 
 /// @brief 组合器一族：WhenAll / WhenAllSettled / WhenRace / WhenAny。
@@ -734,7 +734,7 @@ void DemoCombinators(CAsyncExecutor& execMain)
     {
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
         const CPromiseResult r = execMain
-                                     .WhenAll(spCtx, MakeQuickChain(execMain, spCtx, false, nullptr, 5),
+                                     .WhenAll(spCtx, TaskKind::kWrite, MakeQuickChain(execMain, spCtx, false, nullptr, 5),
                                          MakeQuickChain(execMain, spCtx, false, nullptr, 5))
                                      .Await();
         ASSERT(r.IsFulfilled());
@@ -746,7 +746,7 @@ void DemoCombinators(CAsyncExecutor& execMain)
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
         const CPromiseResult r =  //
             execMain
-                .WhenAllSettled(spCtx,                                   //
+                .WhenAllSettled(spCtx, TaskKind::kWrite,                                   //
                     MakeQuickChain(execMain, spCtx, false, nullptr, 5),  //
                     MakeQuickChain(execMain, spCtx, true, kErrNoStockText, 5))
                 .Await();
@@ -759,7 +759,7 @@ void DemoCombinators(CAsyncExecutor& execMain)
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
         const CPromiseResult r =  //
             execMain
-                .WhenRace(spCtx,                                                //
+                .WhenRace(spCtx, TaskKind::kWrite,                                                //
                     MakeQuickChain(execMain, spCtx, true, kErrNoStockText, 0),  //
                     MakeQuickChain(execMain, spCtx, false, nullptr, 60))        //
                 .Await();
@@ -772,7 +772,7 @@ void DemoCombinators(CAsyncExecutor& execMain)
     {
         const std::shared_ptr<COrderCtx> spCtx = std::make_shared<COrderCtx>();
         const CPromiseResult r = execMain
-                                     .WhenAny(spCtx, MakeQuickChain(execMain, spCtx, true, kErrNoStockText, 0),
+                                     .WhenAny(spCtx, TaskKind::kWrite, MakeQuickChain(execMain, spCtx, true, kErrNoStockText, 0),
                                          MakeQuickChain(execMain, spCtx, false, nullptr, 60))
                                      .Await();
         ASSERT(r.IsFulfilled());  // 先到的是拒绝 → 不算，继续等兑现

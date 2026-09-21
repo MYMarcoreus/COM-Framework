@@ -54,6 +54,27 @@ const char* ModeText(detail::HandlerMode eMode)
     return "then";
 }
 
+/// @brief 层类别（读 / 写）的文本形式。
+///
+/// 两个取值都是 3 字节（恰好等于 `%-3s` 的宽度），所以列对得齐。
+///
+/// @param eKind 层类别。
+/// @return 文本（`"读"` / `"写"`）。
+const char* KindText(TaskKind eKind)
+{
+    switch (eKind)
+    {
+    case TaskKind::kRead:
+        return "读";
+
+    case TaskKind::kWrite:
+        return "写";
+
+    default:
+        return "直";  // kDirect：不过门（不经读写门）。
+    }
+}
+
 /// @brief 取路径里的文件名部分（打印短一些）。
 ///
 /// @param pszPath 路径（可为空）。
@@ -332,10 +353,10 @@ std::string DescribeLayer(const CLayerInfo& info)
 
     char szBuf[512];
     std::snprintf(szBuf, sizeof(szBuf),
-        "#%-3d %-7s %-16s %s:%d  %-12.12s 链#%-2u 层#%-3u 龄=%lldms 本层=%lldms 结果=%-8s tid=%-7s%s%s", info.nDepth,
-        ModeText(info.eMode), ShortFunc(info.loc.szFunction).c_str(), BaseName(info.loc.szFile), info.loc.nLine, strExec.c_str(),
-        info.nChainId, info.nLayerId, info.nAgeMs, info.nSelfMs, ResultText(info).c_str(), ThreadText(info.tid).c_str(),
-        ChainRootText(info), info.bCurrent ? "  ← 当前层" : "");
+        "#%-3d %-7s %-3s %-16s %s:%d  %-12.12s 链#%-2u 层#%-3u 龄=%lldms 本层=%lldms 结果=%-8s tid=%-7s%s%s", info.nDepth,
+        ModeText(info.eMode), KindText(info.eKind), ShortFunc(info.loc.szFunction).c_str(), BaseName(info.loc.szFile),
+        info.loc.nLine, strExec.c_str(), info.nChainId, info.nLayerId, info.nAgeMs, info.nSelfMs, ResultText(info).c_str(),
+        ThreadText(info.tid).c_str(), ChainRootText(info), info.bCurrent ? "  ← 当前层" : "");
     return std::string(szBuf);
 }
 

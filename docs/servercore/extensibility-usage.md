@@ -104,7 +104,7 @@ class IMyService : public virtual sc::IUnknown
 | 场景 | 做法 | 说明 |
 | --- | --- | --- |
 | 本模块内 / 同上下文类型 | 直接串 `Then` / `Catch` / `Finally`（把已有异步函数当构建块复用） | **非阻塞**，不占额外 worker |
-| 其他模块（上下文类型不同） | `CPromise<Ctx>::New`（等价 JS `new Promise((resolve, reject) => …)`）桥接对方 promise，再用 `ThenPromise`（等价 JS 的「then 处理器返回 promise 时等待」）接入本流程 | **非阻塞、零协程**：调用方拿到的仍是含跨模块子流程的完整结果 |
+| 其他模块（上下文类型不同） | `exec.NewPromise(spCtx, fnStarter, 类别)`（等价 JS `new Promise((resolve, reject) => …)`）桥接对方 promise，再用 `ThenPromise(工厂, 类别)`（等价 JS 的「then 处理器返回 promise 时等待」）接入本流程 | **非阻塞、零协程**：调用方拿到的仍是含跨模块子流程的完整结果 |
 
 跨模块调用的落地写法（完整业务示例见 `ServerExample/Module/ExampleAsyncModule.cpp`）：
 
@@ -127,20 +127,21 @@ common::async::CPromise<CMyOpContext> BridgeQueryOther(const CFlowDeps& deps,
             spCtx->nRows = spCtx->spOtherOp->nRows;  // 取回数据
             fnResolve();
         });
-    }, ASYNC_LOC);
+    }, TaskKind::kRead, ASYNC_LOC);  // 桥接层：查询其他模块（读）
 }
 
 // 本流程：本模块层 → 跨模块桥接 → 本模块层（全程只登记回调，不阻塞任何线程）
 common::async::CPromise<CMyOpContext> BuildFlow(const CFlowDeps& deps, const std::shared_ptr<CMyOpContext>& spCtx)
 {
-    return deps.spExec->NewPromise(spCtx, &StepValidate, ASYNC_LOC)
+    return deps.spExec->NewPromise(spCtx, &StepValidate, TaskKind::kRead, ASYNC_LOC)
         .ThenPromise(
             [deps](const std::shared_ptr<CMyOpContext>& sp)
-    {
-        return BridgeQueryOther(deps, sp);
-    }, ASYNC_LOC)
-        .Then(&StepUseRows, ASYNC_LOC)
-        .Finally(&StepAudit, ASYNC_LOC);  // 收尾：失败也执行，且不改变结果
+            {
+                return BridgeQueryOther(deps, sp);
+            },
+            TaskKind::kRead, ASYNC_LOC)
+        .Then(&StepUseRows, TaskKind::kWrite, ASYNC_LOC)
+        .Finally(&StepAudit, TaskKind::kWrite, ASYNC_LOC);  // 收尾：失败也执行，且不改变结果
 }
 ```
 
@@ -150,8 +151,8 @@ common::async::CPromise<CMyOpContext> BuildFlow(const CFlowDeps& deps, const std
   回调，双方线程池互不占用，因此线程数不必为「等待」留余量（示例业务模块与数据访问模块各
   4 个 worker：够几路查询重叠即可）；
 - **模块内的线程安全用「读写门」而不是自己的锁**：执行器的每条投递都带类别 —— 读流程用
-  `NewPromise(spCtx, 首层, ASYNC_LOC, common::async::TaskKind::kRead)`（可并发），写流程用默认的
-  `kWrite`（独占进入）。门对「同一模块的全部任务」生效（与是不是同一条链无关），所以
+  `NewPromise(spCtx, 首层, common::async::TaskKind::kRead, ASYNC_LOC)`（可并发），写流程显式给
+  `TaskKind::kWrite`（独占进入）。门对「同一模块的全部任务」生效（与是不是同一条链无关），所以
   「读出来判断 → 按判断去写」的整段业务不会被插队，模块状态也就不用再拿互斥锁保护
   （详见 [../common/async-usage.md](../common/async-usage.md) §8.1；示例见
   `ServerExample/Module/ExampleDbModule.cpp`：表不加锁，靠读并发 / 写独占）；

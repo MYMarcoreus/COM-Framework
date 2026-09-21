@@ -14,10 +14,10 @@ namespace {
 inline long long RunChain(common::async::CAsyncExecutor& exec, int nLayers)
 {
     std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-    common::async::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc);
+    common::async::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite);
     for (int k = 1; k < nLayers; ++k)
     {
-        tail = tail.Then(&bench::StepInc);
+        tail = tail.Then(&bench::StepInc, common::async::TaskKind::kWrite);
     }
     return tail.Await().IsFulfilled() ? spCtx->nValue : -1;
 }
@@ -56,9 +56,9 @@ void RunChainCases()
     benchmark::SanityCheck(group, "链 10 层结果=10", RunChain(exec, 10) == 10);
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-        common::async::CPromiseResult r = exec.NewPromise(spCtx, &bench::StepInc)
-                                              .Then(&bench::StepFail)
-                                              .Then(&bench::StepInc)  // 失败即停：不执行
+        common::async::CPromiseResult r = exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite)
+                                              .Then(&bench::StepFail, common::async::TaskKind::kWrite)
+                                              .Then(&bench::StepInc, common::async::TaskKind::kWrite)  // 失败即停：不执行
                                               .Await();
         benchmark::SanityCheck(group, "失败即停（后续层不执行）", r.IsRejected() && spCtx->nSteps == 2);
     }
@@ -93,10 +93,10 @@ void RunChainCases()
         [&exec]()
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-            common::async::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc).Then(&bench::StepFail);
+            common::async::CPromise<bench::CChainContext> tail = exec.NewPromise(spCtx, &bench::StepInc, common::async::TaskKind::kWrite).Then(&bench::StepFail, common::async::TaskKind::kWrite);
             for (int k = 0; k < 18; ++k)
             {
-                tail = tail.Then(&bench::StepInc);  // 全部短路
+                tail = tail.Then(&bench::StepInc, common::async::TaskKind::kWrite);  // 全部短路
             }
             volatile int s = tail.Await().IsRejected() ? 1 : 0;
             (void)s;

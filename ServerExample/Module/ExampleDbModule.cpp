@@ -158,7 +158,7 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::QueryUserAsync(const std
     // 契约：执行器在 Start() 中创建（失败即模块不可用），操作上下文由调用方提供且非空。
     ASSERT_MSG(m_pExecutor != nullptr, "模块未启动：没有执行器可调度，不应调用本接口");
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
-    return LoadRowAsync(spOp, common::async::TaskKind::kRead).Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
+    return LoadRowAsync(spOp, common::async::TaskKind::kRead).Finally(BindResult(&CExampleDbModule::StepReleaseConn), common::async::TaskKind::kRead, ASYNC_LOC);
 }
 
 /// @brief 异步插入用户：「复用本模块内的读表异步函数」（查重）→ 写表 → 放连接。
@@ -175,10 +175,10 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::InsertUserAsync(const st
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
     // 写链（默认类别）：独占进入 —— 「读表（查重）→ 写表」整段不被其他任务插队。
     return LoadRowAsync(spOp, common::async::TaskKind::kWrite)                // 本模块内的异步函数（读表）
-        .Catch(BindResult(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)  // 「不存在」归一化为兑现
-        .Then(BindThen(&CExampleDbModule::StepRejectIfExists), ASYNC_LOC)     // 查重
-        .Then(BindThen(&CExampleDbModule::StepInsertRow), ASYNC_LOC)          // 写表
-        .Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);  // 收尾：放连接
+        .Catch(BindResult(&CExampleDbModule::StepAcceptNotFound), common::async::TaskKind::kWrite, ASYNC_LOC)  // 「不存在」归一化为兑现
+        .Then(BindThen(&CExampleDbModule::StepRejectIfExists), common::async::TaskKind::kWrite, ASYNC_LOC)     // 查重
+        .Then(BindThen(&CExampleDbModule::StepInsertRow), common::async::TaskKind::kWrite, ASYNC_LOC)          // 写表
+        .Finally(BindResult(&CExampleDbModule::StepReleaseConn), common::async::TaskKind::kWrite, ASYNC_LOC);  // 收尾：放连接
 }
 
 /// @brief 异步更新用户：「复用本模块内的读表异步函数」 → 乐观锁写表 → 放连接。
@@ -192,9 +192,9 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::UpdateUserAsync(const st
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
     // 写链（默认类别）：独占进入 —— 「读行（拿版本）→ 比对 → 写回」整段不被插队。
     return LoadRowAsync(spOp, common::async::TaskKind::kWrite)
-        .Catch(BindResult(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)
-        .Then(BindThen(&CExampleDbModule::StepApplyUpdate), ASYNC_LOC)
-        .Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
+        .Catch(BindResult(&CExampleDbModule::StepAcceptNotFound), common::async::TaskKind::kWrite, ASYNC_LOC)
+        .Then(BindThen(&CExampleDbModule::StepApplyUpdate), common::async::TaskKind::kWrite, ASYNC_LOC)
+        .Finally(BindResult(&CExampleDbModule::StepReleaseConn), common::async::TaskKind::kWrite, ASYNC_LOC);
 }
 
 /// @brief 异步删除用户：「复用本模块内的读表异步函数」（确认存在）→ 删行 → 放连接。
@@ -208,9 +208,9 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::DeleteUserAsync(const st
     ASSERT_MSG(spOp != nullptr, "接口契约：操作上下文必须非空");
     // 写链（默认类别）：独占进入。
     return LoadRowAsync(spOp, common::async::TaskKind::kWrite)
-        .Catch(BindResult(&CExampleDbModule::StepAcceptNotFound), ASYNC_LOC)
-        .Then(BindThen(&CExampleDbModule::StepEraseRow), ASYNC_LOC)
-        .Finally(BindResult(&CExampleDbModule::StepReleaseConn), ASYNC_LOC);
+        .Catch(BindResult(&CExampleDbModule::StepAcceptNotFound), common::async::TaskKind::kWrite, ASYNC_LOC)
+        .Then(BindThen(&CExampleDbModule::StepEraseRow), common::async::TaskKind::kWrite, ASYNC_LOC)
+        .Finally(BindResult(&CExampleDbModule::StepReleaseConn), common::async::TaskKind::kWrite, ASYNC_LOC);
 }
 
 /// @brief 本模块内的异步函数：读表（取连接 → 读行）。
@@ -228,8 +228,8 @@ common::async::CPromise<CUserTableOp> CExampleDbModule::DeleteUserAsync(const st
 common::async::CPromise<CUserTableOp> CExampleDbModule::LoadRowAsync(
     const std::shared_ptr<CUserTableOp>& spOp, common::async::TaskKind eKind)
 {
-    return m_pExecutor->NewPromise(spOp, BindThen(&CExampleDbModule::StepAcquireConn), ASYNC_LOC, eKind)
-        .Then(BindThen(&CExampleDbModule::StepLoadRow), ASYNC_LOC);
+    return m_pExecutor->NewPromise(spOp, BindThen(&CExampleDbModule::StepAcquireConn), eKind, ASYNC_LOC)
+        .Then(BindThen(&CExampleDbModule::StepLoadRow), eKind, ASYNC_LOC);
 }
 
 /// @brief 处理器（then）：取连接 + 模拟数据库 IO 延迟。

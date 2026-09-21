@@ -22,9 +22,9 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -39,26 +39,26 @@ public:
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
-        CO_AWAIT(NewPromise(&bench::StepInc));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
+        CO_AWAIT(NewPromise(&bench::StepInc, common::async::TaskKind::kWrite));
         CO_RETURN_VOID();
         CO_END();
     }
@@ -74,7 +74,7 @@ inline int RunCoroBatch(common::async::CAsyncExecutor& exec, int nCoros)
     for (int i = 0; i < nCoros; ++i)
     {
         std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-        std::shared_ptr<BenchCoroSeq3> pCoro = exec.CoStart<BenchCoroSeq3>(spCtx);
+        std::shared_ptr<BenchCoroSeq3> pCoro = exec.CoStart<BenchCoroSeq3>(common::async::TaskKind::kWrite, spCtx);
         pCoro->AsPromise().OnSettled(
             [&nDone](common::async::CPromiseResult r)
             {
@@ -104,7 +104,7 @@ void RunResumableCases()
 
         {
             std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-            std::shared_ptr<BenchCoroSeq20> pCoro = exec.CoStart<BenchCoroSeq20>(spCtx);
+            std::shared_ptr<BenchCoroSeq20> pCoro = exec.CoStart<BenchCoroSeq20>(common::async::TaskKind::kWrite, spCtx);
             benchmark::SanityCheck(group, "长协程 20 次 await 结果=20", pCoro->Await().IsFulfilled() && spCtx->nValue == 20);
         }
 
@@ -113,7 +113,7 @@ void RunResumableCases()
             [&exec]()
             {
                 std::shared_ptr<bench::CChainContext> spCtx = std::make_shared<bench::CChainContext>();
-                std::shared_ptr<BenchCoroSeq20> pCoro = exec.CoStart<BenchCoroSeq20>(spCtx);
+                std::shared_ptr<BenchCoroSeq20> pCoro = exec.CoStart<BenchCoroSeq20>(common::async::TaskKind::kWrite, spCtx);
                 volatile int s = pCoro->Await().IsRejected() ? 1 : 0;  // 防优化：读回结果
                 (void)s;
             },

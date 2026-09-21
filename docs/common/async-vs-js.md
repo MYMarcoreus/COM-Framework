@@ -23,41 +23,41 @@ JS 里**根本不存在「执行器」这个概念**，因为两件事由语言 
 | 宿主事件循环 + 微任务队列决定「排到哪、什么时候跑」 | 显式对象 `CAsyncExecutor`（线程池 + 句柄） |
 | 单线程 —— 「哪条线程跑回调」不是问题 | 线程亲和：链的每一层都跑在**本链执行器**线程上（§2.5） |
 
-所以 `exec.WhenAll(spCtx, a, b)` 的两个前导参数恰好就是这两条：**在哪条线程上起聚合链** + **哪一份
+所以 `exec.WhenAll(spCtx, TaskKind::kWrite, a, b)` 的两个前导参数恰好就是这两条：**在哪条线程上起聚合链** + **哪一份
 上下文**。组合器的语义是 JS 的，多出来的参数与接收者是「把隐式前提显式化」的代价。
 
 ## 1. 语义对照（JS 的 Promise → 本框架）
 
 | JavaScript | 本框架 |
 |---|---|
-| `new Promise(executor)` | `exec.NewPromise(spCtx, 首层)` ⁽¹⁾ |
-| `new Promise((resolve, reject) => …)`（由外部 settle） | `exec.NewPromise(spCtx, fnStarter)` ⁽¹⁾：起链回调里发起别的模块 / 回调式异步，由回调 `resolve()` / `reject(码)` |
-| `p.then(onFulfilled)` | `p.Then(handler)` |
-| `onFulfilled` 返回 promise（自动等待） | `p.ThenPromise(factory)`（factory 返回一条子 promise） |
-| `p.catch(onRejected)` | `p.Catch(handler)` |
-| `p.finally(onFinally)` | `p.Finally(handler)`（链上的一层）；只做旁路观察用 `p.OnSettled(cb)` ⁽²⁾ |
+| `new Promise(executor)` | `exec.NewPromise(spCtx, 首层, TaskKind)` ⁽¹⁾ |
+| `new Promise((resolve, reject) => …)`（由外部 settle） | `exec.NewPromise(spCtx, fnStarter, TaskKind)` ⁽¹⁾：起链回调里发起别的模块 / 回调式异步，由回调 `resolve()` / `reject(码)` |
+| `p.then(onFulfilled)` | `p.Then(handler, TaskKind::kWrite)` |
+| `onFulfilled` 返回 promise（自动等待） | `p.ThenPromise(factory, TaskKind)`（factory 返回一条子 promise） |
+| `p.catch(onRejected)` | `p.Catch(handler, TaskKind::kWrite)` |
+| `p.finally(onFinally)` | `p.Finally(handler, TaskKind::kWrite)`（链上的一层）；只做旁路观察用 `p.OnSettled(cb)` ⁽²⁾ |
 | `resolve()` / `reject(reason)` | `CPromiseResult::Resolve()` / `CPromiseResult::Reject(异常对象)` |
 | `fulfilled` / `rejected` | `result.IsFulfilled()` / `result.IsRejected()` |
 | `p` 已完成 | `p.IsSettled()` |
-| `Promise.all([a, b, c])` | `exec.WhenAll(spCtx, a, b, c)` ⁽¹⁾（全部兑现才继续，任一拒绝立即失败）；协程内也可 `CO_AWAIT_ALL(a, b, c)` |
-| `Promise.allSettled([a, b, c])` | `exec.WhenAllSettled(spCtx, ...)` ⁽¹⁾（全部落定即兑现，不看成败） |
-| `Promise.race([a, b])` | `exec.WhenRace(spCtx, a, b)` ⁽¹⁾（首个落定者定结果，拒绝也算结论） |
-| `Promise.any([a, b])` | `exec.WhenAny(spCtx, a, b)` ⁽¹⁾（首个兑现者定结果，全拒绝才失败） |
+| `Promise.all([a, b, c])` | `exec.WhenAll(spCtx, TaskKind::kWrite, a, b, c)` ⁽¹⁾（全部兑现才继续，任一拒绝立即失败）；协程内也可 `CO_AWAIT_ALL(a, b, c)` |
+| `Promise.allSettled([a, b, c])` | `exec.WhenAllSettled(spCtx, TaskKind::kWrite, ...)` ⁽¹⁾（全部落定即兑现，不看成败） |
+| `Promise.race([a, b])` | `exec.WhenRace(spCtx, TaskKind::kWrite, a, b)` ⁽¹⁾（首个落定者定结果，拒绝也算结论） |
+| `Promise.any([a, b])` | `exec.WhenAny(spCtx, TaskKind::kWrite, a, b)` ⁽¹⁾（首个兑现者定结果，全拒绝才失败） |
 | `Promise.resolve(x)` / `Promise.reject(e)` | `CPromiseResult::Resolve()` / `Reject(std::runtime_error("…"))`（结构化的层结果，不是通用工具函数） |
 | `async function` | 协程函数（`Common/Coroutine/Coroutine.h`）⁽³⁾，或纯异步的「层函数 + 链」 |
 
 ⁽¹⁾ **结构差异**：JS 的 `new Promise` 是**构造函数**、`Promise.all` 是**构造函数上的静态方法**；
 本框架这些都挂在**执行器实例**上（`exec.*`）—— 因为「链在哪条线程上跑」必须由调用方选（见 §0）。
 ⁽²⁾ `OnSettled` 是「结算通知」，JS 里要写 `p.then(cb, cb)` 凑；它**保证送达**（执行器停了也在调用线程就地送达）。
-⁽³⁾ JS 的 `async/await` 是引擎语法糖，没有「起协程」这个调用；本框架要显式 `exec.CoStart<T>(spCtx)`。
+⁽³⁾ JS 的 `async/await` 是引擎语法糖，没有「起协程」这个调用；本框架要显式 `exec.CoStart<T>(TaskKind::kWrite, spCtx)`。
 
 ## 1.1 本框架有、JS 没有对应物
 
 | 本框架 | 作用 | 该对照谁 |
 |---|---|---|
 | `CAsyncExecutor`（及 `exec.*` 起链入口） | 线程池 + 句柄 + 停启；回答「投到哪、层跑在哪」 | Java `Executor` / C# `TaskScheduler` / Asio `io_context` |
-| `exec.Post(kind, fn)` | 投递无返回值任务（fire-and-forget；类别必填：读并发 / 写独占） | Asio `io_context::post` / Java `Executor.execute` |
-| `exec.CoStart<T>(spCtx)` + `CO_AWAIT` | 无栈协程（顺序代码 await 多条链） | C# `Task.Run` + `async/await` |
+| `exec.Post(kind, fn)` | 投递无返回值任务（fire-and-forget；类别必填：读并发 / 写独占 / 直投不过门） | Asio `io_context::post` / Java `Executor.execute` |
+| `exec.CoStart<T>(TaskKind::kWrite, spCtx)` + `CO_AWAIT` | 无栈协程（顺序代码 await 多条链） | C# `Task.Run` + `async/await` |
 | `p.Await()` | **阻塞**等待结果（占住 worker，可能死锁） | C# `Task.Wait()` / Java `future.get()` |
 | `p.AwaitFor(ms)` | 阻塞等待 + 超时（超时返「等待超时」，不落定本层） | 要手写 `Promise.race` |
 | `p.OnSettledOn(exec, cb)` | 收尾通知投到指定执行器线程 | — |
@@ -120,20 +120,23 @@ p.then(v => { fetchStock(v); });                         // JS：不等（旁支
 ```cpp
 p.ThenPromise(
      [&exec](const std::shared_ptr<Ctx>& sp)
-{
-    return BridgeQuery(exec, sp);
-}, ASYNC_LOC)  // 等
-    .Then(&StepSave, ASYNC_LOC);
+     {
+         return BridgeQuery(exec, sp);
+     },
+     TaskKind::kWrite, ASYNC_LOC)  // 等（本层类别 = 写：改状态）
+    .Then(&StepSave, TaskKind::kWrite, ASYNC_LOC);
 
-p.Then([&exec](common::async::CPromiseResult, const std::shared_ptr<Ctx>& sp)  // 不等（旁支）
-{
-    exec.NewPromise(sp, &StepLog, ASYNC_LOC);
-    return common::async::CPromiseResult::Resolve();
-}, ASYNC_LOC);
+p.Then(
+    [&exec](const std::shared_ptr<Ctx>& sp)  // 不等（旁支）
+    {
+        exec.NewPromise(sp, &StepLog, TaskKind::kWrite, ASYNC_LOC);
+        return common::async::CPromiseResult::Resolve();
+    },
+    TaskKind::kWrite, ASYNC_LOC);
 ```
 
 普通 `Then` 的处理器只能返回 `CPromiseResult`，里面起的链只能是旁支；要参与当前链必须 `ThenPromise`
-（同上下文直接把子链返回即可；**跨上下文**先 `exec.NewPromise(spCtx, fnStarter)` 桥接）。
+（同上下文直接把子链返回即可；**跨上下文**先 `exec.NewPromise(spCtx, fnStarter, 类别)` 桥接）。
 
 ### 2.4 错误也走「异常对象」（但不携 stack）
 
@@ -183,7 +186,7 @@ JS 里没人 `catch` 的 promise 拒绝会触发 `unhandledrejection`；本框�
 
 ### 2.7 其他差异
 
-- **无 `Promise.resolve` / thenable 探测**：跳库、跳回调式 API 的适配要显式写 `exec.NewPromise(spCtx, fnStarter)`；
+- **无 `Promise.resolve` / thenable 探测**：跳库、跳回调式 API 的适配要显式写 `exec.NewPromise(spCtx, fnStarter, 类别)`；
 - **无 AbortController / 超时**：取消要么在每个层里检查上下文标志，要么用定时器 + `Reject(std::runtime_error("已取消"))`；
 - **`Await()` 之外还有协程**：`CO_AWAIT` 是非阻塞挂起（不占 worker），`Await()` 是阻塞等待；
   生产代码里推荐前者，或干脆全回调（`OnSettled`）。
@@ -204,13 +207,13 @@ loadOrder()
 ```cpp
 // 本框架
 return m_exec
-    .NewPromise(spCtx, &StepLoad, ASYNC_LOC)  // ① 读订单
-    .Then(&StepValidate, ASYNC_LOC)           // ② 校验
-    .ThenPromise(fnQueryStock, ASYNC_LOC)     // ③ 查库存（ThenPromise：等它）
-    .Then(&StepWriteLog, ASYNC_LOC)           // ④ 旁支（普通 Then，不等）
-    .Then(&StepSaveOrder, ASYNC_LOC)          // ⑤ 落库
-    .Catch(&StepCompensate, ASYNC_LOC)        // catch：仅被拒绝时执行
-    .Finally(&StepAudit, ASYNC_LOC);          // finally：成败都跑、不改结果
+    .NewPromise(spCtx, &StepLoad, TaskKind::kRead, ASYNC_LOC)  // ① 读订单
+    .Then(&StepValidate, TaskKind::kRead, ASYNC_LOC)           // ② 校验
+    .ThenPromise(fnQueryStock, TaskKind::kRead, ASYNC_LOC)     // ③ 查库存（ThenPromise：等它）
+    .Then(&StepWriteLog, TaskKind::kWrite, ASYNC_LOC)           // ④ 旁支（普通 Then，不等）
+    .Then(&StepSaveOrder, TaskKind::kWrite, ASYNC_LOC)          // ⑤ 落库
+    .Catch(&StepCompensate, TaskKind::kWrite, ASYNC_LOC)        // catch：仅被拒绝时执行
+    .Finally(&StepAudit, TaskKind::kWrite, ASYNC_LOC);          // finally：成败都跑、不改结果
 ```
 
 完整可编译版本见 [async-mixed-then-example.md](async-mixed-then-example.md)
@@ -299,9 +302,9 @@ class CTradeModule
         };
 
         return m_exec
-            .NewPromise(spCtx, &StepFetchUser, ASYNC_LOC)  // fetchUser(id)
-            .ThenPromise(fnInner, ASYNC_LOC)               // 等内层链跑完
-            .Then(&StepPrintTotal, ASYNC_LOC);             // 等价 .then(total => …)
+            .NewPromise(spCtx, &StepFetchUser, TaskKind::kRead, ASYNC_LOC)  // fetchUser(id)
+            .ThenPromise(fnInner, TaskKind::kWrite, ASYNC_LOC)               // 等内层链跑完
+            .Then(&StepPrintTotal, TaskKind::kRead, ASYNC_LOC);             // 等价 .then(total => …)
     }
 
     /// @brief 内层链：等价 JS `return fetchOrders(user).then(…).then(…)`。
@@ -309,10 +312,10 @@ class CTradeModule
     {
         common::async::CPromise<CTradeCtx>::PromiseFactory fnPayment = [this](const std::shared_ptr<CTradeCtx>& spSelf)
         {
-            return m_exec.NewPromise(spSelf, &StepFetchPayment, ASYNC_LOC);
+            return m_exec.NewPromise(spSelf, &StepFetchPayment, TaskKind::kRead, ASYNC_LOC);
         };
 
-        return m_exec.NewPromise(spCtx, &StepFetchOrders, ASYNC_LOC).ThenPromise(fnPayment, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, &StepFetchOrders, TaskKind::kRead, ASYNC_LOC).ThenPromise(fnPayment, TaskKind::kWrite, ASYNC_LOC);
     }
 
    private:

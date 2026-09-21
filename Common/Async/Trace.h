@@ -65,6 +65,7 @@
     #include <thread>
 
     #include "Async/PromiseTypes.h"
+    #include "Async/ReadWriteGate.h"  // TaskKind（本层读 / 写，描述里要打出来）。
 
 namespace common {
 namespace async {
@@ -90,6 +91,7 @@ struct CLayerInfo
 
     CSourceLoc loc;                                   ///< 注册点（`ASYNC_LOC` 传入的位置）。
     detail::HandlerMode eMode;                        ///< then / catch / finally。
+    TaskKind eKind;                                   ///< 本层读写类别（读 / 写 / 直投）。
     std::shared_ptr<detail::CPromiseState> upstream;  ///< 上游层（谁挂的它；链根 → 空）。
 
     /// 本层「实际跑在哪个执行器」上（执行器名；未命名 / 直接跑在当前线程的层 → 空）。
@@ -120,6 +122,7 @@ struct CLayerInfo
     CLayerInfo()
         : loc(),
           eMode(detail::kModeThen),
+          eKind(TaskKind::kWrite),
           upstream(),
           spExecName(),
           nLayerId(0),

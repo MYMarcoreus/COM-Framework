@@ -154,7 +154,7 @@ TEST(Smoke_MixedUsagesTrace)
     // ④ 工厂：现搭一条内层链，让它参与当前链（同上下文，直接 adopt）
     common::async::CPromise<CSmokeCtx>::PromiseFactory fnInner = [&exec](const std::shared_ptr<CSmokeCtx>& spSelf)
     {
-        return exec.NewPromise(spSelf, &StepAdd10, ASYNC_LOC).Then(&StepMark, ASYNC_LOC);
+        return exec.NewPromise(spSelf, &StepAdd10, common::async::TaskKind::kWrite, ASYNC_LOC).Then(&StepMark, common::async::TaskKind::kWrite, ASYNC_LOC);
     };
 
     // ⑤ 旁支：普通 Then 里起链但不返回 → 主链不等它
@@ -162,7 +162,7 @@ TEST(Smoke_MixedUsagesTrace)
     {
         // 旁支用独立上下文，避免与主链并发写同一个 ctx
         std::shared_ptr<CSmokeCtx> spSide = std::make_shared<CSmokeCtx>();
-        exec.NewPromise(spSide, &StepMark, ASYNC_LOC)
+        exec.NewPromise(spSide, &StepMark, common::async::TaskKind::kWrite, ASYNC_LOC)
             .OnSettled(
                 [spSelf](common::async::CPromiseResult result)
                 {
@@ -175,12 +175,12 @@ TEST(Smoke_MixedUsagesTrace)
         return common::async::CPromiseResult::Resolve();
     };
 
-    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC)  // ① 具名函数
-                                                .Then(fnLambda, ASYNC_LOC)                // ② lambda
-                                                .ThenPromise(fnInner, ASYNC_LOC)          // ④ 内层链（等它）
-                                                .Then(fnSide, ASYNC_LOC)                  // ⑤ 旁支（不等）
-                                                .Catch(&StepCatchPass, ASYNC_LOC)         // catch（兑现时不执行）
-                                                .Finally(&StepFinallyIgnoreReturn, ASYNC_LOC)
+    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepAdd1, common::async::TaskKind::kWrite, ASYNC_LOC)  // ① 具名函数
+                                                .Then(fnLambda, common::async::TaskKind::kWrite, ASYNC_LOC)                // ② lambda
+                                                .ThenPromise(fnInner, common::async::TaskKind::kWrite, ASYNC_LOC)          // ④ 内层链（等它）
+                                                .Then(fnSide, common::async::TaskKind::kWrite, ASYNC_LOC)                  // ⑤ 旁支（不等）
+                                                .Catch(&StepCatchPass, common::async::TaskKind::kWrite, ASYNC_LOC)         // catch（兑现时不执行）
+                                                .Finally(&StepFinallyIgnoreReturn, common::async::TaskKind::kWrite, ASYNC_LOC)
                                                 .Await();
     WaitSide(spCtx, 500);
 
@@ -204,11 +204,11 @@ TEST(Smoke_ThenPromiseWaitsInner)
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
     common::async::CPromise<CSmokeCtx>::PromiseFactory fnInner = [&exec](const std::shared_ptr<CSmokeCtx>& spSelf)
     {
-        return exec.NewPromise(spSelf, &StepAdd1, ASYNC_LOC).Then(&StepAdd10, ASYNC_LOC);
+        return exec.NewPromise(spSelf, &StepAdd1, common::async::TaskKind::kWrite, ASYNC_LOC).Then(&StepAdd10, common::async::TaskKind::kWrite, ASYNC_LOC);
     };
 
     const common::async::CPromiseResult r =
-        exec.NewPromise(spCtx, &StepMark, ASYNC_LOC).ThenPromise(fnInner, ASYNC_LOC).Then(&StepMark, ASYNC_LOC).Await();
+        exec.NewPromise(spCtx, &StepMark, common::async::TaskKind::kWrite, ASYNC_LOC).ThenPromise(fnInner, common::async::TaskKind::kWrite, ASYNC_LOC).Then(&StepMark, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
 
     ASSERT_TRUE(r.IsFulfilled());
     ASSERT_EQ(spCtx->nValue, 11);
@@ -226,14 +226,14 @@ TEST(Smoke_ThenPromiseInnerReject)
     spCtx->strFailText = "业务拒绝（用例 7）";
     common::async::CPromise<CSmokeCtx>::PromiseFactory fnInner = [&exec](const std::shared_ptr<CSmokeCtx>& spSelf)
     {
-        return exec.NewPromise(spSelf, &StepFail, ASYNC_LOC);
+        return exec.NewPromise(spSelf, &StepFail, common::async::TaskKind::kWrite, ASYNC_LOC);
     };
 
-    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepMark, ASYNC_LOC)
-                                                .ThenPromise(fnInner, ASYNC_LOC)       // 内层拒绝 → 本层拒绝
-                                                .Then(&StepMark, ASYNC_LOC)            // 被跳过
-                                                .Catch(&StepCatchPass, ASYNC_LOC)      // 仍执行
-                                                .Finally(&StepFinallyMark, ASYNC_LOC)  // 仍执行
+    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepMark, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .ThenPromise(fnInner, common::async::TaskKind::kWrite, ASYNC_LOC)       // 内层拒绝 → 本层拒绝
+                                                .Then(&StepMark, common::async::TaskKind::kWrite, ASYNC_LOC)            // 被跳过
+                                                .Catch(&StepCatchPass, common::async::TaskKind::kWrite, ASYNC_LOC)      // 仍执行
+                                                .Finally(&StepFinallyMark, common::async::TaskKind::kWrite, ASYNC_LOC)  // 仍执行
                                                 .Await();
 
     ASSERT_TRUE(r.IsRejected());
@@ -252,15 +252,15 @@ TEST(Smoke_ThenPromiseDeepInner)
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
     common::async::CPromise<CSmokeCtx>::PromiseFactory fnDeepest = [&exec](const std::shared_ptr<CSmokeCtx>& spSelf)
     {
-        return exec.NewPromise(spSelf, &StepAdd10, ASYNC_LOC);
+        return exec.NewPromise(spSelf, &StepAdd10, common::async::TaskKind::kWrite, ASYNC_LOC);
     };
     common::async::CPromise<CSmokeCtx>::PromiseFactory fnMid = [&exec, fnDeepest](const std::shared_ptr<CSmokeCtx>& spSelf)
     {
-        return exec.NewPromise(spSelf, &StepMark, ASYNC_LOC).ThenPromise(fnDeepest, ASYNC_LOC);
+        return exec.NewPromise(spSelf, &StepMark, common::async::TaskKind::kWrite, ASYNC_LOC).ThenPromise(fnDeepest, common::async::TaskKind::kWrite, ASYNC_LOC);
     };
 
     const common::async::CPromiseResult r =
-        exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).ThenPromise(fnMid, ASYNC_LOC).Then(&StepMark, ASYNC_LOC).Await();
+        exec.NewPromise(spCtx, &StepAdd1, common::async::TaskKind::kWrite, ASYNC_LOC).ThenPromise(fnMid, common::async::TaskKind::kWrite, ASYNC_LOC).Then(&StepMark, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
 
     ASSERT_TRUE(r.IsFulfilled());
     ASSERT_EQ(spCtx->nValue, 11);
@@ -291,12 +291,12 @@ TEST(Smoke_NewExternalSettle)
                 fnRejectHolder = fnReject;
                 spCtx->strTrace += "n";  // executor 是同步执行的
             },
-            ASYNC_LOC);
+            common::async::TaskKind::kWrite, ASYNC_LOC);
 
         ASSERT_TRUE(spCtx->strTrace == "n");  // 立即执行
         ASSERT_TRUE(!p.IsSettled());          // 还没 settle
         fnResolveHolder();                    // 外部 settle
-        ASSERT_TRUE(p.Then(&StepMark, ASYNC_LOC).Await().IsFulfilled());
+        ASSERT_TRUE(p.Then(&StepMark, common::async::TaskKind::kWrite, ASYNC_LOC).Await().IsFulfilled());
         ASSERT_TRUE(spCtx->strTrace == "nX");
         ASSERT_TRUE(static_cast<bool>(fnRejectHolder));  // reject 句柄有效（本例不用）
     }
@@ -313,10 +313,10 @@ TEST(Smoke_NewExternalSettle)
             {
                 fnRejectHolder = fnReject;
             },
-            ASYNC_LOC);
+            common::async::TaskKind::kWrite, ASYNC_LOC);
 
         fnRejectHolder(common::async::CPromiseResult::Reject(std::runtime_error("业务拒绝（用例 5）")));
-        const common::async::CPromiseResult r = p.Then(&StepMark, ASYNC_LOC).Catch(&StepCatchPass, ASYNC_LOC).Await();
+        const common::async::CPromiseResult r = p.Then(&StepMark, common::async::TaskKind::kWrite, ASYNC_LOC).Catch(&StepCatchPass, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
         ASSERT_TRUE(r.IsRejected());
         ASSERT_EQ(r.Message(), std::string("业务拒绝（用例 5）"));
         ASSERT_EQ(spCtx->nCatchRuns, 1);
@@ -340,14 +340,14 @@ TEST(Smoke_NewBadExecutor)
                                                          {
                                                              throw std::runtime_error("executor boom");
                                                          },
-                                                         ASYNC_LOC)
+                                                         common::async::TaskKind::kWrite, ASYNC_LOC)
                                                      .Await();
     ASSERT_TRUE(rThrow.IsRejected());
     ASSERT_EQ(rThrow.Message(), std::string("executor boom"));  // 异常原样成为拒绝（what() 都保住）
 
     std::shared_ptr<CSmokeCtx> spCtxEmpty = std::make_shared<CSmokeCtx>();
     const common::async::CPromiseResult rEmpty =
-        exec.NewPromise(spCtxEmpty, common::async::CPromise<CSmokeCtx>::ChainStarter(), ASYNC_LOC).Await();
+        exec.NewPromise(spCtxEmpty, common::async::CPromise<CSmokeCtx>::ChainStarter(), common::async::TaskKind::kWrite, ASYNC_LOC).Await();
     ASSERT_TRUE(rEmpty.IsRejected());
     ASSERT_TRUE(asynctest::IsUnspecifiedFailure(rEmpty));  // 未给起链回调：框架侧收口
     exec.Stop();
@@ -363,10 +363,10 @@ TEST(Smoke_FailFast)
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
     spCtx->strFailText = "业务拒绝（用例 3）";
-    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepMark, ASYNC_LOC)
-                                                .Then(&StepFail, ASYNC_LOC)
-                                                .Then(&StepMark, ASYNC_LOC)  // 跳过
-                                                .Then(&StepMark, ASYNC_LOC)  // 跳过
+    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepMark, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Then(&StepFail, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Then(&StepMark, common::async::TaskKind::kWrite, ASYNC_LOC)  // 跳过
+                                                .Then(&StepMark, common::async::TaskKind::kWrite, ASYNC_LOC)  // 跳过
                                                 .Await();
 
     ASSERT_TRUE(r.IsRejected());
@@ -383,9 +383,9 @@ TEST(Smoke_CatchRecoverContinues)
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
     spCtx->strFailText = "业务拒绝（用例 4）";
-    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC)
-                                                .Catch(&StepCatchRecover, ASYNC_LOC)
-                                                .Then(&StepAdd1, ASYNC_LOC)  // 恢复后继续执行
+    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFail, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Catch(&StepCatchRecover, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Then(&StepAdd1, common::async::TaskKind::kWrite, ASYNC_LOC)  // 恢复后继续执行
                                                 .Await();
 
     ASSERT_TRUE(r.IsFulfilled());
@@ -403,9 +403,9 @@ TEST(Smoke_CatchPassthrough)
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
     spCtx->strFailText = "业务拒绝（用例 5）";
-    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC)
-                                                .Catch(&StepCatchPass, ASYNC_LOC)
-                                                .Then(&StepMark, ASYNC_LOC)  // 跳过
+    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepFail, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Catch(&StepCatchPass, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Then(&StepMark, common::async::TaskKind::kWrite, ASYNC_LOC)  // 跳过
                                                 .Await();
 
     ASSERT_TRUE(r.IsRejected());
@@ -424,7 +424,7 @@ TEST(Smoke_FinallyIgnoresReturn)
     {
         std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
         const common::async::CPromiseResult r =
-            exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Finally(&StepFinallyIgnoreReturn, ASYNC_LOC).Await();
+            exec.NewPromise(spCtx, &StepAdd1, common::async::TaskKind::kWrite, ASYNC_LOC).Finally(&StepFinallyIgnoreReturn, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
         ASSERT_TRUE(r.IsFulfilled());
         ASSERT_EQ(spCtx->nFinallyRuns, 1);
     }
@@ -434,7 +434,7 @@ TEST(Smoke_FinallyIgnoresReturn)
         std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
         spCtx->strFailText = "业务拒绝（用例 6）";
         const common::async::CPromiseResult r =
-            exec.NewPromise(spCtx, &StepFail, ASYNC_LOC).Finally(&StepFinallyIgnoreReturn, ASYNC_LOC).Await();
+            exec.NewPromise(spCtx, &StepFail, common::async::TaskKind::kWrite, ASYNC_LOC).Finally(&StepFinallyIgnoreReturn, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
         ASSERT_TRUE(r.IsRejected());
         ASSERT_EQ(r.Message(), spCtx->strFailText);  // finally 的拒绝被忽略
         ASSERT_EQ(spCtx->nFinallyRuns, 1);
@@ -449,10 +449,10 @@ TEST(Smoke_HandlerThrowIsException)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepThrow, ASYNC_LOC)
-                                                .Then(&StepMark, ASYNC_LOC)  // 跳过
-                                                .Catch(&StepCatchPass, ASYNC_LOC)
-                                                .Finally(&StepFinallyMark, ASYNC_LOC)
+    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepThrow, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Then(&StepMark, common::async::TaskKind::kWrite, ASYNC_LOC)  // 跳过
+                                                .Catch(&StepCatchPass, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Finally(&StepFinallyMark, common::async::TaskKind::kWrite, ASYNC_LOC)
                                                 .Await();
 
     ASSERT_TRUE(r.IsRejected());
@@ -474,7 +474,7 @@ TEST(Smoke_OnSettledSideChannel)
     spCtx->strFailText = "业务拒绝（用例 8）";  // 拒绝原因由业务自己定（框架不解释）
     std::atomic<int> nOk(0);
     std::atomic<int> nFail(0);
-    common::async::CPromise<CSmokeCtx> p = exec.NewPromise(spCtx, &StepFail, ASYNC_LOC).Catch(&StepCatchPass, ASYNC_LOC);
+    common::async::CPromise<CSmokeCtx> p = exec.NewPromise(spCtx, &StepFail, common::async::TaskKind::kWrite, ASYNC_LOC).Catch(&StepCatchPass, common::async::TaskKind::kWrite, ASYNC_LOC);
     p.OnSettled(
         [&nOk, &nFail](common::async::CPromiseResult r)
         {
@@ -518,9 +518,9 @@ TEST(Smoke_CatchFinallyRightAfterHead)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC)
-                                                .Catch(&StepCatchRecover, ASYNC_LOC)  // 兑现 → 不执行
-                                                .Finally(&StepFinallyIgnoreReturn, ASYNC_LOC)
+    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepAdd1, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Catch(&StepCatchRecover, common::async::TaskKind::kWrite, ASYNC_LOC)  // 兑现 → 不执行
+                                                .Finally(&StepFinallyIgnoreReturn, common::async::TaskKind::kWrite, ASYNC_LOC)
                                                 .Await();
 
     ASSERT_TRUE(r.IsFulfilled());
@@ -529,8 +529,8 @@ TEST(Smoke_CatchFinallyRightAfterHead)
 
     // 独立的 promise：Catch 挂在首层之后（首层起点兑现 → Catch 不执行）。
     std::shared_ptr<CSmokeCtx> spCtx2 = std::make_shared<CSmokeCtx>();
-    common::async::CPromise<CSmokeCtx> p2 = exec.NewPromise(spCtx2, &StepAdd1, ASYNC_LOC);
-    const common::async::CPromiseResult r2 = p2.Catch(&StepCatchRecover, ASYNC_LOC).Await();
+    common::async::CPromise<CSmokeCtx> p2 = exec.NewPromise(spCtx2, &StepAdd1, common::async::TaskKind::kWrite, ASYNC_LOC);
+    const common::async::CPromiseResult r2 = p2.Catch(&StepCatchRecover, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
     ASSERT_TRUE(r2.IsFulfilled());
     ASSERT_EQ(spCtx2->nCatchRuns, 0);
     exec.Stop();
@@ -554,7 +554,7 @@ TEST(Smoke_BridgeTwoModules)
         [&execStock, spCtx, &idStock](const common::async::CPromise<CSmokeCtx>::ResolveFn& fnResolve,
             const common::async::CPromise<CSmokeCtx>::RejectFn& fnReject)
     {
-        common::async::CPromise<CSmokeCtx> pStock = execStock.NewPromise(spCtx, &StepAdd10, ASYNC_LOC);
+        common::async::CPromise<CSmokeCtx> pStock = execStock.NewPromise(spCtx, &StepAdd10, common::async::TaskKind::kWrite, ASYNC_LOC);
         pStock.OnSettled(
             [spCtx, fnResolve, fnReject, &idStock](common::async::CPromiseResult result)
             {
@@ -573,11 +573,11 @@ TEST(Smoke_BridgeTwoModules)
     common::async::CPromise<CSmokeCtx>::PromiseFactory fnBridge = [&execOrder, &fnStarter, spCtx](
                                                                       const std::shared_ptr<CSmokeCtx>& /*spSelf*/)
     {
-        return execOrder.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+        return execOrder.NewPromise(spCtx, fnStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
     };
 
     const common::async::CPromiseResult r =
-        execOrder.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).ThenPromise(fnBridge, ASYNC_LOC).Then(&StepMark, ASYNC_LOC).Await();
+        execOrder.NewPromise(spCtx, &StepAdd1, common::async::TaskKind::kWrite, ASYNC_LOC).ThenPromise(fnBridge, common::async::TaskKind::kWrite, ASYNC_LOC).Then(&StepMark, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
 
     ASSERT_TRUE(r.IsFulfilled());
     ASSERT_EQ(spCtx->nValue, 11);
@@ -599,17 +599,17 @@ TEST(Smoke_SingleWorkerNoBlocking)
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
     common::async::CPromise<CSmokeCtx>::PromiseFactory fnInner = [&exec](const std::shared_ptr<CSmokeCtx>& spSelf)
     {
-        return exec.NewPromise(spSelf, &StepAdd10, ASYNC_LOC);
+        return exec.NewPromise(spSelf, &StepAdd10, common::async::TaskKind::kWrite, ASYNC_LOC);
     };
 
-    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC)
-                                                .ThenPromise(fnInner, ASYNC_LOC)
+    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepAdd1, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .ThenPromise(fnInner, common::async::TaskKind::kWrite, ASYNC_LOC)
                                                 .Then(
                                                     [&exec](const std::shared_ptr<CSmokeCtx>& spSelf)
                                                     {
                                                         // 旁支用独立上下文，避免与主链并发写同一个 ctx
                                                         std::shared_ptr<CSmokeCtx> spSide = std::make_shared<CSmokeCtx>();
-                                                        exec.NewPromise(spSide, &StepMark, ASYNC_LOC)
+                                                        exec.NewPromise(spSide, &StepMark, common::async::TaskKind::kWrite, ASYNC_LOC)
                                                             .OnSettled(
                                                                 [spSelf](common::async::CPromiseResult result)
                                                                 {
@@ -621,8 +621,8 @@ TEST(Smoke_SingleWorkerNoBlocking)
                                                         spSelf->strTrace += "s";
                                                         return common::async::CPromiseResult::Resolve();
                                                     },
-                                                    ASYNC_LOC)
-                                                .Finally(&StepFinallyIgnoreReturn, ASYNC_LOC)
+                                                    common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                .Finally(&StepFinallyIgnoreReturn, common::async::TaskKind::kWrite, ASYNC_LOC)
                                                 .Await();
     WaitSide(spCtx, 500);
 
@@ -640,7 +640,7 @@ TEST(Smoke_ChainOnUnstartedExecutor)
 {
     common::async::CAsyncExecutor exec(1);  // 故意不 Start
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC).Await();
+    const common::async::CPromiseResult r = exec.NewPromise(spCtx, &StepAdd1, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
 
     ASSERT_TRUE(r.IsRejected());
     ASSERT_TRUE(asynctest::IsStoppedFailure(r));  // 执行器未启动 → 框架侧拒绝「执行器已停」
@@ -654,7 +654,7 @@ TEST(Smoke_PromiseIntrospection)
     ASSERT_TRUE(exec.Start());
 
     std::shared_ptr<CSmokeCtx> spCtx = std::make_shared<CSmokeCtx>();
-    common::async::CPromise<CSmokeCtx> p = exec.NewPromise(spCtx, &StepAdd1, ASYNC_LOC);
+    common::async::CPromise<CSmokeCtx> p = exec.NewPromise(spCtx, &StepAdd1, common::async::TaskKind::kWrite, ASYNC_LOC);
     ASSERT_TRUE(p.GetContext() == spCtx);  // 全链共用同一实例
     const common::async::CPromiseResult r = p.Await();
     ASSERT_TRUE(p.IsSettled());

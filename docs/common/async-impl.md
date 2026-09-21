@@ -16,8 +16,8 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 
 职责边界（「谁决定什么」）：
 
-- **起链**只在执行器上：`exec.NewPromise(spCtx, 首层)` / `exec.NewPromise(spCtx, fnStarter)` /
-  `exec.NewPromise(spCtx, …)`（两个重载）/ `exec.CoStart<T>(spCtx)`；`CPromise` 只提供「句柄 + 加层」，没有任何起链入口。
+- **起链**只在执行器上：`exec.NewPromise(spCtx, 首层, 类别)` / `exec.NewPromise(spCtx, fnStarter, 类别)` /
+  `exec.NewPromise(spCtx, …)`（两个重载）/ `exec.CoStart<T>(类别, spCtx)`；`CPromise` 只提供「句柄 + 加层」，没有任何起链入口。
 - **调度**（跑在哪条线程：就地内联 / 投递 / 深度限额）在执行器侧：
   `detail::ShouldInline`、`detail::DispatchInlineOrPost`。
 - **编排**（层语义：then / catch / finally 三态、失败即停、桥接、通知）在 promise 侧，
@@ -110,7 +110,7 @@ class CPromiseState
 
 ## 5. 一次 promise 链的完整生命周期
 
-以 `exec.NewPromise(spCtx, f0).Then(f1).Then(f2)` 为例：
+以 `exec.NewPromise(spCtx, f0).Then(f1, TaskKind::kWrite).Then(f2, TaskKind::kWrite)` 为例：
 
 ```text
 ① NewPromise → StartChain（建核心：spCtx + 句柄；建首层状态 s0；投递 f0，起点结果 Resolve）
@@ -161,8 +161,11 @@ else
 
 | 入口 | 首层何时投递 | 追加层 |
 | --- | --- | --- |
-| `exec.NewPromise(spCtx, 首层处理器)` | 调用即投递（与 JS 的 `new Promise(executor)` 一致） | 上游未 settle 时登记、已 settle 时投递回本链执行器 |
-| `exec.NewPromise(spCtx, fnStarter)` | 由起链回调里的 `resolve()` / `reject(码)` 决定（起链回调当场同步执行） | 同上 |
+| `exec.NewPromise(spCtx, 首层处理器, 类别)` | 调用即投递（与 JS 的 `new Promise(executor)` 一致） | 上游未 settle 时登记、已 settle 时投递回本链执行器 |
+| `exec.NewPromise(spCtx, fnStarter, 类别)` | 由起链回调里的 `resolve()` / `reject(码)` 决定（起链回调当场同步执行） | 同上 |
+
+两个重载的类别都只定**首层**：后续每层各自在 `Then` 一族里给（共享核心不存类别 —— 同一条链的层
+可以读 / 写 / 直投混排）。
 
 **为什么删掉「延迟启动」（原 `BuildPromise` + `Start()` + `CLaunchState`，2026-09-11 引入，2026-09-12 移除）**：
 
@@ -174,7 +177,7 @@ else
    exec.Post(common::async::TaskKind::kWrite, [&exec, spCtx]()
    {
        // 整段构链在执行器线程上同步做完；首层投递出去时，链已挂完
-       common::async::CPromise<Ctx> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Then(StepB, ASYNC_LOC);
+       common::async::CPromise<Ctx> p = exec.NewPromise(spCtx, StepA, common::async::TaskKind::kWrite, ASYNC_LOC).Then(StepB, common::async::TaskKind::kWrite, ASYNC_LOC);
        p.OnSettled(...);
    });
    ```
@@ -262,13 +265,13 @@ return MakeLayerRunner(pState, [spContext, fnHandler, upResult, eMode]()
 「已兑现」），因此 `Catch` / `Finally` 永远只会是「追加层」—— 挂在首层之后时，上一层已兑现，
 `Catch` 不执行（没有可处理的拒绝）。
 
-### 6.1 跨模块组合的三个原语（`exec.NewPromise(spCtx, fnStarter)` / `ThenPromise` / `ThenBridge`）
+### 6.1 跨模块组合的三个原语（`exec.NewPromise(spCtx, fnStarter, 类别)` / `ThenPromise` / `ThenBridge`）
 
 | API | JS 对照 | 实现要点 |
 | --- | --- | --- |
-| `exec.NewPromise(spCtx, fnStarter, loc)` | `new Promise((resolve, reject) => …)` | 直接建 `CPromiseState` 并交出 `ResolveFn` / `RejectFn`（内部就是 `pState->Settle(...)`）；起链回调同步执行（与 JS 一致），抛异常 → 异常原样成为本层拒绝；`Settle` 幂等，故重复 settle / settle 后异常都安全 |
-| `CPromise<T>::ThenPromise(factory, loc)` | `then(处理器返回 promise)` 的 flatten | 建本层 state，在上游 state 上登记 handler：上游被拒 → 直接透传；上游兑现 → `Adopt()` |
-| `CPromise<T>::ThenBridge(fnCreate, fnApply, loc)` | `then` 里「等别的模块 + 取回数据」 | **上面两个原语的语法糖**：内部就是 `Adopt()` + `New`（改走句柄版 `NewFromHandle`）+ `OnSettled`，多出的只是「子链兑现时先 `fnApply` 搬数据」 |
+| `exec.NewPromise(spCtx, fnStarter, 类别, loc)` | `new Promise((resolve, reject) => …)` | 直接建 `CPromiseState` 并交出 `ResolveFn` / `RejectFn`（内部就是 `pState->Settle(...)`）；起链回调同步执行（与 JS 一致），抛异常 → 异常原样成为本层拒绝；`Settle` 幂等，故重复 settle / settle 后异常都安全 |
+| `CPromise<T>::ThenPromise(factory, 类别, loc)` | `then(处理器返回 promise)` 的 flatten | 建本层 state，在上游 state 上登记 handler：上游被拒 → 直接透传；上游兑现 → `Adopt()` |
+| `CPromise<T>::ThenBridge(fnCreate, fnApply, 类别, loc)` | `then` 里「等别的模块 + 取回数据」 | **上面两个原语的语法糖**：内部就是 `Adopt()` + `New`（改走句柄版 `NewFromHandle`）+ `OnSettled`，多出的只是「子链兑现时先 `fnApply` 搬数据」 |
 
 `Adopt()` 做的事：调 `factory(spCtx)` 拿到子 promise，在**子 promise** 的 `OnSettled` 回调里
 `pState->Settle(childResult)` —— 本层的 settle 由子 promise 的结果决定。注意点：
@@ -419,7 +422,7 @@ if (!DispatchInlineOrPost(Handle(), std::move(fnRun)))
 | 层处理器抛异常 | `MakeLayerRunner` 的 try/catch → 异常原样成为本层拒绝 | 不变（本来就安全） |
 | **通知**（`OnSettled` / `OnSettledOn`）抛异常 | 异常从 `CPromiseState::Settle` 逃出 → worker 无 catch → **`std::terminate`（进程挂掉）** | `detail::RunNotice` 兜住 + 报告诊断 |
 | `exec.Post(类别, fn)` 的任务抛异常 | 同上（同样能弄死进程） | `CAsyncExecutor::Post` 包一层 guard 兜住 + 报告 |
-| `exec.NewPromise(spCtx, starter)` 的起链回调抛异常 | `RunChainStarter` 兜住 → 异常原样成为拒绝 | 不变 |
+| `exec.NewPromise(spCtx, starter, 类别)` 的起链回调抛异常 | `RunChainStarter` 兜住 → 异常原样成为拒绝 | 不变 |
 | `Await()` 永久挂住 | 只能靠文档警告 | 新增 `AwaitFor(ms)`（超时返回「等待超时」，不落定、不取消链） |
 | 层内 / 本链线程上 `Await()` 未落定的层（必死锁） | 无任何提示 | `ReportBlockingRisk()` 报诊断（**不硬失败**：等「别的线程 settle 的层」是合法的） |
 | 调用方误用（未传上下文 / 模块未启动 / 对空上下文起链） | 运行期崩在别处，难定位 | `ASSERT` 在开发期直接报位置（见 §13）；无效句柄态已从类型上消除 |
@@ -470,10 +473,11 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 | 路径 | 说法 |
 | --- | --- |
-| `exec.Post(类别, fn)` | 包一层异常兜底（`kDiagPostThrow`）后按类别过门 |
-| 层派发 `PostToHandle(handle, kind, fn)` | `StartChain` 首层、`AddHandler` 的「已落定 → 投递」、`DispatchInlineOrPost` 的投递分支 —— 按链的类别过门 |
+| `exec.Post(类别, fn)` | 包一层异常兜底（`kDiagPostThrow`）后按类别过门（`kDirect` 不过门，见下行） |
+| 层派发 `PostToHandle(handle, kind, fn)` | `StartChain` 首层、`AddHandler` 的「已落定 → 投递」、`DispatchInlineOrPost` 的投递分支 —— 按**本层**的类别过门（核心不存类别：同一条链的层可以不同；`NewPromise` 的类别只管首层） |
+| 直投层 / `Post(kDirect, fn)` | **直投线程池**（`PostToHandle` 的直投重载）：不入队、不占槽位、不查门 |
 | 通知（`OnSettled` / `OnSettledOn`） | **直投**（`PostToHandle(handle, fn)` 的直投重载）：保证送达优先，不去排队等槽位 |
-| 就地（`CanRunInline`） | 不过门：槽位已在外层任务手里（同类），只要求「无人在排队」 |
+| 就地（`CanRunInline`） | 不过门：槽位已在外层任务手里（同类），只要求「无人在排队」；**直投层不查门**（它不占槽位）—— 在本执行器线程上就接着跑 |
 
 准入算法（与 Exec 时代同款，随能力搬过来）：
 
@@ -484,7 +488,10 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 - **异常也归还槽位**：池不捕获异常，门在包装里兜住（`kDiagGateThrow`）后照常归还 ——
   漏归还 = 写者标志回不来 = 模块永久卡死；
 - **就地判定用线程局部任务帧**：`detail::CTaskFrame` / `CTaskFrameGuard`（过门投递的任务压帧，
-  就地跑下来的层沿用外层帧）；`CanRunInline` 只看「帧 = 本门 + 同类」且「队列空」。
+  就地跑下来的层沿用外层帧）；`CanRunInline` 只看「帧 = 本门 + 同类」且「队列空」；
+- **`kDirect` 不走这条队列**：直投任务直接投线程池 —— 不占槽位、不受「同类槽位 + 队列空」约束，
+  因此也**不受公平性保护**（写任务扎堆时它照样能插进去跑）。契约：不得访问受门保护的数据
+  （门对它完全不知情，写者可能正在同时跑）；用途 = 日志 / 指标 / 上报 / 搬运这类自成一体的活。
 
 开销（`Tests/test_async_alloc.cpp` 守着）：
 
@@ -513,7 +520,9 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 测试：`Tests/test_async_gate.cpp`（门本体 13 例：读并发 / 写独占 / 三种 FIFO 顺序 / 同门重入 /
 多门链式 / 16 门压力 / 排空 / 拒绝路径 / 异常仍归还槽位）+ `Tests/test_async_rw.cpp`
-（执行器集成 8 例：默认写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / 就地级联同线程 /
+（执行器集成 16 例：写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / **逐层类别**
+（写链里的读层、读链里的写层、各层各自标读、类别在 trace 里可见）/ **`kDirect` 直投不过门**
+（写者占门时直投任务与直投链照跑、混排保持链序）/ 就地级联同线程 /
 `Stop` 排空不丢任务 / 停止中链以「执行器已停」收口）+ `Tests/test_async_module_threads.cpp`
 （多线程模块 8 例：并发写不丢更新 / 读不撕裂 / 写链层不重叠 / 层间让位 / 乐观锁重试 / 混合流量
 与 `Stop` 后状态自洽 —— 模块状态是**普通成员**，安全全部来自读写门）。
@@ -556,7 +565,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 8. **loc / trace 跟着 `FRAMEWORK_DEBUG` 走，不做独立开关**：调试构建自动开启（每层多 16 字节 + 一次
    `SetLoc`），发布构建整段不参与编译 —— 少一个要记住的宏，也不会出现「开了 loc 却没开 trace」
    这类半开状态（两者本来就是同一件事：定位层）。
-9. **上下文强制传入，不做懒创建**：`NewPromise(spCtx, …)` / `CCoroutine(spCtx)` 的上下文参数必传。
+9. **上下文强制传入，不做懒创建**：`NewPromise(spCtx, …, 类别)` / `CCoroutine(spCtx)` 的上下文参数必传。
    权衡：懒创建能让调用方少写一行 `make_shared`，代价却是——`TContext` 必须可默认构造；
    核心要留 mutable 成员 + mutex；`Context()` 每层多一次空判（热路径）。
    本框架的取舍基准是：**能用编译期约束表达的，就不要留成运行时的分支持久态**。
@@ -577,7 +586,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
     then 与 catch 互补、构造即起链、异常、settled 通知、分叉、settled 后追加、未启动 / 停止 /
     重启、工作线程、析构后完成、并发 Await、多链条并行、深链 300 层、400 条压力、Post 行为；
   - 协程 9 例（见 coroutine-impl.md）；
-- **分配护栏**：`Tests/test_async_alloc.cpp`（2 例，见 §12）——每次改动异步热路径都应让它保持绿；
+- **分配护栏**：`Tests/test_async_alloc.cpp`（3 例，见 §12）——每次改动异步热路径都应让它保持绿；
 - 基准：`Benchmark/cases/ChainCase.cpp`（层数 1/5/20/100、深链 256、失败即停）、
   `CoroutineCase.cpp`、`ResumableCase.cpp`、`StressCase.cpp`；
   `Benchmark/results/benchmark-report.md` 由 `./build/release/benchmark` 直接改写，跑完记得一起提交。
@@ -631,7 +640,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 ### 已落地的两处优化
 
 1. **上下文强制传入 + 热路径去锁**（`detail::CPromiseCore`）：
-   - 上下文由调用方传入（`NewPromise(spCtx, …)` / `CCoroutine(spCtx)` 都去掉了默认实参）→
+   - 上下文由调用方传入（`NewPromise(spCtx, …, 类别)` / `CCoroutine(spCtx)` 都去掉了默认实参）→
      核心**再无可变共享状态**：`Context()` 直接返回成员的 `const` 引用（不加锁、不拷贝 `shared_ptr`）；
      懒创建那一版要 mutable 成员 + mutex + 一个「可能还没准备好」的时间窗，
      而它换来的只是调用方少写一行 `make_shared`（见 §10 第 9 条）；
@@ -659,10 +668,10 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 ```cpp
 CAllocCounter counter;  // 开表
-common::async::CPromise<CCtx> tail = exec.NewPromise(spCtx, &StepBump, ASYNC_LOC);
+common::async::CPromise<CCtx> tail = exec.NewPromise(spCtx, &StepBump, common::async::TaskKind::kWrite, ASYNC_LOC);
 for (int i = 0; i < nLayers; ++i)
 {
-    tail = tail.Then(&StepBump, ASYNC_LOC);
+    tail = tail.Then(&StepBump, TaskKind::kWrite, ASYNC_LOC);
 }
 counter.Stop();  // 关表
 ASSERT_TRUE(counter.Counts() <= 2 * nLayers + 8);
@@ -745,7 +754,7 @@ return [pState, fnBody]()
 
 | 分组 | 字段 | 说明 |
 | --- | --- | --- |
-| 记录（写一次，之后只读） | `loc` / `eMode` | 注册点（`ASYNC_LOC`）、模式（then / catch / finally） |
+| 记录（写一次，之后只读） | `loc` / `eMode` / `eKind` | 注册点（`ASYNC_LOC`）、模式（then / catch / finally）、本层类别（读 / 写 / 直投） |
 | | `upstream` | 上游层（**强引用**，见下）；链根为空 |
 | | `nLayerId` / `nChainId` | 全局递增的层号 / 链号（链号在链根分配，子链与父链不同号） |
 | | `bChainRoot` / `bSubChain` | 是不是链根 / 是不是「挂在别的层下面」的子链链根 |
@@ -753,16 +762,17 @@ return [pState, fnBody]()
 | | `spExecName` | 本层**实际跑在哪个执行器**上（执行器名）。`shared_ptr<const string>`：名字串在执行器构造时分配一次、各层共享，层记录持强引用 → 执行器析构后已起的链也不会悬垂 |
 | 视图（遍历时算） | `nDepth` / `bCurrent` | 距当前层几跳 / 是不是正在执行的那一层 |
 | | `nAgeMs` / `nSelfMs` | 年龄 = 创建到现在（链根上 = 整条链的年龄）；当前层的耗时用实时值 |
-| | `bSettled` / `bFulfilled` / `nCode` | 落定与否 / 结果是否兑现 / 结果码 |
+| | `bSettled` / `bFulfilled` / `strMessage` | 落定与否 / 结果是否兑现 / 拒绝文案（兑现为空） |
 
 `DescribeLayer(info)` 把上面这些拼成一行（`examples` 里 ①…⑬ 每个位置打印的就是它）：
 
 ```text
-#0  then    BuildOrderChain  main.cpp:641  [main]       链#1  层#3   龄=0ms 本层=0ms 结果=未落定 tid=…  ← 当前层
-#1  then    BuildOrderChain  main.cpp:639  [main]       链#1  层#2   龄=0ms 本层=0ms 结果=兑现   tid=…
-#2  then    BuildOrderChain  main.cpp:637  [main]       链#1  层#1   龄=0ms 本层=0ms 结果=兑现   tid=… [链根]
+#0   then    写  BuildOrderChain  main.cpp:641  [main]       链#1  层#3   龄=0ms 本层=0ms 结果=未落定 tid=…  ← 当前层
+#1   then    读  BuildOrderChain  main.cpp:639  [main]       链#1  层#2   龄=0ms 本层=0ms 结果=兑现   tid=…
+#2   then    写  BuildOrderChain  main.cpp:637  [main]       链#1  层#1   龄=0ms 本层=0ms 结果=兑现   tid=… [链根]
 ```
 
+第三列（`%-3s`）是**本层类别**（`读` / `写` / `直` —— `直` = 直投、不过门），
 方括号那一列（12 列，`[name]` 连方括号一起左对齐）是**本层实际跑在哪个执行器上**。
 来源是**线程自己的归属**（`CThreadPool` 的 worker 在自己线程的 TLS 里带着池名，
 `CCurrentLayerFrame` 压帧时顺手记下来），不是「注册时指定的执行器」：

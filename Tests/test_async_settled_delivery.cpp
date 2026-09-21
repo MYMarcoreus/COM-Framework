@@ -57,7 +57,7 @@ public:
     /// @return 本层 promise。
     common::async::CPromise<CDeliveryCtx> QueryAsync(const std::shared_ptr<CDeliveryCtx>& spCtx)
     {
-        return m_exec.NewPromise(spCtx, &StepQuery, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, &StepQuery, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
 private:
@@ -115,10 +115,10 @@ public:
             return BridgeCallCallee(spSelf, spCallee);
         };
 
-        return m_exec.NewPromise(spCtx, &StepOrderA, ASYNC_LOC)
-            .ThenPromise(fnCall, ASYNC_LOC)
-            .Then(&StepOrderB, ASYNC_LOC)
-            .Catch(&StepCatch, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, &StepOrderA, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .ThenPromise(fnCall, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Then(&StepOrderB, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Catch(&StepCatch, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
 private:
@@ -171,7 +171,7 @@ private:
                     fnResolve();
                 });
         };
-        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。
@@ -284,7 +284,7 @@ TEST(SettledNotice_LayerStillRejectedWhenExecutorUnavailable)
     spModule->Stop();  // 之后执行器不可用
 
     // 已 settled + 执行器不可用：追加层 → 本层以框架侧拒绝结算（不是就地执行）
-    const common::async::CPromiseResult result = promise.Then(&StepMark, ASYNC_LOC).Await();
+    const common::async::CPromiseResult result = promise.Then(&StepMark, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
 
     ASSERT_TRUE(result.IsRejected());
     ASSERT_TRUE(asynctest::IsStoppedFailure(result));

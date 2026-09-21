@@ -12,36 +12,37 @@
 
 | JS | 本框架 |
 | --- | --- |
-| `new Promise((resolve, reject) => {...})` | `exec.NewPromise(spCtx, 首层)` ⁽*⁾ |
-| `new Promise` **由外部回调 settle** | `exec.NewPromise(spCtx, fnStarter)` ⁽*⁾（起链回调里拿到 resolve / reject 句柄） |
-| `promise.then(onFulfilled)` | `p.Then(处理器)` |
-| `then` 的处理器**返回 promise**（flatten） | `p.ThenPromise(子 promise 工厂)` |
-| `then` 里**等另一个模块的 promise 并把数据取回来** | `p.ThenBridge(起子链, 搬数据)`（简写，等价下行两行） |
-| `promise.catch(onRejected)` | `p.Catch(处理器)` |
-| `promise.finally(onFinally)` | `p.Finally(处理器)` |
+| `new Promise((resolve, reject) => {...})` | `exec.NewPromise(spCtx, 首层, TaskKind)` ⁽*⁾ |
+| `new Promise` **由外部回调 settle** | `exec.NewPromise(spCtx, fnStarter, TaskKind)` ⁽*⁾（起链回调里拿到 resolve / reject 句柄） |
+| `promise.then(onFulfilled)` | `p.Then(处理器, TaskKind)` |
+| `then` 的处理器**返回 promise**（flatten） | `p.ThenPromise(子 promise 工厂, TaskKind)` |
+| `then` 里**等另一个模块的 promise 并把数据取回来** | `p.ThenBridge(起子链, 搬数据, TaskKind)`（简写，等价下行两行） |
+| `promise.catch(onRejected)` | `p.Catch(处理器, TaskKind)` |
+| `promise.finally(onFinally)` | `p.Finally(处理器, TaskKind)` |
 | `promise` 已完成 | `p.IsSettled()` |
 | `resolve()` / `reject(reason)` | `CPromiseResult::Resolve()` / `CPromiseResult::Reject(异常对象)`（拒绝 = 标准异常） |
 | `fulfilled` / `rejected` | `result.IsFulfilled()` / `result.IsRejected()` |
 | 状态 pending → settled | 每个 then/catch/finally 都返回「指向新一层的 promise」 |
-| `Promise.all([a, b])` | `exec.WhenAll(spCtx, a, b)`（详见 §10）；协程内并行也可用 `CO_AWAIT_ALL(a, b)` ⁽*⁾ |
-| `Promise.allSettled([a, b])` | `exec.WhenAllSettled(spCtx, a, b)` ⁽*⁾ |
-| `Promise.race([a, b])` | `exec.WhenRace(spCtx, a, b)` ⁽*⁾ |
-| `Promise.any([a, b])` | `exec.WhenAny(spCtx, a, b)` ⁽*⁾ |
+| `Promise.all([a, b])` | `exec.WhenAll(spCtx, TaskKind::kWrite, a, b)`（详见 §10）；协程内并行也可用 `CO_AWAIT_ALL(a, b)` ⁽*⁾ |
+| `Promise.allSettled([a, b])` | `exec.WhenAllSettled(spCtx, TaskKind::kWrite, a, b)` ⁽*⁾ |
+| `Promise.race([a, b])` | `exec.WhenRace(spCtx, TaskKind::kWrite, a, b)` ⁽*⁾ |
+| `Promise.any([a, b])` | `exec.WhenAny(spCtx, TaskKind::kWrite, a, b)` ⁽*⁾ |
 
 > ⁽*⁾ **结构差异**：JS 的 `new Promise` 是构造函数、`Promise.all` 一族是构造函数上的**静态方法**；
-> 本框架挂在**执行器实例**上（`exec.*`），而且多一个 `spCtx` 参数 —— 因为 C++ 里「调度器」与
-> 「共享上下文」都必须显式传（JS 靠宿主事件循环与闭包隐式提供）。
+> 本框架挂在**执行器实例**上（`exec.*`），而且多一个 `spCtx` 参数与一个 `TaskKind` 参数 —— 因为 C++ 里
+> 「调度器」「共享上下文」「本层的读写类别」都必须显式传（JS 靠宿主事件循环与闭包隐式提供；类别是本
+> 框架特有的概念：读可并发 / 写独占 / 直投不过门，见 §8）。
 
 ### 1.2 本框架有、JS 没有
 
 | 本框架 | 作用 |
 | --- | --- |
-| `exec.Start()` / `Stop()` / `Post(TaskKind, fn)` | 执行器生命周期与 fire-and-forget 投递（类别必填：读可并发 / 写独占；≈ Asio `io_context::post`） |
-| `exec.NewPromise(..., TaskKind)` / `Post(TaskKind, fn)` | 模块内读写控制：读任务并发、写任务独占（≈ 读写锁，但**不阻塞任何线程**、可跨挂起点） |
+| `exec.Start()` / `Stop()` / `Post(TaskKind, fn)` | 执行器生命周期与 fire-and-forget 投递（类别必填：读可并发 / 写独占 / 直投不过门；≈ Asio `io_context::post`） |
+| `exec.NewPromise(..., TaskKind)` / `Post(TaskKind, fn)` | 模块内读写控制：读任务并发、写任务独占、`kDirect` 不过门（≈ 读写锁，但**不阻塞任何线程**、可跨挂起点） |
 | `p.Await()` | **阻塞**等待结果（占住 worker，可死锁；≈ C# `Task.Wait()`） |
 | `p.AwaitFor(ms)` | 阻塞等待 + 超时（≈ 手写 `Promise.race`） |
 | `p.OnSettledOn(exec, cb)` | 收尾通知投到指定执行器线程（**不是层**；≈ `CompletableFuture.whenCompleteAsync(fn, executor)`） |
-| `exec.CoStart<T>(spCtx)` + `CO_AWAIT` | 无栈协程（≈ C# `Task.Run` + `async/await`） |
+| `exec.CoStart<T>(TaskKind::kWrite, spCtx)` + `CO_AWAIT` | 无栈协程（≈ C# `Task.Run` + `async/await`） |
 
 ## 2. 与「传值版任务链」的区别
 
@@ -100,10 +101,10 @@ common::async::CAsyncExecutor exec(2);
 exec.Start();
 
 std::shared_ptr<CLoginContext> spCtx = std::make_shared<CLoginContext>();
-common::async::CPromise<CLoginContext> p = exec.NewPromise(spCtx, StepReadParam, ASYNC_LOC)  // 起 promise（首层）
-                                               .Then(StepVerify, ASYNC_LOC)                  // 兑现路径
-                                               .Catch(StepRollback, ASYNC_LOC)     // 拒绝路径（可恢复）
-                                               .Finally(StepWriteLog, ASYNC_LOC);  // 收尾（兑现 / 拒绝都跑）
+common::async::CPromise<CLoginContext> p = exec.NewPromise(spCtx, StepReadParam, common::async::TaskKind::kRead, ASYNC_LOC)  // 起 promise（首层）
+                                               .Then(StepVerify, TaskKind::kRead, ASYNC_LOC)                  // 兑现路径
+                                               .Catch(StepRollback, TaskKind::kWrite, ASYNC_LOC)     // 拒绝路径（可恢复）
+                                               .Finally(StepWriteLog, TaskKind::kWrite, ASYNC_LOC);  // 收尾（兑现 / 拒绝都跑）
 
 p.OnSettled([](common::async::CPromiseResult result) { /* settled 通知 */ });
 
@@ -116,7 +117,8 @@ if (r.IsFulfilled())
 
 要点：
 
-- `exec.NewPromise(spCtx, 首层)` **起链即投递首层**（等价 JS 里 `new Promise(executor)` 立即执行 executor）；
+- `exec.NewPromise(spCtx, 首层, TaskKind)` **起链即投递首层**（等价 JS 里 `new Promise(executor)` 立即执行 executor）；
+  类别只定**首层**（每层各自在 `Then` 一族里给），`loc` 是可选的最后参数；
 - `Then` / `Catch` / `Finally` 各自返回**指向新一层的句柄**；
 - 只有最后一层的句柄取结果才有意义 —— 写成 `auto tail = exec.NewPromise(...).Then(...)` 再 `tail.Await()`；
   丢弃返回值时 `p.Await()` 等到的只是首层。
@@ -125,9 +127,9 @@ if (r.IsFulfilled())
 
 | 接口 | 何时执行 | 返回值的作用 |
 | --- | --- | --- |
-| `Then(handler)` | 上一层**兑现**时；被拒绝则跳过（失败即停） | 决定本层结果（`Resolve()` / `Reject(异常)`） |
-| `Catch(handler)` | 上一层**被拒绝**时；已兑现则跳过 | 同上：返回 `Resolve()` 即**吞掉拒绝**，promise 从本层之后继续 |
-| `Finally(handler)` | **无论兑现或拒绝都执行** | **被忽略**，原样透传上一层结果（与 JS `finally` 一致） |
+| `Then(handler, TaskKind)` | 上一层**兑现**时；被拒绝则跳过（失败即停） | 决定本层结果（`Resolve()` / `Reject(异常)`） |
+| `Catch(handler, TaskKind)` | 上一层**被拒绝**时；已兑现则跳过 | 同上：返回 `Resolve()` 即**吞掉拒绝**，promise 从本层之后继续 |
+| `Finally(handler, TaskKind)` | **无论兑现或拒绝都执行** | **被忽略**，原样透传上一层结果（与 JS `finally` 一致） |
 
 > **then 处理器根本拿不到 `upResult`**：失败即停由框架保证 —— 上游被拒绝时本层**根本不会被调用**
 > （框架把拒绝结果直接交给下一层），所以 then 的签名里就没有这个形参，也就写不出
@@ -137,18 +139,18 @@ if (r.IsFulfilled())
 
 ```cpp
 // 失败即停：StepStore 被拒绝 → 后续 then 不执行，拒绝（异常）透传
-auto r = exec.NewPromise(spCtx, StepReadParam).Then(StepStore).Then(StepNotify).Await();
+auto r = exec.NewPromise(spCtx, StepReadParam).Then(StepStore, TaskKind::kWrite).Then(StepNotify, TaskKind::kWrite).Await();
 // r.IsRejected() == true，StepNotify 未执行
 
 // 回滚：catch 看得到拒绝结果
-auto t = exec.NewPromise(spCtx, StepLoad)
-             .Then(StepStore)
-             .Catch(StepRollback)  // 仅被拒绝时执行
+auto t = exec.NewPromise(spCtx, StepLoad, TaskKind::kRead)
+             .Then(StepStore, TaskKind::kWrite)
+             .Catch(StepRollback, TaskKind::kWrite)  // 仅被拒绝时执行
              .Await();
 
 // 收尾：finally 无论成败都执行，且不改结果
-auto t2 = exec.NewPromise(spCtx, StepLoad)
-              .Finally(StepReleaseLock)  // 兑现 / 拒绝都执行
+auto t2 = exec.NewPromise(spCtx, StepLoad, TaskKind::kRead)
+              .Finally(StepReleaseLock, TaskKind::kWrite)  // 兑现 / 拒绝都执行
               .Await();
 ```
 
@@ -161,13 +163,13 @@ auto t2 = exec.NewPromise(spCtx, StepLoad)
 std::shared_ptr<CMyContext> spCtx = std::make_shared<CMyContext>();
 spCtx->strRequestId = GetRequestId();
 spCtx->nRetry = 3;  // 所有初始字段都在起链前填好
-common::async::CPromise<CMyContext> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Then(StepB, ASYNC_LOC);
+common::async::CPromise<CMyContext> p = exec.NewPromise(spCtx, StepA, common::async::TaskKind::kWrite, ASYNC_LOC).Then(StepB, common::async::TaskKind::kWrite, ASYNC_LOC);
 // 链内各层拿到的恒是同一个实例：p.GetContext() == spCtx
 ```
 
 约束与建议：
 
-- **上下文必须由调用方传入**（`NewPromise` / `CoStart` 的第一个参数）：
+- **上下文必须由调用方传入**（`NewPromise` 的 `spCtx` 参数 / `CoStart` 的**第二个**参数，类别在最前）：
   框架**不做懒创建** —— 于是 `GetContext()` 恒非空、核心不必为「可能还没准备好」加锁，
   `TContext` 也不必可默认构造；
 - 处理器拿到的是 `const std::shared_ptr<TContext>&`（借用引用，不增加引用计数）；
@@ -180,9 +182,9 @@ common::async::CPromise<CMyContext> p = exec.NewPromise(spCtx, StepA, ASYNC_LOC)
 
 | 形态 | 写法 | 阻塞？ | 适用 |
 | --- | --- | --- | --- |
-| 协程内 await（**推荐**） | `CO_AWAIT(NewPromise(StepSub))`、`CO_AWAIT(pChild->AsPromise())`、`CO_AWAIT(exec.NewPromise(spOther, StepX))` | 否（挂起让出线程） | 任何「等一段异步再往下走」的场合 |
+| 协程内 await（**推荐**） | `CO_AWAIT(NewPromise(StepSub, TaskKind::kWrite))`、`CO_AWAIT(pChild->AsPromise())`、`CO_AWAIT(exec.NewPromise(spOther, StepX))` | 否（挂起让出线程） | 任何「等一段异步再往下走」的场合 |
 | 协程内并行 await | `CO_AWAIT_ALL(a, b, c)` | 否 | 多段异步并行 + 汇聚 |
-| **跨模块组合**（不用协程） | `p.ThenPromise(工厂)` + `exec.NewPromise(spCtx, fnStarter)` | 否 | 调用**其他模块 / 另一套上下文**的异步函数，且要拿到完整结果 |
+| **跨模块组合**（不用协程） | `p.ThenPromise(工厂, TaskKind)` + `exec.NewPromise(spCtx, fnStarter, TaskKind)` | 否 | 调用**其他模块 / 另一套上下文**的异步函数，且要拿到完整结果 |
 | 层内非阻塞嵌套 | 层里起子 promise，由它的 `OnSettled` 回调接着写上下文 / 起后续 | 否 | 层里「顺手起一段异步」，不关心何时回来 |
 | 层内 Post | `exec.Post(TaskKind::kWrite, 重活)` | 否 | fire-and-forget 重活下沉 |
 | 层内阻塞等待 | 层里 `sub.Await()` | **是**（占住一个 worker） | 仅当线程池还有空闲 worker（**单线程执行器必死锁**） |
@@ -200,11 +202,11 @@ class CFlow : public common::async::CCoroutine<CDemoContext>
     void Run() override
     {
         CO_BEGIN();
-        CO_AWAIT(NewPromise(&StepReadParam));                               // 同上下文子 promise
+        CO_AWAIT(NewPromise(&StepReadParam, TaskKind::kRead));                               // 同上下文子 promise
         m_spSub = std::make_shared<CSubContext>();                          // 跨 await → 成员变量
-        CO_AWAIT(m_pExec->NewPromise(m_spSub, &StepQueryRows, ASYNC_LOC));  // **跨上下文** await
-        CO_AWAIT(NewPromise(&StepScale).Then(&StepStore));                  // 多步子 promise
-        CO_AWAIT_ALL(NewPromise(&StepA), NewPromise(&StepB));               // 并行
+        CO_AWAIT(m_pExec->NewPromise(m_spSub, &StepQueryRows, TaskKind::kRead, ASYNC_LOC));  // **跨上下文** await
+        CO_AWAIT(NewPromise(&StepScale, TaskKind::kWrite).Then(&StepStore, TaskKind::kWrite));                  // 多步子 promise
+        CO_AWAIT_ALL(NewPromise(&StepA, TaskKind::kWrite), NewPromise(&StepB, TaskKind::kWrite));               // 并行
         GetContext()->nScaled += m_spSub->nRows;                            // 恢复后并入
         CO_RETURN_VOID();
         CO_END();
@@ -222,20 +224,19 @@ class CFlow : public common::async::CCoroutine<CDemoContext>
 ### 6.2 层内非阻塞嵌套（回调驱动）
 
 ```cpp
-exec.NewPromise(spCtx, [&exec, spSub](common::async::CPromiseResult up, const std::shared_ptr<CDemoContext>& sp)
-{
-    if (up.IsRejected())
+exec.NewPromise(spCtx,
+    [&exec, spSub](const std::shared_ptr<CDemoContext>& sp)
     {
-        return up;
-    }
-    exec.NewPromise(spSub, &StepQueryRows, ASYNC_LOC)              // 起子 promise 但不等待
-        .OnSettled([sp, spSub](common::async::CPromiseResult sub)  // 子流程结束后接着干活
-    {
-        sp->nScaled = sub.IsFulfilled() ? spSub->nRows : -1;
-    });
-    sp->strTrace += "父层起步;";
-    return common::async::CPromiseResult::Resolve();  // 外层立刻继续
-}, ASYNC_LOC);
+        // 起子 promise 但不等待：子链自己有类别（这里是读链）
+        exec.NewPromise(spSub, &StepQueryRows, TaskKind::kRead, ASYNC_LOC)
+            .OnSettled([sp, spSub](common::async::CPromiseResult sub)  // 子流程结束后接着干活
+            {
+                sp->nScaled = sub.IsFulfilled() ? spSub->nRows : -1;
+            });
+        sp->strTrace += "父层起步;";
+        return common::async::CPromiseResult::Resolve();  // 外层立刻继续
+    },
+    TaskKind::kWrite, ASYNC_LOC);
 ```
 
 > **「不等它」= 完成时机不由链保证**：上面的「起子 promise 不等」与层里 `exec.Post(...)`
@@ -243,7 +244,7 @@ exec.NewPromise(spCtx, [&exec, spSub](common::async::CPromiseResult up, const st
 > （线程越多，主链越可能先结束：并行等待会真的并行）。所以要断言 / 依赖它的结果，得自己同步
 > （原子标志 + 有上限的等待，见 `examples/main.cpp` 的 `WaitCount`），别写成时序侥幸。
 
-### 6.3 跨模块组合：`ThenBridge`（推荐）/ `ThenPromise` + `exec.NewPromise(spCtx, fnStarter)`
+### 6.3 跨模块组合：`ThenBridge`（推荐）/ `ThenPromise` + `exec.NewPromise(spCtx, fnStarter, 类别)`
 
 场景：模块 A 的业务流程要调「**模块 B（另一套上下文类型）**」的异步函数，
 且模块 A 的调用方希望拿到的 promise 反映**含 B 在内的完整结果**。
@@ -264,10 +265,10 @@ auto fnApplyRows = [](const std::shared_ptr<CMyContext>& spSelf, const std::shar
     spSelf->nRows = spOther->nRows;
 };
 
-p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
-        .ThenBridge(fnCreateRows, fnApplyRows, ASYNC_LOC)  // 等模块 B；回来时数据已就位
-        .Then(&StepUseRows, ASYNC_LOC)                     // 线程亲和：这一层已回本模块线程
-        .Finally(&StepAudit, ASYNC_LOC);
+p = exec.NewPromise(spCtx, &StepValidate, TaskKind::kRead, ASYNC_LOC)
+        .ThenBridge(fnCreateRows, fnApplyRows, TaskKind::kWrite, ASYNC_LOC)  // 等模块 B；回来时数据已就位
+        .Then(&StepUseRows, TaskKind::kWrite, ASYNC_LOC)                     // 线程亲和：这一层已回本模块线程
+        .Finally(&StepAudit, TaskKind::kWrite, ASYNC_LOC);
 ```
 
 `ThenBridge` 的语义（与 `ThenPromise` 完全一致，只是多一步搬数据）：
@@ -285,7 +286,7 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
   `return CPromiseResult::Reject(std::runtime_error("库存不足：…"))`，
   不要塞进 `fnApply`（它没有返回值，也不该做业务分支）。
 
-#### 等价的手写版：`ThenPromise` + `exec.NewPromise(spCtx, fnStarter)`（`ThenBridge` 内部就是这两步）
+#### 等价的手写版：`ThenPromise` + `exec.NewPromise(spCtx, fnStarter, 类别)`（`ThenBridge` 内部就是这两步）
 
 两步写出来就是 JS 的组合方式：
 
@@ -308,18 +309,19 @@ common::async::CPromise<CMyContext> BridgeQueryOther(const CDeps& deps, const st
             spCtx->nRows = spCtx->spOtherOp->nRows;  // 取回数据
             fnResolve();
         });
-    }, ASYNC_LOC);
+    }, TaskKind::kRead, ASYNC_LOC);  // 桥接层：查询模块 B（读）
 }
 
 // ② 接进本流程：then 的 promise 版（等价 JS 的 then 返回 promise 时自动等待）
-p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
+p = exec.NewPromise(spCtx, &StepValidate, TaskKind::kRead, ASYNC_LOC)
         .ThenPromise(
             [deps](const std::shared_ptr<CMyContext>& sp)
-{
-    return BridgeQueryOther(deps, sp);
-}, ASYNC_LOC)
-        .Then(&StepUseRows, ASYNC_LOC)
-        .Finally(&StepAudit, ASYNC_LOC);
+            {
+                return BridgeQueryOther(deps, sp);
+            },
+            TaskKind::kRead, ASYNC_LOC)
+        .Then(&StepUseRows, TaskKind::kWrite, ASYNC_LOC)
+        .Finally(&StepAudit, TaskKind::kWrite, ASYNC_LOC);
 ```
 
 要点：
@@ -334,7 +336,7 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
   —— 被调模块 settle 本链时，这一层会被投递回本模块执行器（同执行器内仍然就地内联，不多花一次入队）。
   所以回调里可以直接改本模块状态，无需再显式 `exec.Post(...)`（想显式强制也仍然可用）；
   但 **`OnSettled` 通知不迁移**：它仍在结算线程（= 被调模块线程）上触发，只对「层」做亲和；
-  `exec.NewPromise(spCtx, fnStarter)` 的起链回调是「发起」语义，仍在调用线程上同步执行。
+  `exec.NewPromise(spCtx, fnStarter, 类别)` 的起链回调是「发起」语义，仍在调用线程上同步执行。
   背景与实测：见 [async-cross-module-findings.md](async-cross-module-findings.md)；
 - **`OnSettled` 保证送达**（2026-09-11 框架修复）：子 promise 已 settled 且它的执行器不可用
   （被调模块已停止 / 拒绝投递）时，通知改为在**调用线程**上就地执行 —— `OnSettled` 现在**没有返回值**
@@ -342,11 +344,11 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
   注意「层」的语义不变：`Then` / `Catch` / `Finally` 在同样情况下仍以「执行器已停」收口
   （停了的执行器不再跑新层）。背景见 [async-cross-module-findings.md](async-cross-module-findings.md)；
 - 子 promise 可以是**任意 promise**：同一 `TContext` 的 then 链**直接返回**就会被 adopt（无需桥接）；
-  跳上下文才需要 `exec.NewPromise(spCtx, fnStarter)` 桥接（本节写法）。内层链被拒绝时，拒绝（异常）会作为本层拒绝
+  跳上下文才需要 `exec.NewPromise(spCtx, fnStarter, 类别)` 桥接（本节写法）。内层链被拒绝时，拒绝（异常）会作为本层拒绝
   沿**外层链**透传（外层后续 `Then` 不执行，`Catch` / `Finally` 仍执行）；
 - `ThenPromise` 的语义与 `Then` 一致（上层被拒绝则本层不执行），差别是**本层等子 promise**：
   子 promise 兑现 → 本层兑现；子 promise 被拒绝 → 本层以**同一个异常**被拒绝（`Catch` / `Finally` 仍会执行）；
-- `exec.NewPromise(spCtx, fnStarter)` 的起链回调 **立即（同步）执行**（与 JS 一致），只应做「发起 + 登记回调」，
+- `exec.NewPromise(spCtx, fnStarter, 类别)` 的起链回调 **立即（同步）执行**（与 JS 一致），只应做「发起 + 登记回调」，
   由回调调 `fnResolve()` / `fnReject(结果)`（要造业务拒绝就 `fnReject(CPromiseResult::Reject(std::runtime_error("原因")))`）；
 - 桥接处是**唯一**做「跨模块失败 → 本模块语义」转换的地方（例如把数据访问层的
   `CDbError(kRowNotFound)` 归一化成「兑现 + bFound=false」，把它的其他失败翻译成本模块的
@@ -358,7 +360,7 @@ p = exec.NewPromise(spCtx, &StepValidate, ASYNC_LOC)
 ### 6.4 层内阻塞等待（慎用）
 
 ```cpp
-const common::async::CPromiseResult sub = exec.NewPromise(spSub, &StepQueryRows, ASYNC_LOC).Await();  // 占住一个 worker
+const common::async::CPromiseResult sub = exec.NewPromise(spSub, &StepQueryRows, common::async::TaskKind::kRead, ASYNC_LOC).Await();  // 占住一个 worker
 ```
 
 - `Await()` 是阻塞等待，它占着的 worker 无法去跑别的 promise；
@@ -600,16 +602,23 @@ exec.Stop();                             // 停止并等待已投递任务完成
 
 | 类别 | 语义 | 怎么声明 |
 | --- | --- | --- |
-| `kWrite` | 独占：排斥本执行器内所有读写任务（写者之间也串行） | `exec.Post(TaskKind::kWrite, fn)` / `exec.NewPromise(spCtx, 首层)`（默认写） |
-| `kRead` | 并发：多个读任务可同时进入（上限 = 执行器线程数） | `exec.Post(TaskKind::kRead, fn)` / `exec.NewPromise(spCtx, 首层, ASYNC_LOC, common::async::TaskKind::kRead)` |
+| `kWrite` | 独占：排斥本执行器内所有读写任务（写者之间也串行） | `exec.Post(TaskKind::kWrite, fn)` / `exec.NewPromise(spCtx, 首层, TaskKind::kWrite, loc)` |
+| `kRead` | 并发：多个读任务可同时进入（上限 = 执行器线程数） | `exec.Post(TaskKind::kRead, fn)` / `exec.NewPromise(spCtx, 首层, TaskKind::kRead, loc)` |
+| `kDirect` | 直投：**不进读写门**（不入队、不占槽位、不参与公平性），随时可与读 / 写并发 | `exec.Post(TaskKind::kDirect, fn)` / `exec.NewPromise(spCtx, 首层, TaskKind::kDirect, loc)`；层同理（`Then(handler, TaskKind::kDirect, loc)`） |
 
 ```cpp
-// 模块的对外异步函数：查询 = 读链（可并发），写入 = 写链（独占）
-exec.NewPromise(spCtx, StepQueryStock, ASYNC_LOC, common::async::TaskKind::kRead);
-exec.NewPromise(spCtx, StepApplyChange, ASYNC_LOC);   // 默认写
-exec.Post(common::async::TaskKind::kRead, fnSnapshot);   // 读任务：可并发（类别必填）
-exec.Post(common::async::TaskKind::kWrite, fnRecalc);    // 写任务：独占（类别必填）
+// 模块的对外异步函数：查询 = 读链（可并发），写入 = 写链（独占），上报 = 直投（不过门）
+exec.NewPromise(spCtx, StepQueryStock, common::async::TaskKind::kRead, ASYNC_LOC);
+exec.NewPromise(spCtx, StepApplyChange, TaskKind::kWrite, ASYNC_LOC);   // 写链：显式给写
+exec.Post(common::async::TaskKind::kRead, fnSnapshot);   // 读任务：可并发
+exec.Post(common::async::TaskKind::kWrite, fnRecalc);    // 写任务：独占
+exec.Post(common::async::TaskKind::kDirect, fnFlushMetrics);  // 直投：不过门（指标上报）
 ```
+
+**为什么要有 `kDirect`**：让「**不需要门**」在代码里**看得见**，而不是靠「忘了声明」的默认值 ——
+它必须是显式的少数派。代价是它**不受门的保护**（也不受公平性保护：写任务扎堆时它照样能插进去跑），
+所以契约是：**不得访问受门保护的数据**（门对它完全不知情，写者可能正在同时跑）。用途：日志 / 指标 /
+上报 / 数据搬运这类自成一体的活（自身线程安全、不碰模块状态）。
 
 业务侧完整落地（模块里不再需要自己的锁）：`ServerExample/Module/ExampleDbModule.cpp`（表不加锁：
 写独占使「读出来改回去」整段不被打断）与 `ServerExample/Module/ExampleAsyncModule.cpp`（查询 = 读链、
@@ -618,7 +627,10 @@ exec.Post(common::async::TaskKind::kWrite, fnRecalc);    // 写任务：独占�
 
 规则与后果（**都是行为契约，不只是性能开关**）：
 
-- **类别必须说清楚**：`Post` 的类别必填（没有默认值 —— 默认写会让「忘记声明的读」变成静默并发问题）；`NewPromise` 的类别默认是写，要并发必须**显式**声明读；
+- **类别是契约，不是可选参数**：`Post` / `NewPromise` / `Then` 一族 / `CoStart` / 组合器**每一处都要显式
+  声明**（本框架不提供默认值 —— 默认值会让「忘记声明的读」变成静默的并发问题，也会让「不需要门」
+  的活变成看不见的默认）；**一条链的每一层各自给类别**（读 / 写 / 直投可混排），`NewPromise` 的类别只管
+  **首层**（共享核心不存类别）；`loc`（`ASYNC_LOC`）是可选的最后参数，永远排在类别之后；
 - **读并发 / 写独占 / 公平 FIFO**：读任务之间可同时进入；写任务排斥一切（含其它写）；
   门按提交顺序放行 —— 读不会越过先前排队的写，写也不会被后来的读插队；
   （实测：4 线程执行器上、每个任务约 40 µs 业务时，读批 ≈ 写批的 1/4，见
@@ -628,8 +640,10 @@ exec.Post(common::async::TaskKind::kWrite, fnRecalc);    // 写任务：独占�
   自己的锁」才成立；忘记标注 = 静默数据竞争（用 TSan 或 review 兜住）；
 - **就地级联仍然保留**：本线程持着本门**同类**槽位、且无人在排队时，下一层直接在当前线程接着跑
   （没有竞争的一条链依旧连续跑完）；换类别或有人在排队 → 入队（换类别会自死锁、插队会破坏公平）；
+  **直投层不查门**（它不占槽位）：已在本执行器线程上就接着跑，没有「同类槽位」这一条件；
 - **`Promise.race` 那类「快者先到」的写法必须用读链**：写链互相串行，先提交者先落定，与耗时无关；
-- 协程（`exec.CoStart<T>`）目前固定按**写**处理；`OnSettled` 通知**不走门**（「保证送达」优先），
+- 协程（`exec.CoStart<T>`）的类别**必填**（= 本协程这个任务的类别：投递 Resume / 就地判定都用它，
+  存在协程自身，不是「链的类别」）；`OnSettled` 通知**不走门**（「保证送达」优先），
   所以通知里只做轻量搬运 / 收尾，不要长时间占用模块；
 - `Stop()` 的顺序是「关门（拒新）→ 等已接受的跑完 → 停池」，所以「停止后不再跑新层」对**需要过门**
   的层成立（已在跑的任务里的同类层仍可就地跑完）。
@@ -649,9 +663,9 @@ exec.Post(common::async::TaskKind::kWrite, fnRecalc);    // 写任务：独占�
 
 ```cpp
 // 想要「这件事在别的执行器上做」：对方自持执行器 + 起一条子链（执行器是模块私有资源，不外传）
-exec.NewPromise(spCtx, StepLoad, ASYNC_LOC)
-    .ThenPromise(fnCallOtherModule, ASYNC_LOC)  // 对方在自己的执行器上跑自己的链，跑完交回来
-    .Then(&StepBackOnMain, ASYNC_LOC);          // 回到本链执行器（本模块线程）
+exec.NewPromise(spCtx, StepLoad, TaskKind::kRead, ASYNC_LOC)
+    .ThenPromise(fnCallOtherModule, TaskKind::kWrite, ASYNC_LOC)  // 对方在自己的执行器上跑自己的链，跑完交回来
+    .Then(&StepBackOnMain, TaskKind::kWrite, ASYNC_LOC);          // 回到本链执行器（本模块线程）
 ```
 
 要「一层换个地方跑」的旧写法（`ThenInline` 就地、`ThenOn(exec, …)` 指定执行器）已于
@@ -679,9 +693,9 @@ exec.NewPromise(spCtx, StepLoad, ASYNC_LOC)
 exec.Post(common::async::TaskKind::kWrite, [&exec, spCtx]()
 {
     // 这一段整体跑在执行器线程上；首层投递出去时，链已经挂完
-    common::async::CPromise<COrderCtx> p = exec.NewPromise(spCtx, StepLoad, ASYNC_LOC)
-                                               .ThenPromise(fnCallOtherModule, ASYNC_LOC)
-                                               .Then(StepAfterBridge, ASYNC_LOC);
+    common::async::CPromise<COrderCtx> p = exec.NewPromise(spCtx, StepLoad, common::async::TaskKind::kRead, ASYNC_LOC)
+                                               .ThenPromise(fnCallOtherModule, TaskKind::kWrite, ASYNC_LOC)
+                                               .Then(StepAfterBridge, TaskKind::kWrite, ASYNC_LOC);
     p.OnSettled([](common::async::CPromiseResult r) { /* 收尾 */ });
 });
 ```
@@ -710,17 +724,17 @@ exec.Post(common::async::TaskKind::kWrite, [&exec, spCtx]()
 
 ```cpp
 // ① 全部兑现才继续（任一拒绝 → 立即失败）
-common::async::CPromise<COrderCtx> p = exec.WhenAll(spCtx, pStock, pBilling).Then(StepGather, ASYNC_LOC);
+common::async::CPromise<COrderCtx> p = exec.WhenAll(spCtx, common::async::TaskKind::kWrite, pStock, pBilling).Then(StepGather, common::async::TaskKind::kWrite, ASYNC_LOC);
 
 // ② 数量运行时确定：标量 + 列表可混用
 std::vector<common::async::CPromise<COrderCtx> > vecChild = BuildChildren(spCtx);
-common::async::CPromiseResult r = exec.WhenAllSettled(spCtx, pHead, vecChild).AwaitFor(1000);
+common::async::CPromiseResult r = exec.WhenAllSettled(spCtx, common::async::TaskKind::kWrite, pHead, vecChild).AwaitFor(1000);
 
 // ③ 多副本取「第一个成功的」
-common::async::CPromise<COrderCtx> pAny = exec.WhenAny(spCtx, pReplicaA, pReplicaB);
+common::async::CPromise<COrderCtx> pAny = exec.WhenAny(spCtx, common::async::TaskKind::kWrite, pReplicaA, pReplicaB);
 
 // ④ 主链路 + 备用链路，谁先有结论用谁（拒绝也算结论）
-common::async::CPromise<COrderCtx> pRace = exec.WhenRace(spCtx, pPrimary, pBackup);
+common::async::CPromise<COrderCtx> pRace = exec.WhenRace(spCtx, common::async::TaskKind::kWrite, pPrimary, pBackup);
 ```
 
 各分支的成败从**子句柄**读：组合器收口时子句柄都已落定，`child.Await()` 立即返回（不阻塞），
@@ -745,18 +759,18 @@ common::async::CPromise<COrderCtx> pRace = exec.WhenRace(spCtx, pPrimary, pBacku
 
 ```cpp
 // 单层
-common::async::CPromiseResult r = exec.NewPromise(spCtx, StepOne, ASYNC_LOC).Await();
+common::async::CPromiseResult r = exec.NewPromise(spCtx, StepOne, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
 
 // 多层（then 失败即停）+ 收尾
-auto tail = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Then(StepB, ASYNC_LOC).Then(StepC, ASYNC_LOC);
+auto tail = exec.NewPromise(spCtx, StepA, TaskKind::kWrite, ASYNC_LOC).Then(StepB, TaskKind::kWrite, ASYNC_LOC).Then(StepC, TaskKind::kWrite, ASYNC_LOC);
 tail.OnSettled([](common::async::CPromiseResult r) { /* 兑现 / 拒绝 */ });
 common::async::CPromiseResult final = tail.Await();
 
 // 回滚 / 恢复
-auto t = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Then(StepB, ASYNC_LOC).Catch(StepRollback, ASYNC_LOC);
+auto t = exec.NewPromise(spCtx, StepA, TaskKind::kWrite, ASYNC_LOC).Then(StepB, TaskKind::kWrite, ASYNC_LOC).Catch(StepRollback, TaskKind::kWrite, ASYNC_LOC);
 
 // 收尾（不改结果）
-auto t2 = exec.NewPromise(spCtx, StepA, ASYNC_LOC).Finally(StepAudit, ASYNC_LOC);
+auto t2 = exec.NewPromise(spCtx, StepA, TaskKind::kWrite, ASYNC_LOC).Finally(StepAudit, TaskKind::kWrite, ASYNC_LOC);
 
 // 不允许永久挂住：带超时等 + 在自己线程收尾
 common::async::CPromiseResult r2 = t2.AwaitFor(500);  // 超时 → 「等待超时」
@@ -765,16 +779,16 @@ t2.OnSettledOn(m_exec, [](common::async::CPromiseResult)
 });  // 通知投到本模块执行器
 
 // 分叉
-common::async::CPromise<Ctx> head = exec.NewPromise(spCtx, StepA, ASYNC_LOC);
-common::async::CPromise<Ctx> b1 = head.Then(StepB, ASYNC_LOC);
-common::async::CPromise<Ctx> b2 = head.Then(StepC, ASYNC_LOC);
+common::async::CPromise<Ctx> head = exec.NewPromise(spCtx, StepA, common::async::TaskKind::kWrite, ASYNC_LOC);
+common::async::CPromise<Ctx> b1 = head.Then(StepB, common::async::TaskKind::kWrite, ASYNC_LOC);
+common::async::CPromise<Ctx> b2 = head.Then(StepC, common::async::TaskKind::kWrite, ASYNC_LOC);
 
 // 并行汇聚（详见 §10）：全部兑现 / 全部落定 / 首个落定 / 首个兑现
-common::async::CPromise<Ctx> tAll = exec.WhenAll(spCtx, b1, b2).Then(StepGather, ASYNC_LOC);
-common::async::CPromiseResult rAll = exec.WhenAllSettled(spCtx, b1, b2).AwaitFor(500);
+common::async::CPromise<Ctx> tAll = exec.WhenAll(spCtx, common::async::TaskKind::kWrite, b1, b2).Then(StepGather, common::async::TaskKind::kWrite, ASYNC_LOC);
+common::async::CPromiseResult rAll = exec.WhenAllSettled(spCtx, common::async::TaskKind::kWrite, b1, b2).AwaitFor(500);
 
 // 起链（上下文必传）：先备好数据，再 NewPromise；想「构链期不跑业务代码」用 exec.Post 包一段（§9.2）
-common::async::CPromise<Ctx> c1 = exec.NewPromise(spCtx, StepA, ASYNC_LOC);
+common::async::CPromise<Ctx> c1 = exec.NewPromise(spCtx, StepA, common::async::TaskKind::kWrite, ASYNC_LOC);
 
 // 跨模块组合（纯异步、零阻塞）：桥接 + then-promise 接入（详见 6.3）
 auto fnCreateOther = [deps](const std::shared_ptr<Ctx>& sp)
@@ -786,7 +800,7 @@ auto fnApplyOther = [](const std::shared_ptr<Ctx>& sp, const std::shared_ptr<COt
     sp->nRows = spOther->nRows;
 };
 common::async::CPromise<Ctx> p =
-    exec.NewPromise(spCtx, StepA, ASYNC_LOC).ThenBridge(fnCreateOther, fnApplyOther, ASYNC_LOC).Then(StepB, ASYNC_LOC);
+    exec.NewPromise(spCtx, StepA, TaskKind::kWrite, ASYNC_LOC).ThenBridge(fnCreateOther, fnApplyOther, TaskKind::kWrite, ASYNC_LOC).Then(StepB, TaskKind::kWrite, ASYNC_LOC);
 ```
 
 ## 13. 与旧版（传值版 `CTask`）的迁移对照
@@ -799,7 +813,7 @@ common::async::CPromise<Ctx> p =
 | `OnSuccess / OnNone` | `Then` / `Catch`（统一用 `CPromiseResult` 判断） |
 | `Get()` | `Await()` |
 | `NOTHROW_LOC` | `ASYNC_LOC` |
-| flatMap（层返回 `CTask`） | 同上下文：`ThenPromise`（处理器返回 promise，框架自动等）；跨上下文：`exec.NewPromise(spCtx, fnStarter)` 桥接（见 6.3 / 协程文档） |
+| flatMap（层返回 `CTask`） | 同上下文：`ThenPromise`（处理器返回 promise，框架自动等）；跨上下文：`exec.NewPromise(spCtx, fnStarter, 类别)` 桥接（见 6.3 / 协程文档） |
 
 ## 14. 测试与示例
 
@@ -807,7 +821,8 @@ common::async::CPromise<Ctx> p =
 - 单独用例：`examples/cases/ThenMixCase.cpp`（一条链里混用：具名异步函数 / lambda / lambda 内执行其他异步函数「等与不等」）；
 - 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞；
   查询 = 读链可并发，注册 / 改名 / 删除 = 写链独占，模块内无需自己的锁）；
-- 单元测试（异步共 **139 例**，全量 **171 例**；release 166 例，差的 5 例是 trace 专属）：
+- 单元测试（异步共 **147 例**，全量 **179 例**；release 172 例，差的 7 例是 debug 专属：
+  trace 5 例 + 读写门 × trace 2 例）：
   `test_async_smoke.cpp`（17）对外用法逐条冒烟、
   `test_async_chain.cpp`（40）promise 契约 + 协程、`test_async_combine.cpp`（12）组合器、
   `test_async_modules.cpp`（6）+ `test_async_modules_stress.cpp`（8）跨模块与极限、
@@ -816,7 +831,10 @@ common::async::CPromise<Ctx> p =
   `test_async_robustness.cpp`（6）健壮性与诊断、`test_async_layer_rules.cpp`（3）三态语义、
   `test_async_alloc.cpp`（3）每层分配预算护栏、
   `test_async_gate.cpp`（13）读写门本体（读并发 / 写独占 / 公平 FIFO / 多门与多生产者 / Drain）、
-  `test_async_rw.cpp`（8）读写门 × 执行器集成（投递与链的类别、读写不重叠、停止语义）、
+  `test_async_rw.cpp`（16）读写门 × 执行器集成：投递与**逐层类别**（`AsyncRw_PerLayerReadInWriteChain` /
+  `PerLayerWriteInReadChain` / `AllLayersMarkedReadConcurrent` / `PerLayerKindVisibleInTrace`）、
+  读写不重叠、就地下沉、停止语义、**`kDirect` 直投不过门**（`AsyncRw_DirectPostBypassesGate` /
+  `DirectChainBypassesGate` / `MixedKindsChainKeepsOrder` / `DirectKindVisibleInTrace`）、
   `test_async_module_threads.cpp`（8）**多线程模块的线程安全**（不加锁的模块状态：并发写不丢更新 /
   读不撕裂 / 写链层不重叠 / 层间让位（写链不原子）/ 乐观锁重试 / 停止 / 多客户端压力）、
   `test_async_trace.cpp`（6）调用链 trace（复杂主链看完整链 / 多层子链跨链祖先路径 /

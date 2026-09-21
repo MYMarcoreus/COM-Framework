@@ -132,7 +132,7 @@ else
 - 代价：每次跨执行器的续接多一次入队 + 唤醒（微秒级）；同执行器内仍完全内联，不受影响；
   内联深度也只在同一执行器线程内累加，跳模块不会涨栈；
 - 边界（**亲和只作用于"层"**）：`OnSettled` 是通知 → 仍在**结算线程**（跨模块时=被调模块线程）上触发；
-  `exec.NewPromise(spCtx, fnStarter)` 的起链回调是"发起"语义 → 仍在调用线程上同步执行；`Await()` 仍占住调用线程；
+  `exec.NewPromise(spCtx, fnStarter, 类别)` 的起链回调是"发起"语义 → 仍在调用线程上同步执行；`Await()` 仍占住调用线程；
 - 验收：`Tests/test_async_affinity.cpp`（5 例：0 延迟 / 慢被调 / 50 轮往返 / 协程跨模块 await /
   4 条并发链），以及被改紧的原极限用例（`ModuleStress_*`）。
 
@@ -154,7 +154,7 @@ else
    见 `PostBackToOwnThread`）；
 6. 写测试时**不要再写"续跑一定在对方线程"的断言**（改前很容易写成这样）；改后应为
    "跨模块返回的层必在本模块线程"、"`OnSettled` 通知在被调模块线程"；
-7. 跨模块那一层**优先用 `p.ThenBridge(fnCreate, fnApply, ASYNC_LOC)`**（2026-09-12 新增）：
+7. 跨模块那一层**优先用 `p.ThenBridge(fnCreate, fnApply, TaskKind::kWrite, ASYNC_LOC)`**（2026-09-12 新增）：
    起子链 + 搬数据一步到位，不用手写 `New` + `OnSettled` 样板（也不再需要 `if (!bOk)` 保险）。
    子链被拒绝时的码原样透传；业务规则上的拒绝写到**桥接之后的层**里。
    对照用例：`Tests/test_async_modules.cpp` 的 `Module_BridgeHelper*`（与手写版逐项等价）。
@@ -206,7 +206,7 @@ promiseStock.OnSettled([...](common::async::CPromiseResult result) { /* 回调 *
 2. 调用方紧接着 `OnSettled(...)`，此时子 promise **已经 settled** → `CPromiseState::AddHandler` 走路径 ②
    → `PostToHandle(pHandle, ...)` 用的是**被调模块的执行器**（已停止）→ 返回 `false`，
    **回调永远不会执行**；
-3. 桥接层（`exec.NewPromise(spCtx, fnStarter)` 出来的那一层）**没有任何人去 settle 它** → 永久 pending；
+3. 桥接层（`exec.NewPromise(spCtx, fnStarter, 类别)` 出来的那一层）**没有任何人去 settle 它** → 永久 pending；
 4. 上层 `Await()` 阻塞在 `CPromiseState::Await` 的条件变量上，`m_cv.wait(...)` 永不唤醒 → **死等**。
 
 修复前 `OnSettled` 的文档就是这么写的（"返回 `false`：本层已 settled 但执行器不可用，通知不执行"），
@@ -300,11 +300,11 @@ promiseStock.OnSettled([...](common::async::CPromiseResult result) { /* 桥接�
 | `ModuleStress_FanOutJoin` | 一层分叉 64 分支 + 手写汇聚：全完成、库存串行（纯 async 可用 `exec.WhenAll` 直接写） |
 | `ModuleStress_MixedRejections` | 100 条链一半被拒：成功/失败互不串 |
 | `ModuleStress_StopMidFlight` | 半路 `Stop()` 被调模块 → 退化为「执行器已停」（问题 ②） |
-| `Tests/test_async_settled_delivery.cpp`（5 例） | 问题 ② 的修复验收：通知送达保证 + 层的语义不变（含“漏检返回值不死等”回归） |
+| `Tests/test_async_settled_delivery.cpp`（4 例） | 问题 ② 的修复验收：通知送达保证 + 层的语义不变（含“漏检返回值不死等”回归） |
 
 ```bash
 # 跑全部测试（含以上用例）
-./build.sh --debug Tests && ./build/debug/tests        # total=156 pass=156 fail=0
+./build.sh --debug Tests && ./build/debug/tests        # total=179 pass=179 fail=0
 
 # 数据竞争检查（异步测试文件 + 异步框架 + 线程池）
 g++ -std=c++11 -fsanitize=thread -g -O1 -pthread -ICommon -ITests \

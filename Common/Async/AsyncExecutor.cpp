@@ -86,7 +86,7 @@ bool CAsyncExecutor::Post(TaskKind eKind, std::function<void()> fnTask)
 /// 包一层异常兜底的原因：线程池 worker 不捕获异常（异常逃出线程函数即 `std::terminate`），
 /// 而这里投递的是「用户任务」，所以在框架边界上收口。
 ///
-/// @param eKind 任务类别（读可并发 / 写独占）。
+/// @param eKind 任务类别（读可并发 / 写独占 / 直投不过门）。
 /// @param fnTask 任务函数（按值接收 + 移动投递，避免 std::function 拷贝）。
 /// @return true 已接受（已投递或在门口排队）；false 执行器已停止 / 未启动 / 门已关闭。
 bool CAsyncExecutor::PostImpl(TaskKind eKind, std::function<void()> fnTask)
@@ -114,7 +114,8 @@ bool CAsyncExecutor::PostImpl(TaskKind eKind, std::function<void()> fnTask)
             ReportDiagnostic(detail::kDiagPostThrow);
         }
     };
-    return m_pHandle->m_pGate->Submit(eKind, std::move(fnTaskGuarded));  // 未启动 / 已关闭 → false。
+    // 走与层派发同一个漏斗：读 / 写过门（未启动 / 已关闭 → false），`kDirect` 直投线程池。
+    return detail::PostToHandle(m_pHandle, eKind, std::move(fnTaskGuarded));
 }
 
 /// @brief 停止并等待任务完成（优雅关闭）。

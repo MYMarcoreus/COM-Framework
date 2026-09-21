@@ -76,11 +76,11 @@ public:
     common::async::CPromise<CAffinityOrderCtx> RunOnceAsync(
         const std::shared_ptr<CAffinityOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule)
     {
-        return m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
-            .ThenPromise(MakeQueryFactory(spStockModule), ASYNC_LOC)
-            .Then(&StepOrderAfterBridge, ASYNC_LOC)
-            .ThenPromise(MakeBackHomeFactory(), ASYNC_LOC)
-            .Then(&StepOrderBackHome, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, &StepOrderLoad, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .ThenPromise(MakeQueryFactory(spStockModule), common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Then(&StepOrderAfterBridge, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .ThenPromise(MakeBackHomeFactory(), common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Then(&StepOrderBackHome, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// @brief 多轮往返：A↔B 往返 nRounds 次（每轮的 A2 都应在回到本模块线程）。
@@ -93,12 +93,12 @@ public:
     common::async::CPromise<CAffinityOrderCtx> RunRoundsAsync(
         const std::shared_ptr<CAffinityOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule, int nRounds)
     {
-        common::async::CPromise<CAffinityOrderCtx> promise = m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC);
+        common::async::CPromise<CAffinityOrderCtx> promise = m_exec.NewPromise(spCtx, &StepOrderLoad, common::async::TaskKind::kWrite, ASYNC_LOC);
         for (int i = 0; i < nRounds; ++i)
         {
-            promise = promise.ThenPromise(MakeQueryFactory(spStockModule), ASYNC_LOC)
-                          .Then(&StepOrderAfterBridge, ASYNC_LOC)
-                          .Then(&StepOrderRound, ASYNC_LOC);
+            promise = promise.ThenPromise(MakeQueryFactory(spStockModule), common::async::TaskKind::kWrite, ASYNC_LOC)
+                          .Then(&StepOrderAfterBridge, common::async::TaskKind::kWrite, ASYNC_LOC)
+                          .Then(&StepOrderRound, common::async::TaskKind::kWrite, ASYNC_LOC);
         }
         return promise;
     }
@@ -112,9 +112,9 @@ public:
     common::async::CPromise<CAffinityOrderCtx> RunWithOnSettledAsync(
         const std::shared_ptr<CAffinityOrderCtx>& spCtx, const std::shared_ptr<CCalleeModule>& spStockModule)
     {
-        return m_exec.NewPromise(spCtx, &StepOrderLoad, ASYNC_LOC)
-            .ThenPromise(MakeQueryFactory(spStockModule), ASYNC_LOC)
-            .Then(&StepOrderAfterBridge, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, &StepOrderLoad, common::async::TaskKind::kWrite, ASYNC_LOC)
+            .ThenPromise(MakeQueryFactory(spStockModule), common::async::TaskKind::kWrite, ASYNC_LOC)
+            .Then(&StepOrderAfterBridge, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// @brief 协程版：跨模块 await 之后，协程体应回到本模块执行器线程。
@@ -127,7 +127,7 @@ public:
     std::shared_ptr<CAffinityFlowCoro> RunCoAsync(const std::shared_ptr<CAffinityOrderCtx>& spCtx,
         const std::shared_ptr<CCalleeModule>& spStockModule, const common::async::CPromise<CCalleeCtx>& promiseStock)
     {
-        return m_exec.CoStart<CAffinityFlowCoro>(spCtx, spStockModule, promiseStock);
+        return m_exec.CoStart<CAffinityFlowCoro>(common::async::TaskKind::kWrite, spCtx, spStockModule, promiseStock);
     }
 
     /// @brief 跨模块协程：先在本模块跑一层，await 别的模块的 promise，再回到本模块跑一层。
@@ -147,9 +147,9 @@ public:
         void Run() override
         {
             CO_BEGIN();
-            CO_AWAIT(NewPromise(StepOrderLoad));         // 本模块执行器线程
+            CO_AWAIT(NewPromise(StepOrderLoad, common::async::TaskKind::kWrite));         // 本模块执行器线程
             CO_AWAIT(m_pStock);                          // 跨模块：等库存模块的 promise（另一套上下文）
-            CO_AWAIT(NewPromise(StepOrderAfterBridge));  // 应回到本模块执行器线程
+            CO_AWAIT(NewPromise(StepOrderAfterBridge, common::async::TaskKind::kWrite));  // 应回到本模块执行器线程
             CO_RETURN(common::async::CPromiseResult::Resolve());
             CO_END();
         }
@@ -248,7 +248,7 @@ private:
                     fnResolve();
                 });
         };
-        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// 显式投递回本模块执行器（线程亲和已保证，这里是"显式强制"的写法对照）。
@@ -269,7 +269,7 @@ private:
                 fnReject(common::async::CPromiseResult::Reject(std::runtime_error(kExecUnavailableText)));
             }
         };
-        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程）。

@@ -85,7 +85,7 @@ Resume / await 回调执行完毕（不悬垂）。
 ## 4. 启动流程
 
 ```text
-exec.CoStart<TCoroutine>(args...)
+exec.CoStart<TCoroutine>(TaskKind::kWrite, args...)
     ├── make_shared<TCoroutine>(args...)     创建（构造时建 m_pCore 与初始 m_pSegment）
     ├── pCoro->SetSelf(pCoro)                注入自持弱引用
     └── pCoro->Start(this)
@@ -185,16 +185,17 @@ CPromise<TContext> AsPromise() const
     return CPromise<TContext>::Make(m_pCore, m_pSegment);
 }
 
-CPromise<TContext> NewPromise(const ThenHandler& fnHandler, const CSourceLoc& loc) const
+CPromise<TContext> NewPromise(const ThenHandler& fnHandler, TaskKind eKind, const CSourceLoc& loc) const
 {
-    return CPromise<TContext>::StartChain(m_pCore, fnHandler, loc);
+    // 类别逐层自负：这里只定这条子链的**首层**（核心不存类别）
+    return CPromise<TContext>::StartChain(m_pCore, eKind, fnHandler, loc);
 }
 ```
 
 - `Make` / `StartChain` 都是 `CPromise` 的私有工厂，`CCoroutine<TContext>` 是其友元；
 - 子 promise 与协程共用 `m_pCore`（同一上下文 + 同一执行器句柄），因此
   「协程里看到的数据」与「子 promise 写的数据」是同一份；
-- `StartChain` 与 `exec.NewPromise(spCtx, handler)` 是**同一条起链路径**（建首层状态 + 强制投递首层），
+- `StartChain` 与 `exec.NewPromise(spCtx, handler, 类别)` 是**同一条起链路径**（建首层状态 + 强制投递首层），
   只是这里复用了协程已有的核心（而不是新建一个）；
 - 协程的 `m_pSegment` 同时是「协程完成状态」与「AsPromise 的当前状态」。
 

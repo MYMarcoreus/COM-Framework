@@ -136,7 +136,7 @@ public:
     {
         std::shared_ptr<CStockContext> spStock = std::make_shared<CStockContext>();
         spStock->nSku = nSku;
-        return m_exec.NewPromise(spStock, &StepConnect, ASYNC_LOC).Then(&StepRead, ASYNC_LOC);
+        return m_exec.NewPromise(spStock, &StepConnect, common::async::TaskKind::kWrite, ASYNC_LOC).Then(&StepRead, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
 private:
@@ -183,7 +183,7 @@ public:
         std::shared_ptr<CBillingContext> spBill = std::make_shared<CBillingContext>();
         spBill->nOrderId = nOrderId;
         spBill->nAmount = nAmount;
-        return m_exec.NewPromise(spBill, &StepWrite, ASYNC_LOC);
+        return m_exec.NewPromise(spBill, &StepWrite, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
 private:
@@ -232,7 +232,7 @@ public:
         common::async::CPromise<COrderContext>::PromiseFactory fnReserveInner =
             [this](const std::shared_ptr<COrderContext>& spCtxSelf)
         {
-            return m_exec.NewPromise(spCtxSelf, &StepReserveStock, ASYNC_LOC).Then(&StepReserveConfirm, ASYNC_LOC);
+            return m_exec.NewPromise(spCtxSelf, &StepReserveStock, common::async::TaskKind::kWrite, ASYNC_LOC).Then(&StepReserveConfirm, common::async::TaskKind::kWrite, ASYNC_LOC);
         };
 
         // ⑤ 旁支：then 内部执行其他异步函数，但不等它（fire-and-forget）。
@@ -256,15 +256,15 @@ public:
         };
 
         return m_exec
-            .NewPromise(spCtx, &StepLoad, ASYNC_LOC)  // ① 具名异步函数
-            .Then(&StepValidate, ASYNC_LOC)           // ② 校验
-            .ThenPromise(fnQueryStock, ASYNC_LOC)     // ③ 调库存模块（等它）
-            .Then(&StepApplyDiscount, ASYNC_LOC)      // ④ 算折扣
-            .ThenPromise(fnReserveInner, ASYNC_LOC)   // ④+ 内层链（等它）
-            .Then(fnBillingSideBranch, ASYNC_LOC)     // ⑤ 记账旁支（不等它）
-            .Then(&StepSaveOrder, ASYNC_LOC)          // ⑥ 落库
-            .Catch(&StepCompensate, ASYNC_LOC)        // catch：仅被拒绝时执行
-            .Finally(&StepAudit, ASYNC_LOC);          // finally：成败都跑
+            .NewPromise(spCtx, &StepLoad, common::async::TaskKind::kWrite, ASYNC_LOC)  // ① 具名异步函数
+            .Then(&StepValidate, common::async::TaskKind::kWrite, ASYNC_LOC)           // ② 校验
+            .ThenPromise(fnQueryStock, common::async::TaskKind::kWrite, ASYNC_LOC)     // ③ 调库存模块（等它）
+            .Then(&StepApplyDiscount, common::async::TaskKind::kWrite, ASYNC_LOC)      // ④ 算折扣
+            .ThenPromise(fnReserveInner, common::async::TaskKind::kWrite, ASYNC_LOC)   // ④+ 内层链（等它）
+            .Then(fnBillingSideBranch, common::async::TaskKind::kWrite, ASYNC_LOC)     // ⑤ 记账旁支（不等它）
+            .Then(&StepSaveOrder, common::async::TaskKind::kWrite, ASYNC_LOC)          // ⑥ 落库
+            .Catch(&StepCompensate, common::async::TaskKind::kWrite, ASYNC_LOC)        // catch：仅被拒绝时执行
+            .Finally(&StepAudit, common::async::TaskKind::kWrite, ASYNC_LOC);          // finally：成败都跑
     }
 
 private:
@@ -334,7 +334,7 @@ private:
                     fnResolve();
                 });
         };
-        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// ④ 算折扣（then）：满 3 件 9 折（模拟业务规则）。

@@ -48,14 +48,16 @@
 //     void Run() override
 //     {
 //         CO_BEGIN();
-//         CO_AWAIT(NewPromise(StepLoad));     // 起一条子 promise 并等待（被拒绝则终止）
-//         CO_AWAIT_ALL(NewPromise(StepSave), NewPromise(StepNotify));   // 并行等待
+//         CO_AWAIT(NewPromise(StepLoad, common::async::TaskKind::kWrite));     // 起一条子 promise 并等待（被拒绝则终止）
+//         CO_AWAIT_ALL(NewPromise(StepSave, common::async::TaskKind::kWrite),
+//                      NewPromise(StepNotify, common::async::TaskKind::kWrite));   // 并行等待
 //         CO_RETURN_VOID();                   // 正常结束（兑现）
 //         CO_END();
 //     }
 // };
 //
-// std::shared_ptr<CMyCoroutine> pCoro = exec.CoStart<CMyCoroutine>(spCtx);
+// // 起协程（类别必填：读可并发 / 写独占）
+// std::shared_ptr<CMyCoroutine> pCoro = exec.CoStart<CMyCoroutine>(common::async::TaskKind::kWrite, spCtx);
 // common::async::CPromiseResult r = pCoro->Await();   // 阻塞取最终结果
 // (void)r;
 // @endcode
@@ -116,8 +118,9 @@ public:
     /// @param spContext 共享上下文（「必传」：与 promise 一致，框架不做懒创建）。
     explicit CCoroutine(const std::shared_ptr<TContext>& spContext)
         : m_pCore(std::make_shared<detail::CPromiseCore<TContext> >(
-              std::shared_ptr<detail::CExecutorHandle>(), spContext, TaskKind::kWrite)),
+              std::shared_ptr<detail::CExecutorHandle>(), spContext)),
           m_pSegment(std::make_shared<detail::CPromiseState>()),
+          m_eKind(TaskKind::kWrite),
           m_pExec(nullptr),
           m_wpSelf(),
           m_hot()
@@ -175,16 +178,20 @@ public:
     /// 未启动（`m_pExec == nullptr`，句柄还是空）时首层投递失败 → 该 promise 以系统侧失败 `Stopped()` 收口。
     ///
     /// @param fnHandler 首层处理器（固定签名）。
+    /// @param eKind 本子链的读写类别（**必填**：读可并发 / 写独占）。
     /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
     /// @return 指向首层的 promise 句柄（须先挂起 await，勿丢弃）。
-    CPromise<TContext> NewPromise(const ThenHandler& fnHandler, const CSourceLoc& loc = CSourceLoc()) const
+    CPromise<TContext> NewPromise(const ThenHandler& fnHandler, TaskKind eKind, const CSourceLoc& loc = CSourceLoc()) const
     {
 #if defined(ASYNC_DEBUG_TRACE)
         // trace：父层钉成「启动本协程的那一层」—— 协程体可能在别处的层栈里内联恢复，
         // 只靠「当前正在跑的层」会随调度而变。
         const detail::CChainAdopterScope scope(m_spOwnerLayer);
 #endif
-        return CPromise<TContext>::StartChain(m_pCore, fnHandler, loc);
+        // 子链用指定类别（类别逐层自负：一条链的层可以各不相同）。
+        const std::shared_ptr<detail::CPromiseCore<TContext> > pCore = std::make_shared<detail::CPromiseCore<TContext> >(
+            m_pCore->Handle(), m_pCore->Context());
+        return CPromise<TContext>::StartChain(pCore, eKind, fnHandler, loc);
     }
 
 protected:
@@ -310,6 +317,19 @@ private:
         m_wpSelf = sp;
     }
 
+    /// @brief 设置本协程的读写类别（`CoStart(eKind, ...)` 调用；之后只读）。
+    ///
+    /// 用途：投递 Resume / 就地判定 / 协程内起的子 promise，都以它过读写门。
+    ///
+    /// 存在协程自己身上（不在共享核心上）：它是「本协程这一个任务」的属性，
+    /// 而核心是「一条链的上下文 + 执行器」—— 协程体内起的子 promise 每层各自给类别。
+    ///
+    /// @param eKind 类别（读可并发 / 写独占 / 直投不过门）。
+    void SetKind(TaskKind eKind)
+    {
+        m_eKind = eKind;
+    }
+
     /// @brief 协程热状态：步号 / 终止标志 / 终止结果（紧邻打包，减少跨线程迁移的 cache line 数）。
     struct CHotState
     {
@@ -362,7 +382,7 @@ private:
             Terminate(CPromiseResult::Reject(std::runtime_error("执行器已停")));  // 无强引用（理论不应发生）。
             return;
         }
-        if (!m_pExec->Post(TaskKind::kWrite,
+        if (!m_pExec->Post(m_eKind,
                 [spSelf, this]()
                 {
                     Resume();
@@ -386,10 +406,10 @@ private:
             return;
         }
         // 就地判定与 promise 层派发共用一处（多一条「线程池无积压」的负载感知条件）：
-        // 类别按「写」判：协程体（以及它起、它等的子 promise）是本执行器上的写任务，
-        // 只有当前线程正持着本门写槽位时才就地 —— 否则恢复要排队（读任务里等到的
-        // 协程恢复不能就地跑写代码）。
-        if (detail::ShouldInline(m_pExec->Handle(), TaskKind::kWrite, /* bRequireIdle = */ true))
+        // 类别按**本协程的类别**判（`CoStart(eKind, ...)` 指定，见 `SetKind`）：
+        // 只有当前线程正持着本门同类的槽位时才就地 —— 否则恢复要排队
+        //（读任务里等到的协程恢复不能就地跑写代码，反之亦然）。
+        if (detail::ShouldInline(m_pExec->Handle(), m_eKind, /* bRequireIdle = */ true))
         {
             detail::CInlineGuard guard;  // 深度 +1 / -1 成对。
             Resume();
@@ -471,6 +491,7 @@ private:
 
     std::shared_ptr<detail::CPromiseCore<TContext> > m_pCore;  ///< 共享核心（上下文 + 执行器句柄）。
     std::shared_ptr<detail::CPromiseState> m_pSegment;         ///< 协程完成状态（AsPromise 暴露）。
+    TaskKind m_eKind;                                          ///< 本协程的类别（Resume 过门用；CoStart 注入）。
     CAsyncExecutor* m_pExec;                                   ///< 执行器指针（Resume 调度 + 子 promise 投递）。
     std::weak_ptr<void> m_wpSelf;                              ///< 自持弱引用（生命周期加固）。
     CHotState m_hot;                                           ///< 热状态（步号 / 终止标志 / 拒绝码）。
@@ -486,10 +507,11 @@ private:
 /// @param args 转发给 TCoroutine 构造函数的参数。
 /// @return 协程对象；调用方须持有直到完成（Await() 取结果），勿丢弃。
 template <typename TCoroutine, typename... TArgs>
-std::shared_ptr<TCoroutine> CAsyncExecutor::CoStart(TArgs&&... args)
+std::shared_ptr<TCoroutine> CAsyncExecutor::CoStart(TaskKind eKind, TArgs&&... args)
 {
     std::shared_ptr<TCoroutine> pCoro = std::make_shared<TCoroutine>(std::forward<TArgs>(args)...);
     pCoro->SetSelf(pCoro);  // 自持弱引用：Resume / 回调生命周期加固。
+    pCoro->SetKind(eKind);  // 本协程（及其子 promise）的读写类别：投递 Resume / 过门都用它。
     pCoro->Start(this);     // 绑定 + 复位 + 投递首次执行（未启动 / 已停止 → 立即被拒绝）。
     return pCoro;
 }

@@ -50,7 +50,7 @@
 
 | 文档 | 内容 |
 |---|---|
-| [async-style.md](common/async-style.md) | 三类「外来的异步」在五种写法里各写一遍：① 跨模块异步调用 ② **包装非 Promise 的异步调用**（回调式 SDK → `NewPromise(fnStarter)`）③ **子 Promise 链**（`ThenPromise`）；写法 = then 链 + `ThenBridge`（默认）/ 协程 `CO_AWAIT` / 手写桥接 / 并行汇聚 `WhenAll` / 失败补偿（`Catch` 分流 + 反向操作）；含公共部分、五条业务路径、选型对照表与判据 |
+| [async-style.md](common/async-style.md) | 三类「外来的异步」在五种写法里各写一遍：① 跨模块异步调用 ② **包装非 Promise 的异步调用**（回调式 SDK → `NewPromise(fnStarter, 类别)`）③ **子 Promise 链**（`ThenPromise`）；写法 = then 链 + `ThenBridge`（默认）/ 协程 `CO_AWAIT` / 手写桥接 / 并行汇聚 `WhenAll` / 失败补偿（`Catch` 分流 + 反向操作）；含公共部分、五条业务路径、选型对照表与判据 |
 
 ### 问题记录（`docs/common/`）
 

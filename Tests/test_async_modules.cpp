@@ -83,11 +83,11 @@ public:
         };
 
         return m_exec
-            .NewPromise(spCtx, &StepLoadOrder, ASYNC_LOC)  // ① 本模块执行器
-            .ThenPromise(fnQueryStock, ASYNC_LOC)          // ② + ③ 库存模块
-            .Then(&StepTakeStock, ASYNC_LOC)               // ④ 线程亲和：回本模块线程
-            .ThenPromise(fnBackHome, ASYNC_LOC)            // ⑤ 投递回本模块
-            .Then(&StepFinish, ASYNC_LOC);                 // ⑥ 本模块执行器
+            .NewPromise(spCtx, &StepLoadOrder, common::async::TaskKind::kWrite, ASYNC_LOC)  // ① 本模块执行器
+            .ThenPromise(fnQueryStock, common::async::TaskKind::kWrite, ASYNC_LOC)          // ② + ③ 库存模块
+            .Then(&StepTakeStock, common::async::TaskKind::kWrite, ASYNC_LOC)               // ④ 线程亲和：回本模块线程
+            .ThenPromise(fnBackHome, common::async::TaskKind::kWrite, ASYNC_LOC)            // ⑤ 投递回本模块
+            .Then(&StepFinish, common::async::TaskKind::kWrite, ASYNC_LOC);                 // ⑥ 本模块执行器
     }
 
     /// @brief 下单流程（「ThenBridge 版」）：与 PlaceOrderAsync 逐项等价，只是跨模块那一层改用简写。
@@ -125,11 +125,11 @@ public:
         };
 
         return m_exec
-            .NewPromise(spCtx, &StepLoadOrder, ASYNC_LOC)        // ① 本模块执行器
-            .ThenBridge(fnCreateStock, fnApplyStock, ASYNC_LOC)  // ② + ③ 库存模块（一行顶手写桥接）
-            .Then(&StepTakeStock, ASYNC_LOC)                     // ④ 线程亲和：回本模块线程
-            .ThenPromise(fnBackHome, ASYNC_LOC)                  // ⑤ 投递回本模块
-            .Then(&StepFinish, ASYNC_LOC);                       // ⑥ 本模块执行器
+            .NewPromise(spCtx, &StepLoadOrder, common::async::TaskKind::kWrite, ASYNC_LOC)        // ① 本模块执行器
+            .ThenBridge(fnCreateStock, fnApplyStock, common::async::TaskKind::kWrite, ASYNC_LOC)  // ② + ③ 库存模块（一行顶手写桥接）
+            .Then(&StepTakeStock, common::async::TaskKind::kWrite, ASYNC_LOC)                     // ④ 线程亲和：回本模块线程
+            .ThenPromise(fnBackHome, common::async::TaskKind::kWrite, ASYNC_LOC)                  // ⑤ 投递回本模块
+            .Then(&StepFinish, common::async::TaskKind::kWrite, ASYNC_LOC);                       // ⑥ 本模块执行器
     }
 
 private:
@@ -193,7 +193,7 @@ private:
                     fnResolve();
                 });
         };
-        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     /// ⑤ 回到本模块线程：跨模块回调里显式投递到本模块执行器，再 settle 本层。
@@ -219,7 +219,7 @@ private:
                 fnReject(common::async::CPromiseResult::Reject(std::runtime_error(kExecUnavailableText)));
             }
         };
-        return m_exec.NewPromise(spCtx, fnStarter, ASYNC_LOC);
+        return m_exec.NewPromise(spCtx, fnStarter, common::async::TaskKind::kWrite, ASYNC_LOC);
     }
 
     common::async::CAsyncExecutor m_exec;  ///< 模块私有执行器（单线程；析构自动 Stop）。
@@ -435,11 +435,11 @@ TEST(Module_BridgeHelperPropagatesRejection)
 
     // 桥接那一层的结果：以子链的异常被拒绝（框架只搬运、不解释）。
     common::async::CPromise<COrderCtx> promiseBridge =
-        exec.NewPromise(spCtx, &StepLoadOrderForTest, ASYNC_LOC).ThenBridge(fnCreateReject, fnApplyNever, ASYNC_LOC);
+        exec.NewPromise(spCtx, &StepLoadOrderForTest, common::async::TaskKind::kWrite, ASYNC_LOC).ThenBridge(fnCreateReject, fnApplyNever, common::async::TaskKind::kWrite, ASYNC_LOC);
 
     // 后续层：A2 跳过 → Catch 看到同一异常并恢复 → A3 执行。
     const common::async::CPromiseResult resultTail =
-        promiseBridge.Then(fnAfterBridge, ASYNC_LOC).Catch(fnCatch, ASYNC_LOC).Then(fnAfterCatch, ASYNC_LOC).Await();
+        promiseBridge.Then(fnAfterBridge, common::async::TaskKind::kWrite, ASYNC_LOC).Catch(fnCatch, common::async::TaskKind::kWrite, ASYNC_LOC).Then(fnAfterCatch, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
 
     const common::async::CPromiseResult resultBridge = promiseBridge.Await();
     ASSERT_TRUE(resultBridge.IsRejected());
@@ -477,9 +477,9 @@ TEST(Module_BridgeHelperApplyThrowRejects)
         return common::async::CPromiseResult::Resolve();
     };
 
-    const common::async::CPromiseResult result = exec.NewPromise(spCtx, &StepLoadOrderForTest, ASYNC_LOC)
-                                                     .ThenBridge(fnCreateStock, fnApplyThrow, ASYNC_LOC)
-                                                     .Catch(fnCatch, ASYNC_LOC)
+    const common::async::CPromiseResult result = exec.NewPromise(spCtx, &StepLoadOrderForTest, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                     .ThenBridge(fnCreateStock, fnApplyThrow, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                     .Catch(fnCatch, common::async::TaskKind::kWrite, ASYNC_LOC)
                                                      .Await();
 
     ASSERT_TRUE(result.IsFulfilled());                    // Catch 恢复了结果
