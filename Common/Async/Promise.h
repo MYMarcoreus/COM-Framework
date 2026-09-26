@@ -626,12 +626,14 @@ private:
 /// @param pHandle 本链执行器句柄（重入投递用；恒非空）。
 /// @param pState 本层状态（执行结果写入它）。
 /// @param fnBody 执行体（返回本层结果）。
+/// @param bRetried 本层这次运行是否已因「自请过门」挂起过一次（重入运行器传 true；判据见 GateGuard.h：
+///                 一次运行只允许挂起一次，第二次挂起即收口）。
 /// @return 任务体（在工作线程上执行处理器并 settle 本层状态）。
 template <typename TBody>
-std::function<void()> MakeLayerRunner(
-    const std::shared_ptr<CExecutorHandle>& pHandle, const std::shared_ptr<CPromiseState>& pState, TBody fnBody)
+std::function<void()> MakeLayerRunner(const std::shared_ptr<CExecutorHandle>& pHandle,
+    const std::shared_ptr<CPromiseState>& pState, TBody fnBody, bool bRetried = false)
 {
-    return [pHandle, pState, fnBody]()
+    return [pHandle, pState, fnBody, bRetried]()
     {
         // ① 压层体调用作用域（TLS，零分配）：`ASYNC_GATE` 的判定与挂起请求都写在这里。
         const CGateCallScope scope(pHandle->m_pGate.get());
@@ -661,7 +663,16 @@ std::function<void()> MakeLayerRunner(
         //    不 settle，改为把「再跑一遍本层」按请求类别过门投递；重入时帧已匹配，请求那一行落穿。
         if (scope.bSuspended)
         {
-            std::function<void()> fnRetry = MakeLayerRunner(pHandle, pState, fnBody);
+            // 兜底：一次运行只允许挂起一次（编译期已保证「一个层体只声明一次」，重入后必然落穿）。
+            // 第二次挂起 = 漏网的换档写法（辅助函数里再声明门 / 绕过宏直接请求）→ 收成**有界失败**
+            //（诊断 + 本层收口），而不是让链在门之间来回换档。
+            if (bRetried)
+            {
+                ReportDiagnostic(kDiagGateSuspendedTwice);
+                pState->Settle(CPromiseResult::Reject(std::runtime_error("ASYNC_GATE 重复挂起")));
+                return;
+            }
+            std::function<void()> fnRetry = MakeLayerRunner(pHandle, pState, fnBody, /* bRetried = */ true);
             if (!PostToHandle(pHandle, scope.eRequested, std::move(fnRetry)))
             {
                 // 执行器不可用 → 本层以「执行器已停」收口（链绝不永久 pending）。
@@ -914,12 +925,17 @@ public:
     /// 「处理器看不到上游结果」（上一层被拒绝时本层根本不执行），所以它只接上下文：
     /// 要处理拒绝请用 `Catch`（那里才拿得到 `upResult`）。
     ///
+    /// **类别两种写法**：
+    ///  - 省略（缺省 `kDirect`）→ **不过读写门**：本层不占槽位、不与他人互斥；需要门保护时在函数体
+    ///    第一行用 `ASYNC_GATE_READ()` / `ASYNC_GATE_WRITE()` 声明（「是读还是写」由函数自己说了算，
+    ///    调用方不必操心；框架发现不在目标槽位会挂起本层并按声明类别过门重入）；
+    ///  - 显式给 → 本层按该类别过门（读可并发 / 写独占）。
+    ///
     /// @param fnHandler 本层处理器（then 签名）。
-    /// @param eKind 本层类别（**必填**：读可并发 / 写独占 / 直投不过门）—— 本框架不给默认值，
-    ///              每一层都要自己说清「读还是写」（读层不得修改模块状态）。
+    /// @param eKind 本层类别（可选：缺省 `kDirect` = 不过门；显式给读 / 写即按该类别过门）。
     /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
     /// @return 指向本层的 promise 句柄（后续 Await / Then / Catch / Finally 作用于本层）。
-    CPromise Then(const ThenHandler& fnHandler, TaskKind eKind, const CSourceLoc& loc = CSourceLoc())
+    CPromise Then(const ThenHandler& fnHandler, TaskKind eKind = TaskKind::kDirect, const CSourceLoc& loc = CSourceLoc())
     {
         return AppendThenLayer(fnHandler, loc, eKind);
     }
@@ -931,10 +947,11 @@ public:
     /// 上一层已兑现时本层不执行，结果原样透传。
     ///
     /// @param fnHandler 本层处理器（catch 签名：入参是本层要处理的失败结果）。
-    /// @param eKind 本层类别（**必填**：读可并发 / 写独占 / 直投不过门；回滚 / 补偿要写状态 → `kWrite`）。
+    /// @param eKind 本层类别（可选：缺省 `kDirect` = 不过门；回滚 / 补偿要碰状态 → `kWrite`，
+    ///              或在函数体首行用 `ASYNC_GATE_WRITE()` 声明）。
     /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
     /// @return 指向本层的 promise 句柄。
-    CPromise Catch(const ResultHandler& fnHandler, TaskKind eKind, const CSourceLoc& loc = CSourceLoc())
+    CPromise Catch(const ResultHandler& fnHandler, TaskKind eKind = TaskKind::kDirect, const CSourceLoc& loc = CSourceLoc())
     {
         return AppendResultLayer(fnHandler, detail::kModeCatch, loc, eKind);
     }
@@ -947,10 +964,11 @@ public:
     /// 需要在失败时改变链的走向请用 Catch。
     ///
     /// @param fnHandler 本层处理器（finally 签名，`upResult` 为上一层结果）。
-    /// @param eKind 本层类别（**必填**：读可并发 / 写独占 / 直投不过门；收尾审计要写状态 → `kWrite`）。
+    /// @param eKind 本层类别（可选：缺省 `kDirect` = 不过门；收尾审计要碰状态 → `kWrite`，
+    ///              或在函数体首行用 `ASYNC_GATE_WRITE()` 声明）。
     /// @param loc 注册点源码位置（可选，建议传 ASYNC_LOC）。
     /// @return 指向本层的 promise 句柄。
-    CPromise Finally(const ResultHandler& fnHandler, TaskKind eKind, const CSourceLoc& loc = CSourceLoc())
+    CPromise Finally(const ResultHandler& fnHandler, TaskKind eKind = TaskKind::kDirect, const CSourceLoc& loc = CSourceLoc())
     {
         return AppendResultLayer(fnHandler, detail::kModeFinally, loc, eKind);
     }

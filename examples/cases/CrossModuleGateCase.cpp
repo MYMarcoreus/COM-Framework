@@ -29,6 +29,7 @@
 
 #include "Assert.h"
 #include "Async/AsyncExecutor.h"
+#include "Async/GateGuard.h"
 #include "Async/Promise.h"
 
 namespace {
@@ -51,7 +52,7 @@ struct CGateCtx
 class CCalleeModule
 {
 public:
-    CCalleeModule() : m_spExec(new CAsyncExecutor(2)), m_nActive(0), m_nOverlaps(0), m_nSettled(0)
+    CCalleeModule() : m_spExec(new CAsyncExecutor(2)), m_nActive(0), m_nOverlaps(0), m_nSettled(0), m_nGatedRuns(0)
     {}
 
     bool Start()
@@ -84,6 +85,54 @@ public:
                 fnResolve();
             },
             TaskKind::kWrite);
+    }
+
+    /// @brief 层体自请过门（`ASYNC_GATE`）：具名处理器，**函数自己声明**它要在写槽位里跑。
+    ///
+    /// 调用点连类别都不写（`.Then(...)` 缺省不过门）：框架发现本层不在写槽位 → 挂起本层
+    /// （函数立即返回占位结果，不用异常）→ 把「再跑一遍本层」按 `kWrite` 过门投递 → 门内跑起来
+    /// 时任务帧匹配，宏那一行自动落穿、继续执行函数体。本层没 settle 前，下游层不会跑。
+    ///
+    /// @param spCtx 本流程上下文。
+    /// @return 兑现。
+    CPromiseResult StepBumpGated(const std::shared_ptr<CGateCtx>& spCtx)
+    {
+        ASYNC_GATE_WRITE();  // ← 必须第一条语句：本函数体独占进入本模块
+        EnterCritical();
+        m_mapStats[spCtx->nUserId] += 1;
+        LeaveCritical();
+        m_nSettled.fetch_add(1);
+        m_nGatedRuns.fetch_add(1);
+        return CPromiseResult::Resolve();
+    }
+
+    /// @brief 公开异步函数：只用 then 系列，**调用点省略类别**（门要求写在处理器里）。
+    ///
+    /// @param spCtx 本流程上下文。
+    /// @return 本流程的 promise 句柄。
+    CPromise<CGateCtx> BumpGatedAsync(const std::shared_ptr<CGateCtx>& spCtx)
+    {
+        return m_spExec
+            ->NewPromise(
+                spCtx,
+                [](const std::shared_ptr<CGateCtx>& /*spSelf*/)
+                {
+                    return CPromiseResult::Resolve();
+                },
+                TaskKind::kRead)  // 首层（起链入口）仍显式给类别
+            .Then(
+                [this](const std::shared_ptr<CGateCtx>& spCtxSelf)
+                {
+                    return StepBumpGated(spCtxSelf);  // ← 本层省略类别：门要求由处理器自己声明
+                });
+    }
+
+    /// @brief 「自请过门」那条流跑了多少次（观测用）。
+    ///
+    /// @return 次数。
+    int GatedRuns() const
+    {
+        return m_nGatedRuns.load();
     }
 
     /// @brief 本模块自己的写链（门内首层碰状态）：驱动用例用，只用 then 系列。
@@ -155,6 +204,7 @@ private:
     std::atomic<int> m_nActive;                ///< 当前在状态段里的进入者数（观测用）
     std::atomic<int> m_nOverlaps;              ///< 重叠进入次数（观测用，应为 0）
     std::atomic<int> m_nSettled;               ///< 已落定的流数（观测用）
+    std::atomic<int> m_nGatedRuns;             ///< 「自请过门」那条流跑了多少次（观测用）
 };
 
 /// @brief 调用方模块 A：自己的执行器（自己的门），链**只用 then 系列**组装。
@@ -241,11 +291,8 @@ bool RunCrossModuleGateCase()
     // 主线程逐条等落定（主线程不占任何槽位；这里只为「跑完再断言」）。
     for (std::size_t i = 0; i < vecFlows.size(); ++i)
     {
-        vecFlows[i].Await();
+        ASSERT(vecFlows[i].Await().IsFulfilled());
     }
-
-    caller.Stop();  // Stop = 先关门、再等已接受的跑完 → 之后读状态才是安全的
-    spCallee->Stop();
 
     const int nStatA = spCallee->StatOf(3);
     const int nStatB = spCallee->StatOf(7);
@@ -261,5 +308,45 @@ bool RunCrossModuleGateCase()
     ASSERT(nStatB == kFlows);        // 自己模块的写链每条加 1
     ASSERT(nSettled == 2 * kFlows);  // 两条流都真的跑完（不是被门挡死）
     ASSERT(nOverlaps == 0);          // 被调模块的状态段任意时刻只有一个进入者
+
+    // ── 第二段：层体自请过门（`ASYNC_GATE`） ────────────────────────────
+    //
+    // `BumpGatedAsync` 的调用点**省略了类别**（缺省不过门），门要求写在具名处理器
+    // `StepBumpGated` 的第一行（`ASYNC_GATE_WRITE()`）：框架挂起本层并按写类别过门重入。
+    // 与模块自己的写链并发跑，观测同样应「零重叠 + 计数精确」。
+    std::vector<CPromise<CGateCtx> > vecGated;
+    for (int i = 0; i < kFlows; ++i)
+    {
+        std::shared_ptr<CGateCtx> spGated(new CGateCtx());
+        spGated->nUserId = 11;
+        vecGated.push_back(spCallee->BumpGatedAsync(spGated));
+
+        std::shared_ptr<CGateCtx> spOwn(new CGateCtx());
+        spOwn->nUserId = 13;
+        vecGated.push_back(spCallee->OwnWriteAsync(spOwn));
+    }
+    for (std::size_t i = 0; i < vecGated.size(); ++i)
+    {
+        ASSERT(vecGated[i].Await().IsFulfilled());  // 挂起重入也算「跑完」：不应以「执行器已停」收口
+    }
+
+    caller.Stop();  // Stop = 先关门、再等已接受的跑完 → 之后读状态才是安全的
+    spCallee->Stop();
+
+    const int nStatGated = spCallee->StatOf(11);
+    const int nStatPlain = spCallee->StatOf(13);
+    const int nGatedRuns = spCallee->GatedRuns();
+    const int nGatedOverlaps = spCallee->Overlaps() - nOverlaps;
+
+    std::printf(
+        "  ASYNC_GATE：跨模块链 %d 条（调用点省略类别、处理器自称写门）+ 模块自己的写链 %d 条："
+        "user11=%d user13=%d、自请过门层跑了 %d 次、状态段重叠进入 %d 次\n",
+        kFlows, kFlows, nStatGated, nStatPlain, nGatedRuns, nGatedOverlaps);
+
+    std::fflush(stdout);           // 断言失败时也能看到上面的数字
+    ASSERT(nStatGated == kFlows);  // 自请过门的层：计数不丢更新
+    ASSERT(nStatPlain == kFlows);  // 与它并发的模块写链同样精确
+    ASSERT(nGatedRuns == kFlows);  // 函数体只跑一次（挂起 → 重入后宏落穿，不重复执行）
+    ASSERT(nGatedOverlaps == 0);   // 声明了写门，就真的独占（与「门内首层」同样安全）
     return true;
 }

@@ -142,6 +142,14 @@ git commit -m "升级 asio 到 <新标签>"
 | `./ThirdParty/build.sh --compiledb` | 生成 workflow 源码 compile_commands.json |
 | `./ThirdParty/build.sh --clean` | 清理第三方库构建产物 |
 
+### 辅助脚本 `.tools/`
+
+| 命令 | 说明 |
+| --- | --- |
+| `bash .tools/check_async_gate_once.sh` | 编译期自检：`ASYNC_GATE` 同一函数只允许一处（重复 → `duplicate label`） |
+| `bash .tools/setup_tools.sh` | 在工作区 `.tools/venv` 中安装 `compiledb` |
+| `bash .tools/run_project.sh <项目> [模式]` | 构建并运行指定可执行项目（VS Code「run」任务调用） |
+
 ### 项目级 Makefile（由 `build.sh` 调用）
 
 | 命令 | 说明 |

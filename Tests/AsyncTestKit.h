@@ -55,6 +55,15 @@ inline bool IsTimeoutFailure(const common::async::CPromiseResult& result)
     return result.IsRejected() && result.Message() == "等待超时";
 }
 
+/// @brief 是不是「`ASYNC_GATE` 重复挂起」这类框架侧失败（本层一次运行里挂了第二次）。
+///
+/// @param result 待判定的结果。
+/// @return true 是。
+inline bool IsGateSuspendedTwiceFailure(const common::async::CPromiseResult& result)
+{
+    return result.IsRejected() && result.Message() == "ASYNC_GATE 重复挂起";
+}
+
 /// @brief 是不是「未指定原因」这类框架侧失败（组合器空集合等）。
 ///
 /// @param result 待判定的结果。

@@ -510,13 +510,13 @@ public:
     {
         CO_BEGIN();
         {
-            const common::async::detail::CTaskFrame* pFrame = common::async::detail::TaskFrameTop();
+            const common::async::detail::CTaskFrame* pFrame = common::async::detail::CTaskFrame::Top();
             nFirstKind.store(pFrame != NULL ? static_cast<int>(pFrame->eKind) : -1);
         }
         // 恢复后那一段显式声明为读（本段只读上下文 / 观测计数，不碰模块状态）。
         CO_AWAIT(common::async::TaskKind::kRead, promiseGate);
         {
-            const common::async::detail::CTaskFrame* pFrame = common::async::detail::TaskFrameTop();
+            const common::async::detail::CTaskFrame* pFrame = common::async::detail::CTaskFrame::Top();
             nResumeKind.store(pFrame != NULL ? static_cast<int>(pFrame->eKind) : -1);
         }
         pObs->EnterRead();
@@ -764,7 +764,7 @@ TEST(AsyncRw_BridgeFactoryRunsGated)
     chain = chain.ThenPromise(
         [&exec, &bFactoryRan, &bFactoryHasSlot, &factoryTid](const std::shared_ptr<SRwCtx>& spSelf) -> CPromise<SRwCtx>
         {
-            bFactoryHasSlot.store(common::async::detail::TaskFrameTop() != NULL);
+            bFactoryHasSlot.store(common::async::detail::CTaskFrame::Top() != NULL);
             factoryTid = std::this_thread::get_id();
             bFactoryRan.store(true);
             return exec.NewPromise(
@@ -826,7 +826,7 @@ TEST(AsyncRw_CrossModuleStarterLandsInCalleeGate)
     ASSERT_TRUE(execCallee.Post(TaskKind::kWrite,
         [&pGateCallee, &bGotGate]()
         {
-            pGateCallee = common::async::detail::TaskFrameTop()->pGate;
+            pGateCallee = common::async::detail::CTaskFrame::Top()->pGate;
             bGotGate.store(true);
         }));
     ASSERT_TRUE(WaitUntil(
@@ -854,7 +854,7 @@ TEST(AsyncRw_CrossModuleStarterLandsInCalleeGate)
                 [&bStarterRan, &bStarterInOwnGate, &bStarterHasSlot, &nStarterKind, &pGateCallee](
                     const CPromise<SRwCtx>::ResolveFn& fnResolve, const CPromise<SRwCtx>::RejectFn& /*fnReject*/)
                 {
-                    const common::async::detail::CTaskFrame* pFrame = common::async::detail::TaskFrameTop();
+                    const common::async::detail::CTaskFrame* pFrame = common::async::detail::CTaskFrame::Top();
                     bStarterHasSlot.store(pFrame != NULL);
                     bStarterInOwnGate.store(pFrame != NULL && pFrame->pGate == pGateCallee);
                     nStarterKind.store(pFrame != NULL ? static_cast<int>(pFrame->eKind) : -1);
@@ -912,7 +912,7 @@ TEST(AsyncRw_StarterRunsUnderDeclaredKind)
                 [&bDone, &bHasSlot, &nKind](
                     const CPromise<SRwCtx>::ResolveFn& fnResolve, const CPromise<SRwCtx>::RejectFn& /*fnReject*/)
                 {
-                    const common::async::detail::CTaskFrame* pFrame = common::async::detail::TaskFrameTop();
+                    const common::async::detail::CTaskFrame* pFrame = common::async::detail::CTaskFrame::Top();
                     bHasSlot.store(pFrame != NULL);
                     nKind.store(pFrame != NULL ? static_cast<int>(pFrame->eKind) : -1);
                     fnResolve();
@@ -956,7 +956,7 @@ TEST(AsyncRw_GateMacroNoOpWhenKindMatches)
                                           {
                                               ASYNC_GATE_READ();  // 与挂层处同类
                                               ++nBodyRuns;
-                                              nBodyKind.store(static_cast<int>(common::async::detail::TaskFrameTop()->eKind));
+                                              nBodyKind.store(static_cast<int>(common::async::detail::CTaskFrame::Top()->eKind));
                                               return CPromiseResult::Resolve();
                                           },
                                           TaskKind::kRead, ASYNC_LOC)
@@ -1024,13 +1024,12 @@ TEST(AsyncRw_GateMacroUpgradesToWriteSlot)
                                  .Then(
                                      [&nBodyRuns, &nBodyKind](const std::shared_ptr<SRwCtx>& /*spCtx*/)
                                      {
-                                         // 升级点：挂层处只给了 kRead，这里声明「本层体必须独占」
+                                         // 升级点：调用点**连类别都不写**（缺省不过门），函数体声明「本层体必须独占」
                                          ASYNC_GATE_WRITE();
                                          ++nBodyRuns;
-                                         nBodyKind.store(static_cast<int>(common::async::detail::TaskFrameTop()->eKind));
+                                         nBodyKind.store(static_cast<int>(common::async::detail::CTaskFrame::Top()->eKind));
                                          return CPromiseResult::Resolve();
-                                     },
-                                     TaskKind::kRead, ASYNC_LOC)
+                                     })  // ← 省略类别：默认不过门，门要求由上面的 ASYNC_GATE 声明
                                  .Then(
                                      [&bDownstream](const std::shared_ptr<SRwCtx>& /*spCtx*/)
                                      {
@@ -1055,6 +1054,192 @@ TEST(AsyncRw_GateMacroUpgradesToWriteSlot)
     ASSERT_EQ(nBodyRuns.load(), 1);                                   // 只跑一次（重入后宏落穿）
     ASSERT_EQ(nBodyKind.load(), static_cast<int>(TaskKind::kWrite));  // 在写槽位里
     ASSERT_TRUE(bDownstream.load());                                  // 本层 settle 之后才轮到下游
+    exec.Stop();
+}
+
+/// @brief `Then` 省略类别 = **不过门**（缺省 `kDirect`）：写者占着门时它照跑，且不占槽位。
+TEST(AsyncRw_ThenWithoutKindRunsUngated)
+{
+    CAsyncExecutor exec(2);
+    ASSERT_TRUE(exec.Start());
+
+    std::atomic<bool> bWriterHolds(false);
+    std::atomic<bool> bReleaseWriter(false);
+    std::atomic<bool> bUngatedRan(false);
+    std::atomic<bool> bWriterStillHolding(false);
+    std::atomic<int> nFrameKind(-2);  // -1 = 没有任务帧（不过门）
+
+    // 写任务占住门不放
+    ASSERT_TRUE(exec.Post(TaskKind::kWrite,
+        [&bWriterHolds, &bReleaseWriter]()
+        {
+            bWriterHolds.store(true);
+            WaitUntil(
+                [&bReleaseWriter]()
+                {
+                    return bReleaseWriter.load();
+                },
+                2000);
+        }));
+    ASSERT_TRUE(WaitUntil(
+        [&bWriterHolds]()
+        {
+            return bWriterHolds.load();
+        },
+        1000));
+
+    std::shared_ptr<SRwCtx> spCtx = std::make_shared<SRwCtx>();
+    spCtx->nId = 5;
+    CPromise<SRwCtx> chain =
+        exec.NewPromise(
+                spCtx,
+                [](const std::shared_ptr<SRwCtx>& /*spCtx*/)
+                {
+                    return CPromiseResult::Resolve();
+                },
+                TaskKind::kDirect, ASYNC_LOC)  // 首层显式直投（写者占门时也能跑，便于观察默认层）
+            .Then(
+                [&bUngatedRan, &bWriterHolds, &bWriterStillHolding, &nFrameKind](const std::shared_ptr<SRwCtx>& /*spCtx*/)
+                {
+                    // 省略类别 → 缺省不过门：没有任务帧、且写者仍在门里
+                    const common::async::detail::CTaskFrame* pFrame = common::async::detail::CTaskFrame::Top();
+                    nFrameKind.store(pFrame != NULL ? static_cast<int>(pFrame->eKind) : -1);
+                    bWriterStillHolding.store(bWriterHolds.load());
+                    bUngatedRan.store(true);
+                    return CPromiseResult::Resolve();
+                });  // ← 省略类别
+
+    ASSERT_TRUE(WaitUntil(
+        [&bUngatedRan]()
+        {
+            return bUngatedRan.load();
+        },
+        1000));                        // 写者占门也照跑 → 确实不过门
+    ASSERT_EQ(nFrameKind.load(), -1);  // 没有槽位（帧为空）
+    ASSERT_TRUE(bWriterStillHolding.load());
+    bReleaseWriter.store(true);
+    ASSERT_TRUE(chain.Await().IsFulfilled());
+    exec.Stop();
+}
+
+// ====================================================================
+// `ASYNC_GATE` 用法样例（**具名处理器**，与业务模块里的写法一致）
+//
+// 三种形态都演示一遍：
+//   ① ASYNC_GATE_WRITE()   —— 会改状态，要独占
+//   ② ASYNC_GATE_READ()    —— 只读，可与其它读并发
+//   ③ ASYNC_GATE(kWrite)   —— 基础形态（类别用宏参数给）
+// 调用点**都不写类别**（缺省不过门），门要求由函数体自己声明。
+// ====================================================================
+
+namespace {
+
+/// @brief 样例上下文：记「函数体跑了几次 + 以什么类别跑的」。
+struct SGateSampleCtx
+{
+    SGateSampleCtx() : nRuns(0), nKind(-2)
+    {}
+
+    std::atomic<int> nRuns;  ///< 函数体跑了几次（重入落穿后仍应为 1）。
+    std::atomic<int> nKind;  ///< 帧上的类别（-1 = 没有帧 / 不过门）。
+};
+
+/// @brief 记一笔「本层体是在什么槽位里跑的」（三种样例共用）。
+///
+/// @param spCtx 样例上下文。
+/// @param eKind 本次帧上的类别（没有帧则传 `kDirect`）。
+void NoteRun(const std::shared_ptr<SGateSampleCtx>& spCtx, const common::async::detail::CTaskFrame* pFrame)
+{
+    spCtx->nRuns.fetch_add(1);
+    spCtx->nKind.store(pFrame != nullptr ? static_cast<int>(pFrame->eKind) : -1);
+}
+
+/// @brief 用法样例①：具名处理器 + `ASYNC_GATE_WRITE()`（改状态 → 要写槽位）。
+///
+/// @param spCtx 样例上下文。
+/// @return 兑现。
+common::async::CPromiseResult StepSampleWriteGated(const std::shared_ptr<SGateSampleCtx>& spCtx)
+{
+    ASYNC_GATE_WRITE();  // ← 必须第一条语句：本函数体独占进入本模块
+    NoteRun(spCtx, common::async::detail::CTaskFrame::Top());
+    return common::async::CPromiseResult::Resolve();
+}
+
+/// @brief 用法样例②：具名处理器 + `ASYNC_GATE_READ()`（只读 → 与其它读并发）。
+///
+/// @param spCtx 样例上下文。
+/// @return 兑现。
+common::async::CPromiseResult StepSampleReadGated(const std::shared_ptr<SGateSampleCtx>& spCtx)
+{
+    ASYNC_GATE_READ();  // ← 必须第一条语句：本函数体在读槽位里跑
+    NoteRun(spCtx, common::async::detail::CTaskFrame::Top());
+    return common::async::CPromiseResult::Resolve();
+}
+
+/// @brief 用法样例③：基础形态 `ASYNC_GATE(kWrite)`（类别当宏参数给）。
+///
+/// @param spCtx 样例上下文。
+/// @return 兑现。
+common::async::CPromiseResult StepSampleExplicitGated(const std::shared_ptr<SGateSampleCtx>& spCtx)
+{
+    ASYNC_GATE(kWrite);  // ← 基础形态；`ASYNC_GATE_READ()` / `ASYNC_GATE_WRITE()` 就是它的简写
+    NoteRun(spCtx, common::async::detail::CTaskFrame::Top());
+    return common::async::CPromiseResult::Resolve();
+}
+
+/// @brief 起一条「首层（读）→ 样例处理器（不写类别）」的链并等它跑完。
+///
+/// @param exec 执行器。
+/// @param spCtx 样例上下文。
+/// @param fnHandler 样例处理器。
+/// @return 链的最终结果。
+common::async::CPromiseResult RunSampleChain(common::async::CAsyncExecutor& exec, const std::shared_ptr<SGateSampleCtx>& spCtx,
+    const std::function<common::async::CPromiseResult(const std::shared_ptr<SGateSampleCtx>&)>& fnHandler)
+{
+    return exec
+        .NewPromise(
+            spCtx,
+            [](const std::shared_ptr<SGateSampleCtx>& /*spCtx*/)
+            {
+                return common::async::CPromiseResult::Resolve();
+            },
+            TaskKind::kRead, ASYNC_LOC)
+        .Then(fnHandler)  // ← 省略类别：缺省不过门，门要求由处理器自己声明
+        .Await();
+}
+
+}  // namespace
+
+/// @brief `ASYNC_GATE` 用法样例：三种形态都能「调用点不写类别、函数体自己声明门要求」。
+TEST(AsyncRw_GateMacroUsageSamples)
+{
+    CAsyncExecutor exec(2);
+    ASSERT_TRUE(exec.Start());
+
+    // ① 写声明：链上首层是读、本层省略类别 → 自动升级到写槽位
+    {
+        std::shared_ptr<SGateSampleCtx> spCtx = std::make_shared<SGateSampleCtx>();
+        ASSERT_TRUE(RunSampleChain(exec, spCtx, &StepSampleWriteGated).IsFulfilled());
+        ASSERT_EQ(spCtx->nRuns.load(), 1);  // 重入落穿后只跑一次函数体
+        ASSERT_EQ(spCtx->nKind.load(), static_cast<int>(TaskKind::kWrite));
+    }
+
+    // ② 读声明：在读槽位里跑
+    {
+        std::shared_ptr<SGateSampleCtx> spCtx = std::make_shared<SGateSampleCtx>();
+        ASSERT_TRUE(RunSampleChain(exec, spCtx, &StepSampleReadGated).IsFulfilled());
+        ASSERT_EQ(spCtx->nRuns.load(), 1);
+        ASSERT_EQ(spCtx->nKind.load(), static_cast<int>(TaskKind::kRead));
+    }
+
+    // ③ 基础形态：同上（写成 ASYNC_GATE(kWrite)）
+    {
+        std::shared_ptr<SGateSampleCtx> spCtx = std::make_shared<SGateSampleCtx>();
+        ASSERT_TRUE(RunSampleChain(exec, spCtx, &StepSampleExplicitGated).IsFulfilled());
+        ASSERT_EQ(spCtx->nRuns.load(), 1);
+        ASSERT_EQ(spCtx->nKind.load(), static_cast<int>(TaskKind::kWrite));
+    }
+
     exec.Stop();
 }
 

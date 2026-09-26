@@ -606,7 +606,7 @@ exec.Stop();                             // 停止并等待已投递任务完成
 | --- | --- | --- |
 | `kWrite` | 独占：排斥本执行器内所有读写任务（写者之间也串行） | `exec.Post(TaskKind::kWrite, fn)` / `exec.NewPromise(spCtx, 首层, TaskKind::kWrite, loc)`；层体里也可自称 `ASYNC_GATE_WRITE()`（见下） |
 | `kRead` | 并发：多个读任务可同时进入（上限 = 执行器线程数） | `exec.Post(TaskKind::kRead, fn)` / `exec.NewPromise(spCtx, 首层, TaskKind::kRead, loc)` |
-| `kDirect` | 直投：**不进读写门**（不入队、不占槽位、不参与公平性），随时可与读 / 写并发 | `exec.Post(TaskKind::kDirect, fn)` / `exec.NewPromise(spCtx, 首层, TaskKind::kDirect, loc)`；层同理（`Then(handler, TaskKind::kDirect, loc)`） |
+| `kDirect` | 直投：**不进读写门**（不入队、不占槽位、不参与公平性），随时可与读 / 写并发 | `exec.Post(TaskKind::kDirect, fn)` / `exec.NewPromise(spCtx, 首层, TaskKind::kDirect, loc)`；层同理 —— `Then(handler)` **省略类别即为此**（也可显式写 `Then(handler, TaskKind::kDirect, loc)`） |
 
 ```cpp
 // 模块的对外异步函数：查询 = 读链（可并发），写入 = 写链（独占），上报 = 直投（不过门）
@@ -635,7 +635,7 @@ exec.Post(common::async::TaskKind::kDirect, fnFlushMetrics);  // 直投：不过
 | 代码 | 在哪跑 |
 | --- | --- |
 | **起链回调** `NewPromise(spCtx, fnStarter, 类别)` 的 `fnStarter` | 已在本门**同类**槽位里 → 就地同步跑（JS 的 `new Promise(executor)` 语义，零开销）；否则（门外 / 别的模块的线程 / 换类别）→ **按类别过门投递**后再跑 |
-| 首层（`NewPromise(spCtx, 处理器, 类别)`）与后续每一层（`Then` 一族） | 本链执行器 + 本层类别过门 |
+| 首层（`NewPromise(spCtx, 处理器, 类别)`）与后续每一层（`Then` 一族） | 本链执行器 + 本层类别过门（`Then` 一族省略类别 = `kDirect`：不过门，跑在本链执行器线程上但不占槽位） |
 | 「等子链」层的工厂（`ThenPromise` / `ThenBridge` 的 `fnCreate`） | 本层类别过门（上游即使是外部线程 settle 的也一样） |
 | 协程每一段（`CoStart` 与每个 `CO_AWAIT`） | 本段类别过门 |
 
@@ -651,12 +651,14 @@ exec.Post(common::async::TaskKind::kDirect, fnFlushMetrics);  // 直投：不过
 
 规则与后果（**都是行为契约，不只是性能开关**）：
 
-- **类别是契约，不是可选参数**：`Post` / `NewPromise` / `Then` 一族 / `CoStart` / 组合器**每一处都要显式
-  声明**（本框架不提供默认值 —— 默认值会让「忘记声明的读」变成静默的并发问题，也会让「不需要门」
-  的活变成看不见的默认）；**一条链的每一层各自给类别**（读 / 写 / 直投可混排），`NewPromise` 的类别只管
-  **首层**（共享核心不存类别）；`loc`（`ASYNC_LOC`）是可选的最后参数，永远排在类别之后；
+- **类别是契约**：`Post` / `NewPromise` / `CoStart` / 组合器**必填**（不提供默认值 —— 默认值会让「忘记声明的读」
+  变成静默的并发问题）；`Then` / `Catch` / `Finally` **两种写法**：**省略 = 不过门**（缺省 `kDirect`，本层不占
+  槽位、不与他人互斥）或**显式给**读 / 写（按该类别过门）。省略时若要门保护，就在函数体第一行用
+  `ASYNC_GATE_READ()` / `ASYNC_GATE_WRITE()` 声明 —— 「是读还是写」由**函数自己**说了算，调用方不必操心；
+  **一条链的每一层各自给类别**（读 / 写 / 直投可混排），`NewPromise` 的类别只管**首层**（共享核心不存类别）；
+  `loc`（`ASYNC_LOC`）是可选的最后参数，永远排在类别之后；
 **层体自请过门（`ASYNC_GATE`）**：类别也可以由**函数体自己**声明 —— 同一个处理器被多处复用时，
-调用点只表达「调度意图」，数据契约写在函数里（谁碰状态谁声明）：
+调用点**连类别都可以不写**（`.Then(&StepRejectIfAbsent)` 缺省不过门），数据契约写在函数里（谁碰状态谁声明）：
 
 ```cpp
 common::async::CPromiseResult StepRejectIfAbsent(const std::shared_ptr<CUserOpContext>& spCtx)
@@ -670,9 +672,12 @@ common::async::CPromiseResult StepRejectIfAbsent(const std::shared_ptr<CUserOpCo
 - **不在**（调用点给了读、函数体要写；或跨模块续接下来的层）→ 本层**挂起**（函数返回占位结果，**不用异常**），
   框架把「再跑一遍本层」按请求类别**过门投递**；门内跑起来时任务帧匹配 → 那一行自动**落穿**、执行函数体。
   挂起时本层不 settle → 下游层不会跑，**链序不变**；槽位在挂起时已归还 → 换类别不会自死锁；
-- **纪律**：必须是函数体**第一条语句**；只适用于返回 `CPromiseResult` 的层体（then / catch / finally /
-  首层处理器）—— 写在协程体 / 子链工厂 / 通知 / `Post` 任务里会报诊断（`kDiagGateOutsideLayer`），
-  因为那里没有「重入」可言；
+- **纪律**：必须是函数体**第一条语句**；**一个函数只允许出现一次**（宏里带固定标签，第二处会被编译器
+  报 `duplicate label` —— 「既读又写」的层体必须拆成两层；`bash .tools/check_async_gate_once.sh` 守着
+  这条性质）；由此**一次运行最多挂起一次**（挂起后重入的帧必然匹配、那一行落穿），第二次挂起即
+  收口成**有界失败**（`kDiagGateSuspendedTwice`）—— 漏网写法是「辅助函数 / lambda 里再声明门」与
+  「绕过宏直接请求 `EnterGate`」；只适用于返回 `CPromiseResult` 的层体（then / catch / finally / 首层处理器）——
+  写在协程体 / 子链工厂 / 通知 / `Post` 任务里会报诊断（`kDiagGateOutsideLayer`），因为那里没有「重入」可言；
 - **代价**：只在「调用点类别 ≠ 函数体声明」时 +1 次过门投递（每层最多一次）；正常路径 0 额外分配
   （`Tests/test_async_alloc.cpp` 守着的预算不变）。
 
@@ -871,7 +876,7 @@ common::async::CPromise<Ctx> p =
   `examples/cases/CrossModuleGateCase.cpp`（跨模块起链落在**被调模块自己的门**里：两种写法对照 + 重叠进入自校验）；
 - 业务侧完整示例：`ServerExample/Module/ExampleAsyncModule.cpp`（业务模块 ↔ 数据访问模块，纯异步零阻塞；
   查询 = 读链可并发，注册 / 改名 / 删除 = 写链独占，模块内无需自己的锁）；
-- 单元测试（异步共 **156 例**，全量 **188 例**；release 181 例，差的 7 例是 debug 专属：
+- 单元测试（异步共 **172 例**，全量 **204 例**；release 197 例，差的 7 例是 debug 专属：
   trace 5 例 + 读写门 × trace 2 例）：
   `test_async_smoke.cpp`（17）对外用法逐条冒烟、
   `test_async_chain.cpp`（41）promise 契约 + 协程（含协程体抛异常的收口）、`test_async_combine.cpp`（12）组合器、
@@ -882,7 +887,12 @@ common::async::CPromise<Ctx> p =
   不改变行为）、`test_async_layer_rules.cpp`（3）三态语义、
   `test_async_alloc.cpp`（3）每层分配预算护栏、
   `test_async_gate.cpp`（13）读写门本体（读并发 / 写独占 / 公平 FIFO / 多门与多生产者 / Drain）、
-  `test_async_rw.cpp`（23）读写门 × 执行器集成：投递与**逐层类别**（`AsyncRw_PerLayerReadInWriteChain` /
+  `test_async_gate_macro.cpp`（14）**层体自请过门**（`ASYNC_GATE`）专项：省略类别不过门 / 同类**就地落穿**
+  （与外层同一任务帧）/ 升级写槽位（真等读者排空）/ 换读槽位（读段峰值 ≥ 2）/ 兑现与拒绝（自定义异常类型 +
+  文案）透传 / catch 恢复 / finally 不改结果 / 首层同样生效 / 同类重复请求落穿 / **第二次挂起即收口**（绕过宏、
+  辅助 lambda 换档）/ 与
+  模块自己的写任务**零重叠** / 读声明可真并发 —— 编译期「一个函数只允许一处」由 `.tools/check_async_gate_once.sh` 守着、
+  `test_async_rw.cpp`（25）读写门 × 执行器集成：投递与**逐层类别**（`AsyncRw_PerLayerReadInWriteChain` /
   `PerLayerWriteInReadChain` / `AllLayersMarkedReadConcurrent` / `PerLayerKindVisibleInTrace`）、
   读写不重叠、就地下沉、停止语义、**`kDirect` 直投不过门**（`AsyncRw_DirectPostBypassesGate` /
   `DirectChainBypassesGate` / `MixedKindsChainKeepsOrder` / `DirectKindVisibleInTrace`）、
@@ -897,4 +907,5 @@ common::async::CPromise<Ctx> p =
   `test_async_trace.cpp`（6）调用链 trace（复杂主链看完整链 / 多层子链跨链祖先路径 /
   并发多链互不串 / 深链与帧栈无残留 / 层里起链的父层 / 层外空操作契约，见 [async-impl.md](async-impl.md) §14）。
 - 基准：`Benchmark/cases/ChainCase.cpp`、`CoroutineCase.cpp`、`ResumableCase.cpp`、`StressCase.cpp`；
-- 运行：`./build.sh --tests`、`./build/debug/examples`。
+- 运行：`./build.sh --tests`、`./build/debug/examples`；`bash .tools/check_async_gate_once.sh`
+  （`ASYNC_GATE` 唯一性的**编译期**自检：重复使用必须报 `duplicate label`）。

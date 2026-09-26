@@ -164,7 +164,8 @@ else
 | `exec.NewPromise(spCtx, 首层处理器, 类别)` | 调用即投递（与 JS 的 `new Promise(executor)` 一致） | 上游未 settle 时登记、已 settle 时投递回本链执行器 |
 | `exec.NewPromise(spCtx, fnStarter, 类别)` | 由起链回调里的 `resolve()` / `reject(码)` 决定（起链回调与层体同一套派发：本门同类槽位 → 就地；否则按类别过门投递） | 同上 |
 
-两个重载的类别都只定**首层**：后续每层各自在 `Then` 一族里给（共享核心不存类别 —— 同一条链的层
+两个重载的类别都只定**首层**：后续每层各自在 `Then` 一族里给（**可省略** —— 缺省 `kDirect` 不过门，需要门保护
+时由层体首行的 `ASYNC_GATE_*` 声明；共享核心不存类别 —— 同一条链的层
 可以读 / 写 / 直投混排）。
 
 **为什么删掉「延迟启动」（原 `BuildPromise` + `Start()` + `CLaunchState`，2026-09-11 引入，2026-09-12 移除）**：
@@ -489,14 +490,19 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 - **非阻塞**：进不了就留在队列，线程立即归还线程池；槽位释放时（`OnTaskExit`）继续泵出；
 - **异常也归还槽位**：池不捕获异常，门在包装里兜住（`kDiagGateThrow`）后照常归还 ——
   漏归还 = 写者标志回不来 = 模块永久卡死；
-- **就地判定用线程局部任务帧**：`detail::CTaskFrame` / `CTaskFrameGuard`（过门投递的任务压帧，
-  就地跑下来的层沿用外层帧）；`CanRunInline` 只看「帧 = 本门 + 同类」且「队列空」；
+- **就地判定用线程局部任务帧**：`detail::CTaskFrame`（自管理：**构造压帧 / 析构弹帧**，与
+  `CGateCallScope` / `CCurrentLayerFrame` 同款写法；过门投递的任务压帧，就地跑下来的层沿用外层帧）；
+  `CanRunInline` 只看「帧 = 本门 + 同类」且「队列空」；
 - **层体自请过门（`ASYNC_GATE`，可选；`Common/Async/GateGuard.h`）**：层体第一行的
   `ASYNC_GATE_READ/WRITE()` 声明「本函数体必须在该类槽位里跑」。已在（含内联级联下来的情况）→ 帧匹配、
   零成本落穿；不在 → 层体返回**占位结果**并在本次调用的作用域（TLS `detail::CGateCallScope`）里登记挂起，
   层运行器**不 settle**、改为把「再跑一遍本层」按请求类别过门投递（重入时帧已匹配 → 那一行自动落穿；
   **不用异常、不用标志位、不新增状态**）。挂起时槽位已归还 → 换类别不会自死锁；本层未 settle → 下游
-  不提前跑。代价：只在「调用点类别 ≠ 函数体声明」时 +1 次过门投递（每层最多一次），正常路径 0 额外分配；
+  不提前跑。**一个函数只允许出现一次**：宏里带固定标签 `ASYNC_GATE_ONCE_PER_FUNCTION`，同一函数里
+  第二处 → `duplicate label` **编译错误**；漏网的写法（跨作用域各声明一次、绕过宏直接请求 `EnterGate`）
+  由运行时兜底收成**有界失败**（判据：**一次运行只允许挂起一次** —— 第二次挂起即诊断
+  `kDiagGateSuspendedTwice` + 本层拒绝），不会在门里来回换档。
+  代价：只在「调用点类别 ≠ 函数体声明」时 +1 次过门投递（每层最多一次），正常路径 0 额外分配；
 - **`kDirect` 不走这条队列**：直投任务直接投线程池 —— 不占槽位、不受「同类槽位 + 队列空」约束，
   因此也**不受公平性保护**（写任务扎堆时它照样能插进去跑）。契约：不得访问受门保护的数据
   （门对它完全不知情，写者可能正在同时跑）；用途 = 日志 / 指标 / 上报 / 搬运这类自成一体的活。
@@ -518,7 +524,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
   钉住它，`examples/cases/CrossModuleGateCase.cpp` 是可运行的两种写法对照；
 - 「等子链」层（`ThenPromise` / `ThenBridge`）的**工厂 `fnCreate`**：走 `CPromiseCore::DispatchAction`
   （就地 / 按本层类别投递），**永远跑在本链执行器线程上**。这一条也是修出来的：之前登记路径直接调
-  `Adopt()` 跑工厂，上游若由**外部线程** settle，工厂就在那个线程上、**无槽位**地跑（`TaskFrameTop() == NULL`）
+  `Adopt()` 跑工厂，上游若由**外部线程** settle，工厂就在那个线程上、**无槽位**地跑（`CTaskFrame::Top() == NULL`）
   —— `AsyncRw_BridgeFactoryRunsGated` 钉住它（去掉过门那一跳即失败）；
 - 协程每一段（`CoStart` / 每个 `CO_AWAIT`）与本链的每一层：各自按本段 / 本层类别过门。
 
@@ -550,7 +556,7 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 测试：`Tests/test_async_gate.cpp`（门本体 13 例：读并发 / 写独占 / 三种 FIFO 顺序 / 同门重入 /
 多门链式 / 16 门压力 / 排空 / 拒绝路径 / 异常仍归还槽位）+ `Tests/test_async_rw.cpp`
-（执行器集成 23 例：写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / **逐层类别**
+（执行器集成 25 例：写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / **逐层类别**
 （写链里的读层、读链里的写层、各层各自标读、类别在 trace 里可见）/ **`kDirect` 直投不过门**
 （写者占门时直投任务与直投链照跑、混排保持链序）/ 组合器聚合层不过门 / 协程逐段类别
 （首段与恢复段的任务帧类别各自正确）/ 等子链层的工厂过门（`AsyncRw_BridgeFactoryRunsGated`）/
@@ -558,7 +564,10 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 `AsyncRw_StarterRunsUnderDeclaredKind` 换类别时按声明类别进模块）/ **层体自请过门**
 （`AsyncRw_GateMacroNoOpWhenKindMatches` 同类落穿 / `AsyncRw_GateMacroUpgradesToWriteSlot` 挂起 + 重入
 且真等到读者排空）/ 就地级联同线程 /
-`Stop` 排空不丢任务 / 停止中链以「执行器已停」收口）+ `Tests/test_async_module_threads.cpp`
+`Stop` 排空不丢任务 / 停止中链以「执行器已停」收口）+ `Tests/test_async_gate_macro.cpp`
+（`ASYNC_GATE` 专项 14 例：同类就地落穿（同一任务帧）/ 升级写槽位 / 换读槽位 / 兑现与拒绝透传 /
+catch 与 finally / 首层 / 同类重复请求落穿（函数形态）/ **第二次挂起即收口**（绕过宏请求两种类别、
+辅助 lambda 换档）/与模块自己的写任务零重叠 / 读声明并发）+ `Tests/test_async_module_threads.cpp`
 （多线程模块 8 例：并发写不丢更新 / 读不撕裂 / 写链层不重叠 / 层间让位 / 乐观锁重试 / 混合流量
 与 `Stop` 后状态自洽 —— 模块状态是**普通成员**，安全全部来自读写门）。
 

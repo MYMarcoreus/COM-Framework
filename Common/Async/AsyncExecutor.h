@@ -373,13 +373,13 @@ private:
     }
 
     // 执行器句柄（promise / 协程持有，生命周期加固用）。
-    const std::shared_ptr<detail::CExecutorHandle>& Handle() const
+    auto Handle() const -> const std::shared_ptr<detail::CExecutorHandle>&
     {
         return m_pHandle;
     }
 
     // 新建句柄（连同线程池对象 + 读写门：都带上本执行器的名字）。
-    std::shared_ptr<detail::CExecutorHandle> MakeHandle() const;
+    auto MakeHandle() const -> std::shared_ptr<detail::CExecutorHandle>;
 
     // 投递实现（Post 的唯一实现）：包异常兜底后按类别过读写门。
     bool PostImpl(TaskKind eKind, std::function<void()> fnTask);

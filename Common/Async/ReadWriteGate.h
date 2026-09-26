@@ -81,41 +81,42 @@ constexpr const char* kDiagGateThrow = "读写门：任务抛出了异常（已�
 /// 只有「过门投递出去的任务」会压帧（见 ReadWriteGate.cpp 的包装任务）——
 /// 就地跑下来的层沿用外层任务的帧：同类，槽位已经在手，不需要新的占用。
 /// 因此 `CanRunInline(kind)` 只需回答两件事：① 本线程手上是不是本门的同类槽位；② 有没有人在排队。
+///
+/// 写法与另外两个 thread_local 栈（`CGateCallScope`、`CCurrentLayerFrame`）同款：
+/// **构造压帧、析构弹帧**，`Top()` 取栈顶 —— 「帧」与「守卫」是同一个对象（不拆两个类型），
+/// 它必须活在任务体的调用栈上（地址即栈顶指针），因此拷贝 / 赋值已删除。
 struct CTaskFrame
 {
     const CReadWriteGate* pGate;  ///< 所属门。
     TaskKind eKind;               ///< 任务类别。
     const CTaskFrame* pPrev;      ///< 外层帧（弹栈还原用；不在任务里时为 nullptr）。
-};
 
-/// @brief 当前线程的任务帧栈顶（不在任何任务里 = nullptr）。
-///
-/// @return 栈顶帧的引用（可读、可写：守卫在构造 / 析构时改写它）。
-inline const CTaskFrame*& TaskFrameTop()
-{
-    static thread_local const CTaskFrame* s_pFrameTop = nullptr;
-    return s_pFrameTop;
-}
-
-/// @brief 任务帧守卫（构造压栈、析构弹栈）。
-///
-/// 压帧的时机 = 任务体开跑之前；弹帧 = 任务体跑完（异常路径也弹，因为它是栈上对象）。
-struct CTaskFrameGuard
-{
-    CTaskFrame m_frame;  ///< 本帧（地址稳定：守卫活在任务的调用栈上）。
-
-    CTaskFrameGuard(const CReadWriteGate* pGate, TaskKind eKind) : m_frame{pGate, eKind, TaskFrameTop()}
+    /// @brief 压帧（TLS 顶 = 本帧；时机 = 任务体开跑之前）。
+    ///
+    /// @param pGateIn 所属门。
+    /// @param eKindIn 任务类别。
+    CTaskFrame(const CReadWriteGate* pGateIn, TaskKind eKindIn) : pGate(pGateIn), eKind(eKindIn), pPrev(Top())
     {
-        TaskFrameTop() = &m_frame;
+        Top() = this;
     }
 
-    ~CTaskFrameGuard()
+    /// @brief 弹帧（还原外层；异常路径也弹，因为它是栈上对象）。
+    ~CTaskFrame()
     {
-        TaskFrameTop() = m_frame.pPrev;
+        Top() = pPrev;
     }
 
-    CTaskFrameGuard(const CTaskFrameGuard&) = delete;
-    CTaskFrameGuard& operator=(const CTaskFrameGuard&) = delete;
+    CTaskFrame(const CTaskFrame&) = delete;
+    CTaskFrame& operator=(const CTaskFrame&) = delete;
+
+    /// @brief 当前线程的任务帧栈顶（不在任何任务里 = nullptr）。
+    ///
+    /// @return 栈顶帧的引用（可读、可写：构造 / 析构时改写它）。
+    static const CTaskFrame*& Top()
+    {
+        static thread_local const CTaskFrame* s_pFrameTop = nullptr;
+        return s_pFrameTop;
+    }
 };
 
 }  // namespace detail
@@ -220,7 +221,7 @@ private:
         /// @brief 执行任务体（压「当前任务」帧 → 兜异常 → 归还槽位）。
         void operator()()
         {
-            const detail::CTaskFrameGuard frame(pGate, eKind);  // 跑完自动弹帧（异常路径也弹）。
+            const detail::CTaskFrame frame(pGate, eKind);  // 跑完自动弹帧（异常路径也弹）。
             try
             {
                 fnTask();

@@ -27,6 +27,13 @@
 //   - 必须是**函数体第一条语句**（挂起时第一次只执行到它，之前的语句会白跑一次）；
 //   - 只适用于返回 `CPromiseResult` 的**层体**（then / catch / finally / 首层处理器）；
 //     协程体、`ThenPromise` 工厂、`OnSettled` 通知、`Post` 任务里没有层体作用域（会诊断）。
+//   - **一个层体只允许出现一次**（编译期检查）：宏里带固定标签 `ASYNC_GATE_ONCE_PER_FUNCTION`，
+//     同一函数（含嵌套块）里第二次使用 → `duplicate label` 编译错误（`.tools/check_async_gate_once.sh`
+//     守着这条性质）。为什么这么严：两种类别会在读 / 写槽位之间**来回换档重入**（挂起 → 重入 → 又
+//     挂起）；确实需要两种类别，请**拆成两层**，每层各自声明自己的类别。
+//   - 于是**一次运行最多挂起一次**（挂起后重入的帧必然匹配，那一行落穿）—— 这也是层运行器的兜底判据：
+//     第二次挂起 = 漏网的换档写法（辅助函数 / lambda 里再声明门、绕过宏直接请求 `detail::EnterGate`），
+//     立即收口成有界失败（诊断 + 本层拒绝），不让它在读 / 写槽位之间无限换档。
 //
 // 与挂层处类别的关系：调用点类别负责**首次准入**（决定排队与首层的进入方式），本宏负责
 // **数据契约**；两者一致时宏是零成本 no-op，不一致时才发生「挂起 + 重入」。
@@ -50,10 +57,24 @@ constexpr const char* kDiagGateOutsideLayer =
 /// @brief 诊断：层体请求过门，但本层执行器没有读写门（理论分支）。
 constexpr const char* kDiagGateNoGate = "ASYNC_GATE：本层执行器没有读写门，无法过门（照常执行，未受保护）";
 
+/// @brief 诊断：同一层体在一次运行里**挂了第二次** —— 兜底分支（正常写法在编译期就被拦下了）。
+///
+/// 正常路径一次运行最多挂起一次：宏里带固定标签，同一函数里写不了第二处（`duplicate label`），
+/// 而挂起后的重入帧必然匹配 → 那一行落穿。能第二次挂起的只有两种漏网写法：
+///  - 层体里调用**另一个带宏的函数**（辅助 lambda / 辅助函数有自己的函数作用域，标签不冲突，
+///    但挂起作用域与本层共享）→ 外层要写、内层要读，换档来回；
+///  - 绕过宏直接请求 `detail::EnterGate`。
+/// 两者都收口成**有界失败**（诊断 + 本层拒绝）：不这么做就会在门里无限换档（链永不落定）。
+constexpr const char* kDiagGateSuspendedTwice =
+    "ASYNC_GATE 重复挂起：同一层体一次运行里只能挂起一次（辅助函数里再声明门 / 绕过宏直接请求会让本层"
+    "既读又写），本层已收口 —— 拆成两层即可";
+
 /// @brief 本次「层体调用」的作用域（TLS 链；由层运行器在进层体前压栈）。
 ///
 /// 只记两件事：本层的门（判定「我是不是已经在目标槽位里」）与层体请求的类别（挂起时有效）。
 /// 内联级联会自然嵌套（`pPrev` 还原外层）。
+///
+/// 写法与 `CTaskFrame`（读写门任务帧）同款：**构造压栈、析构弹栈**，`Top()` 取栈顶。
 struct CGateCallScope
 {
     const CReadWriteGate* pGate;  ///< 本层的门（执行器没有门时为 nullptr）。
@@ -103,7 +124,7 @@ enum class EGateEnter
 /// @return true 已在（含内联级联下来的情况）。
 inline bool InGateSlot(const CReadWriteGate* pGate, TaskKind eKind)
 {
-    const CTaskFrame* pFrame = TaskFrameTop();
+    const CTaskFrame* pFrame = CTaskFrame::Top();
     return pFrame != nullptr && pFrame->pGate == pGate && pFrame->eKind == eKind;
 }
 
@@ -125,7 +146,7 @@ inline EGateEnter EnterGate(TaskKind eKind)
         // 不在层体里（Post 任务 / 协程体 / 工厂 / 通知 / 模块公开异步函数）：没有「重入」可言。
         // 已持同类槽位时照常执行；否则只报告（不改变行为 —— 与 `kDiagAwaitRisk` 同口径）。
         // 注：宏形态只写得进返回 `CPromiseResult` 的层体，走到这里多半是函数形态的误用。
-        const CTaskFrame* pFrame = TaskFrameTop();
+        const CTaskFrame* pFrame = CTaskFrame::Top();
         if (pFrame == nullptr || pFrame->eKind != eKind)
         {
             ReportDiagnostic(kDiagGateOutsideLayer);
@@ -157,11 +178,18 @@ inline EGateEnter EnterGate(TaskKind eKind)
 
 /// @brief 声明本层体需要「本链执行器的 kind 槽位」（必须放在函数体第一条语句）。
 ///
-/// 已在槽位 → 零成本落穿；否则挂起本层并过门重入（重入后自动跳过本行）。
+/// **一个函数只允许出现一次**（编译期检查）：宏里带固定标签 `ASYNC_GATE_ONCE_PER_FUNCTION`，同一函数里
+/// 第二次出现 → `duplicate label` 编译错误（`.tools/check_async_gate_once.sh` 守着这条不变）。
+/// 已在目标槽位 → 零成本落穿；否则挂起本层并过门重入（重入后自动跳过本行）。
 /// 用法：`ASYNC_GATE_READ();` / `ASYNC_GATE_WRITE();` / `ASYNC_GATE(kWrite);`
 #define ASYNC_GATE(kind)                                                                                              \
+    ASYNC_GATE_ONCE_PER_FUNCTION: /* ← 每个函数只允许一处：第二处 = duplicate label 编译错误 */    \
     do                                                                                                                \
     {                                                                                                                 \
+        if (false)                                                                                                    \
+        {                                                                                                             \
+            goto ASYNC_GATE_ONCE_PER_FUNCTION; /* 引用一下标签：避开 -Wunused-label */                       \
+        }                                                                                                             \
         if (::common::async::detail::EGateEnter::kReenter ==                                                          \
             ::common::async::detail::EnterGate(::common::async::TaskKind::kind))                                      \
         {                                                                                                             \

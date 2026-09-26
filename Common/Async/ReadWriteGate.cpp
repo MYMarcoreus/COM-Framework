@@ -109,7 +109,7 @@ bool CReadWriteGate::CanRunInline(TaskKind eKind) const
 {
     ASSERT_MSG(eKind != TaskKind::kDirect, "kDirect 不过门（CanRunInline 对它无意义）");  // 与 Submit 同一契约。
     // ① 手上的槽位是不是「本门 + 同类」（不在任务里 / 别的门 / 别的类别 → 都不能就地）。
-    const detail::CTaskFrame* pFrame = detail::TaskFrameTop();
+    const detail::CTaskFrame* pFrame = detail::CTaskFrame::Top();
     if (pFrame == nullptr || pFrame->pGate != this || pFrame->eKind != eKind)
     {
         return false;
