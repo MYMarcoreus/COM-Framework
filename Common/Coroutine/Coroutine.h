@@ -185,7 +185,7 @@ public:
     ///
     /// 供协程体内 await 使用：CO_AWAIT(类别, NewPromise(StepLoad, 类别))。
     /// 与 `exec.NewPromise(spCtx, handler)` 走同一条起链路径（建首层 + 强制投递首层）；
-    /// 未启动（`m_pExec == nullptr`，句柄还是空）时首层投递失败 → 该 promise 以系统侧失败 `Stopped()` 收口。
+    /// 未启动（`m_pExec == nullptr`，句柄还是空）时首层投递失败 → 该 promise 以框架侧拒绝「执行器已停」收口。
     ///
     /// @param fnHandler 首层处理器（固定签名）。
     /// @param eKind 本子链的读写类别（**必填**：读可并发 / 写独占）。
@@ -326,7 +326,7 @@ private:
     /// @brief 在指定执行器上启动协程（绑定 + 复位 + 投递首次执行）。
     ///
     /// 由 CAsyncExecutor::CoStart 调用；执行器须存活于协程生命周期
-    /// （未启动 / 已停止时协程立即以系统侧失败 `Stopped()` 结束）。
+    /// （未启动 / 已停止时协程立即以框架侧拒绝「执行器已停」结束）。
     ///
     /// @param pExec 执行器指针。
     /// @param eKind 首段的类别（**必填**：读可并发 / 写独占 / 直投不过门）—— 首段 =

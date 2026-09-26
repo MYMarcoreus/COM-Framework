@@ -65,7 +65,7 @@ inline void FailAssert(const char* strExpr, const char* strFile, int nLine, cons
             {                                                                         \
                 ::common::FailAssert(#expr, __FILE__, __LINE__, __PRETTY_FUNCTION__); \
             }                                                                         \
-        } while (0)
+        } while (false)
 
     /// @brief 带说明的断言（说明会与表达式一起打印）。
     #define ASSERT_MSG(expr, strMsg)                                                                \
@@ -75,7 +75,7 @@ inline void FailAssert(const char* strExpr, const char* strFile, int nLine, cons
             {                                                                                       \
                 ::common::FailAssert(#expr " —— " strMsg, __FILE__, __LINE__, __PRETTY_FUNCTION__); \
             }                                                                                       \
-        } while (0)
+        } while (false)
 #else
     #define ASSERT(expr) ((void)sizeof(expr))
     #define ASSERT_MSG(expr, strMsg) ((void)sizeof(expr))

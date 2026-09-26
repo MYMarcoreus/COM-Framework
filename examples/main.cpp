@@ -53,6 +53,7 @@
 
 #include "Assert.h"
 #include "Async/AsyncExecutor.h"
+#include "Async/Combine.h"
 #include "Async/Promise.h"
 #include "Async/Trace.h"
 #include "Coroutine/Coroutine.h"

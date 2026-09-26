@@ -195,7 +195,7 @@ inline EGateEnter EnterGate(TaskKind eKind)
         {                                                                                                             \
             return ::common::async::CPromiseResult::Resolve(); /* 占位：运行器见挂起标记后重入本层 */ \
         }                                                                                                             \
-    } while (0)
+    } while (false)
 
 /// @brief `ASYNC_GATE(kRead)` 的简写：本层体与其它读任务并发（只读，不改模块状态）。
 #define ASYNC_GATE_READ() ASYNC_GATE(kRead)

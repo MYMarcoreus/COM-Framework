@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "Async/AsyncExecutor.h"
+#include "Async/Combine.h"
 #include "Async/Promise.h"
 #include "Async/PromiseResult.h"
 #include "AsyncTestKit.h"

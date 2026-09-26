@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "Async/AsyncExecutor.h"
+#include "Async/Combine.h"
 #include "Async/GateGuard.h"
 #include "Async/Promise.h"
 #include "Async/ReadWriteGate.h"
