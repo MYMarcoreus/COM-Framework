@@ -56,7 +56,7 @@ public:
     // 工作线程数量。
     size_t ThreadCount() const;
 
-    // 是否正在运行。
+    // 是否正在运行（免锁原子读：热路径上每任务都要问一次，不该为此拿池锁）。
     bool IsRunning() const;
 
     // 待处理任务数（队列中未取出的）。
@@ -89,8 +89,12 @@ private:
     std::condition_variable m_condition;
     size_t m_nThreadCount;
     std::shared_ptr<const std::string> m_spName;  // 池名（只用于给 worker 线程起名 / 调试辨认）。
-    bool m_bRunning;
-    bool m_bStopping;
+
+    // 运行标志：写入都在 `m_mutex` 临界区内（Start / Stop），但**读是免锁的** ——
+    // 上层每投递一次就要问一次「池还活着吗」（`IsRunning`），不值得为它拿锁；
+    // 权威判定仍以 `Submit` 在锁内的 `m_bRunning / m_bStopping` 为准。
+    std::atomic<bool> m_bRunning;
+    bool m_bStopping;  ///< 正在停（只拒新任务；锁内访问）。
 };
 
 }  // namespace thread

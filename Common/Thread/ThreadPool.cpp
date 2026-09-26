@@ -218,10 +218,12 @@ size_t CThreadPool::ThreadCount() const
 }
 
 /// @brief 是否正在运行。
+/// @brief 是否正在运行（免锁原子读）。
+///
+/// @return true 已启动且未停下。
 bool CThreadPool::IsRunning() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    return m_bRunning;
+    return m_bRunning.load();
 }
 
 /// @brief 返回待处理任务数（队列中未取出的；轻量原子读，不加锁）。
@@ -288,7 +290,9 @@ void CThreadPool::WorkerLoop(size_t nIndex)
                 }
                 break;
             }
-            fnTask = m_dequeTasks.front();
+            // 移动取任务：拷贝赋值会把任务（含 `std::function` 目标）整个复制一份 ——
+            // 每任务多 1~2 次堆分配，而且是在「提交线程也在分配」的并发窗口里，实测最贵。
+            fnTask = std::move(m_dequeTasks.front());
             m_dequeTasks.pop_front();
             m_nPending.fetch_sub(1, std::memory_order_relaxed);
             if (bWasIdle)
