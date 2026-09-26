@@ -237,7 +237,8 @@ static common::async::CPromiseResult StepBump(const std::shared_ptr<CAllocCtx>& 
 static common::async::CPromiseResult StepMeasureBuild(const std::shared_ptr<CAllocCtx>& spCtx)
 {
     CAllocCounter counter;
-    common::async::CPromise<CAllocCtx> tail = spCtx->pExec->NewPromise(spCtx->spOther, &StepBump, common::async::TaskKind::kWrite, ASYNC_LOC);
+    common::async::CPromise<CAllocCtx> tail =
+        spCtx->pExec->NewPromise(spCtx->spOther, &StepBump, common::async::TaskKind::kWrite, ASYNC_LOC);
     for (int i = 0; i < spCtx->nMeasureLayers; ++i)
     {
         tail = tail.Then(&StepBump, common::async::TaskKind::kWrite, ASYNC_LOC);
