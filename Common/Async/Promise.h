@@ -13,6 +13,7 @@
 #include "Assert.h"
 #include "Async/AsyncExecutor.h"
 #include "Async/Diagnostics.h"
+#include "Async/GateGuard.h"
 #include "Async/PromiseResult.h"
 #include "Async/PromiseTypes.h"
 #include "Async/SourceLoc.h"
@@ -618,16 +619,24 @@ private:
 /// 这样在途任务不需要靠核心存活（因此核心无需 `enable_shared_from_this`），
 /// 也让「保活链」短一截：任务跑完前，只有它自己用到的对象在。
 ///
+/// 另一件事：压「层体调用作用域」（`detail::CGateCallScope`）—— 层体里的 `ASYNC_GATE`
+/// 靠它判定「我是不是已经在目标槽位里」；不在时层体返回占位结果，这里把「重跑一遍本层」
+/// 按请求的类别过门投递（本层**不 settle**，所以下游不会提前跑）。
+///
+/// @param pHandle 本链执行器句柄（重入投递用；恒非空）。
 /// @param pState 本层状态（执行结果写入它）。
 /// @param fnBody 执行体（返回本层结果）。
 /// @return 任务体（在工作线程上执行处理器并 settle 本层状态）。
 template <typename TBody>
-std::function<void()> MakeLayerRunner(const std::shared_ptr<CPromiseState>& pState, TBody fnBody)
+std::function<void()> MakeLayerRunner(
+    const std::shared_ptr<CExecutorHandle>& pHandle, const std::shared_ptr<CPromiseState>& pState, TBody fnBody)
 {
-    return [pState, fnBody]()
+    return [pHandle, pState, fnBody]()
     {
+        // ① 压层体调用作用域（TLS，零分配）：`ASYNC_GATE` 的判定与挂起请求都写在这里。
+        const CGateCallScope scope(pHandle->m_pGate.get());
 #if defined(ASYNC_DEBUG_TRACE)
-        // ① 压 trace 帧：处理器内部就能通过 Trace.h 看到自己处在哪条链上。
+        // ①′ 压 trace 帧：处理器内部就能通过 Trace.h 看到自己处在哪条链上。
         //    帧活在本次调用的栈上（零分配）；内联级联会自然形成嵌套的帧栈，每层自己弹自己。
         const CCurrentLayerFrame frame(pState);
 #endif
@@ -648,30 +657,44 @@ std::function<void()> MakeLayerRunner(const std::shared_ptr<CPromiseState>& pSta
             result = CPromiseResult::Reject(std::runtime_error("处理器异常"));  // 非 std 异常：只留一句说明
         }
 
+        // ③ 层体自请过门（`ASYNC_GATE`）：本次只跑到请求那一行 —— 上面的 result 是占位值。
+        //    不 settle，改为把「再跑一遍本层」按请求类别过门投递；重入时帧已匹配，请求那一行落穿。
+        if (scope.bSuspended)
+        {
+            std::function<void()> fnRetry = MakeLayerRunner(pHandle, pState, fnBody);
+            if (!PostToHandle(pHandle, scope.eRequested, std::move(fnRetry)))
+            {
+                // 执行器不可用 → 本层以「执行器已停」收口（链绝不永久 pending）。
+                pState->Settle(CPromiseResult::Reject(std::runtime_error("执行器已停")));
+            }
+            return;
+        }
+
 #if defined(ASYNC_DEBUG_TRACE)
-        // ③ 记本层耗时（必须在 settle 前写：落定后这层就可能被别的线程读了）。
+        // ④ 记本层耗时（必须在 settle 前写：落定后这层就可能被别的线程读了）。
         pState->SetSelfDurationMs(frame.ElapsedMs());
 #endif
-        // ④ 落定本层 → 触发下一层（同执行器就地级联 / 跨执行器投递）。
+        // ⑤ 落定本层 → 触发下一层（同执行器就地级联 / 跨执行器投递）。
         pState->Settle(result);
     };
 }
 
 /// @brief 造 then 层（含首层）的任务体：处理器「看不到上游结果」，直接返回本层结果。
 ///
+/// @param pHandle 本链执行器句柄（层体自请过门要用）。
 /// @param spContext 共享上下文（调用方在构造任务时解析好，恒非空）。
 /// @param pState 本层状态（执行结果写入它）。
 /// @param fnHandler 处理器（then 签名）。
 /// @return 任务体。
 template <typename TContext>
-std::function<void()> MakeThenRunner(const std::shared_ptr<TContext>& spContext, const std::shared_ptr<CPromiseState>& pState,
-    const ThenHandler<TContext>& fnHandler)
+std::function<void()> MakeThenRunner(const std::shared_ptr<CExecutorHandle>& pHandle, const std::shared_ptr<TContext>& spContext,
+    const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler)
 {
     ASSERT(spContext != nullptr);  // 任务体把上下文按值捕获交给处理器：必须已经备好。
 
     // 执行体只做一件事：把共享上下文交给处理器（then 拿不到上游结果）；
-    // 帧 / 异常收口 / settle 都是外壳（MakeLayerRunner）的事。
-    return MakeLayerRunner(pState,
+    // 帧 / 异常收口 / settle / 自请过门都是外壳（MakeLayerRunner）的事。
+    return MakeLayerRunner(pHandle, pState,
         [spContext, fnHandler]()
         {
             return fnHandler(spContext);
@@ -680,6 +703,7 @@ std::function<void()> MakeThenRunner(const std::shared_ptr<TContext>& spContext,
 
 /// @brief 造 catch / finally 层的任务体：把「上游结果」交给处理器，返回值按模式归一。
 ///
+/// @param pHandle 本链执行器句柄（层体自请过门要用）。
 /// @param spContext 共享上下文（调用方在构造任务时解析好，恒非空）。
 /// @param pState 本层状态（执行结果写入它）。
 /// @param fnHandler 处理器（catch / finally 签名）。
@@ -688,14 +712,15 @@ std::function<void()> MakeThenRunner(const std::shared_ptr<TContext>& spContext,
 ///              catch 取处理器返回值（返回 `Resolve()` 即恢复）；finally 忽略它、原样透传上一层结果。
 /// @return 任务体。
 template <typename TContext>
-std::function<void()> MakeResultRunner(const std::shared_ptr<TContext>& spContext, const std::shared_ptr<CPromiseState>& pState,
+std::function<void()> MakeResultRunner(const std::shared_ptr<CExecutorHandle>& pHandle,
+    const std::shared_ptr<TContext>& spContext, const std::shared_ptr<CPromiseState>& pState,
     const ResultHandler<TContext>& fnHandler, const CPromiseResult& upResult, HandlerMode eMode)
 {
     ASSERT(spContext != nullptr);  // 任务体把上下文按值捕获交给处理器：必须已经备好。
 
     // 执行体两步：① 把「上游结果 + 上下文」交给处理器；② 按模式归一结果
     //（catch 取处理器返回值；finally 忽略它，原样透传上一层结果）。
-    return MakeLayerRunner(pState,
+    return MakeLayerRunner(pHandle, pState,
         [spContext, fnHandler, upResult, eMode]()
         {
             const CPromiseResult ownResult = fnHandler(upResult, spContext);
@@ -770,7 +795,7 @@ public:
     void RunThenHandler(const std::shared_ptr<CPromiseState>& pState, const ThenHandler<TContext>& fnHandler) const
     {
         // 两步：① 造本层任务体（then 语义：处理器只接上下文）；② 交给派发器（就地 / 投递）。
-        Dispatch(pState, MakeThenRunner(Context(), pState, fnHandler));
+        Dispatch(pState, MakeThenRunner(m_pHandle, Context(), pState, fnHandler));
     }
 
     /// @brief 级联执行下一层（catch / finally 语义：处理器拿到上游结果）。
@@ -783,7 +808,7 @@ public:
         const CPromiseResult& upResult, HandlerMode eMode) const
     {
         // 两步：① 造本层任务体（catch / finally 语义：要传上游结果与模式）；② 交给派发器。
-        Dispatch(pState, MakeResultRunner(Context(), pState, fnHandler, upResult, eMode));
+        Dispatch(pState, MakeResultRunner(m_pHandle, Context(), pState, fnHandler, upResult, eMode));
     }
 
     /// @brief 派发「本层的动作体」——「等子链」那一层（`ThenPromise` / `ThenBridge`）用。
@@ -1176,7 +1201,7 @@ private:
 
         // 起点结果视为「已兑现」；首层恒以 then 语义执行（catch / finally 是追加层的写法）。
         // ③ 造首层任务体并「强制投递」（不内联：起链线程不跑业务代码）。
-        std::function<void()> fnRun = detail::MakeThenRunner(pCore->Context(), pState, fnHandler);
+        std::function<void()> fnRun = detail::MakeThenRunner(pCore->Handle(), pCore->Context(), pState, fnHandler);
         if (!detail::PostToHandle(pCore->Handle(), eKind, std::move(fnRun)))
         {
             SettleStopped(pState);  // 执行器不可用 → 首层被拒绝（链绝不永久 pending）。

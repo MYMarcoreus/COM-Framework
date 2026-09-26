@@ -491,6 +491,12 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
   漏归还 = 写者标志回不来 = 模块永久卡死；
 - **就地判定用线程局部任务帧**：`detail::CTaskFrame` / `CTaskFrameGuard`（过门投递的任务压帧，
   就地跑下来的层沿用外层帧）；`CanRunInline` 只看「帧 = 本门 + 同类」且「队列空」；
+- **层体自请过门（`ASYNC_GATE`，可选；`Common/Async/GateGuard.h`）**：层体第一行的
+  `ASYNC_GATE_READ/WRITE()` 声明「本函数体必须在该类槽位里跑」。已在（含内联级联下来的情况）→ 帧匹配、
+  零成本落穿；不在 → 层体返回**占位结果**并在本次调用的作用域（TLS `detail::CGateCallScope`）里登记挂起，
+  层运行器**不 settle**、改为把「再跑一遍本层」按请求类别过门投递（重入时帧已匹配 → 那一行自动落穿；
+  **不用异常、不用标志位、不新增状态**）。挂起时槽位已归还 → 换类别不会自死锁；本层未 settle → 下游
+  不提前跑。代价：只在「调用点类别 ≠ 函数体声明」时 +1 次过门投递（每层最多一次），正常路径 0 额外分配；
 - **`kDirect` 不走这条队列**：直投任务直接投线程池 —— 不占槽位、不受「同类槽位 + 队列空」约束，
   因此也**不受公平性保护**（写任务扎堆时它照样能插进去跑）。契约：不得访问受门保护的数据
   （门对它完全不知情，写者可能正在同时跑）；用途 = 日志 / 指标 / 上报 / 搬运这类自成一体的活。
@@ -521,7 +527,8 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 - 包装任务是**可移动**的 `CWrappedTask`（不是 lambda）—— C++11 的 lambda 不能「移动捕获」，
   包一层会把任务体拷一份，而 `std::function` 的拷贝要再走一次堆分配；
 - 放行收集缓冲是**线程局部复用**的（`ScratchDispatchBuffer`），不再每次投递新建一个 vector；
-- 合计：每次「过门投递」≈1 次额外分配，就地层 0 次。实测跑链 200 层 213 次、800 层 841 次
+- 合计：每次「过门投递」≈1 次额外分配，就地层 0 次；`ASYNC_GATE` 同类落穿 0 次，只有「类别升级」那条
+  重入路径每层最多再 +1 次（判定全在 TLS / 栈上，零分配）。实测跑链 200 层 213 次、800 层 841 次
   （≈1.05 次/层；一条链约每 `kMaxInlineDepth`(64) 层才投递一次）。
 
 **语义边界（必须记住）**：门保证的是「**单个任务**互斥」，不是「**整条链**独占」—— 一条写链的层
@@ -543,12 +550,14 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 测试：`Tests/test_async_gate.cpp`（门本体 13 例：读并发 / 写独占 / 三种 FIFO 顺序 / 同门重入 /
 多门链式 / 16 门压力 / 排空 / 拒绝路径 / 异常仍归还槽位）+ `Tests/test_async_rw.cpp`
-（执行器集成 21 例：写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / **逐层类别**
+（执行器集成 23 例：写链互斥 / `Post(kRead)` 并发 / 读写不重叠 / 读链并发 / **逐层类别**
 （写链里的读层、读链里的写层、各层各自标读、类别在 trace 里可见）/ **`kDirect` 直投不过门**
 （写者占门时直投任务与直投链照跑、混排保持链序）/ 组合器聚合层不过门 / 协程逐段类别
 （首段与恢复段的任务帧类别各自正确）/ 等子链层的工厂过门（`AsyncRw_BridgeFactoryRunsGated`）/
 **起链回调过门**（`AsyncRw_CrossModuleStarterLandsInCalleeGate` 跨模块落在被调模块自己的门里 /
-`AsyncRw_StarterRunsUnderDeclaredKind` 换类别时按声明类别进模块）/ 就地级联同线程 /
+`AsyncRw_StarterRunsUnderDeclaredKind` 换类别时按声明类别进模块）/ **层体自请过门**
+（`AsyncRw_GateMacroNoOpWhenKindMatches` 同类落穿 / `AsyncRw_GateMacroUpgradesToWriteSlot` 挂起 + 重入
+且真等到读者排空）/ 就地级联同线程 /
 `Stop` 排空不丢任务 / 停止中链以「执行器已停」收口）+ `Tests/test_async_module_threads.cpp`
 （多线程模块 8 例：并发写不丢更新 / 读不撕裂 / 写链层不重叠 / 层间让位 / 乐观锁重试 / 混合流量
 与 `Stop` 后状态自洽 —— 模块状态是**普通成员**，安全全部来自读写门）。

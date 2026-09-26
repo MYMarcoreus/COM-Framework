@@ -128,6 +128,44 @@ static common::async::CPromiseResult StepBump(const std::shared_ptr<CRobustCtx>&
 
 // ==================== 用例：用户回调异常不终止进程 ====================
 
+/// @brief `ASYNC_GATE`（函数形态）用在没有层体作用域的地方：报诊断、**不改变行为**。
+///
+/// 宏形态只写得进「返回 CPromiseResult 的层体」，所以误用多半来自函数形态（把
+/// `EnterGate(...)` 写在 `Post` 任务 / 协程体 / 模块公开异步函数里）：
+///  - 已经持有**同类**槽位 → 无事发生（本就是安全的）；
+///  - 否则 → 一句诊断（`kDiagGateOutsideLayer`），照常往下执行（不挂起、也不静默假装受保护）。
+TEST(Robust_GateGuardOutsideLayerDiagnosed)
+{
+    CDiagnosticCapture capture;
+
+    common::async::CAsyncExecutor exec(2);
+    ASSERT_TRUE(exec.Start());
+
+    std::atomic<int> nSameKindRuns(0);
+    std::atomic<int> nMismatchRuns(0);
+    std::atomic<bool> bAllDone(false);
+
+    // ① 已是写任务（同类槽位）里请求写：不报诊断
+    ASSERT_TRUE(exec.Post(common::async::TaskKind::kWrite,
+        [&nSameKindRuns, &bAllDone, &nMismatchRuns]()
+        {
+            common::async::detail::EnterGate(common::async::TaskKind::kWrite);
+            ++nSameKindRuns;
+            // ② 同一个任务里请求读（换类别）：没有层体作用域 → 诊断，但照常执行
+            common::async::detail::EnterGate(common::async::TaskKind::kRead);
+            ++nMismatchRuns;
+            bAllDone.store(true);
+        }));
+
+    ASSERT_TRUE(asynctest::WaitFlag(bAllDone, 1000));
+
+    ASSERT_EQ(nSameKindRuns.load(), 1);  // 同类槽位：静默（不报诊断）
+    ASSERT_EQ(nMismatchRuns.load(), 1);  // 换类别：报了诊断，但函数照常往下跑
+    ASSERT_TRUE(capture.Has(common::async::detail::kDiagGateOutsideLayer));
+
+    exec.Stop();
+}
+
 /// @brief 通知里抛异常：链结果不受影响，进程存活，框架报告一次诊断。
 TEST(Robust_NoticeThrowIsContained)
 {
@@ -261,7 +299,8 @@ TEST(Robust_AwaitForTimesOut)
 
     // 负超时 = 无限等待；已落定的层再 AwaitFor 立即拿结果。
     auto spDone = std::make_shared<CRobustCtx>();
-    common::async::CPromise<CRobustCtx> promiseDone = exec.NewPromise(spDone, &StepBump, common::async::TaskKind::kWrite, ASYNC_LOC);
+    common::async::CPromise<CRobustCtx> promiseDone =
+        exec.NewPromise(spDone, &StepBump, common::async::TaskKind::kWrite, ASYNC_LOC);
     ASSERT_TRUE(promiseDone.AwaitFor(-1).IsFulfilled());
     ASSERT_TRUE(promiseDone.AwaitFor(0).IsFulfilled());
     exec.Stop();
@@ -289,8 +328,9 @@ TEST(Robust_AwaitInsideLayerReportsRisk)
         return common::async::CPromiseResult::Resolve();
     };
 
-    const common::async::CPromiseResult result =
-        exec.NewPromise(spCtx, &StepBump, common::async::TaskKind::kWrite, ASYNC_LOC).Then(fnWaitInsideLayer, common::async::TaskKind::kWrite, ASYNC_LOC).Await();
+    const common::async::CPromiseResult result = exec.NewPromise(spCtx, &StepBump, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                     .Then(fnWaitInsideLayer, common::async::TaskKind::kWrite, ASYNC_LOC)
+                                                     .Await();
 
     ASSERT_TRUE(result.IsFulfilled());
     ASSERT_TRUE(spCtx->bCaught);

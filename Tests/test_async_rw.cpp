@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "Async/AsyncExecutor.h"
+#include "Async/GateGuard.h"
 #include "Async/Promise.h"
 #include "Async/ReadWriteGate.h"
 #include "Coroutine/Coroutine.h"
@@ -928,6 +929,132 @@ TEST(AsyncRw_StarterRunsUnderDeclaredKind)
         2000));
     ASSERT_TRUE(bHasSlot.load());
     ASSERT_EQ(nKind.load(), static_cast<int>(TaskKind::kRead));
+    exec.Stop();
+}
+
+/// @brief `ASYNC_GATE`：挂层处类别与函数体声明**一致**时零成本落穿（不挂起、不重入）。
+TEST(AsyncRw_GateMacroNoOpWhenKindMatches)
+{
+    CAsyncExecutor exec(2);
+    ASSERT_TRUE(exec.Start());
+
+    std::atomic<int> nBodyRuns(0);
+    std::atomic<int> nBodyKind(-1);
+    std::shared_ptr<SRwCtx> spCtx = std::make_shared<SRwCtx>();
+    spCtx->nId = 1;
+
+    // 挂层处 kWrite + 函数体声明 kWrite：宏直接落穿（本层只跑一次，是一次普通层执行）。
+    const CPromiseResult result = exec.NewPromise(
+                                          spCtx,
+                                          [](const std::shared_ptr<SRwCtx>& /*spCtx*/)
+                                          {
+                                              return CPromiseResult::Resolve();
+                                          },
+                                          TaskKind::kRead, ASYNC_LOC)
+                                      .Then(
+                                          [&nBodyRuns, &nBodyKind](const std::shared_ptr<SRwCtx>& /*spCtx*/)
+                                          {
+                                              ASYNC_GATE_READ();  // 与挂层处同类
+                                              ++nBodyRuns;
+                                              nBodyKind.store(static_cast<int>(common::async::detail::TaskFrameTop()->eKind));
+                                              return CPromiseResult::Resolve();
+                                          },
+                                          TaskKind::kRead, ASYNC_LOC)
+                                      .Then(
+                                          [](const std::shared_ptr<SRwCtx>& /*spCtx*/)
+                                          {
+                                              return CPromiseResult::Resolve();
+                                          },
+                                          TaskKind::kWrite, ASYNC_LOC)
+                                      .Await();
+
+    ASSERT_TRUE(result.IsFulfilled());
+    ASSERT_EQ(nBodyRuns.load(), 1);                                  // 没有重入
+    ASSERT_EQ(nBodyKind.load(), static_cast<int>(TaskKind::kRead));  // 在声明的读槽位里跑
+    exec.Stop();
+}
+
+/// @brief `ASYNC_GATE`：挂层处给读、函数体要写 → 挂起 + 按写类别过门重入（真等读者排空）。
+///
+/// 断言三件事：
+///  - 首次（读槽位里）只跑到宏那一行就返回 → 宏之后的函数体**一次都没跑**；
+///  - 本层没 settle → 下游层不提前跑（链序保持）；
+///  - 长读任务占着读槽位时，升级后的写层**进不来**（放行后才跑，且帧类别 = 写）。
+TEST(AsyncRw_GateMacroUpgradesToWriteSlot)
+{
+    CAsyncExecutor exec(4);
+    ASSERT_TRUE(exec.Start());
+
+    std::atomic<bool> bLongReadHolds(false);
+    std::atomic<bool> bReleaseLongRead(false);
+    std::atomic<bool> bFirstLayerRan(false);
+    std::atomic<int> nBodyRuns(0);
+    std::atomic<int> nBodyKind(-1);
+    std::atomic<bool> bDownstream(false);
+
+    // 长读任务占住一个读槽位（由主线程放行）
+    ASSERT_TRUE(exec.Post(TaskKind::kRead,
+        [&bLongReadHolds, &bReleaseLongRead]()
+        {
+            bLongReadHolds.store(true);
+            WaitUntil(
+                [&bReleaseLongRead]()
+                {
+                    return bReleaseLongRead.load();
+                },
+                2000);
+        }));
+    ASSERT_TRUE(WaitUntil(
+        [&bLongReadHolds]()
+        {
+            return bLongReadHolds.load();
+        },
+        1000));
+
+    std::shared_ptr<SRwCtx> spCtx = std::make_shared<SRwCtx>();
+    spCtx->nId = 2;
+    CPromise<SRwCtx> chain = exec.NewPromise(
+                                     spCtx,
+                                     [&bFirstLayerRan](const std::shared_ptr<SRwCtx>& /*spCtx*/)
+                                     {
+                                         bFirstLayerRan.store(true);
+                                         return CPromiseResult::Resolve();
+                                     },
+                                     TaskKind::kRead, ASYNC_LOC)
+                                 .Then(
+                                     [&nBodyRuns, &nBodyKind](const std::shared_ptr<SRwCtx>& /*spCtx*/)
+                                     {
+                                         // 升级点：挂层处只给了 kRead，这里声明「本层体必须独占」
+                                         ASYNC_GATE_WRITE();
+                                         ++nBodyRuns;
+                                         nBodyKind.store(static_cast<int>(common::async::detail::TaskFrameTop()->eKind));
+                                         return CPromiseResult::Resolve();
+                                     },
+                                     TaskKind::kRead, ASYNC_LOC)
+                                 .Then(
+                                     [&bDownstream](const std::shared_ptr<SRwCtx>& /*spCtx*/)
+                                     {
+                                         bDownstream.store(true);
+                                         return CPromiseResult::Resolve();
+                                     },
+                                     TaskKind::kWrite, ASYNC_LOC);
+
+    ASSERT_TRUE(WaitUntil(
+        [&bFirstLayerRan]()
+        {
+            return bFirstLayerRan.load();
+        },
+        1000));
+    // 读槽位被长读任务占着：升级的写层进不来 → 宏之后的函数体还没跑、下游也没跑
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    ASSERT_EQ(nBodyRuns.load(), 0);
+    ASSERT_TRUE(!bDownstream.load());
+
+    bReleaseLongRead.store(true);  // 放行读者 → 写层过门
+    ASSERT_TRUE(chain.Await().IsFulfilled());
+    ASSERT_EQ(nBodyRuns.load(), 1);                                   // 只跑一次（重入后宏落穿）
+    ASSERT_EQ(nBodyKind.load(), static_cast<int>(TaskKind::kWrite));  // 在写槽位里
+    ASSERT_TRUE(bDownstream.load());                                  // 本层 settle 之后才轮到下游
     exec.Stop();
 }
 
