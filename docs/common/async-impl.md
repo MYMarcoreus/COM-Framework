@@ -30,8 +30,12 @@ CAsyncExecutor                 调度层：CThreadPool + 执行器句柄（Start
 | `PromiseResult.h` | `CPromiseResult`（兑现 / 拒绝 + 标准异常，拒绝统一用 `std::exception` 派生对象） |
 | `PromiseTypes.h` | `SettledNotice`、`detail::HandlerMode`、`detail::ThenHandler<TContext>`（then：只接上下文）、`detail::ResultHandler<TContext>`（catch / finally：多一个上游结果） |
 | `SourceLoc.h` | `CSourceLoc` + `ASYNC_LOC`（注册点调试信息，发布构建零开销） |
-| `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle`、`detail::IsInExecutorThread`、`detail::ShouldInline` / `DispatchInlineOrPost`（**调度策略**：跑在哪条线程）、组合器 `detail::Gather*` |
-| `Promise.h` | `detail::CPromiseState`、`detail::CPromiseCore<TContext>`、`CPromise<TContext>`（**编排**：层语义 / 三态 / 桥接） |
+| `AsyncExecutor.h/.cpp` | `CAsyncExecutor`、`detail::CExecutorHandle`、`detail::PostToHandle`、`detail::IsInExecutorThread`、`detail::ShouldInline` / `DispatchInlineOrPost`（**调度策略**：跑在哪条线程） |
+| `Combine.h` | 组合器（`WhenAll` 一族）与 `detail::Gather*`（聚合状态 / 登记路径 / 参数包摊平） |
+| `PromiseState.h` | `detail::CPromiseState`（一层一个状态机：单向开关 + 处理器登记 / 通知路径） |
+| `PromiseLayer.h` | `detail::MakeLayerRunner` / `MakeThenRunner` / `MakeResultRunner`（三态语义 + 层体自请过门重入） |
+| `PromiseCore.h` | `detail::CPromiseCore<TContext>`（共享上下文 + 执行器句柄 + 派发） |
+| `Promise.h` | `CPromise<TContext>`（**编排**：层语义 / 三态 / 桥接）与起链定义 `NewPromise` |
 | `Common/Coroutine/Coroutine.h` | `CCoroutine<TContext>` + `CO_*` 宏（**独立目录**：顺序化是另一个关注点，只依赖 `Common/Async`） |
 | `Diagnostics.h/.cpp` | 诊断钩子 `DiagnosticHandler` / `SetDiagnosticHandler` / `ReportDiagnostic`（进程级单槽；promise / 协程 / 执行器共用；调试构建默认打印） |
 | `Common/Assert.h`（**全框架**） | `ASSERT` / `ASSERT_MSG` + 唯一调试判定 `FRAMEWORK_DEBUG`（见 §13） |
@@ -332,9 +336,11 @@ ThenBridge(fnCreate, fnApply, loc)
   收口标志，`settle` 聚合层则在锁外调用（聚合层的下一层可能就地执行，持锁会死锁）；
 - **不取消**：收口后迟到的子 promise 直接被忽略，但它们自己继续跑完。
 
-> 实现位置：`Common/Async/AsyncExecutor.h`（声明、实现与文档同文件）。该头只**前置声明**
-> `CPromise`，里面所有对它的使用都落在模板的依赖上下文（`CPromise<TContext>::New`、按值返回），
-> 名字查找与类型完备性检查推迟到**实例化点**（调用方 TU 必然已 include `Promise.h`）。
+> 实现位置：`Common/Async/Combine.h`（声明在执行器头 `AsyncExecutor.h`，定义在 `Combine.h`——
+> 2026-09-26 拆出）。为什么要拆：组合器要造 `CPromise` 实例，需要它的**完整类型**，而执行器头只能
+> **前置声明** `CPromise`（`Promise.h` 反过来 include 执行器头，不能成环）；留在执行器头里时这条
+> 依赖靠「模板两段查找 + 调用方 TU 碰巧已 include `Promise.h`」兜住，是个隐式契约。
+> 用组合器的 TU 请 include `Async/Combine.h`（它显式 include `AsyncExecutor.h` + `Promise.h`）。
 
 ## 7. 两种注册时机
 
@@ -490,6 +496,11 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 - **非阻塞**：进不了就留在队列，线程立即归还线程池；槽位释放时（`OnTaskExit`）继续泵出；
 - **异常也归还槽位**：池不捕获异常，门在包装里兜住（`kDiagGateThrow`）后照常归还 ——
   漏归还 = 写者标志回不来 = 模块永久卡死；
+- **投递被池拒（停放竞态）时「丢弃 + 报诊断」，不回滚队列**：任务在门口已出队（槽位记在它名下），
+  池若已进入停放（`m_bStopping`，只在调用方违反停止顺序时才出现），门归还槽位、报诊断
+  `kDiagGateTaskDropped`（与「任务体抛异常」分开）—— 任务体在构造 `Submit` 形参时已被移走
+  （拿不回来），而池不会再跑任务（留在队列里也没人会泵出它）；早先那版「回滚回队列」是假保护：
+  它只会留下一串空任务，日后被投递时以 `bad_function_call` 伪装成「任务体抛异常」；
 - **就地判定用线程局部任务帧**：`detail::CTaskFrame`（自管理：**构造压帧 / 析构弹帧**，与
   `CGateCallScope` / `CCurrentLayerFrame` 同款写法；过门投递的任务压帧，就地跑下来的层沿用外层帧）；
   `CanRunInline` 只看「帧 = 本门 + 同类」且「队列空」；
@@ -530,12 +541,15 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 
 开销（`Tests/test_async_alloc.cpp` 守着）：
 
-- 包装任务是**可移动**的 `CWrappedTask`（不是 lambda）—— C++11 的 lambda 不能「移动捕获」，
+- 队列条目与投递目标是**同一个可移动类型** `CWrappedTask`（不是 lambda）—— C++11 的 lambda 不能「移动捕获」，
   包一层会把任务体拷一份，而 `std::function` 的拷贝要再走一次堆分配；
 - 放行收集缓冲是**线程局部复用**的（`ScratchDispatchBuffer`），不再每次投递新建一个 vector；
-- 合计：每次「过门投递」≈1 次额外分配，就地层 0 次；`ASYNC_GATE` 同类落穿 0 次，只有「类别升级」那条
-  重入路径每层最多再 +1 次（判定全在 TLS / 栈上，零分配）。实测跑链 200 层 213 次、800 层 841 次
-  （≈1.05 次/层；一条链约每 `kMaxInlineDepth`(64) 层才投递一次）。
+- 合计：每次「过门投递」= 任务包装那 **1 次**分配（池侧已无拷贝：`WorkerLoop` 移动取任务），就地层 0 次；
+  `ASYNC_GATE` 同类落穿 0 次，只有「类别升级」那条
+  重入路径每层最多再 +1 次（判定全在 TLS / 栈上，零分配）。实测跑链 200 层 **205** 次、
+  800 层 **815** 次（≈1.02 次/层；一条链约每 `kMaxInlineDepth`(64) 层才投递一次）。
+  （投递路径的完整实测归因与三项优化 —— 过门 864 → 497 ns/任务 —— 见
+  [perf-optimization.md](../perf-optimization.md) §4.6。）
 
 **语义边界（必须记住）**：门保证的是「**单个任务**互斥」，不是「**整条链**独占」—— 一条写链的层
 与层之间，别的任务（包括别的写）会被放行（队首是谁谁上）。于是：
@@ -553,6 +567,10 @@ void ReportDiagnostic(const char* strWhat);                     // 框架内部�
 停止顺序（`CAsyncExecutor::Stop`）：**关读写门 → 标记停止 → `Drain`（等已接受的跑完）→ 停池**。
 先关门再标记，是为了让「看到 `IsStopped()` 为真」的调用方确定「门也已经关了」（门是唯一权威的
 准入点，标记只是快速路径）。
+
+门侧的对应契约：`Close` → `Drain` → 停池；反了（或「提交与停池并发」）的后果是任务永远投不出去 ——
+投递被拒的那一轮会被**丢弃并报 `kDiagGateTaskDropped`**（不静默、不伪装），队列里剩下的条目则
+卡住后续的 `Drain()`：门不提供「违规顺序下也能跑完」的保证。
 
 测试：`Tests/test_async_gate.cpp`（门本体 13 例：读并发 / 写独占 / 三种 FIFO 顺序 / 同门重入 /
 多门链式 / 16 门压力 / 排空 / 拒绝路径 / 异常仍归还槽位）+ `Tests/test_async_rw.cpp`
@@ -655,8 +673,8 @@ catch 与 finally / 首层 / 同类重复请求落穿（函数形态）/ **第�
 历史上建链是 **3 次/层**（多一次 `std::vector` 缓冲 32B），现已削到 2 次。
 
 过门投递的摊销：一条链大约每 `kMaxInlineDepth`(64) 层才会「过门投递」一次（其余层在门内就地级联），
-所以跑链实测 200 层 **213** 次、800 层 **841** 次（≈1.05 次/层）；护栏按
-`层数 + 层数/16 + 8` 设上限 —— 比实测宽，但仍能抓住「每层多一次分配」这类回归。
+所以跑链实测 200 层 **205** 次、800 层 **815** 次（≈1.02 次/层；池侧改移动取任务之前是 213 / 841）；
+护栏按 `层数 + 层数/16 + 8` 设上限 —— 比实测宽，但仍能抓住「每层多一次分配」这类回归。
 
 ### 读并发的实测与「调度开销边界」（2026-09-19）
 
@@ -920,8 +938,12 @@ return [pState, fnBody]()
 1. Common/Async/PromiseResult.h     层结果（层间唯一信息）
 2. Common/Async/PromiseTypes.h      两种处理器形状（ThenHandler / ResultHandler / SettledNotice）
 3. Common/Async/AsyncExecutor.h     调度层与执行器句柄（含 detail::ShouldInline / DispatchInlineOrPost）
+   Common/Async/Combine.h           组合器（WhenAll 一族：聚合状态 / 登记路径 / Gather）
    Common/Async/Diagnostics.{h,cpp} 诊断钩子（与执行器无关的进程级出口）
-4. Common/Async/Promise.h           状态 + 核心 + promise（重点看 AppendThenLayer / AppendResultLayer / Settle / RunThenHandler）
+4. Common/Async/PromiseState.h     层状态机（单向开关 + 处理器登记 / 通知）
+   Common/Async/PromiseLayer.h     层运行器（三态语义 + Make*Runner；含 ASYNC_GATE 重入）
+   Common/Async/PromiseCore.h      共享核心（上下文 + 执行器句柄 + 派发）
+5. Common/Async/Promise.h           句柄（重点看 AppendThenLayer / AppendResultLayer / RunThenHandler）与起链
    （层派发策略细节在 Common/Async/AsyncExecutor.h：detail::DispatchInlineOrPost / ShouldInline）
 5. Common/Coroutine/Coroutine.h    顺序化（Duff's device 状态机）—— 另一个模块，只依赖 Async
 6. Tests/test_async_chain.cpp       行为契约

@@ -8,8 +8,11 @@
 #include <mutex>
 #include <vector>
 
-#include "Async/Diagnostics.h"
-#include "Thread/ThreadPool.h"
+namespace common {
+namespace thread {
+class CThreadPool;  // 前置声明：本头只用它的指针，实现细节（<thread>/<string>…）留在 .cpp。
+}  // namespace thread
+}  // namespace common
 
 // ====================================================================
 // 读写门（模块内「读并发 / 写独占」的准入闸）
@@ -49,7 +52,9 @@
 // 线程安全：Submit / Close / Drain / 查询均可跨线程调用；队列与槽位计数在同一把锁内维护。
 //
 // 停止顺序（调用方契约）：先 Close()（拒新投递）→ 再 Drain()（等已接受的跑完）→ 最后停线程池。
-//   反了会让队列里的任务永远投不出去（它们已经算「已接受」）。
+//   反了会让队列里的任务永远投不出去（它们已经算「已接受」）；更糟的是「提交与停池并发」时
+//   投递会被池拒（`m_bStopping`），那时门只能**丢弃该任务并报诊断** —— 任务体在进入投递入口
+//   时就被移走了（见 `CWrappedTask`），留在队列里也再没有谁去泵出它。
 // ====================================================================
 
 namespace common {
@@ -72,9 +77,6 @@ enum class TaskKind
 class CReadWriteGate;  // 前置声明（任务帧只存指针）。
 
 namespace detail {
-
-/// @brief 读写门侧诊断文案（集中一处：测试断言常量，而不是去匹配子串）。
-constexpr const char* kDiagGateThrow = "读写门：任务抛出了异常（已兜住，未终止进程）";
 
 /// @brief 「当前任务」帧：本线程正跑着哪个门的哪类任务（「就地」判定的唯一依据）。
 ///
@@ -153,7 +155,10 @@ public:
     //
     // @param eKind 任务类别（`kRead` / `kWrite`；`kDirect` 不走这里 —— 它不过门）。
     // @param fnTask 任务函数（移动投递）。
-    // @return true 已接受（已投递或在门口排队）；false 门已关闭 / 线程池不可用。
+    // @return true 已接受（已投递或在门口排队）；false 门已关闭 / 线程池已停（未入队）。
+    //
+    // @note 「已接受」的弱化：若线程池在投递瞬间进入停放（`m_bStopping`），任务会被丢弃并
+    //       报诊断（见文件头的停止顺序）—— 只发生在调用方违反 Close → Drain → 停池顺序时。
     bool Submit(TaskKind eKind, std::function<void()> fnTask);
 
     //================ Inline ================
@@ -172,8 +177,8 @@ public:
     // 排队中的任务数（持锁统计）。
     size_t PendingCount() const;
 
-    // 当前活跃（已放行、未结束）的读任务数。
-    int ActiveReaders() const;
+    // 当前活跃（已放行、未结束）的读任务数（锁外原子读，近似值，诊断用）。
+    size_t ActiveReaders() const;
 
     // 当前是否有写任务在跑。
     bool HasActiveWriter() const;
@@ -181,19 +186,17 @@ public:
 private:
     //================ Internal ================
 
-    /// @brief 待调度条目：任务类别 + 任务体（统一 FIFO 队列）。
-    struct CDispatchEntry
-    {
-        TaskKind eKind;                ///< 任务类别。
-        std::function<void()> fnTask;  ///< 任务体。
-    };
-
-    /// @brief 过门任务包装（把「跑任务 + 归还槽位」合成一个「可移动」目标）。
+    /// @brief 过门任务（队列条目 = 投递目标，同一个类型）。
+    ///
+    /// 它同时担两个角色：① 在门口排队时它就是队列条目；② 取得槽位后被整个移进线程池，
+    /// 干两件事 —— 跑任务体、**无论成败都归还槽位**（任务体抛异常时若不归还，模块会永久卡死）。
     ///
     /// 为什么不用 lambda 包一层：C++11 的 lambda 不能「移动捕获」——包一层会把任务体
     /// 拷一份，而 `std::function` 的拷贝要再走一次堆分配（每次投递 +2 次分配）。
     /// 本类型可移动：构造时把任务体「移」进来，之后全程移动存储 ——
     /// 于是每次投递只花一次分配（`std::function` 存它自己的目标块），符合门定下的开销预算。
+    ///
+    /// @note 成员函数都定义在 .cpp：本头文件因此不必认识诊断与线程池的实现细节。
     struct CWrappedTask
     {
         CReadWriteGate* pGate;         ///< 所属门（归还槽位用）。
@@ -201,64 +204,66 @@ private:
         std::function<void()> fnTask;  ///< 任务体。
 
         /// @brief 构造（移动任务体）。
-        CWrappedTask(CReadWriteGate* pGate, TaskKind eKind, std::function<void()> fnTask)
-            : pGate(pGate), eKind(eKind), fnTask(std::move(fnTask))
-        {}
+        CWrappedTask(CReadWriteGate* pGate, TaskKind eKind, std::function<void()> fnTask);
 
         /// @brief 移动构造（`std::function` 存放目标时用它，避免拷贝任务体）。
-        CWrappedTask(CWrappedTask&& other) : pGate(other.pGate), eKind(other.eKind), fnTask(std::move(other.fnTask))
-        {}
+        CWrappedTask(CWrappedTask&& other);
 
         /// @brief 拷贝构造（只为满足 `std::function` 目标的 CopyConstructible 要求）。
         ///
         /// @note 实际不会走到：投递全程是移动（`Submit(CTask&&)` → 池队列移动存储）。
-        CWrappedTask(const CWrappedTask& other) : pGate(other.pGate), eKind(other.eKind), fnTask(other.fnTask)
-        {}
+        CWrappedTask(const CWrappedTask& other);
 
         CWrappedTask& operator=(const CWrappedTask&) = delete;
         CWrappedTask& operator=(CWrappedTask&&) = delete;
 
         /// @brief 执行任务体（压「当前任务」帧 → 兜异常 → 归还槽位）。
-        void operator()()
-        {
-            const detail::CTaskFrame frame(pGate, eKind);  // 跑完自动弹帧（异常路径也弹）。
-            try
-            {
-                fnTask();
-            }
-            catch (...)
-            {
-                ReportDiagnostic(detail::kDiagGateThrow);
-            }
-            pGate->OnTaskExit(eKind);
-        }
+        ///
+        /// @note 契约：`OnTaskExit` 视为不抛（它只做归还 + 泵出 + 投递；分配失败一类进程级
+        ///       故障不在这里兜 —— 那种情况下模块已经没法继续工作）。
+        void operator()();
     };
 
     // 空闲判定（持锁调用）。
     bool IsIdleLocked() const;
 
+    // 归还槽位（持锁调用）。
+    void ReturnSlot(TaskKind eKind);
+
+    // 唤醒 `Drain()` 的等待方（持锁调用；**没有等待者时不发通知**）。
+    void NotifyDrainWaitersLocked();
+
     // 放行收集缓冲（线程局部复用，省掉每次投递的临时 vector 分配）。
-    static std::vector<CDispatchEntry>& ScratchDispatchBuffer();
+    static std::vector<CWrappedTask>& ScratchDispatchBuffer();
 
     // 公平 FIFO：从队首顺序放行可准入的任务（持锁调用）。
-    void PumpLocked(std::vector<CDispatchEntry>& vecDispatch);
+    void PumpLocked(std::vector<CWrappedTask>& vecDispatch);
 
     // 任务结束：归还槽位并继续泵出（在线程池线程中调用）。
     void OnTaskExit(TaskKind eKind);
 
-    // 把已取得槽位的任务包装并投递到线程池（锁外调用）。
-    void DispatchToPool(std::vector<CDispatchEntry>& vecDispatch);
+    // 把已取得槽位的任务投递到线程池（锁外调用）。
+    void DispatchToPool(std::vector<CWrappedTask>& vecDispatch);
 
     common::thread::CThreadPool* m_pPool;  ///< 线程池（只执行；生命周期由调用方保证比门长）。
     size_t m_nMaxReaders;                  ///< 最大并发读任务数（0 = 不设上限）。
 
-    std::deque<CDispatchEntry> m_dequeTasks;  ///< 统一 FIFO 队列（队首最先准入）。
-    std::atomic<int> m_nActiveReaders;        ///< 当前活跃读任务数。
-    std::atomic<bool> m_bWriterActive;        ///< 当前是否有写任务在跑。
-    std::atomic<bool> m_bClosed;              ///< 是否已关闭（拒绝新提交）。
+    std::deque<CWrappedTask> m_dequeTasks;  ///< 统一 FIFO 队列（队首最先准入）。
 
-    mutable std::mutex m_mutex;           ///< 保护队列与槽位计数。
+    // 槽位计数（读计数 / 写标志）：**所有写点都在 `m_mutex` 临界区内**（放行 / 归还 / 丢弃），
+    // 用原子只为「锁外诊断读」（`ActiveReaders` / `HasActiveWriter`）不撕裂 ——
+    // 它不是免锁读写路径，别绕过锁去改。
+    std::atomic<size_t> m_nActiveReaders;  ///< 当前活跃读任务数。
+    std::atomic<bool> m_bWriterActive;     ///< 当前是否有写任务在跑。
+    std::atomic<bool> m_bClosed;           ///< 是否已关闭（拒绝新提交；`Close()` 置位时不持锁）。
+
+    mutable std::mutex m_mutex;           ///< 保护队列、槽位计数与下述等待者计数。
     std::condition_variable m_condition;  ///< 供 Drain() 等待排空。
+
+    // 正在 `Drain()` 里等待的线程数：**只在 `m_mutex` 临界区内访问**（不需要原子）。
+    // 用途：任务结束时（`OnTaskExit`）本来要无条件 notify_all，而绝大多数时候没人在等 ——
+    // 免掉这次共享状态写（每任务一次）。
+    size_t m_nDrainWaiters;
 };
 
 }  // namespace async
